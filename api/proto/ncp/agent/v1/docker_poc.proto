@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+// DockerPocService 仅用于 Phase 0 验证。P0-03 前不提供 gRPC 传输实现。
+service DockerPocService {
+  rpc RunDockerPoc(RunDockerPocRequest) returns (RunDockerPocResponse);
+}
+
+message RunDockerPocRequest {
+  // 必须指向名称和标签均受 Agent 校验的临时 PoC 容器。
+  string test_container_id = 1;
+}
+
+message RunDockerPocResponse {
+  string docker_api_version = 1;
+  uint32 listed_container_count = 2;
+  string inspected_container_id = 3;
+  uint64 memory_usage_bytes = 4;
+  string exec_marker = 5;
+  string observed_event_action = 6;
+  string image_reference = 7;
+  bool image_pull_completed = 8;
+  uint64 observed_log_bytes = 9;
+}

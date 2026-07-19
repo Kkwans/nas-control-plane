@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目处于 Spec 定义的 **Phase 0：技术验证**。**P0-01 环境探测器已完成并在 DH4300 Plus 上进行只读实机核验**；下一项为 P0-02 Docker PoC。当前不部署 systemd 服务、不修改 Docker 状态，也不提供完整管理 UI。
+项目处于 Spec 定义的 **Phase 0：技术验证**。**P0-01 环境探测器与 P0-02 Docker SDK PoC 均已完成实机核验**；下一项为 P0-03 Agent Socket、鉴权、审计与 Job 框架。当前不部署常驻 systemd 服务、不提供完整管理 UI，也不提供通用 Docker 管理接口。
 
 ## 目录
 
@@ -32,4 +32,4 @@ $env:CGO_ENABLED = '0'
 go build -buildvcs=false -trimpath -o bin/ncp-agent-linux-arm64 ./cmd/ncp-agent
 ```
 
-同步副本不含真实 Git 元数据，因此本地验证显式关闭 VCS build stamp；NAS 实际仓库中的发布构建仍保留 VCS 信息。实际 NAS 探测属于只读验证；安装 Agent、创建 systemd 单元或访问 Docker API 将在对应 PoC 设计完成并单独确认后进行。
+同步副本不含真实 Git 元数据，因此本地验证显式关闭 VCS build stamp；NAS 实际仓库中的发布构建仍保留 VCS 信息。P0-02 的 Docker 访问仅针对带固定标签的临时容器完成验证并已清理；安装常驻 Agent、创建 Unix Socket 或 systemd 单元仍留待后续阶段。
