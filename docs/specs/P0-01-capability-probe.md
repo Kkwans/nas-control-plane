@@ -35,3 +35,11 @@
 ## 验证计划
 
 先通过伪造平台的单元测试验证所有判断分支，再在 Windows 开发机运行 `go test ./...`、`go vet ./...` 和 Linux ARM64 交叉构建。实机运行仅在交付后的只读核验中执行；任何 systemd、Docker 或 Socket 操作不属于本能力包。
+
+## 交付状态
+
+- 状态：已完成。
+- 2026-07-19 已通过 `go test ./...` 和 `go vet ./...`，并完成 Linux ARM64 静态交叉构建。
+- 已在 DH4300 Plus 上临时运行探测二进制，确认 ARM64、Debian 12、Docker、Compose、systemd、journald、cgroup v2、温度节点及 `/volume1`、`/volume2` 数据卷根均可正确识别，返回结果没有 Warning。
+- 实机结果发现 Docker overlay 子挂载会混入数据卷列表；已以失败测试复现并修复为只返回数据卷根路径。
+- 本次核验没有安装服务、创建 Agent Socket、创建/控制 Docker 资源或修改 NAS 配置。
