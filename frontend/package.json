@@ -1,0 +1,41 @@
+{
+  "name": "ncp-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "pnpm run typecheck && vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "latest",
+    "@fontsource-variable/jetbrains-mono": "latest",
+    "@fontsource-variable/manrope": "latest",
+    "echarts": "latest",
+    "element-plus": "latest",
+    "@lucide/vue": "latest",
+    "pinia": "latest",
+    "vue": "latest",
+    "vue-echarts": "latest",
+    "vue-router": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "latest",
+    "@vitejs/plugin-vue": "latest",
+    "@vue/tsconfig": "latest",
+    "jsdom": "latest",
+    "typescript": "~5.9.3",
+    "vite": "latest",
+    "vitest": "latest",
+    "vue-tsc": "latest"
+  }
+}

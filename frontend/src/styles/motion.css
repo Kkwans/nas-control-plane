@@ -1,0 +1,42 @@
+@keyframes ncp-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ncp-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(140, 226, 190, 0.28);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(140, 226, 190, 0);
+  }
+}
+
+.reveal {
+  animation: ncp-rise-in var(--ncp-duration-slow) var(--ncp-ease-out) both;
+  animation-delay: calc(var(--reveal-index, 0) * 55ms);
+}
+
+.presence-dot {
+  animation: ncp-pulse 2.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

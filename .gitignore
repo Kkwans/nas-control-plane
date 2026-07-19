@@ -3,6 +3,13 @@
 /dist/
 /coverage.out
 
+# Frontend build artifacts
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/playwright-report/
+/frontend/test-results/
+
 # Local runtime state
 /data/
 /*.db
