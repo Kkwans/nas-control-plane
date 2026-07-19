@@ -1,10 +1,10 @@
 # NAS Control Plane
 
-`nas-control-plane`（简称 NCP）是面向绿联 NAS 的本地服务器控制平面。它采用“非特权 Server + 特权 Agent”的分层架构：浏览器和 Server 不直接持有 Docker Socket 或宿主机 root 权限，受控宿主机能力只经由 Agent 的白名单接口提供。
+`nas-control-plane`（简称 NCP）是面向绿联 NAS 的本地服务器控制平面。它采用“登录后的 Root 控制台 + 原生 Root Agent”架构：`ncp-agent` 以 root 身份访问 Docker、systemd、journald、宿主机指标和 PTY；浏览器通过 `ncp-server` 使用这些能力。MVP 的 `root` 角色拥有所有已实现模块的完整权限。
 
 ## 当前状态
 
-项目处于 Spec 定义的 **Phase 0：技术验证**。**P0-01 环境探测器、P0-02 Docker SDK PoC、P0-04 终端 PoC 与 P0-05 journald PoC 均已完成实机核验**；P0-03 的 Unix Socket gRPC 与只读 HTTP 适配层已完成代码、测试和 ARM64 构建，root systemd 实机验证仍待具备非交互提权条件后执行。P0-06 的受限 Caddy Admin API 客户端与路由持久化编排已完成代码和测试，但 NAS 当前无运行中的 Caddy，尚未进行运行时 PoC。P0-04 仅通过显式 `--terminal-poc` 参数开放受控验证通道，P0-05 仅通过 `journal-poc` 验证受控日志读取，二者都不能视为生产 Web 功能。Vue 前端工程、统一设计系统和只读页面骨架已建立，但尚未接入完整真实 API，也不代表完整管理 UI 或通用 Docker 管理接口。
+项目已完成可复用的 Phase 0 验证基础，并切换到 **Root 控制面 MVP** 交付节奏。**P0-01 环境探测器、P0-02 Docker SDK PoC、P0-04 终端 PoC 与 P0-05 journald PoC 均已完成实机核验**；P0-03 的 Unix Socket gRPC 与 HTTP 适配层已完成代码、测试和 ARM64 构建，下一优先级是将 Root Agent 作为 systemd 服务真正部署并接入 Server。P0-06 Caddy 路由持久化代码可保留为后续能力，不再阻塞首页、Docker、服务发现、日志与终端的真实数据交付。Vue 前端是 Vue 3 SPA，不是手写静态 HTML；当前已部署版本因 API 未接通而展示预览数据，必须尽快替换为真实 API。
 
 ## 目录
 
@@ -52,4 +52,4 @@ P0-04 的端到端验证、容器保护条件与关闭协议见 [P0-04 Terminal 
 
 P0-05 的 journald 查询、Cursor、筛选、Follow 与实机验证边界见 [P0-05 journald PoC](docs/specs/P0-05-journald-poc.md)。
 
-阶段成果、已核验证据和待办见 [阶段进度](docs/PROGRESS.md)。静态前端预览的 Compose 描述位于 `deploy/console/`；它不包含特权 Agent 或真实宿主机管理 API。
+阶段成果、已核验证据和待办见 [阶段进度](docs/PROGRESS.md)。Root 控制面 MVP 的架构调整见 [v0.2 方向说明](docs/specs/v0.2-root-control-plane-direction.md)。`deploy/console/` 中现有 Compose 项目仅是前端预览入口，不代表完整 NCP 发布形态。
