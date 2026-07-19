@@ -28,7 +28,12 @@
 - 项目登记：使用标准 Docker Compose 项目元数据，由 `docker compose ls` 识别；不写入绿联未公开的内部数据库。
 - API 行为：`/api/` 明确返回 Phase 0 尚未部署的状态，前端进入预览态，不伪装为真实系统数据。
 
-部署完成后的访问地址、健康检查和实际项目登记结果将在本文件下一次更新中记录。
+### 已完成部署记录
+
+- Compose 已启动 `nas-control-plane-console`，容器状态为 `running/healthy`。
+- `docker compose ls` 已识别项目 `nas-control-plane`，配置文件为 `deploy/console/docker-compose.yml`。
+- NAS 本机与局域网侧访问均已验证：根页面、`/services` SPA 路由和 `/healthz` 均返回 HTTP 200。
+- 访问方式：使用 NAS 的局域网地址加端口 `8760`。该容器仅提供静态预览控制台；`/api/` 明确返回 Phase 0 API 待部署状态。
 
 ## 尚未开始或未完成
 
