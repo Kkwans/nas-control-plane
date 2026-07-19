@@ -29,3 +29,10 @@ func TestRunTerminalPOCRejectsUnsupportedTargetBeforeOpeningSession(t *testing.T
 		t.Fatalf("错误码 = %q，期望 TERMINAL_TARGET_REJECTED", terminal.ErrorCode(err))
 	}
 }
+
+func TestRunJournalPOCRejectsUnexpectedArguments(t *testing.T) {
+	err := runJournalPOC(context.Background(), []string{"unexpected"}, io.Discard)
+	if err == nil {
+		t.Fatal("journal POC accepted an unexpected argument")
+	}
+}

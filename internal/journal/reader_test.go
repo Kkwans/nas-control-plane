@@ -2,6 +2,7 @@ package journal
 
 import (
 	"context"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,10 +67,37 @@ func TestQueryRedactsSensitiveFragmentsFromMessage(t *testing.T) {
 	}
 }
 
+func TestQueryUsesUTCUnitAndTimeFilters(t *testing.T) {
+	runner := &fakeRunner{outputs: [][]byte{nil}}
+	reader := NewReader(runner)
+	since := time.Date(2026, time.July, 19, 18, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	until := since.Add(15 * time.Minute)
+
+	if _, err := reader.Query(context.Background(), Query{
+		Unit:  "systemd-journald.service",
+		Since: &since,
+		Until: &until,
+		Limit: 10,
+	}); err != nil {
+		t.Fatalf("query journal: %v", err)
+	}
+
+	args := runner.outputArgs[0]
+	if !hasArgumentSequence(args, "--unit", "systemd-journald.service") {
+		t.Fatalf("unit filter missing: %#v", args)
+	}
+	if !hasArgumentSequence(args, "--since", "2026-07-19 10:00:00.000000 UTC") || !hasArgumentSequence(args, "--until", "2026-07-19 10:15:00.000000 UTC") {
+		t.Fatalf("time filters missing: %#v", args)
+	}
+}
+
 type fakeRunner struct {
-	mu         sync.Mutex
-	outputs    [][]byte
-	outputArgs [][]string
+	mu           sync.Mutex
+	outputs      [][]byte
+	outputArgs   [][]string
+	followArgs   []string
+	followReader io.ReadCloser
+	followWait   <-chan error
 }
 
 func (f *fakeRunner) Output(_ context.Context, args ...string) ([]byte, error) {
@@ -82,6 +110,13 @@ func (f *fakeRunner) Output(_ context.Context, args ...string) ([]byte, error) {
 	output := f.outputs[0]
 	f.outputs = f.outputs[1:]
 	return output, nil
+}
+
+func (f *fakeRunner) Follow(_ context.Context, args ...string) (io.ReadCloser, <-chan error, error) {
+	f.mu.Lock()
+	f.followArgs = append([]string(nil), args...)
+	f.mu.Unlock()
+	return f.followReader, f.followWait, nil
 }
 
 func entryJSON(cursor, timestamp, message string) string {

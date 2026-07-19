@@ -12,6 +12,7 @@ import (
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 )
@@ -35,6 +36,11 @@ func main() {
 		case "terminal-poc":
 			if err := runTerminalPOC(ctx, os.Args[2:], os.Stdout); err != nil {
 				fmt.Fprintln(os.Stderr, terminalPOCErrorCode(err))
+				os.Exit(1)
+			}
+		case "journal-poc":
+			if err := runJournalPOC(ctx, os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, journalPOCErrorCode(err))
 				os.Exit(1)
 			}
 		default:
@@ -152,4 +158,30 @@ func terminalPOCErrorCode(err error) string {
 		return code
 	}
 	return "TERMINAL_POC_FAILED"
+}
+
+func runJournalPOC(ctx context.Context, args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("journal-poc", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected journal POC arguments")
+	}
+
+	result, err := journal.RunPOC(ctx, journal.NewReader(journal.OSRunner{}), journal.OSMarkerWriter{})
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
+}
+
+func journalPOCErrorCode(err error) string {
+	if code := journal.ErrorCode(err); code != "" {
+		return code
+	}
+	return "JOURNAL_POC_FAILED"
 }

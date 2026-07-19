@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,11 +15,12 @@ import (
 )
 
 const (
-	defaultLimit        = 100
-	maximumLimit        = 200
-	maximumFilterLength = 255
-	maximumCursorLength = 4096
-	maximumEntrySize    = 1024 * 1024
+	defaultLimit         = 100
+	maximumLimit         = 200
+	maximumFilterLength  = 255
+	maximumCursorLength  = 4096
+	maximumEntrySize     = 1024 * 1024
+	journalctlTimeFormat = "2006-01-02 15:04:05.000000 UTC"
 )
 
 var (
@@ -33,6 +35,12 @@ var (
 // are validated before they reach the runner and are always passed as arguments.
 type Runner interface {
 	Output(context.Context, ...string) ([]byte, error)
+}
+
+// FollowRunner is the separate streaming execution capability. Reader only uses
+// it for validated follow arguments; it never exposes arbitrary commands.
+type FollowRunner interface {
+	Follow(context.Context, ...string) (io.ReadCloser, <-chan error, error)
 }
 
 // Query describes one bounded historical journald read.
@@ -60,6 +68,13 @@ type Entry struct {
 type Page struct {
 	Entries    []Entry
 	NextCursor string
+}
+
+// Stream carries redacted follow records. Done delivers the terminal status,
+// including JOURNAL_FOLLOW_CANCELED when the caller stops the stream.
+type Stream struct {
+	Entries <-chan Entry
+	Done    <-chan error
 }
 
 // Reader reads structured records through a fixed journalctl invocation.
@@ -104,6 +119,54 @@ func (r *Reader) Query(ctx context.Context, query Query) (Page, error) {
 	return page, nil
 }
 
+// Follow starts a read-only journal stream. Canceling ctx closes the upstream
+// reader immediately so callers do not retain a journald process after leaving.
+func (r *Reader) Follow(ctx context.Context, query Query) (Stream, error) {
+	if r == nil || r.runner == nil {
+		return Stream{}, coded("JOURNAL_FOLLOW_FAILED", errors.New("journal runner is unavailable"))
+	}
+	if err := ctx.Err(); err != nil {
+		return Stream{}, coded("JOURNAL_FOLLOW_CANCELED", err)
+	}
+	follower, supported := r.runner.(FollowRunner)
+	if !supported {
+		return Stream{}, coded("JOURNAL_FOLLOW_UNAVAILABLE", errors.New("journal runner does not support following"))
+	}
+	normalized, err := normalizeQuery(query)
+	if err != nil {
+		return Stream{}, err
+	}
+
+	streamContext, cancel := context.WithCancel(ctx)
+	source, wait, err := follower.Follow(streamContext, followArguments(normalized)...)
+	if err != nil {
+		cancel()
+		if ctx.Err() != nil {
+			return Stream{}, coded("JOURNAL_FOLLOW_CANCELED", ctx.Err())
+		}
+		return Stream{}, coded("JOURNAL_FOLLOW_FAILED", err)
+	}
+	if source == nil || wait == nil {
+		cancel()
+		if source != nil {
+			_ = source.Close()
+		}
+		return Stream{}, coded("JOURNAL_FOLLOW_FAILED", errors.New("journal runner returned an incomplete stream"))
+	}
+
+	entries := make(chan Entry, 16)
+	done := make(chan error, 1)
+	go func() {
+		terminalErr := readFollow(streamContext, source, wait, entries)
+		_ = source.Close()
+		cancel()
+		close(entries)
+		done <- terminalErr
+		close(done)
+	}()
+	return Stream{Entries: entries, Done: done}, nil
+}
+
 func normalizeQuery(query Query) (Query, error) {
 	if query.Limit == 0 {
 		query.Limit = defaultLimit
@@ -144,6 +207,22 @@ func journalctlArguments(query Query) []string {
 		"--show-cursor",
 		fmt.Sprintf("--lines=%d", query.Limit+1),
 	}
+	return appendQueryFilters(args, query)
+}
+
+func followArguments(query Query) []string {
+	args := []string{
+		"--no-pager",
+		"--quiet",
+		"--output=json",
+		"--show-cursor",
+		"--follow",
+		"--lines=0",
+	}
+	return appendQueryFilters(args, query)
+}
+
+func appendQueryFilters(args []string, query Query) []string {
 	if query.Unit != "" {
 		args = append(args, "--unit", query.Unit)
 	}
@@ -151,15 +230,64 @@ func journalctlArguments(query Query) []string {
 		args = append(args, "--identifier", query.Identifier)
 	}
 	if query.Since != nil {
-		args = append(args, "--since", query.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, "--since", query.Since.UTC().Format(journalctlTimeFormat))
 	}
 	if query.Until != nil {
-		args = append(args, "--until", query.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, "--until", query.Until.UTC().Format(journalctlTimeFormat))
 	}
 	if query.Cursor != "" {
 		args = append(args, "--after-cursor", query.Cursor)
 	}
 	return args
+}
+
+func readFollow(ctx context.Context, source io.ReadCloser, wait <-chan error, entries chan<- Entry) error {
+	stopClosingSource := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = source.Close()
+		case <-stopClosingSource:
+		}
+	}()
+	defer close(stopClosingSource)
+
+	scanner := bufio.NewScanner(source)
+	scanner.Buffer(make([]byte, 0, 64*1024), maximumEntrySize)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "-- cursor:") {
+			continue
+		}
+		entry, err := parseEntry([]byte(line))
+		if err != nil {
+			return err
+		}
+		select {
+		case entries <- entry:
+		case <-ctx.Done():
+			return coded("JOURNAL_FOLLOW_CANCELED", ctx.Err())
+		}
+	}
+	if ctx.Err() != nil {
+		return coded("JOURNAL_FOLLOW_CANCELED", ctx.Err())
+	}
+	if err := scanner.Err(); err != nil {
+		return coded("JOURNAL_FOLLOW_FAILED", err)
+	}
+
+	select {
+	case waitErr, open := <-wait:
+		if !open || waitErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return coded("JOURNAL_FOLLOW_CANCELED", ctx.Err())
+		}
+		return coded("JOURNAL_FOLLOW_FAILED", waitErr)
+	case <-ctx.Done():
+		return coded("JOURNAL_FOLLOW_CANCELED", ctx.Err())
+	}
 }
 
 func parseEntries(output []byte) ([]Entry, error) {
