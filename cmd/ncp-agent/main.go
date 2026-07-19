@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
@@ -18,9 +19,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if len(os.Args) > 1 && os.Args[1] == "docker-poc" {
-		if err := runDockerPOC(ctx, os.Args[2:], os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, dockerPOCErrorCode(err))
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "docker-poc":
+			if err := runDockerPOC(ctx, os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, dockerPOCErrorCode(err))
+				os.Exit(1)
+			}
+		case "serve":
+			if err := runAgentServer(ctx, os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, agentSocketErrorCode(err))
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "NCP_AGENT_COMMAND_UNKNOWN")
 			os.Exit(1)
 		}
 		return
@@ -67,4 +79,27 @@ func dockerPOCErrorCode(err error) string {
 		return code
 	}
 	return "DOCKER_POC_FAILED"
+}
+
+func runAgentServer(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	socketGroup := flags.String("socket-group", "", "允许连接 Agent Socket 的 Server 组")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected serve arguments")
+	}
+	if err := agentsocket.ValidateServerSocketGroup(*socketGroup); err != nil {
+		return err
+	}
+	return agentsocket.Serve(ctx, agentsocket.SocketConfig{SocketGroup: *socketGroup})
+}
+
+func agentSocketErrorCode(err error) string {
+	if code := agentsocket.ErrorCode(err); code != "" {
+		return code
+	}
+	return "AGENT_SOCKET_FAILED"
 }

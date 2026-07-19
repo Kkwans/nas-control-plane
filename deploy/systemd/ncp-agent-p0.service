@@ -1,0 +1,15 @@
+[Unit]
+Description=NAS Control Plane P0-03 Agent Socket PoC
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=ncp
+RuntimeDirectoryMode=0750
+ExecStart=/opt/ncp-p0/ncp-agent serve --socket-group users
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

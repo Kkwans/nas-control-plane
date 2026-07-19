@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// P0-03 只验证 root Agent 与非 root Server 之间的受限 Unix Socket 通道。
+service AgentProbeService {
+  // 返回的 Struct 只能包含 protocol_version、agent_euid 与 transport。
+  rpc GetStatus(google.protobuf.Empty) returns (google.protobuf.Struct);
+}

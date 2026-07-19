@@ -11,6 +11,8 @@
 - `api/openapi/`：对外 HTTP API 契约。
 - `api/proto/`：Server 与 Agent 间的 RPC 契约。
 - `cmd/ncp-agent/`：Agent 可执行入口。
+- `cmd/ncp-server/`：非特权 Server 的最小 Agent 客户端入口。
+- `internal/agentsocket/`：受限 Unix Socket gRPC 通道实现。
 - `internal/system/`：只读环境能力探测实现。
 - `docs/adr/`：架构决策记录。
 - `docs/specs/`：可追溯的功能规格与验收标准。
@@ -21,6 +23,7 @@
 go test ./...
 go vet ./...
 go build -buildvcs=false ./cmd/ncp-agent
+go build -buildvcs=false ./cmd/ncp-server
 ```
 
 Linux ARM64 交叉构建：
@@ -30,6 +33,7 @@ $env:GOOS = 'linux'
 $env:GOARCH = 'arm64'
 $env:CGO_ENABLED = '0'
 go build -buildvcs=false -trimpath -o bin/ncp-agent-linux-arm64 ./cmd/ncp-agent
+go build -buildvcs=false -trimpath -o bin/ncp-server-linux-arm64 ./cmd/ncp-server
 ```
 
 同步副本不含真实 Git 元数据，因此本地验证显式关闭 VCS build stamp；NAS 实际仓库中的发布构建仍保留 VCS 信息。P0-02 的 Docker 访问仅针对带固定标签的临时容器完成验证并已清理；安装常驻 Agent、创建 Unix Socket 或 systemd 单元仍留待后续阶段。
