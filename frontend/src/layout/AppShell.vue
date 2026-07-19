@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type PropType } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   Boxes,
@@ -9,9 +9,33 @@ import {
   ShieldCheck,
 } from '@lucide/vue'
 
+import type { SystemConnectionState } from '@/stores/system'
+
 const route = useRoute()
 
+const props = defineProps({
+  deviceName: {
+    type: String,
+    required: true,
+  },
+  connectionState: {
+    type: String as PropType<SystemConnectionState>,
+    required: true,
+  },
+})
+
 const routeTitle = computed(() => String(route.meta.title ?? 'NAS Control Plane'))
+const connectionLabel = computed(() => {
+  switch (props.connectionState) {
+    case 'connected':
+      return '已连接 Agent'
+    case 'checking':
+      return '正在连接 Agent'
+    default:
+      return '数据演示模式'
+  }
+})
+const sidebarLabel = computed(() => (props.connectionState === 'connected' ? '实时连接' : '开发预览'))
 
 const navigation = [
   { label: '控制室', to: '/', icon: LayoutDashboard },
@@ -47,8 +71,12 @@ const navigation = [
 
       <div class="sidebar-footer">
         <div class="sidebar-footer__signal">
-          <span class="presence-dot" aria-hidden="true"></span>
-          <span>开发预览</span>
+          <span
+            class="presence-dot"
+            :class="`presence-dot--${connectionState}`"
+            aria-hidden="true"
+          ></span>
+          <span>{{ sidebarLabel }}</span>
         </div>
         <p>Phase 0 · 架构验证中</p>
       </div>
@@ -58,13 +86,13 @@ const navigation = [
       <header class="topbar">
         <div class="topbar__location" aria-label="当前位置">
           <Server :size="15" :stroke-width="1.75" aria-hidden="true" />
-          <span>本地设备</span>
+          <span>{{ deviceName }}</span>
           <ChevronRight :size="14" aria-hidden="true" />
           <strong>{{ routeTitle }}</strong>
         </div>
         <div class="topbar__status">
-          <span class="topbar__status-dot" aria-hidden="true"></span>
-          <span>数据演示模式</span>
+          <span class="topbar__status-dot" :class="`topbar__status-dot--${connectionState}`" aria-hidden="true"></span>
+          <span>{{ connectionLabel }}</span>
         </div>
       </header>
 
@@ -193,6 +221,16 @@ const navigation = [
   height: 7px;
   border-radius: var(--ncp-radius-pill);
   background: var(--ncp-primary);
+}
+
+.presence-dot--preview,
+.topbar__status-dot--preview {
+  background: var(--ncp-info);
+}
+
+.presence-dot--checking,
+.topbar__status-dot--checking {
+  background: var(--ncp-warning);
 }
 
 .sidebar-footer p {
