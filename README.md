@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-项目处于 Spec 定义的 **Phase 0：技术验证**。**P0-01 环境探测器、P0-02 Docker SDK PoC、P0-04 终端 PoC 与 P0-05 journald PoC 均已完成实机核验**；P0-03 的 Unix Socket gRPC 与只读 HTTP 适配层已完成代码、测试和 ARM64 构建，root systemd 实机验证仍待具备非交互提权条件后执行。P0-04 仅通过显式 `--terminal-poc` 参数开放受控验证通道，P0-05 仅通过 `journal-poc` 验证受控日志读取，二者都不能视为生产 Web 功能。Vue 前端工程、统一设计系统和只读页面骨架已建立，但尚未接入完整真实 API，也不代表完整管理 UI 或通用 Docker 管理接口。
+项目处于 Spec 定义的 **Phase 0：技术验证**。**P0-01 环境探测器、P0-02 Docker SDK PoC、P0-04 终端 PoC 与 P0-05 journald PoC 均已完成实机核验**；P0-03 的 Unix Socket gRPC 与只读 HTTP 适配层已完成代码、测试和 ARM64 构建，root systemd 实机验证仍待具备非交互提权条件后执行。P0-06 的受限 Caddy Admin API 客户端与路由持久化编排已完成代码和测试，但 NAS 当前无运行中的 Caddy，尚未进行运行时 PoC。P0-04 仅通过显式 `--terminal-poc` 参数开放受控验证通道，P0-05 仅通过 `journal-poc` 验证受控日志读取，二者都不能视为生产 Web 功能。Vue 前端工程、统一设计系统和只读页面骨架已建立，但尚未接入完整真实 API，也不代表完整管理 UI 或通用 Docker 管理接口。
 
 ## 目录
 
@@ -51,3 +51,5 @@ go build -buildvcs=false -trimpath -o bin/ncp-server-linux-arm64 ./cmd/ncp-serve
 P0-04 的端到端验证、容器保护条件与关闭协议见 [P0-04 Terminal PoC](docs/specs/P0-04-terminal-poc.md)。
 
 P0-05 的 journald 查询、Cursor、筛选、Follow 与实机验证边界见 [P0-05 journald PoC](docs/specs/P0-05-journald-poc.md)。
+
+阶段成果、已核验证据和待办见 [阶段进度](docs/PROGRESS.md)。静态前端预览的 Compose 描述位于 `deploy/console/`；它不包含特权 Agent 或真实宿主机管理 API。
