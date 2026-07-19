@@ -13,7 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const defaultAgentTimeout = 5 * time.Second
+const (
+	defaultAgentTimeout       = 5 * time.Second
+	defaultTerminalPOCTimeout = 5 * time.Minute
+)
 
 type AgentClient interface {
 	Probe(context.Context, string) (agentsocket.AgentStatus, error)
@@ -21,10 +24,13 @@ type AgentClient interface {
 }
 
 type Config struct {
-	Agent           AgentClient
-	AgentSocketPath string
-	AgentTimeout    time.Duration
-	RequestID       func() string
+	Agent              AgentClient
+	AgentSocketPath    string
+	AgentTimeout       time.Duration
+	Terminal           TerminalClient
+	TerminalPOCEnabled bool
+	TerminalTimeout    time.Duration
+	RequestID          func() string
 }
 
 type HealthResponse struct {
@@ -42,6 +48,9 @@ type handler struct {
 	agent           AgentClient
 	agentSocketPath string
 	agentTimeout    time.Duration
+	terminal        TerminalClient
+	terminalEnabled bool
+	terminalTimeout time.Duration
 	newRequestID    func() string
 }
 
@@ -65,6 +74,12 @@ func NewHandler(config Config) http.Handler {
 	if config.AgentTimeout <= 0 {
 		config.AgentTimeout = defaultAgentTimeout
 	}
+	if config.TerminalPOCEnabled && config.Terminal == nil {
+		config.Terminal = socketTerminalClient{}
+	}
+	if config.TerminalTimeout <= 0 {
+		config.TerminalTimeout = defaultTerminalPOCTimeout
+	}
 	if config.RequestID == nil {
 		config.RequestID = defaultRequestID
 	}
@@ -73,6 +88,9 @@ func NewHandler(config Config) http.Handler {
 		agent:           config.Agent,
 		agentSocketPath: config.AgentSocketPath,
 		agentTimeout:    config.AgentTimeout,
+		terminal:        config.Terminal,
+		terminalEnabled: config.TerminalPOCEnabled,
+		terminalTimeout: config.TerminalTimeout,
 		newRequestID:    config.RequestID,
 	}
 	router := chi.NewRouter()
@@ -80,6 +98,9 @@ func NewHandler(config Config) http.Handler {
 	router.Get("/healthz", api.healthz)
 	router.Get("/api/v1/system/capabilities", api.capabilities)
 	router.Get("/api/v1/system/agent-status", api.agentStatus)
+	if api.terminalEnabled {
+		router.Get("/ws/terminal", api.terminalWebSocket)
+	}
 	router.NotFound(func(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "请求的资源不存在。")
 	})

@@ -84,6 +84,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	flags.SetOutput(io.Discard)
 	listenAddress := flags.String("listen", defaultHTTPListenAddress, "HTTP 监听地址")
 	agentSocketPath := flags.String("agent-socket", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径")
+	terminalPOC := flags.Bool("terminal-poc", false, "启用受控 P0 终端 WebSocket 通道")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -96,7 +97,10 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		return err
 	}
 	server := &http.Server{
-		Handler:           httpapi.NewHandler(httpapi.Config{AgentSocketPath: *agentSocketPath}),
+		Handler: httpapi.NewHandler(httpapi.Config{
+			AgentSocketPath:    *agentSocketPath,
+			TerminalPOCEnabled: *terminalPOC,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

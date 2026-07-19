@@ -15,3 +15,8 @@ service AgentProbeService {
   // 返回只读环境能力；不包含任意命令执行或 Docker Socket 访问权。
   rpc GetCapabilities(google.protobuf.Empty) returns (google.protobuf.Struct);
 }
+
+// P0-04 仅验证固定宿主机或受标签保护的临时容器终端；消息中不允许命令、Shell、路径或环境变量。
+service AgentTerminalPOCService {
+  rpc Open(stream google.protobuf.Struct) returns (stream google.protobuf.Struct);
+}

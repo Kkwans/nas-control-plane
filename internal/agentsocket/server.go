@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/Kkwans/nas-control-plane/internal/system"
+	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -27,9 +28,11 @@ const (
 )
 
 type SocketConfig struct {
-	SocketPath  string
-	SocketGroup string
-	SocketMode  os.FileMode
+	SocketPath        string
+	SocketGroup       string
+	SocketMode        os.FileMode
+	EnableTerminalPOC bool
+	TerminalManager   *terminal.Manager
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -41,6 +44,17 @@ func Serve(ctx context.Context, config SocketConfig) error {
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
+	if config.EnableTerminalPOC {
+		manager := config.TerminalManager
+		if manager == nil {
+			manager, err = terminal.NewPOCManager()
+			if err != nil {
+				cleanup()
+				return coded("TERMINAL_POC_INITIALIZATION_FAILED", err)
+			}
+		}
+		RegisterAgentTerminalPOCServiceServer(grpcServer, newTerminalPOCService(manager))
+	}
 	stopped := make(chan struct{})
 	go func() {
 		select {
@@ -157,6 +171,14 @@ func ValidateServerSocketGroup(groupName string) error {
 	}
 	_, err := socketGroupID(groupName)
 	return err
+}
+
+// ValidateServerSocketPath 保持常规 Agent 的固定 Socket 边界；仅显式 P0 终端实测可使用临时路径。
+func ValidateServerSocketPath(socketPath string, terminalPOC bool) error {
+	if socketPath == "" || socketPath == DefaultSocketPath || terminalPOC {
+		return nil
+	}
+	return coded("AGENT_SOCKET_PATH_POC_ONLY", errors.New("alternate socket path requires terminal POC mode"))
 }
 
 type capabilityCollector interface {
