@@ -1,0 +1,128 @@
+openapi: 3.1.1
+info:
+  title: NAS Control Plane API
+  version: 0.1.0
+  description: Phase 0 的 API 契约。能力信息只能由 ncp-agent 的受控接口提供。
+paths:
+  /api/v1/system/capabilities:
+    get:
+      operationId: getSystemCapabilities
+      summary: 获取 NAS 环境能力
+      tags: [system]
+      responses:
+        '200':
+          description: 已完成只读探测
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+        '503':
+          description: Agent 不可用或探测源不可读
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    Capabilities:
+      type: object
+      required:
+        - architecture
+        - docker
+        - compose
+        - systemd
+        - journald
+        - cgroupVersion
+        - procReadable
+        - sysReadable
+        - smartctl
+        - nvmeCli
+        - hostTerminal
+        - rootFilesystemWritable
+      properties:
+        hostname:
+          type: string
+        architecture:
+          type: string
+          examples: [arm64]
+        operatingSystem:
+          $ref: '#/components/schemas/OperatingSystem'
+        deviceModel:
+          type: [string, 'null']
+        docker:
+          type: boolean
+        dockerApiVersion:
+          type: [string, 'null']
+        compose:
+          type: boolean
+        composeVersion:
+          type: [string, 'null']
+        systemd:
+          type: boolean
+        journald:
+          type: boolean
+        cgroupVersion:
+          type: integer
+          minimum: 0
+          description: 0 表示未识别，1 与 2 分别表示 cgroup v1、v2。
+        procReadable:
+          type: boolean
+        sysReadable:
+          type: boolean
+        smartctl:
+          type: boolean
+        nvmeCli:
+          type: boolean
+        temperatureSensors:
+          type: array
+          items:
+            type: string
+        dataVolumes:
+          type: array
+          items:
+            type: string
+        networkInterfaces:
+          type: array
+          items:
+            type: string
+        canManageSystemUsers:
+          type: boolean
+        rootFilesystemWritable:
+          type: boolean
+        hostTerminal:
+          type: boolean
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProbeWarning'
+    OperatingSystem:
+      type: object
+      properties:
+        id:
+          type: string
+        versionId:
+          type: string
+        prettyName:
+          type: string
+    ProbeWarning:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          examples: [PROBE_SOURCE_UNAVAILABLE]
+        source:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

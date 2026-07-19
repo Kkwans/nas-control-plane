@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+// CapabilityService 是 Server 调用 Agent 的只读能力接口。
+// 后续 P0-03 才会落地 gRPC over Unix Socket 的传输实现。
+service CapabilityService {
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  string hostname = 1;
+  string architecture = 2;
+  OperatingSystem operating_system = 3;
+  optional string device_model = 4;
+  bool docker = 5;
+  optional string docker_api_version = 6;
+  bool compose = 7;
+  optional string compose_version = 8;
+  bool systemd = 9;
+  bool journald = 10;
+  uint32 cgroup_version = 11;
+  bool proc_readable = 12;
+  bool sys_readable = 13;
+  bool smartctl = 14;
+  bool nvme_cli = 15;
+  repeated string temperature_sensors = 16;
+  repeated string data_volumes = 17;
+  repeated string network_interfaces = 18;
+  bool can_manage_system_users = 19;
+  bool root_filesystem_writable = 20;
+  bool host_terminal = 21;
+  repeated ProbeWarning warnings = 22;
+}
+
+message OperatingSystem {
+  string id = 1;
+  string version_id = 2;
+  string pretty_name = 3;
+}
+
+message ProbeWarning {
+  string code = 1;
+  string source = 2;
+}
