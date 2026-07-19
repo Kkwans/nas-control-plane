@@ -3,6 +3,7 @@ module github.com/Kkwans/nas-control-plane
 go 1.26.4
 
 require (
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.0
 	google.golang.org/grpc v1.82.1

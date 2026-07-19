@@ -2,6 +2,7 @@ package agentsocket
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,7 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -155,10 +159,20 @@ func ValidateServerSocketGroup(groupName string) error {
 	return err
 }
 
-type statusService struct{}
+type capabilityCollector interface {
+	Collect(context.Context) (system.Capabilities, error)
+}
+
+type statusService struct {
+	collector capabilityCollector
+}
 
 func newStatusService() *statusService {
-	return &statusService{}
+	return newStatusServiceWithCollector(system.NewProbe(system.NewOSEnvironment()))
+}
+
+func newStatusServiceWithCollector(collector capabilityCollector) *statusService {
+	return &statusService{collector: collector}
 }
 
 func (statusService) GetStatus(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
@@ -170,4 +184,28 @@ func (statusService) GetStatus(ctx context.Context, _ *emptypb.Empty) (*structpb
 		"agent_euid":       os.Geteuid(),
 		"transport":        "unix",
 	})
+}
+
+func (service *statusService) GetCapabilities(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	capabilities, err := service.collector.Collect(ctx)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_CAPABILITIES_UNAVAILABLE")
+	}
+
+	encoded, err := json.Marshal(capabilities)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_CAPABILITIES_RESPONSE_INVALID")
+	}
+	values := make(map[string]any)
+	if err := json.Unmarshal(encoded, &values); err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_CAPABILITIES_RESPONSE_INVALID")
+	}
+	response, err := structpb.NewStruct(values)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_CAPABILITIES_RESPONSE_INVALID")
+	}
+	return response, nil
 }

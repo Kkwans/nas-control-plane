@@ -4,6 +4,18 @@ info:
   version: 0.1.0
   description: Phase 0 的 API 契约。能力信息只能由 ncp-agent 的受控接口提供。
 paths:
+  /healthz:
+    get:
+      operationId: getServerHealth
+      summary: 获取 NCP Server 健康状态
+      tags: [system]
+      responses:
+        '200':
+          description: Server 可响应 HTTP 请求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
   /api/v1/system/capabilities:
     get:
       operationId: getSystemCapabilities
@@ -22,8 +34,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/agent-status:
+    get:
+      operationId: getAgentStatus
+      summary: 获取 Agent Socket 状态
+      tags: [system]
+      responses:
+        '200':
+          description: Agent Socket 可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentStatus'
+        '503':
+          description: Agent Socket 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          examples: [ok]
+        service:
+          type: string
+          examples: [ncp-server]
+    AgentStatus:
+      type: object
+      required: [protocolVersion, agentEUID, transport]
+      properties:
+        protocolVersion:
+          type: string
+          examples: [p0-v1]
+        agentEUID:
+          type: integer
+          minimum: 0
+        transport:
+          type: string
+          examples: [unix]
     Capabilities:
       type: object
       required:

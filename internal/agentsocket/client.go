@@ -2,10 +2,12 @@ package agentsocket
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 
+	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -41,6 +43,27 @@ func Probe(ctx context.Context, socketPath string) (AgentStatus, error) {
 	return decodeAgentStatus(response)
 }
 
+func CollectCapabilities(ctx context.Context, socketPath string) (system.Capabilities, error) {
+	if err := ctx.Err(); err != nil {
+		return system.Capabilities{}, contextError(err)
+	}
+	if socketPath == "" {
+		return system.Capabilities{}, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))
+	}
+
+	connection, err := grpc.NewClient("unix://"+socketPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return system.Capabilities{}, coded("AGENT_RPC_CONNECTION_FAILED", err)
+	}
+	defer connection.Close()
+
+	response, err := NewAgentProbeServiceClient(connection).GetCapabilities(ctx, &emptypb.Empty{})
+	if err != nil {
+		return system.Capabilities{}, rpcError(err)
+	}
+	return decodeCapabilities(response)
+}
+
 func decodeAgentStatus(response *structpb.Struct) (AgentStatus, error) {
 	if response == nil || len(response.GetFields()) != 3 {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("unexpected status field count"))
@@ -62,6 +85,25 @@ func decodeAgentStatus(response *structpb.Struct) (AgentStatus, error) {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", fmt.Errorf("invalid agent euid %v", uid))
 	}
 	return AgentStatus{ProtocolVersion: protocolVersion, AgentEUID: int(uid), Transport: transport}, nil
+}
+
+func decodeCapabilities(response *structpb.Struct) (system.Capabilities, error) {
+	if response == nil {
+		return system.Capabilities{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("capabilities response is required"))
+	}
+
+	encoded, err := json.Marshal(response.AsMap())
+	if err != nil {
+		return system.Capabilities{}, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	var capabilities system.Capabilities
+	if err := json.Unmarshal(encoded, &capabilities); err != nil {
+		return system.Capabilities{}, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	if capabilities.Architecture == "" {
+		return system.Capabilities{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("capabilities architecture is required"))
+	}
+	return capabilities, nil
 }
 
 func stringField(response *structpb.Struct, name string) (string, bool) {

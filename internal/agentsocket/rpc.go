@@ -9,12 +9,14 @@ import (
 )
 
 const (
-	agentProbeServiceName                = "ncp.agent.v1.AgentProbeService"
-	AgentProbeServiceGetStatusFullMethod = "/ncp.agent.v1.AgentProbeService/GetStatus"
+	agentProbeServiceName                      = "ncp.agent.v1.AgentProbeService"
+	AgentProbeServiceGetStatusFullMethod       = "/ncp.agent.v1.AgentProbeService/GetStatus"
+	AgentProbeServiceGetCapabilitiesFullMethod = "/ncp.agent.v1.AgentProbeService/GetCapabilities"
 )
 
 type AgentProbeServiceClient interface {
 	GetStatus(ctx context.Context, in *emptypb.Empty, options ...grpc.CallOption) (*structpb.Struct, error)
+	GetCapabilities(ctx context.Context, in *emptypb.Empty, options ...grpc.CallOption) (*structpb.Struct, error)
 }
 
 type agentProbeServiceClient struct {
@@ -33,8 +35,17 @@ func (c *agentProbeServiceClient) GetStatus(ctx context.Context, in *emptypb.Emp
 	return response, nil
 }
 
+func (c *agentProbeServiceClient) GetCapabilities(ctx context.Context, in *emptypb.Empty, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := c.connection.Invoke(ctx, AgentProbeServiceGetCapabilitiesFullMethod, in, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 type AgentProbeServiceServer interface {
 	GetStatus(context.Context, *emptypb.Empty) (*structpb.Struct, error)
+	GetCapabilities(context.Context, *emptypb.Empty) (*structpb.Struct, error)
 }
 
 func RegisterAgentProbeServiceServer(server grpc.ServiceRegistrar, implementation AgentProbeServiceServer) {
@@ -59,11 +70,32 @@ func agentProbeServiceGetStatusHandler(server any, ctx context.Context, decoder 
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentProbeServiceGetCapabilitiesHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(emptypb.Empty)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return server.(AgentProbeServiceServer).GetCapabilities(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     server,
+		FullMethod: AgentProbeServiceGetCapabilitiesFullMethod,
+	}
+	handler := func(ctx context.Context, request any) (any, error) {
+		return server.(AgentProbeServiceServer).GetCapabilities(ctx, request.(*emptypb.Empty))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
 var agentProbeServiceDescription = grpc.ServiceDesc{
 	ServiceName: agentProbeServiceName,
 	HandlerType: (*AgentProbeServiceServer)(nil),
 	Methods: []grpc.MethodDesc{{
 		MethodName: "GetStatus",
 		Handler:    agentProbeServiceGetStatusHandler,
+	}, {
+		MethodName: "GetCapabilities",
+		Handler:    agentProbeServiceGetCapabilitiesHandler,
 	}},
 }
