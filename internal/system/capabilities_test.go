@@ -127,6 +127,21 @@ func TestCollectRecognizesCgroupV1WhenTheV2ControllerIsAbsent(t *testing.T) {
 	}
 }
 
+func TestCollectReturnsOnlyDataVolumeRoots(t *testing.T) {
+	t.Parallel()
+
+	env := completeEnvironment()
+	env.files["/proc/mounts"] = "overlay / overlay rw,relatime 0 0\n/dev/sda1 /volume1 ext4 rw,relatime 0 0\n/dev/sdb1 /volume2 ext4 rw,relatime 0 0\noverlay /volume1/@docker/overlay2/example/merged overlay rw,relatime 0 0\n"
+
+	capabilities, err := NewProbe(env).Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if !sameStrings(capabilities.DataVolumes, []string{"/volume1", "/volume2"}) {
+		t.Errorf("DataVolumes = %#v, want only data volume roots", capabilities.DataVolumes)
+	}
+}
+
 func completeEnvironment() *fakeEnvironment {
 	return &fakeEnvironment{
 		architecture: "arm64",

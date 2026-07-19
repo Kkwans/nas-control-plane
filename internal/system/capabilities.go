@@ -294,8 +294,8 @@ func parseMounts(content string) (bool, []string) {
 		if mountPoint == "/" {
 			rootWritable = mountOptionsContain(fields[3], "rw")
 		}
-		if strings.HasPrefix(mountPoint, "/volume") {
-			volumes = append(volumes, mountPoint)
+		if volumeRoot, ok := dataVolumeRoot(mountPoint); ok {
+			volumes = append(volumes, volumeRoot)
 		}
 	}
 	return rootWritable, sortedUnique(volumes)
@@ -309,6 +309,25 @@ func unescapeMountPath(path string) string {
 		"\\134", "\\",
 	)
 	return replacer.Replace(path)
+}
+
+func dataVolumeRoot(mountPoint string) (string, bool) {
+	parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(mountPoint), "/"), "/")
+	if len(parts) == 0 {
+		return "", false
+	}
+
+	name := parts[0]
+	suffix, found := strings.CutPrefix(name, "volume")
+	if !found || suffix == "" {
+		return "", false
+	}
+	for _, character := range suffix {
+		if character < '0' || character > '9' {
+			return "", false
+		}
+	}
+	return "/" + name, true
 }
 
 func mountOptionsContain(options, option string) bool {
