@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
@@ -144,6 +145,10 @@ type fakeAgentClient struct {
 	statusErr        error
 	capabilities     system.Capabilities
 	capabilitiesErr  error
+	summary          system.Summary
+	summaryErr       error
+	inventory        docker.Inventory
+	inventoryErr     error
 	socketPath       string
 	deadlineObserved bool
 }
@@ -157,4 +162,16 @@ func (f *fakeAgentClient) CollectCapabilities(ctx context.Context, socketPath st
 	f.socketPath = socketPath
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.capabilities, f.capabilitiesErr
+}
+
+func (f *fakeAgentClient) CollectSystemSummary(ctx context.Context, socketPath string) (system.Summary, error) {
+	f.socketPath = socketPath
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.summary, f.summaryErr
+}
+
+func (f *fakeAgentClient) CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
+	f.socketPath = socketPath
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.inventory, f.inventoryErr
 }

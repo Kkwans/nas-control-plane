@@ -52,6 +52,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/summary:
+    get:
+      operationId: getSystemSummary
+      summary: Get a live NAS host summary
+      tags: [system]
+      responses:
+        '200':
+          description: Live host metrics collected by Root Agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemSummary'
+        '503':
+          description: Root Agent or a required metric source is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/inventory:
+    get:
+      operationId: getDockerInventory
+      summary: Get Docker Engine, container, and Compose project inventory
+      tags: [docker]
+      responses:
+        '200':
+          description: Live Docker inventory collected by Root Agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerInventory'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/services:
+    get:
+      operationId: listServices
+      summary: List discovered Compose projects and standalone containers
+      tags: [services]
+      responses:
+        '200':
+          description: Service list derived from the live Docker inventory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceListResponse'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /ws/terminal:
     get:
       operationId: openTerminalPOCWebSocket
@@ -101,6 +155,150 @@ components:
         transport:
           type: string
           examples: [unix]
+    SystemSummary:
+      type: object
+      required: [collectedAt, host, cpu, memory, storage, network, warnings]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        host:
+          $ref: '#/components/schemas/HostSnapshot'
+        cpu:
+          $ref: '#/components/schemas/CpuStats'
+        memory:
+          $ref: '#/components/schemas/MemoryStats'
+        storage:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiskStats'
+        network:
+          type: array
+          items:
+            $ref: '#/components/schemas/NetworkStats'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SummaryWarning'
+    HostSnapshot:
+      type: object
+      properties:
+        hostname: { type: string }
+        operatingSystem: { type: string }
+        kernelVersion: { type: string }
+        architecture: { type: string }
+        uptimeSeconds: { type: integer, minimum: 0 }
+        processCount: { type: integer, minimum: 0 }
+    CpuStats:
+      type: object
+      properties:
+        usagePercent: { type: number, minimum: 0 }
+        logicalCores: { type: integer, minimum: 0 }
+        load1: { type: number, minimum: 0 }
+        load5: { type: number, minimum: 0 }
+        load15: { type: number, minimum: 0 }
+    MemoryStats:
+      type: object
+      properties:
+        totalBytes: { type: integer, minimum: 0 }
+        usedBytes: { type: integer, minimum: 0 }
+        availableBytes: { type: integer, minimum: 0 }
+    DiskStats:
+      type: object
+      properties:
+        mountpoint: { type: string }
+        totalBytes: { type: integer, minimum: 0 }
+        usedBytes: { type: integer, minimum: 0 }
+        freeBytes: { type: integer, minimum: 0 }
+    NetworkStats:
+      type: object
+      properties:
+        name: { type: string }
+        receiveBytes: { type: integer, minimum: 0 }
+        transmitBytes: { type: integer, minimum: 0 }
+    SummaryWarning:
+      type: object
+      required: [code, source]
+      properties:
+        code: { type: string, examples: [SYSTEM_SUMMARY_SOURCE_UNAVAILABLE] }
+        source: { type: string }
+    DockerInventory:
+      type: object
+      required: [collectedAt, engine, containers, projects]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        engine:
+          $ref: '#/components/schemas/DockerEngineInfo'
+        containers:
+          type: array
+          items:
+            $ref: '#/components/schemas/InventoryContainer'
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerProject'
+    DockerEngineInfo:
+      type: object
+      properties:
+        serverVersion: { type: string }
+        operatingSystem: { type: string }
+        architecture: { type: string }
+        containers: { type: integer, minimum: 0 }
+        containersRunning: { type: integer, minimum: 0 }
+        containersStopped: { type: integer, minimum: 0 }
+        images: { type: integer, minimum: 0 }
+    InventoryContainer:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        image: { type: string }
+        state: { type: string }
+        status: { type: string }
+        createdAt:
+          type: string
+          format: date-time
+        ports:
+          type: array
+          items:
+            $ref: '#/components/schemas/PortMapping'
+        projectId: { type: string }
+        projectName: { type: string }
+        serviceName: { type: string }
+    PortMapping:
+      type: object
+      properties:
+        hostIp: { type: string }
+        privatePort: { type: integer, minimum: 0 }
+        publicPort: { type: integer, minimum: 0 }
+        protocol: { type: string }
+    DockerProject:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind:
+          type: string
+          enum: [compose, standalone]
+        state:
+          type: string
+          enum: [running, stopped, degraded]
+        workingDirectory: { type: string }
+        containerCount: { type: integer, minimum: 0 }
+        runningCount: { type: integer, minimum: 0 }
+    ServiceListResponse:
+      type: object
+      required: [collectedAt, services]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerProject'
     Capabilities:
       type: object
       required:

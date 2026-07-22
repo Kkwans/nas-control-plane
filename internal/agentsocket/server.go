@@ -33,6 +33,7 @@ type SocketConfig struct {
 	SocketMode        os.FileMode
 	EnableTerminalPOC bool
 	TerminalManager   *terminal.Manager
+	DashboardProvider DashboardProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -41,9 +42,17 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		return err
 	}
 	defer cleanup()
+	dashboardProvider := config.DashboardProvider
+	if dashboardProvider == nil {
+		dashboardProvider, err = newLiveDashboardProvider()
+		if err != nil {
+			return coded("AGENT_DASHBOARD_INITIALIZATION_FAILED", err)
+		}
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
+	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

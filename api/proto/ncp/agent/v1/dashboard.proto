@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// Root Agent provides read-only host and Docker dashboard data over the local Unix socket.
+service AgentDashboardService {
+  rpc GetSystemSummary(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc GetDockerInventory(google.protobuf.Empty) returns (google.protobuf.Struct);
+}

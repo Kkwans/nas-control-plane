@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/go-chi/chi/v5"
 )
@@ -21,6 +22,8 @@ const (
 type AgentClient interface {
 	Probe(context.Context, string) (agentsocket.AgentStatus, error)
 	CollectCapabilities(context.Context, string) (system.Capabilities, error)
+	CollectSystemSummary(context.Context, string) (system.Summary, error)
+	CollectDockerInventory(context.Context, string) (docker.Inventory, error)
 }
 
 type Config struct {
@@ -44,6 +47,11 @@ type ErrorResponse struct {
 	RequestID string `json:"requestId"`
 }
 
+type ServiceListResponse struct {
+	CollectedAt time.Time        `json:"collectedAt"`
+	Services    []docker.Project `json:"services"`
+}
+
 type handler struct {
 	agent           AgentClient
 	agentSocketPath string
@@ -62,6 +70,14 @@ func (socketAgentClient) Probe(ctx context.Context, socketPath string) (agentsoc
 
 func (socketAgentClient) CollectCapabilities(ctx context.Context, socketPath string) (system.Capabilities, error) {
 	return agentsocket.CollectCapabilities(ctx, socketPath)
+}
+
+func (socketAgentClient) CollectSystemSummary(ctx context.Context, socketPath string) (system.Summary, error) {
+	return agentsocket.CollectSystemSummary(ctx, socketPath)
+}
+
+func (socketAgentClient) CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
+	return agentsocket.CollectDockerInventory(ctx, socketPath)
 }
 
 func NewHandler(config Config) http.Handler {
@@ -98,6 +114,9 @@ func NewHandler(config Config) http.Handler {
 	router.Get("/healthz", api.healthz)
 	router.Get("/api/v1/system/capabilities", api.capabilities)
 	router.Get("/api/v1/system/agent-status", api.agentStatus)
+	router.Get("/api/v1/system/summary", api.systemSummary)
+	router.Get("/api/v1/docker/inventory", api.dockerInventory)
+	router.Get("/api/v1/services", api.services)
 	if api.terminalEnabled {
 		router.Get("/ws/terminal", api.terminalWebSocket)
 	}
@@ -148,6 +167,49 @@ func (api *handler) agentStatus(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusOK, status)
+}
+
+func (api *handler) systemSummary(response http.ResponseWriter, request *http.Request) {
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+
+	summary, err := api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
+		return
+	}
+	writeJSON(response, http.StatusOK, summary)
+}
+
+func (api *handler) dockerInventory(response http.ResponseWriter, request *http.Request) {
+	inventory, ok := api.collectDockerInventory(response, request)
+	if !ok {
+		return
+	}
+	writeJSON(response, http.StatusOK, inventory)
+}
+
+func (api *handler) services(response http.ResponseWriter, request *http.Request) {
+	inventory, ok := api.collectDockerInventory(response, request)
+	if !ok {
+		return
+	}
+	writeJSON(response, http.StatusOK, ServiceListResponse{
+		CollectedAt: inventory.CollectedAt,
+		Services:    inventory.Projects,
+	})
+}
+
+func (api *handler) collectDockerInventory(response http.ResponseWriter, request *http.Request) (docker.Inventory, bool) {
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+
+	inventory, err := api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_INVENTORY_UNAVAILABLE", "Docker 实时清单暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		return docker.Inventory{}, false
+	}
+	return inventory, true
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {

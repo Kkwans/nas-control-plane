@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -64,6 +65,51 @@ func CollectCapabilities(ctx context.Context, socketPath string) (system.Capabil
 	return decodeCapabilities(response)
 }
 
+func CollectSystemSummary(ctx context.Context, socketPath string) (system.Summary, error) {
+	if err := ctx.Err(); err != nil {
+		return system.Summary{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return system.Summary{}, err
+	}
+	defer connection.Close()
+
+	response, err := NewAgentDashboardServiceClient(connection).GetSystemSummary(ctx, &emptypb.Empty{})
+	if err != nil {
+		return system.Summary{}, rpcError(err)
+	}
+	return decodeSystemSummary(response)
+}
+
+func CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
+	if err := ctx.Err(); err != nil {
+		return docker.Inventory{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.Inventory{}, err
+	}
+	defer connection.Close()
+
+	response, err := NewAgentDashboardServiceClient(connection).GetDockerInventory(ctx, &emptypb.Empty{})
+	if err != nil {
+		return docker.Inventory{}, rpcError(err)
+	}
+	return decodeDockerInventory(response)
+}
+
+func dialSocket(socketPath string) (*grpc.ClientConn, error) {
+	if socketPath == "" {
+		return nil, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))
+	}
+	connection, err := grpc.NewClient("unix://"+socketPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, coded("AGENT_RPC_CONNECTION_FAILED", err)
+	}
+	return connection, nil
+}
+
 func decodeAgentStatus(response *structpb.Struct) (AgentStatus, error) {
 	if response == nil || len(response.GetFields()) != 3 {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("unexpected status field count"))
@@ -104,6 +150,42 @@ func decodeCapabilities(response *structpb.Struct) (system.Capabilities, error) 
 		return system.Capabilities{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("capabilities architecture is required"))
 	}
 	return capabilities, nil
+}
+
+func decodeSystemSummary(response *structpb.Struct) (system.Summary, error) {
+	var summary system.Summary
+	if err := decodeDashboardResponse(response, &summary); err != nil {
+		return system.Summary{}, err
+	}
+	if summary.CollectedAt.IsZero() {
+		return system.Summary{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("summary collection time is required"))
+	}
+	return summary, nil
+}
+
+func decodeDockerInventory(response *structpb.Struct) (docker.Inventory, error) {
+	var inventory docker.Inventory
+	if err := decodeDashboardResponse(response, &inventory); err != nil {
+		return docker.Inventory{}, err
+	}
+	if inventory.CollectedAt.IsZero() {
+		return docker.Inventory{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("inventory collection time is required"))
+	}
+	return inventory, nil
+}
+
+func decodeDashboardResponse(response *structpb.Struct, destination any) error {
+	if response == nil {
+		return coded("AGENT_RPC_RESPONSE_INVALID", errors.New("dashboard response is required"))
+	}
+	encoded, err := json.Marshal(response.AsMap())
+	if err != nil {
+		return coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	if err := json.Unmarshal(encoded, destination); err != nil {
+		return coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	return nil
 }
 
 func stringField(response *structpb.Struct, name string) (string, bool) {

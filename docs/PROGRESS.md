@@ -1,6 +1,6 @@
 # NAS Control Plane 阶段进度
 
-更新时间：2026-07-19
+更新时间：2026-07-23
 
 ## 当前结论
 
@@ -12,11 +12,11 @@
 | --- | --- | --- |
 | P0-01 环境能力探测 | 已完成 | Go 单测、ARM64 交叉构建和 NAS 实机探测通过。 |
 | P0-02 Docker SDK 探针 | 已完成 | 仅针对固定标签的临时容器完成实机验证，验证容器已清理。 |
-| P0-03 Agent Unix Socket 与 HTTP 适配层 | 代码完成 | 代码、测试和 ARM64 构建已完成；因当前没有非交互 root 提权条件，systemd 常驻 Agent 未做实机验证。 |
+| Root Agent 实时系统与 Docker 数据通道 | 代码完成，待实机部署 | 已实现系统快照、Docker Engine/容器/Compose 自动发现、Agent Dashboard gRPC 和 `/api/v1/system/summary`、`/api/v1/docker/inventory`、`/api/v1/services`；Go 全量测试、vet 与 Linux ARM64 交叉构建通过。尚待以 root systemd 服务部署到 NAS 后完成实机读取验证。 |
 | P0-04 受控终端 PoC | 已完成 | PTY、WebSocket、尺寸同步、退出和资源上限均经 NAS 实机 PoC 验证；仅通过显式参数开启。 |
 | P0-05 journald PoC | 已完成 | 查询、筛选、Cursor 分页和 Follow 流均经 NAS 实机 PoC 验证。 |
 | P0-06 Caddy 路由持久化 PoC | 代码完成，运行时暂停 | 受限 Admin API 客户端和持久化编排已测试并提交；NAS 当前无运行中的 Caddy，运行时验证留待后续阶段。 |
-| Vue 控制台 | 已完成基础界面 | 已建立总览、服务中心、能力地图、响应式布局、统一间距/圆角/色彩/动效语言；数据仍以明确标识的预览采样为主。 |
+| Vue 控制台 | 已完成基础界面，待接入真实 API | 已建立总览、服务中心、能力地图、响应式布局、统一间距/圆角/色彩/动效语言；下一切片切换为浅色现代视觉并接入新的实时系统与服务 API。 |
 
 ## 当前预览部署
 
