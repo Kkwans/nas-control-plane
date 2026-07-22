@@ -1,32 +1,34 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --ncp-canvas: #0b1213;
-  --ncp-canvas-deep: #080e0f;
-  --ncp-surface: #111b1d;
-  --ncp-surface-raised: #182426;
-  --ncp-surface-quiet: #0d1617;
-  --ncp-surface-hover: #1d2b2d;
-  --ncp-line: rgba(218, 239, 231, 0.11);
-  --ncp-line-strong: rgba(218, 239, 231, 0.19);
-  --ncp-text: #f2f7f3;
-  --ncp-text-muted: #adbbb5;
-  --ncp-text-subtle: #74817d;
-  --ncp-primary: #8ce2be;
-  --ncp-primary-strong: #52ba90;
-  --ncp-primary-soft: rgba(140, 226, 190, 0.13);
-  --ncp-info: #91c7f3;
-  --ncp-info-soft: rgba(145, 199, 243, 0.13);
-  --ncp-warning: #f1c675;
-  --ncp-warning-soft: rgba(241, 198, 117, 0.14);
-  --ncp-danger: #ef8d89;
-  --ncp-danger-soft: rgba(239, 141, 137, 0.14);
-  --ncp-shadow-panel: 0 18px 52px rgba(0, 0, 0, 0.2);
-  --ncp-shadow-float: 0 24px 72px rgba(0, 0, 0, 0.34);
+  --ncp-canvas: #f6f8fb;
+  --ncp-canvas-deep: #eef2f7;
+  --ncp-surface: #ffffff;
+  --ncp-surface-raised: #ffffff;
+  --ncp-surface-quiet: #f3f6fa;
+  --ncp-surface-hover: #fbfcff;
+  --ncp-line: #e2e8f0;
+  --ncp-line-strong: #cbd5e1;
+  --ncp-text: #17223a;
+  --ncp-text-muted: #59677e;
+  --ncp-text-subtle: #8793a8;
+  --ncp-primary: #2c6fdf;
+  --ncp-primary-strong: #1e5ec6;
+  --ncp-primary-soft: rgba(44, 111, 223, 0.1);
+  --ncp-info: #4a85d8;
+  --ncp-info-soft: rgba(74, 133, 216, 0.1);
+  --ncp-warning: #d28a1b;
+  --ncp-warning-strong: #ac6910;
+  --ncp-warning-soft: rgba(210, 138, 27, 0.11);
+  --ncp-danger: #d4515d;
+  --ncp-danger-strong: #b73746;
+  --ncp-danger-soft: rgba(212, 81, 93, 0.1);
+  --ncp-shadow-panel: 0 14px 35px rgba(35, 55, 91, 0.065), 0 2px 7px rgba(35, 55, 91, 0.025);
+  --ncp-shadow-float: 0 24px 60px rgba(35, 55, 91, 0.12);
 
-  --ncp-radius-sm: 10px;
-  --ncp-radius-md: 14px;
-  --ncp-radius-lg: 20px;
+  --ncp-radius-sm: 12px;
+  --ncp-radius-md: 18px;
+  --ncp-radius-lg: 24px;
   --ncp-radius-pill: 999px;
 
   --ncp-space-1: 4px;
@@ -45,8 +47,8 @@
   --ncp-duration-base: 240ms;
   --ncp-duration-slow: 420ms;
 
-  --el-color-primary: var(--ncp-primary-strong);
-  --el-color-success: var(--ncp-primary-strong);
+  --el-color-primary: var(--ncp-primary);
+  --el-color-success: #1a8b6d;
   --el-color-warning: var(--ncp-warning);
   --el-color-danger: var(--ncp-danger);
   --el-bg-color: var(--ncp-surface);

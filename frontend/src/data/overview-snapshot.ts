@@ -1,6 +1,14 @@
-import type { OverviewSnapshot } from '@/domain/overview'
+interface PreviewSnapshot {
+  hostname: string
+  updatedAt: string
+  cpu: { usage: number; trend: number[] }
+  memory: { usedGiB: number; totalGiB: number }
+  storage: { usedTiB: number; totalTiB: number }
+  network: { downMbps: number; upMbps: number }
+  docker: { available: boolean; activeContainers: number }
+}
 
-export const previewSnapshot: OverviewSnapshot = {
+export const previewSnapshot: PreviewSnapshot = {
   hostname: 'DH4300-PLUS',
   updatedAt: '2026-07-19T09:30:00+08:00',
   cpu: {

@@ -1,23 +1,99 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { RouterView } from 'vue-router'
+import { RouterView, useRouter } from 'vue-router'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import { LoaderCircle } from '@lucide/vue'
 
 import AppShell from './layout/AppShell.vue'
+import LoginView from './views/LoginView.vue'
+import { useAuthStore } from './stores/auth'
 import { useSystemStore } from './stores/system'
 
+const router = useRouter()
+const authStore = useAuthStore()
 const systemStore = useSystemStore()
 
 onMounted(() => {
-  void systemStore.refresh()
+  void initialize()
 })
+
+async function initialize() {
+  await authStore.refresh()
+  if (authStore.isAuthenticated) {
+    await systemStore.refresh()
+  }
+}
+
+async function handleAuthenticated() {
+  await systemStore.refresh()
+}
+
+async function handleRefresh() {
+  await systemStore.refresh()
+  if (systemStore.errorCode === 'AUTH_UNAUTHORIZED') {
+    await authStore.refresh()
+  }
+}
+
+async function handleLogout() {
+  await authStore.logout()
+  systemStore.clear()
+  await router.replace('/')
+}
 </script>
 
 <template>
   <ElConfigProvider :locale="zhCn" size="default" :z-index="3000">
-    <AppShell :device-name="systemStore.deviceName" :connection-state="systemStore.connectionState">
+    <main v-if="authStore.state === 'checking'" class="app-boot" aria-live="polite">
+      <span class="app-boot__mark">N</span>
+      <LoaderCircle class="app-boot__spinner" :size="18" aria-hidden="true" />
+      <span>正在连接控制面</span>
+    </main>
+    <LoginView v-else-if="!authStore.isAuthenticated" @authenticated="handleAuthenticated" />
+    <AppShell
+      v-else
+      :device-name="systemStore.deviceName"
+      :connection-state="systemStore.connectionState"
+      :user-name="authStore.user?.username ?? 'root'"
+      :is-refreshing="systemStore.isRefreshing"
+      @refresh="handleRefresh"
+      @logout="handleLogout"
+    >
       <RouterView />
     </AppShell>
   </ElConfigProvider>
 </template>
+
+<style scoped>
+.app-boot {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ncp-text-muted);
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 0.72rem;
+}
+
+.app-boot__mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--ncp-primary);
+  color: white;
+  font-weight: 800;
+}
+
+.app-boot__spinner {
+  animation: app-spin 0.8s linear infinite;
+  color: var(--ncp-primary);
+}
+
+@keyframes app-spin {
+  to { transform: rotate(360deg); }
+}
+</style>

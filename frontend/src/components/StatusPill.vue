@@ -42,21 +42,21 @@ const toneClass = computed(() => `status-pill--${props.tone}`)
 }
 
 .status-pill--healthy {
-  border-color: rgba(140, 226, 190, 0.22);
-  background: var(--ncp-primary-soft);
-  color: var(--ncp-primary);
+  border-color: rgba(26, 139, 109, 0.18);
+  background: rgba(26, 139, 109, 0.09);
+  color: #17795f;
 }
 
 .status-pill--degraded,
 .status-pill--pending {
-  border-color: rgba(241, 198, 117, 0.23);
+  border-color: rgba(210, 138, 27, 0.2);
   background: var(--ncp-warning-soft);
-  color: var(--ncp-warning);
+  color: var(--ncp-warning-strong);
 }
 
 .status-pill--attention {
-  border-color: rgba(239, 141, 137, 0.24);
+  border-color: rgba(212, 81, 93, 0.2);
   background: var(--ncp-danger-soft);
-  color: var(--ncp-danger);
+  color: var(--ncp-danger-strong);
 }
 </style>
