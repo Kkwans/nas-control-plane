@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	"github.com/Kkwans/nas-control-plane/internal/auth"
 	"github.com/Kkwans/nas-control-plane/internal/httpapi"
 )
 
@@ -22,6 +23,7 @@ const (
 	agentProbeTimeout        = 5 * time.Second
 	httpShutdownTimeout      = 10 * time.Second
 	defaultHTTPListenAddress = "127.0.0.1:8750"
+	defaultDatabasePath      = "/var/lib/ncp-server/ncp.sqlite"
 )
 
 func main() {
@@ -84,6 +86,8 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	flags.SetOutput(io.Discard)
 	listenAddress := flags.String("listen", defaultHTTPListenAddress, "HTTP 监听地址")
 	agentSocketPath := flags.String("agent-socket", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径")
+	databasePath := flags.String("database", defaultDatabasePath, "SQLite 数据库路径")
+	secureCookie := flags.Bool("secure-cookie", false, "仅通过 HTTPS 发送登录 Cookie")
 	terminalPOC := flags.Bool("terminal-poc", false, "启用受控 P0 终端 WebSocket 通道")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -91,6 +95,11 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	if flags.NArg() != 0 {
 		return errors.New("unexpected serve arguments")
 	}
+	authService, err := auth.Open(*databasePath, auth.Options{})
+	if err != nil {
+		return err
+	}
+	defer authService.Close()
 
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
@@ -98,8 +107,10 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	}
 	server := &http.Server{
 		Handler: httpapi.NewHandler(httpapi.Config{
-			AgentSocketPath:    *agentSocketPath,
-			TerminalPOCEnabled: *terminalPOC,
+			AgentSocketPath:     *agentSocketPath,
+			Auth:                authService,
+			SessionCookieSecure: *secureCookie,
+			TerminalPOCEnabled:  *terminalPOC,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

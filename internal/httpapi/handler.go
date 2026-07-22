@@ -27,13 +27,15 @@ type AgentClient interface {
 }
 
 type Config struct {
-	Agent              AgentClient
-	AgentSocketPath    string
-	AgentTimeout       time.Duration
-	Terminal           TerminalClient
-	TerminalPOCEnabled bool
-	TerminalTimeout    time.Duration
-	RequestID          func() string
+	Agent               AgentClient
+	AgentSocketPath     string
+	AgentTimeout        time.Duration
+	Auth                Authenticator
+	SessionCookieSecure bool
+	Terminal            TerminalClient
+	TerminalPOCEnabled  bool
+	TerminalTimeout     time.Duration
+	RequestID           func() string
 }
 
 type HealthResponse struct {
@@ -53,13 +55,15 @@ type ServiceListResponse struct {
 }
 
 type handler struct {
-	agent           AgentClient
-	agentSocketPath string
-	agentTimeout    time.Duration
-	terminal        TerminalClient
-	terminalEnabled bool
-	terminalTimeout time.Duration
-	newRequestID    func() string
+	agent               AgentClient
+	agentSocketPath     string
+	agentTimeout        time.Duration
+	auth                Authenticator
+	sessionCookieSecure bool
+	terminal            TerminalClient
+	terminalEnabled     bool
+	terminalTimeout     time.Duration
+	newRequestID        func() string
 }
 
 type socketAgentClient struct{}
@@ -101,24 +105,35 @@ func NewHandler(config Config) http.Handler {
 	}
 
 	api := &handler{
-		agent:           config.Agent,
-		agentSocketPath: config.AgentSocketPath,
-		agentTimeout:    config.AgentTimeout,
-		terminal:        config.Terminal,
-		terminalEnabled: config.TerminalPOCEnabled,
-		terminalTimeout: config.TerminalTimeout,
-		newRequestID:    config.RequestID,
+		agent:               config.Agent,
+		agentSocketPath:     config.AgentSocketPath,
+		agentTimeout:        config.AgentTimeout,
+		auth:                config.Auth,
+		sessionCookieSecure: config.SessionCookieSecure,
+		terminal:            config.Terminal,
+		terminalEnabled:     config.TerminalPOCEnabled,
+		terminalTimeout:     config.TerminalTimeout,
+		newRequestID:        config.RequestID,
 	}
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
 	router.Get("/healthz", api.healthz)
-	router.Get("/api/v1/system/capabilities", api.capabilities)
-	router.Get("/api/v1/system/agent-status", api.agentStatus)
-	router.Get("/api/v1/system/summary", api.systemSummary)
-	router.Get("/api/v1/docker/inventory", api.dockerInventory)
-	router.Get("/api/v1/services", api.services)
+	router.Route("/api/v1", func(routes chi.Router) {
+		routes.Get("/auth/status", api.authStatus)
+		routes.Post("/auth/bootstrap", api.bootstrap)
+		routes.Post("/auth/login", api.login)
+		routes.Post("/auth/logout", api.logout)
+		routes.Group(func(protected chi.Router) {
+			protected.Use(api.requireAuthentication)
+			protected.Get("/system/capabilities", api.capabilities)
+			protected.Get("/system/agent-status", api.agentStatus)
+			protected.Get("/system/summary", api.systemSummary)
+			protected.Get("/docker/inventory", api.dockerInventory)
+			protected.Get("/services", api.services)
+		})
+	})
 	if api.terminalEnabled {
-		router.Get("/ws/terminal", api.terminalWebSocket)
+		router.With(api.requireAuthentication).Get("/ws/terminal", api.terminalWebSocket)
 	}
 	router.NotFound(func(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "请求的资源不存在。")

@@ -13,6 +13,7 @@
 | P0-01 环境能力探测 | 已完成 | Go 单测、ARM64 交叉构建和 NAS 实机探测通过。 |
 | P0-02 Docker SDK 探针 | 已完成 | 仅针对固定标签的临时容器完成实机验证，验证容器已清理。 |
 | Root Agent 实时系统与 Docker 数据通道 | 代码完成，待实机部署 | 已实现系统快照、Docker Engine/容器/Compose 自动发现、Agent Dashboard gRPC 和 `/api/v1/system/summary`、`/api/v1/docker/inventory`、`/api/v1/services`；Go 全量测试、vet 与 Linux ARM64 交叉构建通过。尚待以 root systemd 服务部署到 NAS 后完成实机读取验证。 |
+| Root 登录与 SQLite 会话 | 代码完成，待实机部署 | 已实现一次性 Root 初始化、bcrypt 密码哈希、SQLite 持久化会话、登录/登出/状态 API 及受会话保护的控制面路由；Go 全量测试、vet 与 CGO 关闭的 Linux ARM64 交叉构建通过。首次账号由管理员在部署后的页面创建，不存在默认密码。 |
 | P0-04 受控终端 PoC | 已完成 | PTY、WebSocket、尺寸同步、退出和资源上限均经 NAS 实机 PoC 验证；仅通过显式参数开启。 |
 | P0-05 journald PoC | 已完成 | 查询、筛选、Cursor 分页和 Follow 流均经 NAS 实机 PoC 验证。 |
 | P0-06 Caddy 路由持久化 PoC | 代码完成，运行时暂停 | 受限 Admin API 客户端和持久化编排已测试并提交；NAS 当前无运行中的 Caddy，运行时验证留待后续阶段。 |

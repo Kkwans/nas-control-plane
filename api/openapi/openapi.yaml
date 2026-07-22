@@ -16,11 +16,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /api/v1/auth/status:
+    get:
+      operationId: getAuthStatus
+      summary: Get Root account initialization and current session status
+      tags: [auth]
+      responses:
+        '200':
+          description: Authentication state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthStatusResponse'
+        '503':
+          description: Authentication database is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/bootstrap:
+    post:
+      operationId: bootstrapRootAccount
+      summary: Create the first Root account and start a session
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialsRequest'
+      responses:
+        '201':
+          description: Root account created and session cookie set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Root account was already initialized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/login:
+    post:
+      operationId: loginRootAccount
+      summary: Start a Root session
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialsRequest'
+      responses:
+        '200':
+          description: Session cookie set
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutRootAccount
+      summary: End the current Root session
+      tags: [auth]
+      responses:
+        '204':
+          description: Session cleared
   /api/v1/system/capabilities:
     get:
       operationId: getSystemCapabilities
       summary: 获取 NAS 环境能力
       tags: [system]
+      security: [{RootSession: []}]
       responses:
         '200':
           description: 已完成只读探测
@@ -39,6 +132,7 @@ paths:
       operationId: getAgentStatus
       summary: 获取 Agent Socket 状态
       tags: [system]
+      security: [{RootSession: []}]
       responses:
         '200':
           description: Agent Socket 可用
@@ -57,6 +151,7 @@ paths:
       operationId: getSystemSummary
       summary: Get a live NAS host summary
       tags: [system]
+      security: [{RootSession: []}]
       responses:
         '200':
           description: Live host metrics collected by Root Agent
@@ -75,6 +170,7 @@ paths:
       operationId: getDockerInventory
       summary: Get Docker Engine, container, and Compose project inventory
       tags: [docker]
+      security: [{RootSession: []}]
       responses:
         '200':
           description: Live Docker inventory collected by Root Agent
@@ -93,6 +189,7 @@ paths:
       operationId: listServices
       summary: List discovered Compose projects and standalone containers
       tags: [services]
+      security: [{RootSession: []}]
       responses:
         '200':
           description: Service list derived from the live Docker inventory
@@ -112,6 +209,7 @@ paths:
       summary: 打开受控 P0 终端 WebSocket
       description: 仅在 `ncp-server serve --terminal-poc` 显式启用；仅支持固定 host 或受标签保护的临时 container 目标，不接受命令、Shell、路径或容器 ID。
       tags: [terminal]
+      security: [{RootSession: []}]
       parameters:
         - name: target
           in: query
@@ -132,6 +230,46 @@ paths:
           description: 未启用 P0 终端通道
 components:
   schemas:
+    CredentialsRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          maxLength: 64
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 256
+    Principal:
+      type: object
+      required: [id, username, role]
+      properties:
+        id: { type: integer, minimum: 1 }
+        username: { type: string }
+        role:
+          type: string
+          enum: [root]
+    AuthStatusResponse:
+      type: object
+      required: [initialized, authenticated]
+      properties:
+        initialized: { type: boolean }
+        authenticated: { type: boolean }
+        user:
+          oneOf:
+            - $ref: '#/components/schemas/Principal'
+            - type: 'null'
+    AuthSessionResponse:
+      type: object
+      required: [user, expiresAt]
+      properties:
+        user:
+          $ref: '#/components/schemas/Principal'
+        expiresAt:
+          type: string
+          format: date-time
     HealthResponse:
       type: object
       required: [status, service]
@@ -401,3 +539,8 @@ components:
         details:
           type: object
           additionalProperties: true
+  securitySchemes:
+    RootSession:
+      type: apiKey
+      in: cookie
+      name: ncp_session
