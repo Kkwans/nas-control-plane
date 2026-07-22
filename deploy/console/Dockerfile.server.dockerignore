@@ -1,0 +1,27 @@
+# Source control and local build state
+.git
+bin
+coverage.out
+
+# Frontend artifacts are served by nginx and are not part of the Server image.
+frontend/node_modules
+frontend/dist
+frontend/coverage
+frontend/playwright-report
+frontend/test-results
+
+# Runtime state must never enter an image build context.
+data
+*.db
+*.db-shm
+*.db-wal
+
+# Local configuration and editor files
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+.DS_Store
+Thumbs.db

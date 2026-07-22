@@ -1,0 +1,19 @@
+[Unit]
+Description=NAS Control Plane Root Agent
+Documentation=https://github.com/Kkwans/nas-control-plane
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=ncp
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+ExecStart=/opt/ncp/bin/ncp-agent serve --socket-group users
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

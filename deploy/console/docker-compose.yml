@@ -1,10 +1,47 @@
 name: nas-control-plane
 
 services:
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/console/Dockerfile.server
+    image: nas-control-plane-server:local
+    container_name: nas-control-plane-server
+    restart: unless-stopped
+    command:
+      - serve
+      - --listen
+      - 0.0.0.0:8750
+      - --agent-socket
+      - /run/ncp/agent.sock
+      - --database
+      - /data/ncp.sqlite
+    volumes:
+      # Root Agent owns this socket; the Server only needs group access to connect.
+      - /run/ncp:/run/ncp:ro
+      # Create this directory as NAS user 1000 before the first compose deployment.
+      - ../../data:/data
+    expose:
+      - "8750"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8750/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   console:
     image: nginx:alpine
     container_name: nas-control-plane-console
     restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
     ports:
       - "8760:80"
     volumes:
