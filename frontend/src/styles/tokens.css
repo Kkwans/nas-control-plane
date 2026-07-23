@@ -52,6 +52,7 @@
   --ncp-duration-slow: 420ms;
   --ncp-touch-target: 44px;
   --ncp-sidebar-width: 232px;
+  --ncp-sidebar-collapsed-width: 68px;
   --ncp-topbar-height: 64px;
 
   --el-color-primary: var(--ncp-primary);

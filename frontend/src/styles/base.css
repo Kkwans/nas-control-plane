@@ -13,10 +13,11 @@ body {
   overflow-x: hidden;
   background: var(--ncp-canvas);
   color: var(--ncp-text);
-  font-family: 'Manrope Variable', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
-  font-optical-sizing: auto;
+  font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  font-size: 15px;
   font-synthesis: none;
-  line-height: 1.5;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
 }
 
 button, input, textarea, select { font: inherit; }
@@ -62,7 +63,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .page {
   width: 100%;
   margin: 0 auto;
-  padding: 24px clamp(18px, 2.2vw, 34px) 40px;
+  padding: 18px clamp(18px, 2vw, 30px) 36px;
 }
 
 .page-toolbar {

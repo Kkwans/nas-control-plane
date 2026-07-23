@@ -12,6 +12,8 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Server,
   Settings,
@@ -40,6 +42,7 @@ const props = defineProps({
 })
 
 const mobileNavigationOpen = ref(false)
+const sidebarCollapsed = ref(true)
 const menuButton = ref<HTMLButtonElement | null>(null)
 
 const primaryNavigation: NavigationItem[] = [
@@ -57,6 +60,18 @@ const plannedNavigation: NavigationItem[] = [
 ]
 
 const routeTitle = computed(() => String(route.meta.title ?? 'NAS 管理面板'))
+const breadcrumbs = computed(() => {
+  if (!route.path.startsWith('/databases')) return [{ label: routeTitle.value }]
+  const items: Array<{ label: string; to?: string }> = [{ label: '数据库', to: '/databases' }]
+  if (route.params.sourceId) {
+    items.push({
+      label: String(route.query.sourceName || '数据库详情'),
+      to: route.params.table ? `/databases/${route.params.sourceId}?sourceName=${encodeURIComponent(String(route.query.sourceName || ''))}` : undefined,
+    })
+  }
+  if (route.params.table) items.push({ label: String(route.query.tableName || route.params.table) })
+  return items
+})
 const realtimeLabel = computed(() => {
   if (props.connectionState === 'unavailable') return '数据暂不可用'
   if (props.realtimeState === 'streaming') return '实时更新'
@@ -85,7 +100,7 @@ onBeforeUnmount(() => {
 
 <template>
   <a class="skip-link" href="#app-main">跳到主要内容</a>
-  <div class="app-shell">
+  <div :class="['app-shell', { 'app-shell--collapsed': sidebarCollapsed }]">
     <button
       v-if="mobileNavigationOpen"
       class="navigation-scrim"
@@ -107,11 +122,13 @@ onBeforeUnmount(() => {
 
       <nav class="navigation" aria-label="控制台页面">
         <p class="navigation__label">管理</p>
-        <RouterLink v-for="item in primaryNavigation" :key="item.label" :to="item.to!" class="navigation__item">
-          <component :is="item.icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
-          <span>{{ item.label }}</span>
-          <ChevronRight class="navigation__arrow" :size="15" aria-hidden="true" />
-        </RouterLink>
+        <ElTooltip v-for="item in primaryNavigation" :key="item.label" :disabled="!sidebarCollapsed" :content="item.label" placement="right">
+          <RouterLink :to="item.to!" class="navigation__item" :aria-label="item.label">
+            <component :is="item.icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
+            <span>{{ item.label }}</span>
+            <ChevronRight class="navigation__arrow" :size="15" aria-hidden="true" />
+          </RouterLink>
+        </ElTooltip>
         <p class="navigation__label navigation__label--secondary">后续模块</p>
         <ElTooltip v-for="item in plannedNavigation" :key="item.label" content="功能待接入" placement="right">
           <button class="navigation__item navigation__item--planned" type="button" disabled>
@@ -126,9 +143,18 @@ onBeforeUnmount(() => {
           <span class="sidebar-footer__avatar" aria-hidden="true">{{ userName.slice(0, 1).toUpperCase() }}</span>
           <div><strong>{{ userName }}</strong><span>Root 管理会话</span></div>
         </div>
-        <button class="sidebar-footer__logout" type="button" @click="emit('logout')">
-          <LogOut :size="17" aria-hidden="true" />退出登录
-        </button>
+        <ElTooltip :disabled="!sidebarCollapsed" content="退出登录" placement="right">
+          <button class="sidebar-footer__logout" type="button" aria-label="退出登录" @click="emit('logout')">
+            <LogOut :size="17" aria-hidden="true" /><span>退出登录</span>
+          </button>
+        </ElTooltip>
+        <ElTooltip :content="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'" placement="right">
+          <button class="sidebar-collapse" type="button" :aria-label="sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'" @click="sidebarCollapsed = !sidebarCollapsed">
+            <PanelLeftOpen v-if="sidebarCollapsed" :size="18" />
+            <PanelLeftClose v-else :size="18" />
+            <span>{{ sidebarCollapsed ? '展开菜单' : '折叠菜单' }}</span>
+          </button>
+        </ElTooltip>
       </div>
     </aside>
 
@@ -148,7 +174,11 @@ onBeforeUnmount(() => {
           </button>
           <div class="topbar__location" aria-label="当前位置">
             <Server :size="17" aria-hidden="true" /><span>{{ deviceName }}</span>
-            <ChevronRight :size="14" aria-hidden="true" /><strong>{{ routeTitle }}</strong>
+            <template v-for="item in breadcrumbs" :key="`${item.label}-${item.to ?? ''}`">
+              <ChevronRight :size="14" aria-hidden="true" />
+              <RouterLink v-if="item.to" :to="item.to">{{ item.label }}</RouterLink>
+              <strong v-else>{{ item.label }}</strong>
+            </template>
           </div>
         </div>
         <div class="topbar__actions">
@@ -169,6 +199,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .app-shell { display: grid; grid-template-columns: var(--ncp-sidebar-width) minmax(0, 1fr); min-height: 100dvh; }
+.app-shell--collapsed { grid-template-columns: var(--ncp-sidebar-collapsed-width) minmax(0, 1fr); }
 .app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: rgba(255,255,255,.98); }
 .sidebar-brand-row { display: flex; align-items: center; }
 .brand { display: flex; min-width: 0; flex: 1; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px; border-radius: 11px; }
@@ -178,9 +209,9 @@ onBeforeUnmount(() => {
 .brand__text small { overflow: hidden; color: var(--ncp-text-subtle); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-close, .menu-button { display: none; width: var(--ncp-touch-target); height: var(--ncp-touch-target); place-items: center; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); }
 .navigation { display: grid; gap: 4px; margin-top: 24px; }
-.navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .72rem; font-weight: 750; letter-spacing: .02em; }
+.navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 750; letter-spacing: .02em; }
 .navigation__label--secondary { margin-top: 18px; }
-.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); font-size: .79rem; font-weight: 680; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); font-size: .84rem; font-weight: 680; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .navigation__item:hover { border-color: rgba(36,104,216,.08); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
 .navigation__item.router-link-exact-active { border-color: rgba(36,104,216,.1); background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .navigation__item--planned { cursor: not-allowed; opacity: .55; }
@@ -191,18 +222,38 @@ onBeforeUnmount(() => {
 .sidebar-footer__identity { display: flex; align-items: center; gap: 9px; }
 .sidebar-footer__avatar { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-weight: 800; }
 .sidebar-footer__identity div { display: grid; min-width: 0; }
-.sidebar-footer__identity strong { font-size: .76rem; }
-.sidebar-footer__identity span:last-child { color: var(--ncp-text-subtle); font-size: .7rem; }
+.sidebar-footer__identity strong { font-size: .82rem; }
+.sidebar-footer__identity span:last-child { color: var(--ncp-text-subtle); font-size: .75rem; }
 .sidebar-footer__logout { display: flex; min-height: 44px; align-items: center; gap: 9px; padding: 0 10px; border-radius: 9px; background: transparent; color: var(--ncp-text-muted); font-size: .72rem; transition: background-color var(--ncp-duration-fast), color var(--ncp-duration-fast); }
 .sidebar-footer__logout:hover { background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); }
+.sidebar-collapse { display: flex; min-height: 40px; align-items: center; gap: 9px; padding: 0 10px; border-radius: 9px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .72rem; font-weight: 680; }
+.sidebar-collapse:hover { background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.app-shell--collapsed .app-sidebar { padding-inline: 9px; }
+.app-shell--collapsed .brand { justify-content: center; padding: 0; }
+.app-shell--collapsed .brand__text,
+.app-shell--collapsed .navigation__label,
+.app-shell--collapsed .navigation__item span,
+.app-shell--collapsed .navigation__item small,
+.app-shell--collapsed .navigation__arrow,
+.app-shell--collapsed .sidebar-footer__identity div,
+.app-shell--collapsed .sidebar-footer__logout span,
+.app-shell--collapsed .sidebar-collapse span { display: none; }
+.app-shell--collapsed .navigation { margin-top: 20px; }
+.app-shell--collapsed .navigation__item,
+.app-shell--collapsed .sidebar-footer__logout,
+.app-shell--collapsed .sidebar-collapse { justify-content: center; padding: 0; }
+.app-shell--collapsed .navigation__item:hover { transform: none; }
+.app-shell--collapsed .sidebar-footer__identity { justify-content: center; }
 .app-stage { min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--ncp-topbar-height); align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(18px, 2.2vw, 34px); border-bottom: 1px solid rgba(220,228,238,.92); background: rgba(244,247,251,.88); backdrop-filter: blur(18px) saturate(150%); }
 .topbar__leading, .topbar__location, .topbar__actions, .connection-state, .refresh-button { display: flex; align-items: center; }
 .topbar__leading { min-width: 0; gap: 8px; }
-.topbar__location { gap: 8px; color: var(--ncp-text-subtle); font-size: .74rem; }
+.topbar__location { gap: 8px; color: var(--ncp-text-subtle); font-size: .8rem; }
 .topbar__location strong { color: var(--ncp-text); font-weight: 750; }
+.topbar__location a { color: var(--ncp-text-muted); font-weight: 680; transition: color var(--ncp-duration-fast); }
+.topbar__location a:hover { color: var(--ncp-primary-strong); }
 .topbar__actions { gap: 12px; }
-.connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .72rem; }
+.connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .78rem; }
 .connection-state > span { width: 7px; height: 7px; border-radius: 50%; background: var(--ncp-primary); box-shadow: 0 0 0 4px var(--ncp-primary-soft); }
 .connection-state--polling > span, .connection-state--connecting > span { background: var(--ncp-warning); box-shadow: 0 0 0 4px var(--ncp-warning-soft); }
 .connection-state--streaming > span { background: var(--ncp-success); box-shadow: 0 0 0 4px var(--ncp-success-soft); }
@@ -213,18 +264,23 @@ onBeforeUnmount(() => {
 .spin { animation: spin .8s linear infinite; }
 .app-main:focus { outline: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 1024px) and (min-width: 769px) {
-  .app-shell { grid-template-columns: 76px minmax(0,1fr); }
-  .app-sidebar { padding-inline: 10px; }
-  .brand { justify-content: center; padding: 0; }
-  .brand__text, .navigation__label, .navigation__item span, .navigation__item small, .navigation__arrow, .sidebar-footer__identity div, .sidebar-footer__logout { display: none; }
-  .navigation__item { justify-content: center; padding: 0; }
-  .sidebar-footer__identity { justify-content: center; }
-}
 @media (max-width: 768px) {
   .app-shell { display: block; }
   .menu-button, .sidebar-close { display: grid; }
   .app-sidebar { position: fixed; left: 0; width: min(304px, 86vw); padding-top: calc(14px + env(safe-area-inset-top)); transform: translateX(-104%); box-shadow: var(--ncp-shadow-float); transition: transform var(--ncp-duration-base) var(--ncp-ease-out); }
+  .app-shell--collapsed .app-sidebar { padding-inline: 14px; }
+  .app-shell--collapsed .brand { justify-content: flex-start; padding: 0 8px; }
+  .app-shell--collapsed .brand__text,
+  .app-shell--collapsed .navigation__label,
+  .app-shell--collapsed .navigation__item span,
+  .app-shell--collapsed .navigation__item small,
+  .app-shell--collapsed .navigation__arrow,
+  .app-shell--collapsed .sidebar-footer__identity div,
+  .app-shell--collapsed .sidebar-footer__logout span { display: initial; }
+  .app-shell--collapsed .sidebar-collapse { display: none; }
+  .app-shell--collapsed .navigation__item,
+  .app-shell--collapsed .sidebar-footer__logout { justify-content: flex-start; padding: 0 11px; }
+  .app-shell--collapsed .sidebar-footer__identity { justify-content: flex-start; }
   .app-sidebar--open { transform: translateX(0); }
   .navigation-scrim { position: fixed; z-index: 45; inset: 0; display: block; width: 100%; height: 100%; background: rgba(12,24,44,.46); backdrop-filter: blur(2px); }
   .topbar { min-height: 58px; padding: 0 14px; }

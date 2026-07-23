@@ -141,9 +141,9 @@ watch([() => route.query.project, enrichedProjects], ([projectId, items]) => {
 <style scoped>
 .service-search { width: min(310px, 38vw); }
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
-.state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .72rem; font-weight: 700; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
+.state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
-.result-line { display: flex; min-height: 28px; align-items: center; justify-content: space-between; color: var(--ncp-text-subtle); font-size: .72rem; }
+.result-line { display: flex; min-height: 28px; align-items: center; justify-content: space-between; color: var(--ncp-text-subtle); font-size: .78rem; }
 .result-line span { display: flex; align-items: center; gap: 6px; }
 .result-line strong { color: var(--ncp-text); font-family: 'JetBrains Mono Variable', monospace; }
 .result-line button { background: transparent; color: var(--ncp-primary-strong); font-size: .66rem; font-weight: 700; }
@@ -152,15 +152,15 @@ watch([() => route.query.project, enrichedProjects], ([projectId, items]) => {
 .service-card header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; }
 .service-card__icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 11px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .service-card__title { display: grid; min-width: 0; gap: 2px; background: transparent; text-align: left; }
-.service-card__title strong { overflow: hidden; color: var(--ncp-text); font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
-.service-card__title small { color: var(--ncp-text-subtle); font-size: .7rem; }
+.service-card__title strong { overflow: hidden; color: var(--ncp-text); font-size: .9rem; text-overflow: ellipsis; white-space: nowrap; }
+.service-card__title small { color: var(--ncp-text-subtle); font-size: .76rem; }
 .service-card__meta { display: grid; min-width: 0; align-content: start; gap: 4px; padding: 10px 11px; border-radius: 9px; background: var(--ncp-surface-quiet); }
-.service-card__meta span { color: var(--ncp-text-subtle); font-size: .68rem; font-weight: 650; }
-.service-card__meta strong { overflow: hidden; color: var(--ncp-text-muted); font-size: .72rem; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.service-card__meta span { color: var(--ncp-text-subtle); font-size: .75rem; font-weight: 650; }
+.service-card__meta strong { overflow: hidden; color: var(--ncp-text-muted); font-size: .78rem; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .service-card footer, .service-card__ports { display: flex; align-items: center; }
 .service-card footer { min-width: 0; justify-content: space-between; gap: 10px; }
 .service-card__ports { min-width: 0; flex-wrap: wrap; gap: 6px; }
-.service-card__ports a { display: flex; min-height: 36px; align-items: center; gap: 4px; padding: 0 9px; border: 1px solid rgba(36,104,216,.15); border-radius: 8px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .65rem; font-weight: 750; transition: background-color var(--ncp-duration-fast); }
+.service-card__ports a { display: flex; min-height: 36px; align-items: center; gap: 4px; padding: 0 9px; border: 1px solid rgba(36,104,216,.15); border-radius: 8px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .73rem; font-weight: 750; transition: background-color var(--ncp-duration-fast); }
 .service-card__ports a:hover { background: var(--ncp-primary-hover); }
 .service-card__ports>span { color: var(--ncp-text-subtle); font-size: .62rem; }
 .no-port { display: flex; min-height: 36px; align-items: center; }
