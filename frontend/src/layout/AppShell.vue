@@ -271,12 +271,12 @@ onBeforeUnmount(() => {
   .app-shell--collapsed .app-sidebar { padding-inline: 14px; }
   .app-shell--collapsed .brand { justify-content: flex-start; padding: 0 8px; }
   .app-shell--collapsed .brand__text,
-  .app-shell--collapsed .navigation__label,
+  .app-shell--collapsed .sidebar-footer__identity div { display: grid; }
+  .app-shell--collapsed .navigation__label { display: block; }
   .app-shell--collapsed .navigation__item span,
   .app-shell--collapsed .navigation__item small,
   .app-shell--collapsed .navigation__arrow,
-  .app-shell--collapsed .sidebar-footer__identity div,
-  .app-shell--collapsed .sidebar-footer__logout span { display: initial; }
+  .app-shell--collapsed .sidebar-footer__logout span { display: inline; }
   .app-shell--collapsed .sidebar-collapse { display: none; }
   .app-shell--collapsed .navigation__item,
   .app-shell--collapsed .sidebar-footer__logout { justify-content: flex-start; padding: 0 11px; }
