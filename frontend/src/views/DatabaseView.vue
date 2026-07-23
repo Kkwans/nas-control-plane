@@ -896,6 +896,8 @@ function showError(error: unknown, fallback: string) {
 .query-result {
   display: flex;
   min-height: 0;
+  flex-direction: column;
+  gap: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -930,6 +932,7 @@ function showError(error: unknown, fallback: string) {
 .query-placeholder {
   display: grid;
   min-height: 150px;
+  flex: 1;
   place-content: center;
   gap: 6px;
   padding: 20px;
