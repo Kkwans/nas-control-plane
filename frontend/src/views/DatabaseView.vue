@@ -25,6 +25,7 @@ import {
   ElMessageBox,
   ElOption,
   ElSelect,
+  ElSwitch,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -50,6 +51,7 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
+import SqlEditor from '@/components/SqlEditor.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 
 type WorkspaceMode = 'data' | 'sql'
@@ -75,11 +77,13 @@ const credentialDraft = ref<DatabaseCredentials>({})
 const rowDialogOpen = ref(false)
 const rowDialogMode = ref<RowDialogMode>('insert')
 const rowForm = ref<Record<string, string>>({})
+const rowNullFields = ref<Record<string, boolean>>({})
 const originalKeys = ref<Record<string, DatabaseValue>>({})
 const mutationPending = ref(false)
 const sql = ref('SELECT * FROM ')
 const queryResult = ref<QueryResult | null>(null)
 const queryPending = ref(false)
+const queryError = ref('')
 
 const selectedSource = computed(() => sources.value.find((source) => source.id === selectedSourceId.value) ?? null)
 const selectedTable = computed(() => {
@@ -103,6 +107,11 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 const editableColumns = computed(() => selectedTable.value?.columns ?? [])
 const primaryKeyColumns = computed(() => editableColumns.value.filter((column) => column.primaryKey))
+const queryRows = computed(() => {
+  if (!queryResult.value) return []
+  return queryResult.value.rows.map((row) =>
+    Object.fromEntries(queryResult.value!.columns.map((column, index) => [column, row[index]])))
+})
 
 onMounted(() => void refreshDiscovery())
 
@@ -220,6 +229,7 @@ async function onSortChange(event: { prop?: string | null; order?: 'ascending' |
 function openInsert() {
   rowDialogMode.value = 'insert'
   rowForm.value = Object.fromEntries(editableColumns.value.map((column) => [column.name, '']))
+  rowNullFields.value = Object.fromEntries(editableColumns.value.map((column) => [column.name, false]))
   originalKeys.value = {}
   rowDialogOpen.value = true
 }
@@ -230,6 +240,10 @@ function openEdit(row: Record<string, DatabaseValue>) {
     column.name,
     row[column.name] === null || row[column.name] === undefined ? '' : String(row[column.name]),
   ]))
+  rowNullFields.value = Object.fromEntries(editableColumns.value.map((column) => [
+    column.name,
+    row[column.name] === null || row[column.name] === undefined,
+  ]))
   originalKeys.value = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
   rowDialogOpen.value = true
 }
@@ -239,10 +253,11 @@ async function submitRow() {
   if (!table) return
   mutationPending.value = true
   try {
-    const values = Object.fromEntries(editableColumns.value.map((column) => [
-      column.name,
-      convertValue(rowForm.value[column.name] ?? '', column),
-    ]))
+    const values = Object.fromEntries(editableColumns.value.flatMap((column) => {
+      const rawValue = rowForm.value[column.name] ?? ''
+      if (rowDialogMode.value === 'insert' && rawValue === '' && (column.primaryKey || column.default !== undefined)) return []
+      return [[column.name, rowNullFields.value[column.name] ? null : convertValue(rawValue, column)]]
+    }))
     if (rowDialogMode.value === 'insert') {
       await insertDatabaseRow({ ...connection(), schema: table.schema, table: table.name, values })
       ElMessage.success('数据已新增')
@@ -282,7 +297,7 @@ async function removeRow(row: Record<string, DatabaseValue>) {
 async function runSQL() {
   if (!sql.value.trim()) return
   queryPending.value = true
-  errorMessage.value = ''
+  queryError.value = ''
   try {
     queryResult.value = await executeDatabaseSQL({ ...connection(), sql: sql.value })
     if (!queryResult.value.columns.length) {
@@ -290,7 +305,8 @@ async function runSQL() {
       await refreshRows()
     }
   } catch (error) {
-    showError(error, 'SQL 执行失败。')
+    queryResult.value = null
+    queryError.value = error instanceof NcpApiError ? error.message : 'SQL 执行失败。'
   } finally {
     queryPending.value = false
   }
@@ -424,28 +440,37 @@ function showError(error: unknown, fallback: string) {
                 <ElTag v-for="column in primaryKeyColumns" :key="column.name" effect="plain">
                   <KeyRound :size="12" />{{ column.name }}
                 </ElTag>
-                <span>{{ selectedTable.columns.length }} 个字段</span>
+                <span>{{ selectedTable.columns.length }} 个字段 · 当前加载 {{ tableRows?.rows.length ?? 0 }} 行</span>
               </div>
-              <div>
-                <ElTooltip content="重新读取当前页"><ElButton circle :loading="rowsLoading" @click="refreshRows"><RefreshCw :size="16" /></ElButton></ElTooltip>
-                <ElButton type="primary" @click="openInsert"><CirclePlus :size="16" />新增数据</ElButton>
+              <div class="table-actions">
+                <ElButton :loading="rowsLoading" aria-label="重新读取当前页" @click="refreshRows">
+                  <RefreshCw :size="15" />刷新
+                </ElButton>
+                <ElButton type="primary" @click="openInsert">
+                  <CirclePlus :size="16" />新增行
+                </ElButton>
               </div>
+            </div>
+            <div v-if="!primaryKeyColumns.length" class="primary-key-warning">
+              当前表没有主键，可以查看和新增数据；为避免误改多行，编辑与删除已停用。
             </div>
 
             <div class="data-table-wrap">
               <ElTable
                 v-loading="rowsLoading"
                 :data="tableRows?.rows ?? []"
-                row-key="_ncp_row"
                 height="100%"
-                table-layout="auto"
+                border
+                stripe
+                highlight-current-row
                 @sort-change="onSortChange"
               >
+                <ElTableColumn type="index" label="#" width="56" fixed="left" align="center" />
                 <ElTableColumn
                   v-for="column in selectedTable.columns"
                   :key="column.name"
                   :prop="column.name"
-                  :min-width="Math.max(130, column.name.length * 12 + 48)"
+                  :min-width="column.primaryKey ? 110 : Math.min(320, Math.max(150, column.name.length * 12 + 64))"
                   sortable="custom"
                   show-overflow-tooltip
                 >
@@ -460,15 +485,15 @@ function showError(error: unknown, fallback: string) {
                     <span v-else class="cell-value">{{ displayValue(column.name, row[column.name]) }}</span>
                   </template>
                 </ElTableColumn>
-                <ElTableColumn label="操作" fixed="right" width="112">
+                <ElTableColumn label="行操作" fixed="right" width="150" align="center">
                   <template #default="{ row }">
                     <div class="row-actions">
-                      <ElTooltip content="编辑当前行">
-                        <button type="button" :disabled="!primaryKeyColumns.length" @click="openEdit(row)"><Pencil :size="15" /></button>
-                      </ElTooltip>
-                      <ElTooltip content="删除当前行">
-                        <button class="danger" type="button" :disabled="!primaryKeyColumns.length" @click="removeRow(row)"><Trash2 :size="15" /></button>
-                      </ElTooltip>
+                      <button type="button" :disabled="!primaryKeyColumns.length" aria-label="编辑当前行" @click.stop="openEdit(row)">
+                        <Pencil :size="14" />编辑
+                      </button>
+                      <button class="danger" type="button" :disabled="!primaryKeyColumns.length" aria-label="删除当前行" @click.stop="removeRow(row)">
+                        <Trash2 :size="14" />删除
+                      </button>
                     </div>
                   </template>
                 </ElTableColumn>
@@ -486,24 +511,50 @@ function showError(error: unknown, fallback: string) {
 
           <template v-else>
             <section class="sql-workspace">
-              <div class="sql-editor">
-                <div><span>SQL 编辑器</span><small>最多返回 500 行</small></div>
-                <ElInput v-model="sql" type="textarea" :autosize="{ minRows: 8, maxRows: 16 }" spellcheck="false" />
-                <ElButton type="primary" :loading="queryPending" @click="runSQL"><Play :size="16" />执行 SQL</ElButton>
+              <div class="sql-toolbar">
+                <div>
+                  <strong>SQL 查询</strong>
+                  <span>{{ selectedSource?.name }} · {{ selectedTable.name }}</span>
+                </div>
+                <div>
+                  <small>最多返回 500 行</small>
+                  <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim()" @click="runSQL">
+                    <Play :size="15" />执行
+                    <kbd>Ctrl ↵</kbd>
+                  </ElButton>
+                </div>
               </div>
-              <div v-if="queryResult" class="query-result">
+              <div class="sql-editor">
+                <SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" />
+              </div>
+              <div class="query-result">
                 <header>
                   <strong>执行结果</strong>
-                  <span>{{ queryResult.rows.length }} 行 · {{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> · 已截断</template></span>
+                  <span v-if="queryResult">{{ queryResult.rows.length }} 行 · {{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> · 已截断</template></span>
+                  <span v-else>等待执行</span>
                 </header>
-                <div v-if="queryResult.columns.length" class="query-table">
-                  <ElTable :data="queryResult.rows.map((row) => Object.fromEntries(queryResult!.columns.map((column, index) => [column, row[index]])))" height="100%">
+                <div v-if="queryError" class="query-message query-message--error" role="alert">
+                  <strong>执行失败</strong>
+                  <span>{{ queryError }}</span>
+                </div>
+                <div v-else-if="queryResult?.columns.length" class="query-table">
+                  <ElTable :data="queryRows" height="100%" border stripe>
                     <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="140" show-overflow-tooltip>
-                      <template #default="{ row }"><span class="cell-value">{{ displayValue(column, row[column]) }}</span></template>
+                      <template #default="{ row }">
+                        <span v-if="row[column] === null" class="null-value">NULL</span>
+                        <span v-else class="cell-value">{{ displayValue(column, row[column]) }}</span>
+                      </template>
                     </ElTableColumn>
                   </ElTable>
                 </div>
-                <p v-else>语句执行成功，影响 {{ queryResult.rowsAffected }} 行。</p>
+                <div v-else-if="queryResult" class="query-message query-message--success">
+                  <strong>执行成功</strong>
+                  <span>影响 {{ queryResult.rowsAffected }} 行，用时 {{ queryResult.durationMs }} ms。</span>
+                </div>
+                <div v-else class="query-placeholder">
+                  <Braces :size="24" />
+                  <span>输入 SQL 后按 Ctrl + Enter 执行</span>
+                </div>
               </div>
             </section>
           </template>
@@ -529,18 +580,38 @@ function showError(error: unknown, fallback: string) {
       </template>
     </ElDialog>
 
-    <ElDialog v-model="rowDialogOpen" :title="rowDialogMode === 'insert' ? '新增数据' : '编辑数据'" width="min(620px, calc(100vw - 28px))">
+    <ElDialog v-model="rowDialogOpen" :title="rowDialogMode === 'insert' ? '新增数据行' : '编辑数据行'" width="min(760px, calc(100vw - 28px))">
+      <div class="row-dialog-context">
+        <Table2 :size="18" />
+        <span><strong>{{ selectedTable?.name }}</strong><small>保存后将直接写入数据库</small></span>
+      </div>
       <ElForm class="row-form" label-position="top">
         <ElFormItem v-for="column in editableColumns" :key="column.name">
           <template #label>
-            <span class="form-label">{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> · 主键</template></small></span>
+            <span class="form-label">
+              <span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> · 主键</template></small></span>
+              <ElSwitch
+                v-if="column.nullable"
+                v-model="rowNullFields[column.name]"
+                size="small"
+                inline-prompt
+                active-text="NULL"
+                inactive-text="值"
+              />
+            </span>
           </template>
-          <ElInput v-model="rowForm[column.name]" :placeholder="column.nullable ? '留空将写入 NULL' : '请输入字段值'" />
+          <ElInput
+            v-model="rowForm[column.name]"
+            :disabled="rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)"
+            :type="isSensitiveColumn(column.name) ? 'password' : /text|json|blob/i.test(column.dataType) ? 'textarea' : 'text'"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            :placeholder="rowNullFields[column.name] ? '将写入 NULL' : column.default !== undefined ? `留空使用默认值 ${column.default}` : '请输入字段值'"
+          />
         </ElFormItem>
       </ElForm>
       <template #footer>
         <ElButton @click="rowDialogOpen = false">取消</ElButton>
-        <ElButton type="primary" :loading="mutationPending" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增' : '保存修改' }}</ElButton>
+        <ElButton type="primary" :loading="mutationPending" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton>
       </template>
     </ElDialog>
   </div>
@@ -621,5 +692,374 @@ function showError(error: unknown, fallback: string) {
   .data-pagination { align-items:flex-start; flex-direction:column; }.data-pagination>div { width:100%; }.data-pagination :deep(.el-button) { flex:1; }
   .row-form { grid-template-columns:1fr; }
   .field-summary :deep(.el-tag:nth-of-type(n+3)) { display:none; }
+}
+
+/* Database workbench: compact, data-first interaction */
+.database-workspace {
+  grid-template-columns: 264px 220px minmax(0, 1fr);
+  height: calc(100dvh - 220px);
+  min-height: 620px;
+  border: 1px solid var(--ncp-line);
+  box-shadow: 0 12px 32px rgba(22, 38, 66, .07);
+}
+
+.source-pane,
+.table-pane {
+  padding: 12px 10px;
+}
+
+.source-item {
+  min-height: 64px;
+}
+
+.table-item {
+  min-height: 44px;
+}
+
+.data-heading {
+  min-height: 66px;
+  padding: 10px 14px;
+}
+
+.data-toolbar {
+  min-height: 52px;
+  padding: 7px 12px;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.primary-key-warning {
+  padding: 8px 13px;
+  border-bottom: 1px solid rgba(183, 116, 13, .15);
+  background: var(--ncp-warning-soft);
+  color: var(--ncp-warning-strong);
+  font-size: .64rem;
+}
+
+.data-table-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.data-table-wrap :deep(.el-table) {
+  --el-table-border-color: #e7ecf3;
+  --el-table-header-bg-color: #f7f9fc;
+  --el-table-row-hover-bg-color: #f1f6ff;
+  --el-table-current-row-bg-color: #edf4ff;
+  color: var(--ncp-text);
+  font-size: .66rem;
+}
+
+.data-table-wrap :deep(.el-table__header th.el-table__cell) {
+  height: 42px;
+  padding: 0;
+  color: var(--ncp-text-muted);
+  font-weight: 750;
+}
+
+.data-table-wrap :deep(.el-table__body td.el-table__cell) {
+  height: 44px;
+  padding: 0;
+}
+
+.data-table-wrap :deep(.el-table .cell) {
+  padding: 0 11px;
+  line-height: 1.35;
+}
+
+.data-table-wrap :deep(.el-table-fixed-column--right) {
+  box-shadow: -8px 0 18px rgba(23, 37, 61, .04);
+}
+
+.column-heading {
+  min-width: 0;
+}
+
+.column-heading small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-value {
+  display: block;
+  overflow: hidden;
+  color: #344054;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.null-value {
+  display: inline-flex;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f0f2f6;
+}
+
+.row-actions {
+  justify-content: center;
+  gap: 5px;
+}
+
+.row-actions button {
+  display: inline-flex;
+  width: auto;
+  height: 30px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid rgba(36, 104, 216, .13);
+  border-radius: 7px;
+  font-size: .6rem;
+  font-weight: 700;
+  transition: transform var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), background var(--ncp-duration-fast);
+}
+
+.row-actions button:hover:not(:disabled) {
+  background: #dfeaff;
+  box-shadow: 0 3px 10px rgba(36, 104, 216, .12);
+  transform: translateY(-1px);
+}
+
+.row-actions button.danger {
+  border-color: rgba(212, 81, 93, .14);
+}
+
+.row-actions button.danger:hover:not(:disabled) {
+  background: #ffe8eb;
+  box-shadow: 0 3px 10px rgba(212, 81, 93, .1);
+}
+
+.data-pagination {
+  min-height: 50px;
+  padding: 7px 12px;
+}
+
+.sql-workspace {
+  grid-template-rows: 52px minmax(220px, .9fr) minmax(220px, 1.1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.sql-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: #fff;
+}
+
+.sql-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.sql-toolbar strong {
+  font-size: .72rem;
+}
+
+.sql-toolbar span,
+.sql-toolbar small {
+  color: var(--ncp-text-subtle);
+  font-size: .59rem;
+}
+
+.sql-toolbar kbd {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .14);
+  color: inherit;
+  font-family: 'JetBrains Mono Variable', monospace;
+  font-size: .5rem;
+}
+
+.sql-editor {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ncp-line);
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.query-result {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.query-result header {
+  min-height: 42px;
+  flex: 0 0 42px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: var(--ncp-surface-quiet);
+}
+
+.query-table {
+  min-height: 0;
+  height: auto;
+  flex: 1;
+}
+
+.query-table :deep(.el-table) {
+  --el-table-border-color: #e7ecf3;
+  --el-table-header-bg-color: #f7f9fc;
+  font-size: .64rem;
+}
+
+.query-table :deep(.el-table__cell) {
+  padding: 7px 0;
+}
+
+.query-message,
+.query-placeholder {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  gap: 6px;
+  padding: 20px;
+  color: var(--ncp-text-subtle);
+  text-align: center;
+}
+
+.query-message strong {
+  font-size: .76rem;
+}
+
+.query-message span,
+.query-placeholder span {
+  font-size: .64rem;
+}
+
+.query-message--success strong {
+  color: var(--ncp-success);
+}
+
+.query-message--error strong {
+  color: var(--ncp-danger-strong);
+}
+
+.query-message--error {
+  color: var(--ncp-danger-strong);
+}
+
+.row-dialog-context {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -4px 0 16px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--ncp-primary-soft);
+  color: var(--ncp-primary-strong);
+}
+
+.row-dialog-context > span {
+  display: grid;
+  gap: 1px;
+}
+
+.row-dialog-context strong {
+  font-size: .7rem;
+}
+
+.row-dialog-context small {
+  color: var(--ncp-text-muted);
+  font-size: .57rem;
+}
+
+.row-form {
+  gap: 2px 16px;
+}
+
+.form-label {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.form-label > span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+@media(max-width:1180px) {
+  .database-workspace {
+    grid-template-columns: 224px 188px minmax(0, 1fr);
+  }
+}
+
+@media(max-width:900px) {
+  .database-workspace {
+    grid-template-columns: 1fr;
+    height: calc(100dvh - 280px);
+    min-height: 600px;
+  }
+}
+
+@media(max-width:640px) {
+  .database-workspace {
+    height: calc(100dvh - 310px);
+    min-height: 560px;
+  }
+
+  .data-heading {
+    gap: 9px;
+  }
+
+  .data-toolbar {
+    align-items: stretch;
+    padding: 8px 10px;
+  }
+
+  .field-summary {
+    min-height: 24px;
+  }
+
+  .table-actions {
+    justify-content: stretch !important;
+  }
+
+  .table-actions :deep(.el-button) {
+    flex: 1;
+  }
+
+  .sql-workspace {
+    grid-template-rows: auto minmax(240px, 1fr) minmax(220px, 1fr);
+  }
+
+  .sql-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 9px 10px;
+  }
+
+  .sql-toolbar > div {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .sql-toolbar kbd {
+    display: none;
+  }
+
+  .row-dialog-context {
+    margin-top: 0;
+  }
 }
 </style>

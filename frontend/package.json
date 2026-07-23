@@ -16,12 +16,14 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@codemirror/lang-sql": "^6.10.0",
     "@element-plus/icons-vue": "latest",
     "@fontsource-variable/jetbrains-mono": "latest",
     "@fontsource-variable/manrope": "latest",
+    "@lucide/vue": "latest",
+    "codemirror": "^6.0.2",
     "echarts": "latest",
     "element-plus": "latest",
-    "@lucide/vue": "latest",
     "pinia": "latest",
     "vue": "latest",
     "vue-echarts": "latest",
