@@ -14,17 +14,19 @@ NCP 的 Root 能力由原生 `ncp-agent` 提供：它以 root 身份运行，负
 2. 浏览器只与 `ncp-server` 通信；Server 将 Root 用户请求转为 Agent RPC。这是进程边界，不是对 Root 用户功能的降级。
 3. Agent 以覆盖 Docker、系统、日志、终端、文件和 Compose 的**强类型 RPC**提供能力；宿主机 Root 终端通过专用 PTY 会话提供，不以字符串形式伪装成通用 HTTP `exec` 接口。
 4. 业务模块不得绕过 Agent 访问宿主机；Docker 实时状态以 Docker Engine 为事实来源，不把完整实时数据复制到 SQLite。
-5. 耗时操作通过 Job 执行，避免 HTTP 请求超时；数据库迁移必须可重复执行并通过测试；API 变更必须同步更新 OpenAPI。
+5. 耗时操作通过 Job 执行，避免 HTTP 请求超时；数据库迁移必须可重复执行；API 变更必须同步更新 OpenAPI。
 
-## 编码与安全约束
+## SDD 工作方式
 
-- Go 代码必须通过 `go test ./...`；新增行为遵循先写失败测试、再最小实现的 TDD 流程。
-- 不拼接用户输入形成 Shell 命令；受控命令必须使用参数数组，并设置超时。Root 终端使用独立 PTY 会话。
+- 使用 OpenSpec 维护规格并按 SDD 推进：proposal → specs/design → tasks → 实现 → 编译构建 → 部署验证。
+- 实现前先明确需求、方案、信息架构与任务边界；实现应可追溯到当前 OpenSpec 变更。
+- 默认不采用 TDD，也不把测试套件作为本阶段交付前置条件；除非用户另行要求，最小验证为 Go 编译、Vue 类型检查、生产构建、Compose 配置和部署健康状态。
+- 文档、注释和 Conventional Commit 描述默认使用中文，类型 token 使用英文，例如 `feat(system)：实现环境能力探测器`。
+
+## 编码与运行约束
+
+- 不拼接用户输入形成 Shell 命令；受控命令使用参数数组并设置超时。Root 终端使用独立 PTY 会话。
 - 不记录或返回密码、Token、Cookie、私钥、连接串或其他敏感值。
 - API 使用稳定错误码，调用方不得依赖错误文本判断行为。
 - 流式调用必须响应 Context 取消；Docker Event 断线后必须触发对账。
 - Root 角色的管理操作以 Job 结果和真实运行状态为准；终端 Session 必须支持关闭、断线和资源回收。
-
-## 工作方式
-
-每个功能按可审查范围推进：ADR → 接口定义 → 数据模型/迁移（若需要）→ Agent RPC → 后端实现 → 单元测试 → 前端 → 集成测试 → 文档。文档、注释和 Conventional Commit 描述默认使用中文，类型 token 使用英文，例如 `feat(system)：实现环境能力探测器`。
