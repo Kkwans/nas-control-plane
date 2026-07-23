@@ -1,0 +1,227 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  ArrowUpRight,
+  Boxes,
+  CalendarClock,
+  CircleStop,
+  FileText,
+  Folder,
+  Image,
+  LoaderCircle,
+  Play,
+  RotateCw,
+} from '@lucide/vue'
+import { ElDrawer, ElTooltip } from 'element-plus'
+
+import StatusPill from '@/components/StatusPill.vue'
+import { projectStateTone } from '@/domain/overview'
+import type { ContainerAction, DockerInventory, DockerProject } from '@/api/system'
+
+type DockerContainer = DockerInventory['containers'][number]
+
+const props = withDefaults(defineProps<{
+  modelValue: boolean
+  project: DockerProject | null
+  containers: DockerContainer[]
+  hostName: string
+  allowOperations?: boolean
+  actionPending?: string | null
+}>(), {
+  allowOperations: false,
+  actionPending: null,
+})
+
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  action: [containerId: string, action: ContainerAction]
+  logs: [container: { id: string; name: string }]
+}>()
+
+const isMobile = ref(window.innerWidth < 768)
+const drawerSize = computed(() => isMobile.value ? '100%' : 'min(720px, 94vw)')
+const publicPorts = computed(() => [...new Set(props.containers
+  .flatMap((container) => container.ports)
+  .filter((port) => port.publicPort > 0)
+  .map((port) => port.publicPort))])
+
+function stateLabel(state: DockerProject['state']) {
+  return state === 'running' ? '运行中' : state === 'degraded' ? '需关注' : '已停止'
+}
+
+function containerStateLabel(state: string) {
+  if (state === 'running') return '运行中'
+  if (state === 'exited') return '已退出'
+  if (state === 'created') return '已创建'
+  return state || '未知'
+}
+
+function formatTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? value || '—' : new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function pendingFor(containerId: string, action: ContainerAction) {
+  return props.actionPending === `${containerId}:${action}`
+}
+
+function updateViewport() {
+  isMobile.value = window.innerWidth < 768
+}
+
+onMounted(() => window.addEventListener('resize', updateViewport, { passive: true }))
+onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
+</script>
+
+<template>
+  <ElDrawer
+    :model-value="modelValue"
+    :size="drawerSize"
+    :show-close="true"
+    class="project-drawer"
+    modal-class="project-drawer-modal"
+    @update:model-value="emit('update:modelValue', $event)"
+  >
+    <template #header>
+      <div v-if="project" class="drawer-title">
+        <span class="drawer-title__icon"><Boxes :size="21" /></span>
+        <div><strong>{{ project.name }}</strong><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
+        <StatusPill :label="stateLabel(project.state)" :tone="projectStateTone(project.state)" />
+      </div>
+    </template>
+
+    <div v-if="project" class="project-detail">
+      <section class="detail-overview">
+        <div><Folder :size="17" /><span>工作目录</span><strong :title="project.workingDirectory">{{ project.workingDirectory || 'Docker 自动发现项目' }}</strong></div>
+        <div><Boxes :size="17" /><span>容器状态</span><strong>{{ project.runningCount }}/{{ project.containerCount }} 正在运行</strong></div>
+      </section>
+
+      <section class="detail-section">
+        <header><div><h3>访问入口</h3><p>在新的浏览器标签页打开服务</p></div><span>{{ publicPorts.length }} 个端口</span></header>
+        <div v-if="publicPorts.length" class="port-links">
+          <ElTooltip v-for="port in publicPorts" :key="port" :content="`打开端口 ${port}`">
+            <a :href="`http://${hostName}:${port}`" target="_blank" rel="noreferrer">
+              <span>{{ port }}</span><ArrowUpRight :size="15" />
+            </a>
+          </ElTooltip>
+        </div>
+        <p v-else class="detail-empty">此项目没有对局域网公开端口。</p>
+      </section>
+
+      <section class="detail-section">
+        <header><div><h3>容器</h3><p>镜像、状态、端口和运行操作</p></div><span>{{ containers.length }} 个</span></header>
+        <div class="container-cards">
+          <article v-for="container in containers" :key="container.id" class="container-card">
+            <div class="container-card__top">
+              <div class="container-card__name">
+                <span><Boxes :size="17" /></span>
+                <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
+              </div>
+              <span :class="['container-card__state', { 'container-card__state--running': container.state === 'running' }]">
+                {{ containerStateLabel(container.state) }}
+              </span>
+            </div>
+            <dl>
+              <div><dt><Image :size="14" />镜像</dt><dd :title="container.image">{{ container.image }}</dd></div>
+              <div><dt><CalendarClock :size="14" />创建时间</dt><dd>{{ formatTime(container.createdAt) }}</dd></div>
+              <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ container.ports.filter((port) => port.publicPort > 0).map((port) => port.publicPort).join('、') || '无公开端口' }}</dd></div>
+            </dl>
+            <div v-if="allowOperations" class="container-card__actions">
+              <ElTooltip :content="container.state === 'running' ? '停止容器' : '启动容器'">
+                <button
+                  :class="{ 'operation-button--danger': container.state === 'running' }"
+                  class="operation-button"
+                  type="button"
+                  :disabled="Boolean(actionPending)"
+                  :aria-label="container.state === 'running' ? `停止 ${container.name}` : `启动 ${container.name}`"
+                  @click="emit('action', container.id, container.state === 'running' ? 'stop' : 'start')"
+                >
+                  <LoaderCircle v-if="pendingFor(container.id, container.state === 'running' ? 'stop' : 'start')" class="spin" :size="17" />
+                  <CircleStop v-else-if="container.state === 'running'" :size="17" />
+                  <Play v-else :size="17" />
+                </button>
+              </ElTooltip>
+              <ElTooltip content="重启容器">
+                <button class="operation-button" type="button" :disabled="Boolean(actionPending)" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
+                  <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
+                </button>
+              </ElTooltip>
+              <ElTooltip content="查看容器日志">
+                <button class="operation-button" type="button" :aria-label="`查看 ${container.name} 日志`" @click="emit('logs', container)">
+                  <FileText :size="17" />
+                </button>
+              </ElTooltip>
+            </div>
+          </article>
+          <p v-if="!containers.length" class="detail-empty">当前项目没有容器。</p>
+        </div>
+      </section>
+    </div>
+  </ElDrawer>
+</template>
+
+<style scoped>
+.drawer-title { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 11px; min-width: 0; padding-right: 10px; }
+.drawer-title__icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 11px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.drawer-title>div { display: grid; min-width: 0; }
+.drawer-title strong { overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-title span:not(.drawer-title__icon) { color: var(--ncp-text-subtle); font-size: .72rem; }
+.project-detail { display: grid; gap: 18px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+.detail-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.detail-overview>div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 2px 8px; padding: 14px; border: 1px solid var(--ncp-line); border-radius: 12px; background: var(--ncp-surface-quiet); }
+.detail-overview svg { grid-row: 1/3; color: var(--ncp-primary-strong); }
+.detail-overview span { color: var(--ncp-text-subtle); font-size: .7rem; }
+.detail-overview strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.detail-section { display: grid; gap: 12px; }
+.detail-section>header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.detail-section h3 { margin: 0; font-size: .88rem; }
+.detail-section p { margin: 3px 0 0; color: var(--ncp-text-subtle); font-size: .72rem; }
+.detail-section>header>span { padding: 4px 8px; border-radius: 99px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .7rem; font-weight: 700; }
+.port-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.port-links a { display: flex; min-height: 44px; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid rgba(36,104,216,.16); border-radius: 10px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .72rem; font-weight: 750; transition: background-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.port-links a:hover { background: var(--ncp-primary-hover); transform: translateY(-1px); }
+.container-cards { display: grid; gap: 10px; }
+.container-card { padding: 14px; border: 1px solid var(--ncp-line); border-radius: 13px; background: #fff; }
+.container-card__top, .container-card__name, .container-card__actions { display: flex; align-items: center; }
+.container-card__top { justify-content: space-between; gap: 12px; }
+.container-card__name { min-width: 0; gap: 9px; }
+.container-card__name>span { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 9px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.container-card__name>div { display: grid; min-width: 0; }
+.container-card__name strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.container-card__name small { color: var(--ncp-text-subtle); font-family: 'JetBrains Mono Variable', monospace; font-size: .68rem; }
+.container-card__state { flex: 0 0 auto; color: var(--ncp-text-muted); font-size: .7rem; font-weight: 700; }
+.container-card__state--running { color: var(--ncp-success); }
+.container-card dl { display: grid; gap: 7px; margin: 13px 0 0; padding: 11px 0 0; border-top: 1px solid var(--ncp-line); }
+.container-card dl>div { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 10px; }
+.container-card dt { display: flex; align-items: center; gap: 5px; color: var(--ncp-text-subtle); font-size: .7rem; }
+.container-card dd { overflow: hidden; margin: 0; color: var(--ncp-text-muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.container-card__actions { justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.operation-button { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(36,104,216,.18); border-radius: 10px; background: #fff; color: var(--ncp-primary-strong); transition: background-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.operation-button:hover:not(:disabled) { background: var(--ncp-primary-soft); transform: translateY(-1px); }
+.operation-button--danger { border-color: rgba(212,81,93,.2); color: var(--ncp-danger-strong); }
+.operation-button:disabled { cursor: wait; opacity: .5; }
+.detail-empty { padding: 22px; border: 1px dashed var(--ncp-line-strong); border-radius: 12px; text-align: center; }
+.spin { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media(max-width: 560px) {
+  .detail-overview { grid-template-columns: 1fr; }
+  .drawer-title { grid-template-columns: auto minmax(0,1fr); }
+  .drawer-title>:last-child { grid-column: 2; justify-self: start; }
+  .container-card { padding: 13px; }
+  .container-card dl>div { grid-template-columns: 78px minmax(0,1fr); }
+}
+</style>
+
+<style>
+.project-drawer .el-drawer__header { margin-bottom: 0; padding: 18px 20px 14px; border-bottom: 1px solid var(--ncp-line); }
+.project-drawer .el-drawer__body { padding: 18px 20px; }
+@media(max-width: 767px) {
+  .project-drawer .el-drawer__header { padding-top: calc(14px + env(safe-area-inset-top)); }
+  .project-drawer .el-drawer__body { padding: 16px 14px; }
+}
+</style>
