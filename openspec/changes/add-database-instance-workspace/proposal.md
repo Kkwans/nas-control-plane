@@ -2,6 +2,8 @@
 
 NCP 已能管理 Docker 项目，但数据库仍只是不可进入的占位菜单，用户无法统一查看 NAS 上实际运行的 MySQL、MariaDB、PostgreSQL、Redis 或 Valkey 实例。与此同时，已部署首页在真实登录验收中仍可能停留在“等待数据”，必须先保证首次快照和持续采样可靠更新。
 
+> 范围说明：本 OpenSpec 变更仅保留为数据库阶段 A 的实例发现与工作区记录。数据库管理的完整目标、适配器架构、SQL/Redis 执行、可视化 CRUD、结构管理和审计以 `docs/specs/database-management-architecture.md` 为准；后续局部切片不再强制重复完整 OpenSpec 流程。
+
 ## What Changes
 
 - 从 Root Agent 已采集的 Docker 容器清单识别数据库实例，不读取容器环境变量、密码、连接串或数据库内容。
