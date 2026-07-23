@@ -99,6 +99,33 @@ func CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inve
 	return decodeDockerInventory(response)
 }
 
+func ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
+	if err := request.Validate(); err != nil {
+		return docker.ContainerActionResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return docker.ContainerActionResult{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ContainerActionResult{}, err
+	}
+	defer connection.Close()
+
+	payload, err := structpb.NewStruct(map[string]any{
+		"container_id": request.ContainerID,
+		"action":       string(request.Action),
+	})
+	if err != nil {
+		return docker.ContainerActionResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerControlServiceClient(connection).ControlContainer(ctx, payload)
+	if err != nil {
+		return docker.ContainerActionResult{}, rpcError(err)
+	}
+	return decodeContainerActionResult(response)
+}
+
 func dialSocket(socketPath string) (*grpc.ClientConn, error) {
 	if socketPath == "" {
 		return nil, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))
@@ -172,6 +199,20 @@ func decodeDockerInventory(response *structpb.Struct) (docker.Inventory, error) 
 		return docker.Inventory{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("inventory collection time is required"))
 	}
 	return inventory, nil
+}
+
+func decodeContainerActionResult(response *structpb.Struct) (docker.ContainerActionResult, error) {
+	var result docker.ContainerActionResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ContainerActionResult{}, err
+	}
+	if result.ContainerID == "" || result.Name == "" || result.State == "" {
+		return docker.ContainerActionResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("container action result is incomplete"))
+	}
+	if _, err := docker.ParseContainerAction(string(result.Action)); err != nil {
+		return docker.ContainerActionResult{}, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	return result, nil
 }
 
 func decodeDashboardResponse(response *structpb.Struct, destination any) error {

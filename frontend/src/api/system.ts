@@ -113,6 +113,15 @@ export interface ServiceListResponse {
   services: DockerProject[]
 }
 
+export type ContainerAction = 'start' | 'stop' | 'restart'
+
+export interface ContainerActionResult {
+  containerId: string
+  name: string
+  action: ContainerAction
+  state: string
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -176,6 +185,20 @@ export async function requestDockerInventory(fetcher: typeof fetch = fetch): Pro
 
 export async function requestServices(fetcher: typeof fetch = fetch): Promise<ServiceListResponse> {
   return requestJson('/api/v1/services', {}, isServiceListResponse, fetcher, 'SERVICES_RESPONSE_INVALID')
+}
+
+export async function requestContainerAction(
+  containerId: string,
+  action: ContainerAction,
+  fetcher: typeof fetch = fetch,
+): Promise<ContainerActionResult> {
+  return requestJson(
+    `/api/v1/docker/containers/${encodeURIComponent(containerId)}/actions/${action}`,
+    { method: 'POST' },
+    isContainerActionResult,
+    fetcher,
+    'DOCKER_CONTAINER_ACTION_RESPONSE_INVALID',
+  )
 }
 
 async function requestCredentials(
@@ -290,4 +313,14 @@ function isDockerInventory(value: unknown): value is DockerInventory {
 
 function isServiceListResponse(value: unknown): value is ServiceListResponse {
   return isRecord(value) && typeof value.collectedAt === 'string' && Array.isArray(value.services)
+}
+
+function isContainerActionResult(value: unknown): value is ContainerActionResult {
+  return (
+    isRecord(value) &&
+    typeof value.containerId === 'string' &&
+    typeof value.name === 'string' &&
+    (value.action === 'start' || value.action === 'stop' || value.action === 'restart') &&
+    typeof value.state === 'string'
+  )
 }

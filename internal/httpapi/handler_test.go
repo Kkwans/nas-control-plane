@@ -140,6 +140,60 @@ func TestAgentStatusReturnsStableErrorWhenProbeFails(t *testing.T) {
 	}
 }
 
+func TestContainerActionUsesRootAgentAndReturnsState(t *testing.T) {
+	agent := &fakeAgentClient{actionResult: docker.ContainerActionResult{
+		ContainerID: "abc123",
+		Name:        "web",
+		Action:      docker.ContainerActionRestart,
+		State:       "running",
+	}}
+	handler := NewHandler(Config{
+		Agent:           agent,
+		AgentSocketPath: "/run/ncp/test.sock",
+		AgentTimeout:    time.Second,
+		RequestID:       func() string { return "req-container-action" },
+	})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/docker/containers/abc123/actions/restart", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if agent.actionRequest.ContainerID != "abc123" || agent.actionRequest.Action != docker.ContainerActionRestart {
+		t.Fatalf("action request = %#v", agent.actionRequest)
+	}
+	if agent.socketPath != "/run/ncp/test.sock" || !agent.deadlineObserved {
+		t.Fatalf("agent call = socket %q deadline=%v", agent.socketPath, agent.deadlineObserved)
+	}
+	var body docker.ContainerActionResult
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Name != "web" || body.State != "running" {
+		t.Fatalf("action response = %#v", body)
+	}
+}
+
+func TestContainerActionRejectsUnknownAction(t *testing.T) {
+	agent := &fakeAgentClient{}
+	handler := NewHandler(Config{Agent: agent, RequestID: func() string { return "req-container-action-invalid" }})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/docker/containers/abc123/actions/scale", nil))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "DOCKER_CONTAINER_ACTION_INVALID" || body.RequestID != "req-container-action-invalid" {
+		t.Fatalf("error response = %#v", body)
+	}
+}
+
 type fakeAgentClient struct {
 	status           agentsocket.AgentStatus
 	statusErr        error
@@ -149,6 +203,9 @@ type fakeAgentClient struct {
 	summaryErr       error
 	inventory        docker.Inventory
 	inventoryErr     error
+	actionResult     docker.ContainerActionResult
+	actionErr        error
+	actionRequest    docker.ContainerActionRequest
 	socketPath       string
 	deadlineObserved bool
 }
@@ -174,4 +231,11 @@ func (f *fakeAgentClient) CollectDockerInventory(ctx context.Context, socketPath
 	f.socketPath = socketPath
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.inventory, f.inventoryErr
+}
+
+func (f *fakeAgentClient) ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
+	f.socketPath = socketPath
+	f.actionRequest = request
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.actionResult, f.actionErr
 }

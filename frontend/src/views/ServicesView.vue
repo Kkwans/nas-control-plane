@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { ArrowUpRight, Boxes, Container, Network, PackageCheck, ServerCog } from '@lucide/vue'
+import { computed, ref } from 'vue'
+import { ArrowUpRight, Boxes, Container, LoaderCircle, Network, PackageCheck, Play, RotateCw, ServerCog, Square } from '@lucide/vue'
 
+import { NcpApiError, requestContainerAction, type ContainerAction } from '@/api/system'
 import StatusPill from '@/components/StatusPill.vue'
 import { projectStateTone } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
@@ -9,6 +10,8 @@ import { useSystemStore } from '@/stores/system'
 const systemStore = useSystemStore()
 const inventory = computed(() => systemStore.inventory)
 const projects = computed(() => systemStore.services?.services ?? inventory.value?.projects ?? [])
+const actionPending = ref<string | null>(null)
+const actionError = ref<string | null>(null)
 
 function containersFor(projectId: string) {
   return inventory.value?.containers.filter((container) => container.projectId === projectId) ?? []
@@ -33,6 +36,24 @@ function stateLabel(state: 'running' | 'stopped' | 'degraded') {
   if (state === 'degraded') return '需关注'
   return '已停止'
 }
+
+async function performAction(containerId: string, action: ContainerAction) {
+  if (actionPending.value) return
+  actionPending.value = `${containerId}:${action}`
+  actionError.value = null
+  try {
+    await requestContainerAction(containerId, action)
+    await systemStore.refresh()
+  } catch (error) {
+    actionError.value = error instanceof NcpApiError ? error.message : '容器操作暂时失败，请稍后重试。'
+  } finally {
+    actionPending.value = null
+  }
+}
+
+function actionPendingFor(containerId: string, action: ContainerAction) {
+  return actionPending.value === `${containerId}:${action}`
+}
 </script>
 
 <template>
@@ -47,6 +68,11 @@ function stateLabel(state: 'running' | 'stopped' | 'degraded') {
       </div>
       <div class="service-count"><strong>{{ projects.length }}</strong><span>已发现服务组</span></div>
     </header>
+
+    <div v-if="actionError" class="action-error panel" role="alert">
+      <span>{{ actionError }}</span>
+      <button type="button" @click="actionError = null">关闭</button>
+    </div>
 
     <section class="engine-summary panel reveal" style="--reveal-index: 1" aria-labelledby="engine-summary-title">
       <div>
@@ -71,7 +97,48 @@ function stateLabel(state: 'running' | 'stopped' | 'degraded') {
         <div class="service-card__identity"><span class="service-card__icon" aria-hidden="true"><Boxes :size="21" :stroke-width="1.8" /></span><div><h2>{{ project.name }}</h2><p>{{ project.runningCount }} / {{ project.containerCount }} 容器运行中</p></div></div>
         <div class="service-card__meta"><ServerCog :size="15" aria-hidden="true" /><span>{{ project.workingDirectory || (project.kind === 'compose' ? 'Compose 工作目录未提供' : '由 Docker 自动归类') }}</span></div>
         <ul class="container-list">
-          <li v-for="container in containersFor(project.id).slice(0, 3)" :key="container.id"><Container :size="14" aria-hidden="true" /><span>{{ container.name }}</span><small>{{ container.state }}</small></li>
+          <li v-for="container in containersFor(project.id).slice(0, 3)" :key="container.id">
+            <Container :size="14" aria-hidden="true" />
+            <span>{{ container.name }}</span>
+            <small>{{ container.state }}</small>
+            <span class="container-list__actions" :aria-label="`${container.name} 容器操作`">
+              <button
+                v-if="container.state !== 'running'"
+                type="button"
+                class="container-action"
+                :disabled="Boolean(actionPending)"
+                :aria-label="`启动 ${container.name}`"
+                title="启动容器"
+                @click.stop="performAction(container.id, 'start')"
+              >
+                <LoaderCircle v-if="actionPendingFor(container.id, 'start')" class="is-spinning" :size="12" aria-hidden="true" />
+                <Play v-else :size="12" aria-hidden="true" />
+              </button>
+              <button
+                v-else
+                type="button"
+                class="container-action container-action--danger"
+                :disabled="Boolean(actionPending)"
+                :aria-label="`停止 ${container.name}`"
+                title="停止容器"
+                @click.stop="performAction(container.id, 'stop')"
+              >
+                <LoaderCircle v-if="actionPendingFor(container.id, 'stop')" class="is-spinning" :size="12" aria-hidden="true" />
+                <Square v-else :size="12" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                class="container-action"
+                :disabled="Boolean(actionPending)"
+                :aria-label="`重启 ${container.name}`"
+                title="重启容器"
+                @click.stop="performAction(container.id, 'restart')"
+              >
+                <LoaderCircle v-if="actionPendingFor(container.id, 'restart')" class="is-spinning" :size="12" aria-hidden="true" />
+                <RotateCw v-else :size="12" aria-hidden="true" />
+              </button>
+            </span>
+          </li>
           <li v-if="containersFor(project.id).length > 3" class="container-list__more">另有 {{ containersFor(project.id).length - 3 }} 个容器</li>
         </ul>
         <div class="service-card__footer">
@@ -117,11 +184,20 @@ function stateLabel(state: 'running' | 'stopped' | 'degraded') {
 .service-card__meta { display: flex; gap: 8px; align-items: flex-start; margin-top: 22px; color: var(--ncp-text-subtle); font-size: 0.69rem; line-height: 1.5; }
 .service-card__meta svg { flex: 0 0 auto; margin-top: 2px; color: var(--ncp-primary-strong); }
 .container-list { display: grid; gap: 8px; padding: 0; margin: 19px 0 0; list-style: none; }
-.container-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: center; color: var(--ncp-text-muted); font-family: 'JetBrains Mono Variable', ui-monospace, monospace; font-size: 0.64rem; }
+.container-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 7px; align-items: center; color: var(--ncp-text-muted); font-family: 'JetBrains Mono Variable', ui-monospace, monospace; font-size: 0.64rem; }
 .container-list li svg { color: var(--ncp-text-subtle); }
 .container-list span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .container-list small { color: var(--ncp-text-subtle); font-size: 0.58rem; }
+.container-list__actions { display: inline-flex; gap: 4px; overflow: visible !important; }
+.container-action { display: grid; width: 25px; height: 25px; padding: 0; place-items: center; border: 1px solid rgba(44, 111, 223, 0.16); border-radius: 7px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); cursor: pointer; transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out), transform var(--ncp-duration-fast) var(--ncp-ease-out); }
+.container-action:hover:not(:disabled) { border-color: rgba(44, 111, 223, 0.3); background: rgba(44, 111, 223, 0.16); transform: translateY(-1px); }
+.container-action:disabled { cursor: wait; opacity: 0.52; }
+.container-action--danger { border-color: rgba(202, 92, 83, 0.16); background: rgba(202, 92, 83, 0.08); color: #b34d48; }
+.container-action--danger:hover:not(:disabled) { border-color: rgba(202, 92, 83, 0.3); background: rgba(202, 92, 83, 0.14); }
+.is-spinning { animation: ncp-spin 0.9s linear infinite; }
 .container-list__more { display: block !important; color: var(--ncp-text-subtle) !important; padding-left: 21px; }
+.action-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 15px; border-color: rgba(202, 92, 83, 0.2); background: rgba(202, 92, 83, 0.06); color: #9e4742; font-size: 0.75rem; }
+.action-error button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 0.7rem; font-weight: 700; }
 .service-card__footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 17px; border-top: 1px solid var(--ncp-line); }
 .port-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .port-list a { display: inline-flex; align-items: center; gap: 4px; min-height: 29px; padding: 0 8px; border: 1px solid rgba(44, 111, 223, 0.17); border-radius: 8px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', ui-monospace, monospace; font-size: 0.61rem; font-weight: 750; transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out); }
@@ -133,5 +209,6 @@ function stateLabel(state: 'running' | 'stopped' | 'degraded') {
 .empty-services h2 { margin: 0; font-size: 1rem; }
 .empty-services p { max-width: 560px; margin: 7px 0 0; color: var(--ncp-text-muted); font-size: 0.79rem; line-height: 1.7; }
 @media (max-width: 940px) { .engine-summary { display: block; } .engine-summary__metrics { margin-top: 24px; } .service-board { grid-template-columns: 1fr; } }
-@media (max-width: 640px) { .service-count { display: inline-grid; margin-top: 20px; } .engine-summary { padding: 22px; } .engine-summary__metrics { min-width: 0; } .service-card { padding: 19px; } }
+@keyframes ncp-spin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) { .service-count { display: inline-grid; margin-top: 20px; } .engine-summary { padding: 22px; } .engine-summary__metrics { min-width: 0; } .service-card { padding: 19px; } .container-action { width: 23px; height: 23px; } }
 </style>

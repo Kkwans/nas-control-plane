@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"google.golang.org/grpc"
@@ -34,6 +35,7 @@ type SocketConfig struct {
 	EnableTerminalPOC bool
 	TerminalManager   *terminal.Manager
 	DashboardProvider DashboardProvider
+	DockerControl     DockerControlProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -49,10 +51,18 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			return coded("AGENT_DASHBOARD_INITIALIZATION_FAILED", err)
 		}
 	}
+	dockerControl := config.DockerControl
+	if dockerControl == nil {
+		dockerControl, err = docker.NewLiveContainerController()
+		if err != nil {
+			return coded("AGENT_DOCKER_CONTROL_INITIALIZATION_FAILED", err)
+		}
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
 	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
+	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

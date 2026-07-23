@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/struct.proto";
+
+// Root Agent exposes only explicit Docker lifecycle actions over the local Unix socket.
+// The Struct envelope is kept aligned with the hand-written Go RPC adapter until generated
+// bindings are introduced; request keys are container_id/action and response keys are camelCase.
+service AgentDockerControlService {
+  rpc ControlContainer(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

@@ -203,6 +203,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/{containerID}/actions/{action}:
+    post:
+      operationId: controlDockerContainer
+      summary: Start, stop, or restart one Docker container
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: containerID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [start, stop, restart]
+      responses:
+        '200':
+          description: Container lifecycle action completed and current state inspected
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContainerActionResult'
+        '400':
+          description: Unsupported action or missing container identifier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /ws/terminal:
     get:
       operationId: openTerminalPOCWebSocket
@@ -426,6 +462,16 @@ components:
         workingDirectory: { type: string }
         containerCount: { type: integer, minimum: 0 }
         runningCount: { type: integer, minimum: 0 }
+    ContainerActionResult:
+      type: object
+      required: [containerId, name, action, state]
+      properties:
+        containerId: { type: string }
+        name: { type: string }
+        action:
+          type: string
+          enum: [start, stop, restart]
+        state: { type: string }
     ServiceListResponse:
       type: object
       required: [collectedAt, services]

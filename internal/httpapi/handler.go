@@ -24,6 +24,7 @@ type AgentClient interface {
 	CollectCapabilities(context.Context, string) (system.Capabilities, error)
 	CollectSystemSummary(context.Context, string) (system.Summary, error)
 	CollectDockerInventory(context.Context, string) (docker.Inventory, error)
+	ControlContainer(context.Context, string, docker.ContainerActionRequest) (docker.ContainerActionResult, error)
 }
 
 type Config struct {
@@ -84,6 +85,10 @@ func (socketAgentClient) CollectDockerInventory(ctx context.Context, socketPath 
 	return agentsocket.CollectDockerInventory(ctx, socketPath)
 }
 
+func (socketAgentClient) ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
+	return agentsocket.ControlContainer(ctx, socketPath, request)
+}
+
 func NewHandler(config Config) http.Handler {
 	if config.Agent == nil {
 		config.Agent = socketAgentClient{}
@@ -129,6 +134,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/agent-status", api.agentStatus)
 			protected.Get("/system/summary", api.systemSummary)
 			protected.Get("/docker/inventory", api.dockerInventory)
+			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/services", api.services)
 		})
 	})
@@ -213,6 +219,31 @@ func (api *handler) services(response http.ResponseWriter, request *http.Request
 		CollectedAt: inventory.CollectedAt,
 		Services:    inventory.Projects,
 	})
+}
+
+func (api *handler) containerAction(response http.ResponseWriter, request *http.Request) {
+	containerRequest := docker.ContainerActionRequest{
+		ContainerID: chi.URLParam(request, "containerID"),
+	}
+	action, err := docker.ParseContainerAction(chi.URLParam(request, "action"))
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_CONTAINER_ACTION_INVALID", "容器操作参数无效。")
+		return
+	}
+	containerRequest.Action = action
+	if err := containerRequest.Validate(); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_CONTAINER_ACTION_INVALID", "容器操作参数无效。")
+		return
+	}
+
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+	result, err := api.agent.ControlContainer(requestContext, api.agentSocketPath, containerRequest)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "容器操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (api *handler) collectDockerInventory(response http.ResponseWriter, request *http.Request) (docker.Inventory, bool) {

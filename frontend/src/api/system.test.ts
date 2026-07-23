@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { NcpApiError, loginRoot, requestCapabilities, requestSystemSummary } from './system'
+import { NcpApiError, loginRoot, requestCapabilities, requestContainerAction, requestSystemSummary } from './system'
 
 describe('NCP API client', () => {
   it('requests protected system data with same-origin credentials', async () => {
@@ -56,5 +56,23 @@ describe('NCP API client', () => {
       code: 'SYSTEM_SUMMARY_UNAVAILABLE',
       requestId: 'req-test',
     })
+  })
+
+  it('posts an explicit container lifecycle action with same-origin credentials', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({ containerId: 'abc123', name: 'web', action: 'restart', state: 'running' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(requestContainerAction('abc123', 'restart', fetcher)).resolves.toMatchObject({
+      containerId: 'abc123',
+      state: 'running',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/docker/containers/abc123/actions/restart',
+      expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+    )
   })
 })
