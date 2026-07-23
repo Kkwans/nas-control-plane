@@ -20,6 +20,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	mobycontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	_ "modernc.org/sqlite"
 )
 
@@ -28,7 +30,14 @@ const (
 	maxPageSize     = 200
 	maxQueryRows    = 500
 	maxScanFiles    = 2500
+	localDockerHost = "unix:///var/run/docker.sock"
 )
+
+type sqliteCandidate struct {
+	root    string
+	project string
+	module  string
+}
 
 type Manager struct {
 	now func() time.Time
@@ -40,11 +49,19 @@ func NewManager() *Manager {
 
 func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
 	sources := make([]Source, 0, 12)
+	sourceIDs := make(map[string]struct{})
+	addSource := func(source Source) {
+		if _, exists := sourceIDs[source.ID]; exists {
+			return
+		}
+		sourceIDs[source.ID] = struct{}{}
+		sources = append(sources, source)
+	}
 	addSQLite := func(path, name, category, project, module string, tags ...string) {
 		if !isSQLiteFile(ctx, path) {
 			return
 		}
-		sources = append(sources, Source{
+		addSource(Source{
 			ID: sourceID(DriverSQLite, path), Name: name, Driver: DriverSQLite,
 			Category: category, Project: project, Module: module, Location: path,
 			Path: path, Status: "available", Tags: tags,
@@ -82,8 +99,26 @@ func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
 		}
 	}
 
+	dockerSources, sqliteCandidates := discoverDockerDatabases(ctx)
+	for _, source := range dockerSources {
+		addSource(source)
+	}
+	for _, candidate := range sqliteCandidates {
+		info, err := os.Stat(candidate.root)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() {
+			addSQLite(candidate.root, candidate.project+" · "+filepath.Base(candidate.root), "project", candidate.project, candidate.module, "容器挂载", "自动发现")
+			continue
+		}
+		for _, path := range discoverSQLiteFiles(ctx, candidate.root) {
+			addSQLite(path, candidate.project+" · "+filepath.Base(path), "project", candidate.project, candidate.module, "容器挂载", "自动发现")
+		}
+	}
+
 	if portOpen(ctx, "127.0.0.1:5432") {
-		sources = append(sources, Source{
+		addSource(Source{
 			ID: sourceID(DriverPostgreSQL, "127.0.0.1:5432/nasdb"), Name: "绿联 NAS 核心数据库",
 			Driver: DriverPostgreSQL, Category: "system", Project: "绿联 NAS",
 			Module: "共享文件夹、用户与系统服务", Location: "127.0.0.1:5432/nasdb",
@@ -91,13 +126,13 @@ func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
 			RequiresLogin: true, Status: "credentials_required", Tags: []string{"系统数据库", "PostgreSQL"},
 		})
 	}
-	if portOpen(ctx, "127.0.0.1:3306") {
-		sources = append(sources, Source{
-			ID: sourceID(DriverMySQL, "127.0.0.1:3306"), Name: "项目 MySQL 数据库",
-			Driver: DriverMySQL, Category: "project", Project: "mysql",
-			Module: "Project 项目共享 MySQL 实例", Location: "127.0.0.1:3306",
+	if portOpen(ctx, "127.0.0.1:3306") && !hasDriver(sources, DriverMySQL) {
+		addSource(Source{
+			ID: sourceID(DriverMySQL, "127.0.0.1:3306"), Name: "本机 MySQL 实例",
+			Driver: DriverMySQL, Category: "project", Project: "未关联项目",
+			Module: "尚未关联到具体项目", Location: "127.0.0.1:3306",
 			Host: "127.0.0.1", Port: 3306, RequiresLogin: true,
-			Status: "credentials_required", Tags: []string{"项目数据库", "MySQL"},
+			Status: "credentials_required", Tags: []string{"MySQL", "端口发现"},
 		})
 	}
 
@@ -126,6 +161,7 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 			return Catalog{}, columnErr
 		}
 		tables[index].Columns = columns
+		enrichTable(ctx, db, source.Driver, &tables[index])
 	}
 	return Catalog{Source: source, Tables: tables}, nil
 }
@@ -379,12 +415,12 @@ func listTables(ctx context.Context, db *sql.DB, source Source, credentials Cred
 	var args []any
 	switch source.Driver {
 	case DriverSQLite:
-		query = `SELECT '', name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name`
+		query = `SELECT '', name, type, COALESCE(sql, '') FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name`
 	case DriverMySQL:
-		query = `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name`
+		query = `SELECT table_schema, table_name, table_type, '' FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name`
 		args = []any{credentials.Database}
 	case DriverPostgreSQL:
-		query = `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_schema, table_name`
+		query = `SELECT table_schema, table_name, table_type, '' FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_schema, table_name`
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -394,12 +430,61 @@ func listTables(ctx context.Context, db *sql.DB, source Source, credentials Cred
 	result := make([]Table, 0)
 	for rows.Next() {
 		var table Table
-		if err := rows.Scan(&table.Schema, &table.Name, &table.Type); err != nil {
+		if err := rows.Scan(&table.Schema, &table.Name, &table.Type, &table.Definition); err != nil {
 			return nil, err
 		}
 		result = append(result, table)
 	}
 	return result, rows.Err()
+}
+
+func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) {
+	switch driver {
+	case DriverSQLite:
+		var count int64
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name)).Scan(&count); err == nil {
+			table.RowCount = &count
+		}
+		var size sql.NullInt64
+		if err := db.QueryRowContext(ctx, "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", table.Name).Scan(&size); err == nil && size.Valid {
+			table.SizeBytes = &size.Int64
+		}
+	case DriverMySQL:
+		var rows, size sql.NullInt64
+		var created sql.NullString
+		if err := db.QueryRowContext(ctx, `SELECT table_rows, data_length + index_length,
+			COALESCE(DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s'), '')
+			FROM information_schema.tables WHERE table_schema = ? AND table_name = ?`,
+			table.Schema, table.Name).Scan(&rows, &size, &created); err == nil {
+			if rows.Valid {
+				table.RowCount = &rows.Int64
+			}
+			if size.Valid {
+				table.SizeBytes = &size.Int64
+			}
+			table.CreatedAt = created.String
+		}
+		var ignored, definition string
+		if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name)).Scan(&ignored, &definition); err == nil {
+			table.Definition = definition
+		}
+	case DriverPostgreSQL:
+		var count, size sql.NullInt64
+		if err := db.QueryRowContext(ctx, `SELECT c.reltuples::bigint, pg_total_relation_size(c.oid)
+			FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relname = $2`, table.Schema, table.Name).Scan(&count, &size); err == nil {
+			if count.Valid {
+				table.RowCount = &count.Int64
+			}
+			if size.Valid {
+				table.SizeBytes = &size.Int64
+			}
+		}
+		if strings.EqualFold(table.Type, "VIEW") {
+			_ = db.QueryRowContext(ctx, "SELECT pg_get_viewdef($1::regclass, true)",
+				table.Schema+"."+table.Name).Scan(&table.Definition)
+		}
+	}
 }
 
 func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string) ([]Column, error) {
@@ -604,6 +689,177 @@ func returnsRows(statement string) bool {
 func sourceID(driver Driver, location string) string {
 	sum := sha256.Sum256([]byte(string(driver) + ":" + location))
 	return string(driver) + "-" + fmt.Sprintf("%x", sum[:8])
+}
+
+func hasDriver(sources []Source, driver Driver) bool {
+	for _, source := range sources {
+		if source.Driver == driver {
+			return true
+		}
+	}
+	return false
+}
+
+func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) {
+	apiClient, err := client.New(client.WithHost(localDockerHost), client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, nil
+	}
+	defer apiClient.Close()
+	response, err := apiClient.ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, nil
+	}
+
+	sources := make([]Source, 0)
+	candidates := make([]sqliteCandidate, 0)
+	for _, item := range response.Items {
+		inspection, inspectErr := apiClient.ContainerInspect(ctx, item.ID, client.ContainerInspectOptions{})
+		if inspectErr != nil || inspection.Container.Config == nil {
+			continue
+		}
+		labels := inspection.Container.Config.Labels
+		project := strings.TrimSpace(labels["com.docker.compose.project"])
+		service := strings.TrimSpace(labels["com.docker.compose.service"])
+		if project == "" {
+			project = strings.TrimPrefix(inspection.Container.Name, "/")
+		}
+		if service == "" {
+			service = "数据库服务"
+		}
+
+		image := strings.ToLower(inspection.Container.Config.Image)
+		if driver, port, ok := databaseImage(image); ok {
+			publicPort := publishedDatabasePort(item.Ports, port)
+			if publicPort > 0 {
+				defaultDatabase := safeEnvironmentValue(inspection.Container.Config.Env, defaultDatabaseKey(driver))
+				location := "127.0.0.1:" + strconv.Itoa(publicPort)
+				if defaultDatabase != "" {
+					location += "/" + defaultDatabase
+				}
+				sources = append(sources, Source{
+					ID: sourceID(driver, project+":"+location), Name: project + " · " + driverName(driver),
+					Driver: driver, Category: "project", Project: project, Module: service + " 容器",
+					Location: location, Host: "127.0.0.1", Port: publicPort,
+					DefaultDatabase: defaultDatabase, RequiresLogin: true, Status: "credentials_required",
+					Tags: []string{"容器发现", driverName(driver)},
+				})
+			}
+		}
+
+		for _, environment := range inspection.Container.Config.Env {
+			key, value, found := strings.Cut(environment, "=")
+			if !found || (!strings.Contains(key, "DATASOURCE_URL") && key != "DATABASE_URL") {
+				continue
+			}
+			if source, ok := sourceFromDatabaseURL(value, project, service); ok {
+				sources = append(sources, source)
+			}
+		}
+
+		for _, mount := range inspection.Container.Mounts {
+			destination := strings.ToLower(mount.Destination)
+			if mount.Source == "" || (!strings.Contains(destination, "data") &&
+				!strings.Contains(destination, "database") && !strings.Contains(destination, "config") &&
+				!strings.Contains(destination, "support")) {
+				continue
+			}
+			candidates = append(candidates, sqliteCandidate{
+				root: mount.Source, project: project, module: service + " 容器数据",
+			})
+		}
+	}
+	return sources, candidates
+}
+
+func databaseImage(image string) (Driver, int, bool) {
+	switch {
+	case strings.Contains(image, "mariadb"), strings.Contains(image, "mysql"):
+		return DriverMySQL, 3306, true
+	case strings.Contains(image, "postgres"):
+		return DriverPostgreSQL, 5432, true
+	default:
+		return "", 0, false
+	}
+}
+
+func publishedDatabasePort(ports []mobycontainer.PortSummary, privatePort int) int {
+	for _, port := range ports {
+		if int(port.PrivatePort) == privatePort && port.PublicPort > 0 {
+			return int(port.PublicPort)
+		}
+	}
+	if portOpen(context.Background(), "127.0.0.1:"+strconv.Itoa(privatePort)) {
+		return privatePort
+	}
+	return 0
+}
+
+func defaultDatabaseKey(driver Driver) string {
+	if driver == DriverPostgreSQL {
+		return "POSTGRES_DB"
+	}
+	return "MYSQL_DATABASE"
+}
+
+func safeEnvironmentValue(environment []string, expectedKey string) string {
+	for _, item := range environment {
+		key, value, found := strings.Cut(item, "=")
+		if found && key == expectedKey {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func sourceFromDatabaseURL(value, project, service string) (Source, bool) {
+	normalized := strings.TrimSpace(strings.TrimPrefix(value, "jdbc:"))
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return Source{}, false
+	}
+	var driver Driver
+	var defaultPort int
+	switch parsed.Scheme {
+	case "mysql", "mariadb":
+		driver, defaultPort = DriverMySQL, 3306
+	case "postgres", "postgresql":
+		driver, defaultPort = DriverPostgreSQL, 5432
+	default:
+		return Source{}, false
+	}
+	databaseName := strings.Trim(strings.TrimSpace(parsed.Path), "/")
+	if databaseName == "" {
+		return Source{}, false
+	}
+	host := parsed.Hostname()
+	if host == "" || host == "localhost" {
+		host = "127.0.0.1"
+	}
+	port := defaultPort
+	if parsed.Port() != "" {
+		if parsedPort, parseErr := strconv.Atoi(parsed.Port()); parseErr == nil {
+			port = parsedPort
+		}
+	}
+	location := host + ":" + strconv.Itoa(port) + "/" + databaseName
+	return Source{
+		ID: sourceID(driver, project+":"+location), Name: project + " · " + databaseName,
+		Driver: driver, Category: "project", Project: project, Module: service + " 使用的数据库",
+		Location: location, Host: host, Port: port, DefaultDatabase: databaseName,
+		RequiresLogin: true, Status: "credentials_required", Tags: []string{"项目配置发现", driverName(driver)},
+	}, true
+}
+
+func driverName(driver Driver) string {
+	switch driver {
+	case DriverMySQL:
+		return "MySQL"
+	case DriverPostgreSQL:
+		return "PostgreSQL"
+	default:
+		return "SQLite"
+	}
 }
 
 func portOpen(ctx context.Context, address string) bool {

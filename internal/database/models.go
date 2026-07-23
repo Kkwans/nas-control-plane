@@ -53,10 +53,14 @@ type Column struct {
 }
 
 type Table struct {
-	Schema  string   `json:"schema"`
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Columns []Column `json:"columns,omitempty"`
+	Schema     string   `json:"schema"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	Columns    []Column `json:"columns,omitempty"`
+	RowCount   *int64   `json:"rowCount,omitempty"`
+	SizeBytes  *int64   `json:"sizeBytes,omitempty"`
+	CreatedAt  string   `json:"createdAt,omitempty"`
+	Definition string   `json:"definition,omitempty"`
 }
 
 type CatalogRequest struct {
