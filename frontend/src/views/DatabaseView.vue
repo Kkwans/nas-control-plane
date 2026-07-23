@@ -554,7 +554,7 @@ function showError(error: unknown, fallback: string) {
 .database-workspace { display:grid; grid-template-columns:270px 220px minmax(0,1fr); min-height:660px; height:calc(100dvh - 250px); overflow:hidden; }
 .source-pane,.table-pane { display:flex; min-width:0; flex-direction:column; gap:10px; padding:14px 12px; border-right:1px solid var(--ncp-line); background:#fff; }
 .table-pane { background:var(--ncp-surface-quiet); }
-.source-pane>.el-input,.table-pane>.el-input { flex:0 0 32px; }
+.source-pane>.el-input,.table-pane>.el-input { height:32px; min-height:32px; max-height:32px; flex:0 0 32px; }
 .pane-heading { display:flex; min-height:34px; align-items:center; justify-content:space-between; padding:0 3px; }
 .pane-heading>div { display:grid; gap:1px; }
 .pane-heading strong { font-size:.75rem; }
