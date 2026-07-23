@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { Boxes, CheckCircle2, CircleAlert, Database, FileClock, HardDrive, Network, Server } from '@lucide/vue'
 
+import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSystemStore } from '@/stores/system'
 
 const systemStore = useSystemStore()
@@ -14,11 +15,16 @@ const capabilityItems = computed(() => [
   { name: '数据卷', enabled: Boolean(capabilities.value?.dataVolumes?.length), detail: capabilities.value?.dataVolumes?.join('、') || '等待检测', icon: HardDrive },
   { name: '网络接口', enabled: Boolean(capabilities.value?.networkInterfaces?.length), detail: `${capabilities.value?.networkInterfaces?.length ?? 0} 个接口`, icon: Network },
 ])
+const headerStats = computed<WorkspaceStat[]>(() => [
+  { label: '系统架构', value: systemStore.summary?.host.architecture ?? capabilities.value?.architecture ?? '—' },
+  { label: 'Docker 版本', value: systemStore.inventory?.engine.serverVersion ?? '—' },
+  { label: '数据卷', value: capabilities.value?.dataVolumes?.length ?? 0 },
+])
 </script>
 
 <template>
   <div class="page workspace-page system-page">
-    <header class="page-toolbar"><div><h1>系统信息</h1><p>设备信息、Agent 能力与数据来源</p></div></header>
+    <WorkspaceHeader title="系统信息" description="设备信息、Root Agent 能力与实时数据来源" :icon="Server" :stats="headerStats" />
     <section class="system-layout">
       <article class="panel info-panel">
         <header><h2>设备信息</h2><span>实时快照</span></header>

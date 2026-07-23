@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowUpRight, Boxes, ChevronRight, Search, SlidersHorizontal } from '@lucide/vue'
+import { ArrowUpRight, Boxes, ChevronRight, Search } from '@lucide/vue'
 import { ElInput, ElTooltip } from 'element-plus'
 
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
@@ -81,11 +81,6 @@ watch([() => route.query.project, enrichedProjects], ([projectId, items]) => {
       </template>
     </WorkspaceHeader>
 
-    <div class="result-line">
-      <span><SlidersHorizontal :size="15" />当前显示 <strong>{{ projects.length }}</strong> 个项目</span>
-      <button v-if="query || stateFilter !== 'all'" type="button" @click="query = ''; stateFilter = 'all'">清除筛选</button>
-    </div>
-
     <section v-if="projects.length" class="service-grid" aria-label="服务入口列表">
       <article v-for="project in projects" :key="project.id" class="service-card panel interactive-surface">
         <header>
@@ -143,10 +138,6 @@ watch([() => route.query.project, enrichedProjects], ([projectId, items]) => {
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
-.result-line { display: flex; min-height: 28px; align-items: center; justify-content: space-between; color: var(--ncp-text-subtle); font-size: .78rem; }
-.result-line span { display: flex; align-items: center; gap: 6px; }
-.result-line strong { color: var(--ncp-text); font-family: 'JetBrains Mono Variable', monospace; }
-.result-line button { background: transparent; color: var(--ncp-primary-strong); font-size: .66rem; font-weight: 700; }
 .service-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
 .service-card { display: grid; min-width: 0; min-height: 188px; grid-template-rows: auto 1fr auto; gap: 15px; padding: 16px; }
 .service-card header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; }

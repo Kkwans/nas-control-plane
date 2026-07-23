@@ -6,6 +6,7 @@ import { ElTooltip } from 'element-plus'
 
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { deriveOverviewState, formatBytes, formatOneDecimal, formatUptime, totalStorage, usagePercent } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 
@@ -27,6 +28,11 @@ const publicServices = computed(() => {
     return { ...project, ports: [...new Set(ports.map((port) => port.publicPort))] }
   }).filter((project) => project.ports.length)
 })
+const headerStats = computed<WorkspaceStat[]>(() => [
+  { label: '运行项目', value: `${runningProjects.value}/${projects.value.length}`, tone: 'success' },
+  { label: '运行时间', value: systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' },
+  { label: '最近更新', value: formatTimestamp(systemStore.lastUpdated) },
+])
 
 const metrics = computed(() => {
   const summary = systemStore.summary
@@ -64,17 +70,11 @@ function formatTimestamp(value: string | null) {
 
 <template>
   <div class="page workspace-page overview-page">
-    <header class="overview-heading">
-      <div>
-        <span class="overview-heading__eyebrow"><Server :size="15" />{{ systemStore.deviceName }}</span>
-        <h1>系统总览</h1>
-        <p>资源、服务和 Docker 状态每次实时快照自动更新</p>
-      </div>
-      <div class="overview-heading__state">
+    <WorkspaceHeader title="系统总览" description="资源、服务和 Docker 状态随实时快照自动更新" :icon="Server" :stats="headerStats">
+      <template #actions>
         <StatusPill :label="overviewState.label" :tone="overviewState.status" />
-        <span>更新于 {{ formatTimestamp(systemStore.lastUpdated) }}</span>
-      </div>
-    </header>
+      </template>
+    </WorkspaceHeader>
 
     <section class="metric-grid" aria-label="核心资源指标">
       <article v-for="metric in metrics" :key="metric.label" class="metric-card panel">
@@ -148,11 +148,6 @@ function formatTimestamp(value: string | null) {
 </template>
 
 <style scoped>
-.overview-heading { display: flex; min-height: 68px; align-items: flex-end; justify-content: space-between; gap: 20px; }
-.overview-heading__eyebrow { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--ncp-primary-strong); font-size: .66rem; font-weight: 730; }
-.overview-heading h1 { margin: 0; font-size: clamp(1.35rem,2.2vw,1.7rem); font-weight: 790; letter-spacing: -.045em; }
-.overview-heading p { margin: 4px 0 0; color: var(--ncp-text-subtle); font-size: .72rem; }
-.overview-heading__state { display: flex; align-items: center; gap: 9px; color: var(--ncp-text-subtle); font-size: .65rem; }
 .metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
 .metric-card { display: grid; min-width: 0; gap: 4px; padding: 16px; }
 .metric-card__head { display: flex; align-items: center; gap: 8px; color: var(--ncp-text-muted); font-size: .68rem; font-weight: 720; }
@@ -198,10 +193,8 @@ function formatTimestamp(value: string | null) {
   .detail-grid { grid-template-columns: repeat(2,1fr); }
 }
 @media(max-width: 720px) {
-  .overview-heading { min-height: 0; align-items: flex-start; flex-direction: column; gap: 10px; }
   .metric-grid, .trend-grid, .detail-grid { grid-template-columns: 1fr; }
   .trend-panel:last-child { grid-column: auto; }
   .metric-card { min-height: 118px; }
-  .overview-heading__state { width: 100%; justify-content: space-between; }
 }
 </style>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Boxes, ChevronRight, ExternalLink, FileText, LoaderCircle, Search, SlidersHorizontal } from '@lucide/vue'
+import { Boxes, ChevronRight, ExternalLink, FileText, LoaderCircle, Search } from '@lucide/vue'
 import { ElDrawer, ElInput, ElTooltip } from 'element-plus'
 
 import { NcpApiError, requestContainerAction, requestContainerLogs, type ContainerAction, type ContainerLogsResult, type DockerProject } from '@/api/system'
@@ -100,9 +100,6 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 <template>
   <div class="page workspace-page docker-page">
     <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、端口和运行状态" :icon="Boxes" :stats="stats">
-      <template #actions>
-        <span class="engine-version">Engine {{ inventory?.engine.serverVersion || '—' }}</span>
-      </template>
       <template #tools>
         <div class="state-filter" aria-label="Docker 项目状态筛选">
           <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: stateFilter === item.value }" @click="stateFilter = item.value as StateFilter">
@@ -117,11 +114,6 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 
     <div v-if="actionError" class="action-error" role="alert">
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
-    </div>
-
-    <div class="result-line">
-      <span><SlidersHorizontal :size="15" />当前显示 <strong>{{ projects.length }}</strong> 个项目</span>
-      <button v-if="query || stateFilter !== 'all'" type="button" @click="query = ''; stateFilter = 'all'">清除筛选</button>
     </div>
 
     <section class="docker-table panel" aria-label="Docker 项目列表">
@@ -193,17 +185,12 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 </template>
 
 <style scoped>
-.engine-version { display: inline-flex; min-height: 36px; align-items: center; padding: 0 11px; border-radius: 9px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-family: 'JetBrains Mono Variable', monospace; font-size: .63rem; }
 .docker-search { width: min(320px, 38vw); }
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
 .action-error { display: flex; min-height: 44px; align-items: center; justify-content: space-between; padding: 9px 13px; border: 1px solid rgba(212,81,93,.2); border-radius: 10px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .7rem; }
 .action-error button { min-height: 36px; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.65); color: inherit; font-weight: 700; }
-.result-line { display: flex; min-height: 28px; align-items: center; justify-content: space-between; color: var(--ncp-text-subtle); font-size: .78rem; }
-.result-line span { display: flex; align-items: center; gap: 6px; }
-.result-line strong { color: var(--ncp-text); font-family: 'JetBrains Mono Variable', monospace; }
-.result-line button { background: transparent; color: var(--ncp-primary-strong); font-size: .66rem; font-weight: 700; }
 .docker-table { overflow: hidden; }
 .docker-table__head, .project-row { display: grid; grid-template-columns: minmax(210px,1.3fr) 108px 74px 180px minmax(170px,1fr) 78px; align-items: center; gap: 12px; }
 .docker-table__head { min-height: 42px; padding: 0 16px; background: var(--ncp-surface-quiet); color: var(--ncp-text-subtle); font-size: .75rem; font-weight: 730; }
