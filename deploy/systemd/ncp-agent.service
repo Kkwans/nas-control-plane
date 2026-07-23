@@ -9,7 +9,9 @@ User=root
 Group=root
 RuntimeDirectory=ncp
 RuntimeDirectoryMode=0750
-RuntimeDirectoryPreserve=no
+# Server 容器绑定的是该目录。重启 Agent 时必须保留目录 inode，
+# 否则容器会继续挂载已经失效的旧目录，无法看到新建的 Socket。
+RuntimeDirectoryPreserve=yes
 ExecStart=/opt/ncp/bin/ncp-agent serve --socket-group users
 Restart=on-failure
 RestartSec=3s
