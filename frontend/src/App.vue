@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -15,18 +15,26 @@ const authStore = useAuthStore()
 const systemStore = useSystemStore()
 
 onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   void initialize()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  systemStore.stopRealtime()
 })
 
 async function initialize() {
   await authStore.refresh()
   if (authStore.isAuthenticated) {
     await systemStore.refresh()
+    systemStore.startRealtime()
   }
 }
 
 async function handleAuthenticated() {
   await systemStore.refresh()
+  systemStore.startRealtime()
 }
 
 async function handleRefresh() {
@@ -37,9 +45,18 @@ async function handleRefresh() {
 }
 
 async function handleLogout() {
+  systemStore.stopRealtime()
   await authStore.logout()
   systemStore.clear()
   await router.replace('/')
+}
+
+function handleVisibilityChange() {
+  if (!authStore.isAuthenticated) return
+  if (document.visibilityState === 'visible') {
+    void systemStore.refresh({ includeCapabilities: false })
+    systemStore.startRealtime()
+  }
 }
 </script>
 
@@ -55,6 +72,7 @@ async function handleLogout() {
       v-else
       :device-name="systemStore.deviceName"
       :connection-state="systemStore.connectionState"
+      :realtime-state="systemStore.realtimeState"
       :user-name="authStore.user?.username ?? 'root'"
       :is-refreshing="systemStore.isRefreshing"
       @refresh="handleRefresh"

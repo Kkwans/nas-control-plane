@@ -165,6 +165,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/events:
+    get:
+      operationId: streamSystemEvents
+      summary: 订阅控制台实时刷新事件
+      tags: [system]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 每 5 秒发送一次 snapshot 事件
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          description: Root 会话无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/inventory:
     get:
       operationId: getDockerInventory

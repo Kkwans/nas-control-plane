@@ -123,7 +123,7 @@ async function submit() {
 
       <footer class="access-footer">
         <span></span>
-        <p>LOCAL NAS · ROOT CONTROL PLANE</p>
+        <p>本地 NAS · Root 管理控制台</p>
       </footer>
     </section>
   </main>

@@ -23,12 +23,12 @@
   --ncp-danger: #d4515d;
   --ncp-danger-strong: #b73746;
   --ncp-danger-soft: rgba(212, 81, 93, 0.1);
-  --ncp-shadow-panel: 0 14px 35px rgba(35, 55, 91, 0.065), 0 2px 7px rgba(35, 55, 91, 0.025);
+  --ncp-shadow-panel: 0 4px 16px rgba(35, 55, 91, 0.045);
   --ncp-shadow-float: 0 24px 60px rgba(35, 55, 91, 0.12);
 
-  --ncp-radius-sm: 12px;
-  --ncp-radius-md: 18px;
-  --ncp-radius-lg: 24px;
+  --ncp-radius-sm: 8px;
+  --ncp-radius-md: 12px;
+  --ncp-radius-lg: 16px;
   --ncp-radius-pill: 999px;
 
   --ncp-space-1: 4px;

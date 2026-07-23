@@ -5,63 +5,119 @@ import {
   NcpApiError,
   requestCapabilities,
   requestDockerInventory,
-  requestServices,
   requestSystemSummary,
   type DockerInventory,
-  type ServiceListResponse,
   type SystemCapabilities,
   type SystemSummary,
 } from '@/api/system'
 
 export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unavailable'
+export type RealtimeState = 'connecting' | 'streaming' | 'polling' | 'offline'
+
+const FALLBACK_INTERVAL = 15_000
 
 export const useSystemStore = defineStore('system', () => {
   const connectionState = ref<SystemConnectionState>('loading')
+  const realtimeState = ref<RealtimeState>('offline')
   const capabilities = ref<SystemCapabilities | null>(null)
   const summary = ref<SystemSummary | null>(null)
   const inventory = ref<DockerInventory | null>(null)
-  const services = ref<ServiceListResponse | null>(null)
   const errorCode = ref<string | null>(null)
   const isRefreshing = ref(false)
 
-  const deviceName = computed(() => summary.value?.host.hostname || capabilities.value?.hostname || 'NAS Control Plane')
-  const lastUpdated = computed(() => summary.value?.collectedAt || inventory.value?.collectedAt || services.value?.collectedAt || null)
+  let eventSource: EventSource | null = null
+  let fallbackTimer: number | null = null
+  let refreshPromise: Promise<void> | null = null
 
-  async function refresh() {
+  const deviceName = computed(() => summary.value?.host.hostname || capabilities.value?.hostname || 'NAS 管理面板')
+  const lastUpdated = computed(() => summary.value?.collectedAt || inventory.value?.collectedAt || null)
+  const services = computed(() => inventory.value?.projects ?? [])
+
+  async function refresh(options: { includeCapabilities?: boolean } = {}) {
+    if (refreshPromise) return refreshPromise
+    refreshPromise = runRefresh(options.includeCapabilities ?? !capabilities.value)
+    try {
+      await refreshPromise
+    } finally {
+      refreshPromise = null
+    }
+  }
+
+  async function runRefresh(includeCapabilities: boolean) {
     isRefreshing.value = true
     connectionState.value = summary.value || inventory.value ? 'degraded' : 'loading'
-    const [capabilitiesResult, summaryResult, inventoryResult, servicesResult] = await Promise.allSettled([
-      requestCapabilities(),
+    const requests: Array<Promise<SystemCapabilities | SystemSummary | DockerInventory>> = [
       requestSystemSummary(),
       requestDockerInventory(),
-      requestServices(),
-    ])
+    ]
+    if (includeCapabilities) requests.push(requestCapabilities())
 
-    if (capabilitiesResult.status === 'fulfilled') capabilities.value = capabilitiesResult.value
-    if (summaryResult.status === 'fulfilled') summary.value = summaryResult.value
-    if (inventoryResult.status === 'fulfilled') inventory.value = inventoryResult.value
-    if (servicesResult.status === 'fulfilled') services.value = servicesResult.value
+    const results = await Promise.allSettled(requests)
+    const summaryResult = results[0]
+    const inventoryResult = results[1]
+    const capabilitiesResult = includeCapabilities ? results[2] : undefined
 
-    const failures = [capabilitiesResult, summaryResult, inventoryResult, servicesResult].filter(
-      (result): result is PromiseRejectedResult => result.status === 'rejected',
-    )
+    if (summaryResult?.status === 'fulfilled') summary.value = summaryResult.value as SystemSummary
+    if (inventoryResult?.status === 'fulfilled') inventory.value = inventoryResult.value as DockerInventory
+    if (capabilitiesResult?.status === 'fulfilled') capabilities.value = capabilitiesResult.value as SystemCapabilities
+
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     errorCode.value = failures.length > 0 ? errorCodeFor(failures[0]?.reason) : null
-    const successful = 4 - failures.length
-    connectionState.value = successful === 4 ? 'connected' : successful > 0 ? 'degraded' : 'unavailable'
+    const successful = results.length - failures.length
+    connectionState.value = successful === results.length ? 'connected' : successful > 0 ? 'degraded' : 'unavailable'
     isRefreshing.value = false
   }
 
+  function startRealtime() {
+    if (eventSource) return
+    realtimeState.value = 'connecting'
+    eventSource = new EventSource('/api/v1/system/events')
+    eventSource.onopen = () => {
+      realtimeState.value = 'streaming'
+      stopFallbackPolling()
+    }
+    eventSource.addEventListener('snapshot', () => {
+      realtimeState.value = 'streaming'
+      void refresh({ includeCapabilities: false })
+    })
+    eventSource.onerror = () => {
+      realtimeState.value = 'polling'
+      startFallbackPolling()
+    }
+  }
+
+  function stopRealtime() {
+    eventSource?.close()
+    eventSource = null
+    stopFallbackPolling()
+    realtimeState.value = 'offline'
+  }
+
+  function startFallbackPolling() {
+    if (fallbackTimer !== null) return
+    fallbackTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh({ includeCapabilities: false })
+    }, FALLBACK_INTERVAL)
+  }
+
+  function stopFallbackPolling() {
+    if (fallbackTimer === null) return
+    window.clearInterval(fallbackTimer)
+    fallbackTimer = null
+  }
+
   function clear() {
+    stopRealtime()
     capabilities.value = null
     summary.value = null
     inventory.value = null
-    services.value = null
     errorCode.value = null
     connectionState.value = 'loading'
   }
 
   return {
     connectionState,
+    realtimeState,
     capabilities,
     summary,
     inventory,
@@ -71,6 +127,8 @@ export const useSystemStore = defineStore('system', () => {
     deviceName,
     lastUpdated,
     refresh,
+    startRealtime,
+    stopRealtime,
     clear,
   }
 })

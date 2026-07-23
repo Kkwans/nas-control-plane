@@ -8,19 +8,25 @@ const router = createRouter({
       path: '/',
       name: 'overview',
       component: () => import('@/views/OverviewView.vue'),
-      meta: { title: '控制室总览' },
+      meta: { title: '总览' },
     },
     {
       path: '/services',
       name: 'services',
       component: () => import('@/views/ServicesView.vue'),
-      meta: { title: '服务中心' },
+      meta: { title: '服务入口' },
     },
     {
-      path: '/infrastructure',
-      name: 'infrastructure',
+      path: '/docker',
+      name: 'docker',
+      component: () => import('@/views/DockerView.vue'),
+      meta: { title: 'Docker 管理' },
+    },
+    {
+      path: '/system',
+      name: 'system',
       component: () => import('@/views/InfrastructureView.vue'),
-      meta: { title: '能力地图' },
+      meta: { title: '系统信息' },
     },
     {
       path: '/:pathMatch(.*)*',
@@ -30,7 +36,7 @@ const router = createRouter({
 })
 
 router.afterEach((to) => {
-  document.title = `${String(to.meta.title ?? 'NCP')} · NAS Control Plane`
+  document.title = `${String(to.meta.title ?? 'NCP')} · NAS 管理面板`
   requestAnimationFrame(() => document.getElementById('app-main')?.focus({ preventScroll: true }))
 })
 

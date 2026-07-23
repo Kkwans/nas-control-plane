@@ -4,49 +4,42 @@
 
 ## 当前结论
 
-NCP 已从 Phase 0 技术验证切换为 Root 控制面 MVP。当前代码已经形成“Root Agent → Unix Socket gRPC → Server HTTP API → Vue 控制台”的真实数据闭环；运行中的 NAS Compose 已包含 Server、Nginx 控制台和 SQLite 数据目录。
+NCP 已完成 Root 控制面第一轮可用性重构。现有链路为“Root Agent → Unix Socket gRPC → Server HTTP API → Vue 控制台”，页面不再依赖静态模拟数据；登录后会立即加载真实主机与 Docker 数据，并通过 SSE 自动刷新，断线时降级为轮询。
 
-## 已完成
+## 本轮完成
 
-| 模块 | 状态 | 证据 |
+| 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| Root Agent 实时系统与 Docker 数据 | 已完成 | gopsutil 主机快照、Docker Engine/容器/Compose 项目发现、Dashboard RPC 与受保护 HTTP API；Go 全量测试、vet、ARM64 构建通过。 |
-| Root 登录与 SQLite 会话 | 已完成 | 一次性 Root 初始化、bcrypt 哈希、SQLite 会话、登录/登出/状态 API；不存在默认密码，首次账号由管理员在页面创建。 |
-| Root Agent 实机部署 | 已完成 | NAS systemd 单元已启用且 active；Unix Socket 为 root:users；`agent-probe` 返回 `agentEUID=0`、`transport=unix`。 |
-| Server + Console Compose | 已完成 | `nas-control-plane` 与 `nas-control-plane-console` 均为 healthy；Nginx `/api/` 已反代 Server；`/healthz` 返回 200。 |
-| 浅色现代 Vue 控制台 | 已完成 | Vue 3 + TypeScript + Vite；Root 初始化/登录、总览、基础设施、Services 页面统一浅色设计系统、圆角、间距和交互反馈。 |
-| 容器生命周期控制 | 已提交 | `feat(docker)：实现容器启停重启控制`；Root Agent、HTTP API、Services 操作条和单元测试已完成。 |
-| 容器日志尾部读取 | 已提交 | `feat(docker)：实现容器日志读取与查看面板`；bounded tail、stdout/stderr 结构化条目、Agent RPC、HTTP API 与 Services 日志面板已完成。 |
+| OpenSpec SDD 工作流 | 已完成 | 建立 `redesign-console-and-realtime` 变更，维护 proposal、design、差异规格与任务清单；项目规则切换为规格驱动。 |
+| 控制台信息架构 | 已完成 | 当前可用导航统一为“总览、服务入口、Docker 管理、系统信息”；数据库、监控、日志中心、终端与系统设置明确标记为待接入。 |
+| 中文化与高密度布局 | 已完成 | 移除巨型营销文案和装饰性英文，统一浅色后台设计语言、紧凑间距、表格与网格布局、40 像素操作按钮和中文 Tooltip。 |
+| 实时数据 | 已完成 | 新增受认证保护的 `/api/v1/system/events` SSE 端点；首次进入自动加载，SSE 每 5 秒触发快照，断线后以 15 秒轮询降级。 |
+| Docker 工作区 | 已完成 | 新增项目表格、项目容器展开详情、端口入口、启停/重启操作和日志抽屉。 |
+| 服务入口 | 已完成 | 以紧凑三列网格展示 Compose 项目和公开端口，提供搜索、状态汇总和统一访问入口。 |
+| 系统信息 | 已完成 | 以紧凑表格与信息卡展示系统、Root Agent、Docker Engine 和能力接入状态。 |
 
-## 已验证命令
+## 构建证据
 
-后端：
+按本轮约定不执行测试套件，仅完成交付必需的编译检查：
 
 ```text
-go test ./...
-go vet ./...
 go build -buildvcs=false ./cmd/ncp-agent ./cmd/ncp-server
-```
-
-前端：
-
-```text
-pnpm test                 # 8 tests passed
-pnpm run typecheck
 pnpm run build
 ```
 
-上述命令均已在 Windows 同步副本执行；ARM64 交叉构建也已通过。同步副本不含有效 Git 元数据，真实提交、推送和 NAS 运行状态以 SSH 到 `/volume2/Project/nas-control-plane` 的结果为准。
+Windows 同步副本的 Go 编译、Vue 类型检查和生产构建均已通过。NAS ARM64 构建、镜像和部署状态以本轮 SSH 交付结果为准。
 
-## 当前运行态与边界
+## 当前运行态
 
-- NAS 当前运行 `nas-control-plane:2026.7.23-v2`（ARM64）与 `nginx:alpine` 控制台；两个 Compose 服务均为 healthy，Server `/healthz` 与控制台 `/healthz` 均返回 200。
-- Compose 项目已注册到 UGREEN Docker 数据库，项目名为 `nas-control-plane`，路径为 `/volume2/Project/nas-control-plane/deploy/console/docker-compose.yml`；`/volume1/docker-apps/nas-control-plane` 已指向该项目目录。
-- `/api/v1/auth/status` 当前返回 `initialized=false`，需要在页面完成一次性 Root 账号创建后，才能验证登录态下的实时主机、Docker、容器控制和日志链路。
-- 容器控制和日志接口都要求有效 Root 会话；本阶段只完成未认证 401 防护与健康检查，未对 NAS 真实容器执行启停、重启或日志读取。
+- Root Agent systemd 单元已启用并以 root 身份运行。
+- Compose 项目已注册到 UGREEN Docker 项目列表，项目名为 `nas-control-plane`。
+- 部署前运行版本为 `nas-control-plane:2026.7.23-v2`；本轮目标版本为 `nas-control-plane:2026.7.23-v3`。
+- 旧镜像保留，用于必要时回滚。
 
-## 下一步
+## 后续路线
 
-1. 管理员在控制台创建 Root 账号，完成登录后验证真实总览、Services 操作条和日志面板。
-2. 增加登录后的真实容器控制与日志读取回归验证，并记录可回滚证据。
-3. 继续交付主机/容器终端与耗时操作 Job；之后再处理 Caddy、备份恢复和更细粒度权限。
+1. 数据库管理：实例发现、连接配置、数据库与备份管理。
+2. 监控：历史 CPU、内存、磁盘、网络曲线与告警数据。
+3. 日志中心：系统日志、NCP 日志、容器日志统一检索。
+4. 终端：主机和容器终端入口。
+5. 系统设置：刷新频率、服务入口别名与面板配置。

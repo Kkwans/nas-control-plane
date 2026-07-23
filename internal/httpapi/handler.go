@@ -18,6 +18,7 @@ import (
 const (
 	defaultAgentTimeout       = 5 * time.Second
 	defaultTerminalPOCTimeout = 5 * time.Minute
+	defaultRealtimeInterval   = 5 * time.Second
 )
 
 type AgentClient interface {
@@ -139,6 +140,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/capabilities", api.capabilities)
 			protected.Get("/system/agent-status", api.agentStatus)
 			protected.Get("/system/summary", api.systemSummary)
+			protected.Get("/system/events", api.systemEvents)
 			protected.Get("/docker/inventory", api.dockerInventory)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
@@ -207,6 +209,51 @@ func (api *handler) systemSummary(response http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(response, http.StatusOK, summary)
+}
+
+func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		api.writeError(response, request, http.StatusInternalServerError, "REALTIME_STREAM_UNSUPPORTED", "当前服务不支持实时数据流。")
+		return
+	}
+
+	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-cache, no-transform")
+	response.Header().Set("Connection", "keep-alive")
+	response.Header().Set("X-Accel-Buffering", "no")
+	response.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(response, "retry: 5000\n\n")
+	flusher.Flush()
+
+	sendSnapshot := func() bool {
+		_, err := fmt.Fprintf(
+			response,
+			"event: snapshot\ndata: {\"collectedAt\":%q}\n\n",
+			time.Now().UTC().Format(time.RFC3339),
+		)
+		if err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !sendSnapshot() {
+		return
+	}
+	ticker := time.NewTicker(defaultRealtimeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+			if !sendSnapshot() {
+				return
+			}
+		}
+	}
 }
 
 func (api *handler) dockerInventory(response http.ResponseWriter, request *http.Request) {
