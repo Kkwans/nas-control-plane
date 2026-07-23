@@ -81,7 +81,7 @@ onBeforeUnmount(() => editor?.destroy())
 </script>
 
 <template>
-  <div ref="editorHost" class="sql-editor-host" />
+  <div ref="editorHost" :class="['sql-editor-host', { 'sql-editor-host--disabled': disabled }]" />
 </template>
 
 <style scoped>
@@ -94,5 +94,13 @@ onBeforeUnmount(() => editor?.destroy())
 
 .sql-editor-host :deep(.cm-editor) {
   height: 100%;
+}
+
+.sql-editor-host--disabled :deep(.cm-content) {
+  cursor: text;
+}
+
+.sql-editor-host--disabled :deep(.cm-cursor) {
+  display: none;
 }
 </style>

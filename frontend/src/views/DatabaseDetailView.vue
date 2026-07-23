@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Columns3,
   Database,
-  FileCode2,
   HardDrive,
   KeyRound,
   RefreshCw,
@@ -14,7 +13,7 @@ import {
   Search,
   Table2,
 } from '@lucide/vue'
-import { ElButton, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
+import { ElButton, ElForm, ElFormItem, ElInput } from 'element-plus'
 
 import { NcpApiError } from '@/api/system'
 import type { DatabaseCredentials, DatabaseTable } from '@/api/database'
@@ -137,14 +136,9 @@ function primaryKeys(table: DatabaseTable) {
     </section>
 
     <template v-else-if="catalog">
-      <div class="section-heading">
-        <div><h2>数据表</h2><p>{{ tables.length }} 张数据表，点击进入独立工作台</p></div>
-        <span>数据、结构与 SQL 定义在数据表页面集中管理</span>
-      </div>
-
       <section class="table-list panel" aria-label="数据表列表">
         <div class="table-list__head">
-          <span>数据表</span><span>字段</span><span>数据行</span><span>大小</span><span>创建时间</span><span>操作</span>
+          <span>数据表</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>操作</span>
         </div>
         <RouterLink
           v-for="table in tables"
@@ -160,17 +154,17 @@ function primaryKeys(table: DatabaseTable) {
             <span><Table2 :size="18" /></span>
             <div>
               <strong>{{ table.name }}</strong>
-              <small>{{ table.schema || 'SQLite' }} · {{ table.type === 'view' ? '视图' : '数据表' }}</small>
+              <small>{{ table.schema || 'SQLite 主库' }}</small>
               <div class="table-row__details">
-                <ElTag v-for="key in primaryKeys(table)" :key="key" effect="plain" size="small"><KeyRound :size="12" />{{ key }}</ElTag>
-                <span v-if="table.definition"><FileCode2 :size="13" />包含 SQL 定义</span>
+                <span v-for="key in primaryKeys(table)" :key="key" class="primary-key-badge"><KeyRound :size="12" />{{ key }}</span>
+                <span v-if="!primaryKeys(table).length" class="no-primary-key">无主键</span>
               </div>
             </div>
           </div>
+          <span>{{ table.type === 'view' ? '视图' : '数据表' }}</span>
           <span><Columns3 :size="14" />{{ table.columns.length }}</span>
           <span><Rows3 :size="14" />{{ formatNumber(table.rowCount ?? null) }}</span>
           <span><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
-          <span>{{ table.createdAt || '—' }}</span>
           <span class="open-table">打开<ArrowRight :size="16" /></span>
         </RouterLink>
         <div v-if="!tables.length" class="empty-table">没有匹配的数据表。</div>
@@ -196,23 +190,23 @@ function primaryKeys(table: DatabaseTable) {
 .connection-form { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
 .connection-form :deep(.el-form-item:last-of-type) { grid-column:1/-1; }
 .connection-form>.el-button { grid-column:1/-1; min-height:42px; justify-self:end; }
-.section-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; min-height:42px; }
-.section-heading h2 { margin:0; font-size:1rem; }.section-heading p,.section-heading>span { margin:3px 0 0; color:var(--ncp-text-subtle); font-size:.78rem; }
 .table-list { overflow:hidden; }
-.table-list__head,.table-row { display:grid; grid-template-columns:minmax(230px,1.5fr) 90px 110px 110px 160px 74px; align-items:center; gap:12px; }
+.table-list__head,.table-row { display:grid; grid-template-columns:minmax(250px,1.6fr) 100px 90px 110px 110px 74px; align-items:center; gap:12px; }
 .table-list__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.74rem; font-weight:700; }
 .table-row { position:relative; min-height:92px; padding:0 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-muted); font-size:.78rem; transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
 .table-row:hover { background:var(--ncp-surface-hover); box-shadow:inset 3px 0 0 var(--ncp-primary); }
 .table-row>span { display:flex; align-items:center; gap:5px; }
-.table-name { display:flex; min-width:0; align-self:start; align-items:center; gap:10px; margin-top:13px; }
+.table-name { display:flex; min-width:0; align-self:center; align-items:center; gap:10px; }
 .table-name>span { display:grid; width:38px; height:38px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
 .table-name>div { display:grid; min-width:0; gap:1px; }.table-name strong { overflow:hidden; color:var(--ncp-text); font-size:.84rem; text-overflow:ellipsis; white-space:nowrap; }.table-name small { color:var(--ncp-text-subtle); font-size:.7rem; }
 .open-table { justify-content:flex-end; color:var(--ncp-primary-strong); font-weight:700; }
 .table-row__details { display:flex; align-items:center; gap:6px; min-height:22px; color:var(--ncp-text-subtle); font-size:.7rem; }
-.table-row__details :deep(.el-tag) { gap:3px; }
+.primary-key-badge { display:inline-flex; min-height:22px; align-items:center; gap:4px; padding:0 7px; border:1px solid rgba(36,104,216,.2); border-radius:6px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); font-family:'JetBrains Mono Variable',monospace; line-height:1; }
+.primary-key-badge svg { flex:0 0 auto; }
+.no-primary-key { color:var(--ncp-text-subtle); }
 .empty-table { padding:40px; color:var(--ncp-text-subtle); text-align:center; }
 .missing-source { display:grid; min-height:260px; place-content:center; gap:8px; text-align:center; }.missing-source h1{margin:0;font-size:1rem}.missing-source a{color:var(--ncp-primary-strong)}
-@media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 75px 95px 95px 120px 64px;gap:8px}.source-summary{grid-template-columns:140px 140px 1fr 1.4fr}}
-@media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{grid-template-columns:1fr 1fr}.source-summary>div:nth-child(2){border-right:0}.source-summary>div:nth-child(-n+2){border-bottom:1px solid var(--ncp-line)}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:118px; padding:14px}.table-row>span:nth-of-type(3),.table-row>span:nth-of-type(4){display:none}.section-heading>span{display:none}}
+@media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 78px 72px 92px 92px 64px;gap:8px}.source-summary{grid-template-columns:140px 140px 1fr 1.4fr}}
+@media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{grid-template-columns:1fr 1fr}.source-summary>div:nth-child(2){border-right:0}.source-summary>div:nth-child(-n+2){border-bottom:1px solid var(--ncp-line)}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:108px; padding:14px}.table-row>span:nth-of-type(2),.table-row>span:nth-of-type(4){display:none}}
 @media(max-width:560px){.connection-form{grid-template-columns:1fr}.connection-form :deep(.el-form-item:last-of-type),.connection-form>.el-button{grid-column:1}.connection-form>.el-button{width:100%}}
 </style>
