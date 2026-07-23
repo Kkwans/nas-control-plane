@@ -1,0 +1,26 @@
+# console-workspace-layout Specification
+
+## Purpose
+TBD - created by archiving change enhance-console-experience. Update Purpose after archive.
+## Requirements
+### Requirement: 紧凑页面工作区
+服务入口和 Docker 管理 MUST 使用紧凑标题、实时摘要、搜索筛选和内容区组成稳定工作区，首屏不得出现无信息的大面积空白。
+
+#### Scenario: 用户进入管理页面
+- **WHEN** 页面拥有项目清单数据
+- **THEN** 标题、摘要、搜索筛选和首批项目在首屏连续排列
+
+### Requirement: 统一列表工具
+项目工作区 MUST 提供搜索、状态筛选、结果数量和清除条件反馈。
+
+#### Scenario: 用户筛选已停止项目
+- **WHEN** 用户选择“已停止”并输入名称
+- **THEN** 列表只展示同时满足状态与关键词的项目，并显示结果数量
+
+### Requirement: 稳定交互状态
+可点击卡片、表格行和按钮 MUST 提供悬停、按压、焦点和禁用状态，状态变化不得引发布局位移。
+
+#### Scenario: 指针悬停项目
+- **WHEN** 用户把指针移到可查看详情的项目项
+- **THEN** 项目边界、背景或箭头在 160–240ms 内平滑变化且卡片尺寸不变
+
