@@ -1,0 +1,49 @@
+# console-information-architecture Specification
+
+## Purpose
+TBD - created by archiving change redesign-console-and-realtime. Update Purpose after archive.
+## Requirements
+### Requirement: 中文优先的管理导航
+控制台 MUST 使用中文任务名称组织主导航，仅对 Docker、Compose、CPU、IP、API 等约定俗成的专业术语保留英文。
+
+#### Scenario: 用户进入任意已实现页面
+- **WHEN** Root 用户完成登录并进入控制台
+- **THEN** 侧栏显示总览、服务入口、Docker 管理和系统信息，且品牌、副标题、用户会话与页面标题均不使用装饰性英文
+
+#### Scenario: 用户查看尚未实现的目标模块
+- **WHEN** 用户看到数据库、监控、日志中心、终端或设置
+- **THEN** 导航明确标记为待接入并提供中文 Tooltip，且不会打开伪造功能页面
+
+### Requirement: 高密度管理布局
+控制台 MUST 将首屏空间用于状态、资源和操作，不得使用宣传式巨型标题、开发者说明或纯装饰空白区。
+
+#### Scenario: 用户打开总览
+- **WHEN** 总览首次渲染
+- **THEN** 首屏展示主机状态、核心资源指标、Docker 状态和服务入口摘要
+
+#### Scenario: 用户查看多个 Docker 项目
+- **WHEN** 项目数量大于四个
+- **THEN** 页面使用表格或紧凑列表在单屏展示多个项目，不以固定双列大卡片制造空白
+
+### Requirement: 一致的操作反馈
+所有图标操作 MUST 具有中文可访问名称、中文 Tooltip、可见的加载/禁用状态和至少 40×40px 的可点击区域。
+
+#### Scenario: 用户悬停容器操作按钮
+- **WHEN** 指针停留在启动、停止、重启或日志按钮
+- **THEN** 页面显示对应中文 Tooltip，按钮状态不引发布局位移
+
+#### Scenario: 容器操作执行中
+- **WHEN** 生命周期请求尚未完成
+- **THEN** 对应操作显示加载状态并阻止重复提交，其他内容保持可读
+
+### Requirement: 服务入口与运维资源分离
+控制台 MUST 提供独立的服务入口页面和 Docker 管理页面。
+
+#### Scenario: 用户需要打开部署服务
+- **WHEN** 用户进入服务入口
+- **THEN** 页面优先显示项目可访问端口、运行状态和打开入口操作
+
+#### Scenario: 用户需要管理容器
+- **WHEN** 用户进入 Docker 管理
+- **THEN** 页面按项目和容器展示镜像、状态、端口、路径、日志与生命周期操作
+
