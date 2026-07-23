@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
@@ -37,6 +38,7 @@ type SocketConfig struct {
 	DashboardProvider DashboardProvider
 	DockerControl     DockerControlProvider
 	DockerLogs        DockerLogsProvider
+	Database          DatabaseProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -66,12 +68,17 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			return coded("AGENT_DOCKER_LOGS_INITIALIZATION_FAILED", err)
 		}
 	}
+	databaseProvider := config.Database
+	if databaseProvider == nil {
+		databaseProvider = ncpdatabase.NewManager()
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
 	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
 	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
+	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

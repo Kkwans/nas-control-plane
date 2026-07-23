@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,7 @@ const (
 	defaultAgentTimeout       = 5 * time.Second
 	defaultTerminalPOCTimeout = 5 * time.Minute
 	defaultRealtimeInterval   = 5 * time.Second
+	defaultDatabaseTimeout    = 20 * time.Second
 )
 
 type AgentClient interface {
@@ -30,8 +32,19 @@ type AgentClient interface {
 	ReadContainerLogs(context.Context, string, docker.ContainerLogsRequest) (docker.ContainerLogsResult, error)
 }
 
+type DatabaseAgentClient interface {
+	DiscoverDatabases(context.Context, string) (ncpdatabase.Discovery, error)
+	CatalogDatabase(context.Context, string, ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error)
+	QueryDatabase(context.Context, string, ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error)
+	ReadDatabaseRows(context.Context, string, ncpdatabase.RowsRequest) (ncpdatabase.RowsResult, error)
+	InsertDatabaseRow(context.Context, string, ncpdatabase.InsertRequest) (ncpdatabase.MutationResult, error)
+	UpdateDatabaseRow(context.Context, string, ncpdatabase.UpdateRequest) (ncpdatabase.MutationResult, error)
+	DeleteDatabaseRow(context.Context, string, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
+}
+
 type Config struct {
 	Agent               AgentClient
+	DatabaseAgent       DatabaseAgentClient
 	AgentSocketPath     string
 	AgentTimeout        time.Duration
 	Auth                Authenticator
@@ -60,6 +73,7 @@ type ServiceListResponse struct {
 
 type handler struct {
 	agent               AgentClient
+	databaseAgent       DatabaseAgentClient
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
@@ -96,9 +110,40 @@ func (socketAgentClient) ReadContainerLogs(ctx context.Context, socketPath strin
 	return agentsocket.ReadContainerLogs(ctx, socketPath, request)
 }
 
+func (socketAgentClient) DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
+	return agentsocket.DiscoverDatabases(ctx, socketPath)
+}
+
+func (socketAgentClient) CatalogDatabase(ctx context.Context, socketPath string, request ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error) {
+	return agentsocket.CatalogDatabase(ctx, socketPath, request)
+}
+
+func (socketAgentClient) QueryDatabase(ctx context.Context, socketPath string, request ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error) {
+	return agentsocket.QueryDatabase(ctx, socketPath, request)
+}
+
+func (socketAgentClient) ReadDatabaseRows(ctx context.Context, socketPath string, request ncpdatabase.RowsRequest) (ncpdatabase.RowsResult, error) {
+	return agentsocket.ReadDatabaseRows(ctx, socketPath, request)
+}
+
+func (socketAgentClient) InsertDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.InsertRequest) (ncpdatabase.MutationResult, error) {
+	return agentsocket.InsertDatabaseRow(ctx, socketPath, request)
+}
+
+func (socketAgentClient) UpdateDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.UpdateRequest) (ncpdatabase.MutationResult, error) {
+	return agentsocket.UpdateDatabaseRow(ctx, socketPath, request)
+}
+
+func (socketAgentClient) DeleteDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error) {
+	return agentsocket.DeleteDatabaseRow(ctx, socketPath, request)
+}
+
 func NewHandler(config Config) http.Handler {
 	if config.Agent == nil {
 		config.Agent = socketAgentClient{}
+	}
+	if config.DatabaseAgent == nil {
+		config.DatabaseAgent = socketAgentClient{}
 	}
 	if config.AgentSocketPath == "" {
 		config.AgentSocketPath = agentsocket.DefaultSocketPath
@@ -118,6 +163,7 @@ func NewHandler(config Config) http.Handler {
 
 	api := &handler{
 		agent:               config.Agent,
+		databaseAgent:       config.DatabaseAgent,
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
@@ -145,6 +191,13 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
+			protected.Get("/databases/discovery", api.databaseDiscovery)
+			protected.Post("/databases/catalog", api.databaseCatalog)
+			protected.Post("/databases/query", api.databaseQuery)
+			protected.Post("/databases/rows", api.databaseRows)
+			protected.Post("/databases/rows/insert", api.databaseInsert)
+			protected.Post("/databases/rows/update", api.databaseUpdate)
+			protected.Post("/databases/rows/delete", api.databaseDelete)
 		})
 	})
 	if api.terminalEnabled {
