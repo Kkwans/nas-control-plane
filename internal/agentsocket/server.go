@@ -36,6 +36,7 @@ type SocketConfig struct {
 	TerminalManager   *terminal.Manager
 	DashboardProvider DashboardProvider
 	DockerControl     DockerControlProvider
+	DockerLogs        DockerLogsProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -58,11 +59,19 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			return coded("AGENT_DOCKER_CONTROL_INITIALIZATION_FAILED", err)
 		}
 	}
+	dockerLogs := config.DockerLogs
+	if dockerLogs == nil {
+		dockerLogs, err = docker.NewLiveContainerLogCollector()
+		if err != nil {
+			return coded("AGENT_DOCKER_LOGS_INITIALIZATION_FAILED", err)
+		}
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
 	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
 	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
+	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

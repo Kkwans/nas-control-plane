@@ -126,6 +126,34 @@ func ControlContainer(ctx context.Context, socketPath string, request docker.Con
 	return decodeContainerActionResult(response)
 }
 
+func ReadContainerLogs(ctx context.Context, socketPath string, request docker.ContainerLogsRequest) (docker.ContainerLogsResult, error) {
+	request, err := request.Normalize()
+	if err != nil {
+		return docker.ContainerLogsResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return docker.ContainerLogsResult{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ContainerLogsResult{}, err
+	}
+	defer connection.Close()
+
+	payload, err := structpb.NewStruct(map[string]any{
+		"container_id": request.ContainerID,
+		"tail":         request.Tail,
+	})
+	if err != nil {
+		return docker.ContainerLogsResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerLogsServiceClient(connection).ReadLogs(ctx, payload)
+	if err != nil {
+		return docker.ContainerLogsResult{}, rpcError(err)
+	}
+	return decodeContainerLogsResult(response)
+}
+
 func dialSocket(socketPath string) (*grpc.ClientConn, error) {
 	if socketPath == "" {
 		return nil, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))
@@ -211,6 +239,17 @@ func decodeContainerActionResult(response *structpb.Struct) (docker.ContainerAct
 	}
 	if _, err := docker.ParseContainerAction(string(result.Action)); err != nil {
 		return docker.ContainerActionResult{}, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	return result, nil
+}
+
+func decodeContainerLogsResult(response *structpb.Struct) (docker.ContainerLogsResult, error) {
+	var result docker.ContainerLogsResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ContainerLogsResult{}, err
+	}
+	if result.ContainerID == "" || result.Tail < 1 || result.CollectedAt.IsZero() || result.Entries == nil {
+		return docker.ContainerLogsResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("container logs result is incomplete"))
 	}
 	return result, nil
 }

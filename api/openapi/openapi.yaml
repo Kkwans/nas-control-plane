@@ -239,6 +239,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/{containerID}/logs:
+    get:
+      operationId: getDockerContainerLogs
+      summary: Read a bounded tail of one container's logs
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: containerID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: tail
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 120 }
+      responses:
+        '200':
+          description: Bounded stdout and stderr log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContainerLogsResult'
+        '400':
+          description: Invalid container identifier or tail size
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /ws/terminal:
     get:
       operationId: openTerminalPOCWebSocket
@@ -472,6 +506,27 @@ components:
           type: string
           enum: [start, stop, restart]
         state: { type: string }
+    ContainerLogsResult:
+      type: object
+      required: [containerId, tail, collectedAt, entries]
+      properties:
+        containerId: { type: string }
+        tail: { type: integer, minimum: 1, maximum: 500 }
+        collectedAt:
+          type: string
+          format: date-time
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContainerLogEntry'
+    ContainerLogEntry:
+      type: object
+      required: [stream, message]
+      properties:
+        stream:
+          type: string
+          enum: [stdout, stderr]
+        message: { type: string }
     ServiceListResponse:
       type: object
       required: [collectedAt, services]

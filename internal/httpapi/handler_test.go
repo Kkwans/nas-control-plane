@@ -194,6 +194,57 @@ func TestContainerActionRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestContainerLogsUsesDefaultTailAndReturnsEntries(t *testing.T) {
+	agent := &fakeAgentClient{logsResult: docker.ContainerLogsResult{
+		ContainerID: "abc123",
+		Tail:        docker.DefaultContainerLogTail,
+		CollectedAt: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
+		Entries:     []docker.ContainerLogEntry{{Stream: "stdout", Message: "ready"}},
+	}}
+	handler := NewHandler(Config{
+		Agent:           agent,
+		AgentSocketPath: "/run/ncp/test.sock",
+		AgentTimeout:    time.Second,
+		RequestID:       func() string { return "req-container-logs" },
+	})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/docker/containers/abc123/logs", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if agent.logsRequest.ContainerID != "abc123" || agent.logsRequest.Tail != docker.DefaultContainerLogTail {
+		t.Fatalf("logs request = %#v", agent.logsRequest)
+	}
+	var body docker.ContainerLogsResult
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Entries) != 1 || body.Entries[0].Message != "ready" {
+		t.Fatalf("logs response = %#v", body)
+	}
+}
+
+func TestContainerLogsRejectsTailOutsideSupportedRange(t *testing.T) {
+	agent := &fakeAgentClient{}
+	handler := NewHandler(Config{Agent: agent, RequestID: func() string { return "req-container-logs-invalid" }})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/docker/containers/abc123/logs?tail=999", nil))
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "DOCKER_LOGS_INPUT_INVALID" || body.RequestID != "req-container-logs-invalid" {
+		t.Fatalf("error response = %#v", body)
+	}
+}
+
 type fakeAgentClient struct {
 	status           agentsocket.AgentStatus
 	statusErr        error
@@ -206,6 +257,9 @@ type fakeAgentClient struct {
 	actionResult     docker.ContainerActionResult
 	actionErr        error
 	actionRequest    docker.ContainerActionRequest
+	logsResult       docker.ContainerLogsResult
+	logsErr          error
+	logsRequest      docker.ContainerLogsRequest
 	socketPath       string
 	deadlineObserved bool
 }
@@ -238,4 +292,11 @@ func (f *fakeAgentClient) ControlContainer(ctx context.Context, socketPath strin
 	f.actionRequest = request
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.actionResult, f.actionErr
+}
+
+func (f *fakeAgentClient) ReadContainerLogs(ctx context.Context, socketPath string, request docker.ContainerLogsRequest) (docker.ContainerLogsResult, error) {
+	f.socketPath = socketPath
+	f.logsRequest = request
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.logsResult, f.logsErr
 }

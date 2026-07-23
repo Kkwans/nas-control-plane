@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,7 @@ type AgentClient interface {
 	CollectSystemSummary(context.Context, string) (system.Summary, error)
 	CollectDockerInventory(context.Context, string) (docker.Inventory, error)
 	ControlContainer(context.Context, string, docker.ContainerActionRequest) (docker.ContainerActionResult, error)
+	ReadContainerLogs(context.Context, string, docker.ContainerLogsRequest) (docker.ContainerLogsResult, error)
 }
 
 type Config struct {
@@ -89,6 +91,10 @@ func (socketAgentClient) ControlContainer(ctx context.Context, socketPath string
 	return agentsocket.ControlContainer(ctx, socketPath, request)
 }
 
+func (socketAgentClient) ReadContainerLogs(ctx context.Context, socketPath string, request docker.ContainerLogsRequest) (docker.ContainerLogsResult, error) {
+	return agentsocket.ReadContainerLogs(ctx, socketPath, request)
+}
+
 func NewHandler(config Config) http.Handler {
 	if config.Agent == nil {
 		config.Agent = socketAgentClient{}
@@ -135,6 +141,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/summary", api.systemSummary)
 			protected.Get("/docker/inventory", api.dockerInventory)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
+			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
 		})
 	})
@@ -241,6 +248,34 @@ func (api *handler) containerAction(response http.ResponseWriter, request *http.
 	result, err := api.agent.ControlContainer(requestContext, api.agentSocketPath, containerRequest)
 	if err != nil {
 		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "容器操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (api *handler) containerLogs(response http.ResponseWriter, request *http.Request) {
+	containerRequest := docker.ContainerLogsRequest{
+		ContainerID: chi.URLParam(request, "containerID"),
+	}
+	if rawTail := request.URL.Query().Get("tail"); rawTail != "" {
+		tail, err := strconv.Atoi(rawTail)
+		if err != nil {
+			api.writeError(response, request, http.StatusBadRequest, "DOCKER_LOGS_INPUT_INVALID", "日志条数参数无效。")
+			return
+		}
+		containerRequest.Tail = tail
+	}
+	normalized, err := containerRequest.Normalize()
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_LOGS_INPUT_INVALID", "日志条数或容器标识无效。")
+		return
+	}
+
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+	result, err := api.agent.ReadContainerLogs(requestContext, api.agentSocketPath, normalized)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_LOGS_UNAVAILABLE", "容器日志暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

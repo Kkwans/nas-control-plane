@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowUpRight, Boxes, Container, LoaderCircle, Network, PackageCheck, Play, RotateCw, ServerCog, Square } from '@lucide/vue'
+import { ArrowUpRight, Boxes, Container, FileText, LoaderCircle, Network, PackageCheck, Play, RotateCw, ServerCog, Square } from '@lucide/vue'
 
-import { NcpApiError, requestContainerAction, type ContainerAction } from '@/api/system'
+import { NcpApiError, requestContainerAction, requestContainerLogs, type ContainerAction, type ContainerLogsResult } from '@/api/system'
 import StatusPill from '@/components/StatusPill.vue'
 import { projectStateTone } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
@@ -12,6 +12,10 @@ const inventory = computed(() => systemStore.inventory)
 const projects = computed(() => systemStore.services?.services ?? inventory.value?.projects ?? [])
 const actionPending = ref<string | null>(null)
 const actionError = ref<string | null>(null)
+const logLoading = ref(false)
+const logContainerName = ref('')
+const logContainerId = ref<string | null>(null)
+const logs = ref<ContainerLogsResult | null>(null)
 
 function containersFor(projectId: string) {
   return inventory.value?.containers.filter((container) => container.projectId === projectId) ?? []
@@ -53,6 +57,28 @@ async function performAction(containerId: string, action: ContainerAction) {
 
 function actionPendingFor(containerId: string, action: ContainerAction) {
   return actionPending.value === `${containerId}:${action}`
+}
+
+async function openLogs(container: { id: string; name: string }) {
+  if (logLoading.value) return
+  logLoading.value = true
+  logContainerId.value = container.id
+  logContainerName.value = container.name
+  logs.value = null
+  actionError.value = null
+  try {
+    logs.value = await requestContainerLogs(container.id)
+  } catch (error) {
+    actionError.value = error instanceof NcpApiError ? error.message : '容器日志暂时无法读取，请稍后重试。'
+  } finally {
+    logLoading.value = false
+  }
+}
+
+function closeLogs() {
+  logs.value = null
+  logContainerId.value = null
+  logContainerName.value = ''
 }
 </script>
 
@@ -137,6 +163,17 @@ function actionPendingFor(containerId: string, action: ContainerAction) {
                 <LoaderCircle v-if="actionPendingFor(container.id, 'restart')" class="is-spinning" :size="12" aria-hidden="true" />
                 <RotateCw v-else :size="12" aria-hidden="true" />
               </button>
+              <button
+                type="button"
+                class="container-action container-action--logs"
+                :disabled="logLoading"
+                :aria-label="`查看 ${container.name} 日志`"
+                title="查看日志"
+                @click.stop="openLogs(container)"
+              >
+                <LoaderCircle v-if="logLoading && logContainerId === container.id" class="is-spinning" :size="12" aria-hidden="true" />
+                <FileText v-else :size="12" aria-hidden="true" />
+              </button>
             </span>
           </li>
           <li v-if="containersFor(project.id).length > 3" class="container-list__more">另有 {{ containersFor(project.id).length - 3 }} 个容器</li>
@@ -151,6 +188,26 @@ function actionPendingFor(containerId: string, action: ContainerAction) {
           <span class="service-card__kind"><PackageCheck :size="14" aria-hidden="true" /> {{ project.kind }}</span>
         </div>
       </article>
+    </section>
+
+    <section v-if="logLoading || logs" class="container-logs panel reveal" aria-labelledby="container-logs-title">
+      <header class="container-logs__header">
+        <div>
+          <span class="engine-summary__eyebrow">CONTAINER LOG TAIL</span>
+          <h2 id="container-logs-title">{{ logContainerName || '容器日志' }}</h2>
+          <p v-if="logs">最近 {{ logs.tail }} 行 · {{ logs.entries.length }} 条记录</p>
+          <p v-else>正在从 Root Agent 读取日志尾部…</p>
+        </div>
+        <button type="button" class="container-logs__close" aria-label="关闭日志面板" @click="closeLogs">关闭</button>
+      </header>
+      <div v-if="logLoading" class="container-logs__loading"><LoaderCircle class="is-spinning" :size="16" aria-hidden="true" /> 正在读取</div>
+      <ol v-else-if="logs?.entries.length" class="log-list">
+        <li v-for="(entry, index) in logs.entries" :key="`${entry.stream}-${index}`">
+          <span :class="['log-stream', `log-stream--${entry.stream}`]">{{ entry.stream }}</span>
+          <code>{{ entry.message }}</code>
+        </li>
+      </ol>
+      <p v-else class="container-logs__empty">当前尾部没有可显示的日志。</p>
     </section>
 
     <section v-else class="empty-services panel reveal" style="--reveal-index: 2">
@@ -194,10 +251,25 @@ function actionPendingFor(containerId: string, action: ContainerAction) {
 .container-action:disabled { cursor: wait; opacity: 0.52; }
 .container-action--danger { border-color: rgba(202, 92, 83, 0.16); background: rgba(202, 92, 83, 0.08); color: #b34d48; }
 .container-action--danger:hover:not(:disabled) { border-color: rgba(202, 92, 83, 0.3); background: rgba(202, 92, 83, 0.14); }
+.container-action--logs { border-color: rgba(64, 142, 117, 0.16); background: rgba(64, 142, 117, 0.08); color: #317c67; }
+.container-action--logs:hover:not(:disabled) { border-color: rgba(64, 142, 117, 0.3); background: rgba(64, 142, 117, 0.14); }
 .is-spinning { animation: ncp-spin 0.9s linear infinite; }
 .container-list__more { display: block !important; color: var(--ncp-text-subtle) !important; padding-left: 21px; }
 .action-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 15px; border-color: rgba(202, 92, 83, 0.2); background: rgba(202, 92, 83, 0.06); color: #9e4742; font-size: 0.75rem; }
 .action-error button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 0.7rem; font-weight: 700; }
+.container-logs { margin-top: 14px; padding: clamp(18px, 3vw, 26px); }
+.container-logs__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.container-logs__header h2 { margin: 8px 0 5px; color: var(--ncp-text); font-size: 1.05rem; letter-spacing: -0.035em; }
+.container-logs__header p { margin: 0; color: var(--ncp-text-subtle); font-size: 0.7rem; }
+.container-logs__close { min-height: 29px; padding: 0 10px; border: 1px solid var(--ncp-line); border-radius: 8px; background: var(--ncp-surface); color: var(--ncp-text-muted); cursor: pointer; font-size: 0.68rem; font-weight: 700; transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out); }
+.container-logs__close:hover { border-color: rgba(44, 111, 223, 0.25); background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.container-logs__loading, .container-logs__empty { display: flex; align-items: center; gap: 8px; margin: 20px 0 0; color: var(--ncp-text-subtle); font-size: 0.75rem; }
+.log-list { display: grid; gap: 6px; max-height: 360px; overflow: auto; padding: 13px; margin: 18px 0 0; border: 1px solid rgba(44, 111, 223, 0.1); border-radius: 11px; background: #f8fbff; list-style: none; }
+.log-list li { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px; align-items: baseline; color: var(--ncp-text-muted); font-size: 0.68rem; line-height: 1.5; }
+.log-list code { overflow-wrap: anywhere; white-space: pre-wrap; font-family: 'JetBrains Mono Variable', ui-monospace, monospace; }
+.log-stream { font-family: 'JetBrains Mono Variable', ui-monospace, monospace; font-size: 0.58rem; font-weight: 750; text-transform: uppercase; }
+.log-stream--stdout { color: var(--ncp-primary-strong); }
+.log-stream--stderr { color: #b34d48; }
 .service-card__footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 17px; border-top: 1px solid var(--ncp-line); }
 .port-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .port-list a { display: inline-flex; align-items: center; gap: 4px; min-height: 29px; padding: 0 8px; border: 1px solid rgba(44, 111, 223, 0.17); border-radius: 8px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', ui-monospace, monospace; font-size: 0.61rem; font-weight: 750; transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out); }

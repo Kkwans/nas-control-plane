@@ -122,6 +122,18 @@ export interface ContainerActionResult {
   state: string
 }
 
+export interface ContainerLogEntry {
+  stream: 'stdout' | 'stderr'
+  message: string
+}
+
+export interface ContainerLogsResult {
+  containerId: string
+  tail: number
+  collectedAt: string
+  entries: ContainerLogEntry[]
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -198,6 +210,20 @@ export async function requestContainerAction(
     isContainerActionResult,
     fetcher,
     'DOCKER_CONTAINER_ACTION_RESPONSE_INVALID',
+  )
+}
+
+export async function requestContainerLogs(
+  containerId: string,
+  tail = 120,
+  fetcher: typeof fetch = fetch,
+): Promise<ContainerLogsResult> {
+  return requestJson(
+    `/api/v1/docker/containers/${encodeURIComponent(containerId)}/logs?tail=${tail}`,
+    {},
+    isContainerLogsResult,
+    fetcher,
+    'DOCKER_LOGS_RESPONSE_INVALID',
   )
 }
 
@@ -322,5 +348,21 @@ function isContainerActionResult(value: unknown): value is ContainerActionResult
     typeof value.name === 'string' &&
     (value.action === 'start' || value.action === 'stop' || value.action === 'restart') &&
     typeof value.state === 'string'
+  )
+}
+
+function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
+  return (
+    isRecord(value) &&
+    typeof value.containerId === 'string' &&
+    typeof value.tail === 'number' &&
+    typeof value.collectedAt === 'string' &&
+    Array.isArray(value.entries) &&
+    value.entries.every(
+      (entry) =>
+        isRecord(entry) &&
+        (entry.stream === 'stdout' || entry.stream === 'stderr') &&
+        typeof entry.message === 'string',
+    )
   )
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { NcpApiError, loginRoot, requestCapabilities, requestContainerAction, requestSystemSummary } from './system'
+import { NcpApiError, loginRoot, requestCapabilities, requestContainerAction, requestContainerLogs, requestSystemSummary } from './system'
 
 describe('NCP API client', () => {
   it('requests protected system data with same-origin credentials', async () => {
@@ -73,6 +73,30 @@ describe('NCP API client', () => {
     expect(fetcher).toHaveBeenCalledWith(
       '/api/v1/docker/containers/abc123/actions/restart',
       expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+    )
+  })
+
+  it('requests a bounded container log tail', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          containerId: 'abc123',
+          tail: 40,
+          collectedAt: '2026-07-23T02:00:00Z',
+          entries: [{ stream: 'stdout', message: 'ready' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(requestContainerLogs('abc123', 40, fetcher)).resolves.toMatchObject({
+      containerId: 'abc123',
+      tail: 40,
+      entries: [{ message: 'ready' }],
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/docker/containers/abc123/logs?tail=40',
+      expect.objectContaining({ credentials: 'same-origin' }),
     )
   })
 })

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/struct.proto";
+
+// Root Agent returns a bounded tail of a container's stdout/stderr stream.
+service AgentDockerLogsService {
+  rpc ReadLogs(google.protobuf.Struct) returns (google.protobuf.Struct);
+}
