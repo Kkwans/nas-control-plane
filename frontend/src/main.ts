@@ -1,5 +1,6 @@
 import '@fontsource-variable/jetbrains-mono/wght.css'
 import '@fontsource-variable/manrope/wght.css'
+import 'element-plus/dist/index.css'
 import './styles/tokens.css'
 import './styles/base.css'
 import './styles/motion.css'
