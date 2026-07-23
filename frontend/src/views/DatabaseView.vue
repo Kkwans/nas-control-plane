@@ -167,7 +167,8 @@ async function connectSource() {
   errorMessage.value = ''
   try {
     catalog.value = await loadDatabaseCatalog(connection())
-    const firstTable = catalog.value.tables[0]
+    const firstTable = catalog.value.tables.find((table) =>
+      !table.columns.some((column) => isSensitiveColumn(column.name))) ?? catalog.value.tables[0]
     if (firstTable) await chooseTable(tableKey(firstTable))
   } catch (error) {
     showError(error, '数据库连接失败，请检查登录信息。')
@@ -303,6 +304,15 @@ function convertValue(value: string, column: DatabaseColumn): DatabaseValue {
     return Number.isFinite(numeric) ? numeric : value
   }
   if (/(bool)/.test(type)) return value === 'true' || value === '1'
+  return value
+}
+
+function isSensitiveColumn(name: string) {
+  return /(password|passwd|token|secret|cookie|api[_-]?key|private[_-]?key)/i.test(name)
+}
+
+function displayValue(column: string, value: DatabaseValue | undefined) {
+  if (isSensitiveColumn(column) && value !== null && value !== undefined) return '••••••••'
   return value
 }
 
@@ -447,7 +457,7 @@ function showError(error: unknown, fallback: string) {
                   </template>
                   <template #default="{ row }">
                     <span v-if="row[column.name] === null" class="null-value">NULL</span>
-                    <span v-else class="cell-value">{{ row[column.name] }}</span>
+                    <span v-else class="cell-value">{{ displayValue(column.name, row[column.name]) }}</span>
                   </template>
                 </ElTableColumn>
                 <ElTableColumn label="操作" fixed="right" width="112">
@@ -488,7 +498,9 @@ function showError(error: unknown, fallback: string) {
                 </header>
                 <div v-if="queryResult.columns.length" class="query-table">
                   <ElTable :data="queryResult.rows.map((row) => Object.fromEntries(queryResult!.columns.map((column, index) => [column, row[index]])))" height="100%">
-                    <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="140" show-overflow-tooltip />
+                    <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="140" show-overflow-tooltip>
+                      <template #default="{ row }"><span class="cell-value">{{ displayValue(column, row[column]) }}</span></template>
+                    </ElTableColumn>
                   </ElTable>
                 </div>
                 <p v-else>语句执行成功，影响 {{ queryResult.rowsAffected }} 行。</p>
