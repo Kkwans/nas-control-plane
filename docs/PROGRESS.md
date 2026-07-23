@@ -13,7 +13,7 @@ NCP 已从 Phase 0 技术验证切换为 Root 控制面 MVP。当前代码已经
 | Root Agent 实时系统与 Docker 数据 | 已完成 | gopsutil 主机快照、Docker Engine/容器/Compose 项目发现、Dashboard RPC 与受保护 HTTP API；Go 全量测试、vet、ARM64 构建通过。 |
 | Root 登录与 SQLite 会话 | 已完成 | 一次性 Root 初始化、bcrypt 哈希、SQLite 会话、登录/登出/状态 API；不存在默认密码，首次账号由管理员在页面创建。 |
 | Root Agent 实机部署 | 已完成 | NAS systemd 单元已启用且 active；Unix Socket 为 root:users；`agent-probe` 返回 `agentEUID=0`、`transport=unix`。 |
-| Server + Console Compose | 已完成 | `nas-control-plane-server` 与 `nas-control-plane-console` 均为 healthy；Nginx `/api/` 已反代 Server；`/healthz` 返回 200。 |
+| Server + Console Compose | 已完成 | `nas-control-plane` 与 `nas-control-plane-console` 均为 healthy；Nginx `/api/` 已反代 Server；`/healthz` 返回 200。 |
 | 浅色现代 Vue 控制台 | 已完成 | Vue 3 + TypeScript + Vite；Root 初始化/登录、总览、基础设施、Services 页面统一浅色设计系统、圆角、间距和交互反馈。 |
 | 容器生命周期控制 | 已提交 | `feat(docker)：实现容器启停重启控制`；Root Agent、HTTP API、Services 操作条和单元测试已完成。 |
 | 容器日志尾部读取 | 代码完成，待提交 | bounded tail、stdout/stderr 结构化条目、Agent RPC、HTTP API 与 Services 日志面板已实现，正在完成提交前验证。 |
