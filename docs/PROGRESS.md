@@ -16,7 +16,7 @@ NCP 已从 Phase 0 技术验证切换为 Root 控制面 MVP。当前代码已经
 | Server + Console Compose | 已完成 | `nas-control-plane` 与 `nas-control-plane-console` 均为 healthy；Nginx `/api/` 已反代 Server；`/healthz` 返回 200。 |
 | 浅色现代 Vue 控制台 | 已完成 | Vue 3 + TypeScript + Vite；Root 初始化/登录、总览、基础设施、Services 页面统一浅色设计系统、圆角、间距和交互反馈。 |
 | 容器生命周期控制 | 已提交 | `feat(docker)：实现容器启停重启控制`；Root Agent、HTTP API、Services 操作条和单元测试已完成。 |
-| 容器日志尾部读取 | 代码完成，待提交 | bounded tail、stdout/stderr 结构化条目、Agent RPC、HTTP API 与 Services 日志面板已实现，正在完成提交前验证。 |
+| 容器日志尾部读取 | 已提交 | `feat(docker)：实现容器日志读取与查看面板`；bounded tail、stdout/stderr 结构化条目、Agent RPC、HTTP API 与 Services 日志面板已完成。 |
 
 ## 已验证命令
 
@@ -40,13 +40,13 @@ pnpm run build
 
 ## 当前运行态与边界
 
-- NAS 当前运行的是已部署的 Server/Console 镜像；新提交的容器控制与日志代码尚未重建镜像或重启 Compose。
+- NAS 当前运行 `nas-control-plane:2026.7.23-v2`（ARM64）与 `nginx:alpine` 控制台；两个 Compose 服务均为 healthy，Server `/healthz` 与控制台 `/healthz` 均返回 200。
+- Compose 项目已注册到 UGREEN Docker 数据库，项目名为 `nas-control-plane`，路径为 `/volume2/Project/nas-control-plane/deploy/console/docker-compose.yml`；`/volume1/docker-apps/nas-control-plane` 已指向该项目目录。
 - `/api/v1/auth/status` 当前返回 `initialized=false`，需要在页面完成一次性 Root 账号创建后，才能验证登录态下的实时主机、Docker、容器控制和日志链路。
-- 容器控制和日志接口都要求有效 Root 会话；本阶段没有对 NAS 真实容器执行启停、重启或日志读取。
+- 容器控制和日志接口都要求有效 Root 会话；本阶段只完成未认证 401 防护与健康检查，未对 NAS 真实容器执行启停、重启或日志读取。
 
 ## 下一步
 
-1. 提交并推送容器日志切片。
-2. 在确认运行时更新后，重建 ARM64 Server 镜像并滚动重建 Compose，做只读健康检查和认证状态检查。
-3. 管理员在控制台创建 Root 账号，完成登录后验证真实总览、Services 操作条和日志面板。
-4. 继续交付主机/容器终端与耗时操作 Job；之后再处理 Caddy、备份恢复和更细粒度权限。
+1. 管理员在控制台创建 Root 账号，完成登录后验证真实总览、Services 操作条和日志面板。
+2. 增加登录后的真实容器控制与日志读取回归验证，并记录可回滚证据。
+3. 继续交付主机/容器终端与耗时操作 Job；之后再处理 Caddy、备份恢复和更细粒度权限。

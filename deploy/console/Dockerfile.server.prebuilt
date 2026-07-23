@@ -5,6 +5,7 @@ FROM alpine:3.23
 ARG NCP_SERVER_BINARY=bin/ncp-server-linux-arm64
 
 COPY --chown=1000:100 ${NCP_SERVER_BINARY} /usr/local/bin/ncp-server
+RUN chmod 0755 /usr/local/bin/ncp-server
 
 USER 1000:100
 
