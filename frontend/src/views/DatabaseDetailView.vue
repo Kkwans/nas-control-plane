@@ -111,15 +111,17 @@ function primaryKeys(table: DatabaseTable) {
         <ElInput v-if="catalog" v-model="query" class="table-search" clearable placeholder="搜索数据表" aria-label="搜索数据表">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
-        <div class="source-summary">
-          <span><strong>{{ source.driver === 'sqlite' ? 'SQLite' : source.driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL' }}</strong>数据库类型</span>
-          <span><strong>{{ source.category === 'system' ? '系统数据库' : '项目数据库' }}</strong>来源分类</span>
-          <span :title="source.location"><strong>{{ source.location }}</strong>连接位置</span>
-        </div>
       </template>
     </WorkspaceHeader>
 
     <div v-if="errorMessage" class="database-error" role="alert">{{ errorMessage }}</div>
+
+    <dl class="source-summary panel">
+      <div><dt>数据库类型</dt><dd>{{ source.driver === 'sqlite' ? 'SQLite' : source.driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL' }}</dd></div>
+      <div><dt>来源分类</dt><dd>{{ source.category === 'system' ? '系统数据库' : '项目数据库' }}</dd></div>
+      <div><dt>关联项目</dt><dd>{{ source.project }}</dd></div>
+      <div><dt>连接位置</dt><dd :title="source.location">{{ source.location }}</dd></div>
+    </dl>
 
     <section v-if="source.requiresLogin && !catalog" class="connection-panel panel">
       <div class="connection-intro">
@@ -156,17 +158,20 @@ function primaryKeys(table: DatabaseTable) {
         >
           <div class="table-name">
             <span><Table2 :size="18" /></span>
-            <div><strong>{{ table.name }}</strong><small>{{ table.schema || 'SQLite' }} · {{ table.type === 'view' ? '视图' : '数据表' }}</small></div>
+            <div>
+              <strong>{{ table.name }}</strong>
+              <small>{{ table.schema || 'SQLite' }} · {{ table.type === 'view' ? '视图' : '数据表' }}</small>
+              <div class="table-row__details">
+                <ElTag v-for="key in primaryKeys(table)" :key="key" effect="plain" size="small"><KeyRound :size="12" />{{ key }}</ElTag>
+                <span v-if="table.definition"><FileCode2 :size="13" />包含 SQL 定义</span>
+              </div>
+            </div>
           </div>
           <span><Columns3 :size="14" />{{ table.columns.length }}</span>
           <span><Rows3 :size="14" />{{ formatNumber(table.rowCount ?? null) }}</span>
           <span><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
           <span>{{ table.createdAt || '—' }}</span>
           <span class="open-table">打开<ArrowRight :size="16" /></span>
-          <div class="table-row__details">
-            <ElTag v-for="key in primaryKeys(table)" :key="key" effect="plain" size="small"><KeyRound :size="12" />{{ key }}</ElTag>
-            <span v-if="table.definition"><FileCode2 :size="13" />包含 SQL 定义</span>
-          </div>
         </RouterLink>
         <div v-if="!tables.length" class="empty-table">没有匹配的数据表。</div>
       </section>
@@ -177,10 +182,12 @@ function primaryKeys(table: DatabaseTable) {
 </template>
 
 <style scoped>
-.table-search { width:min(340px,36vw); }
-.source-summary { display:flex; min-width:0; align-items:center; justify-content:flex-end; gap:18px; }
-.source-summary span { display:grid; min-width:0; color:var(--ncp-text-subtle); font-size:.7rem; }
-.source-summary strong { max-width:220px; overflow:hidden; color:var(--ncp-text); font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.table-search { width:min(250px,24vw); }
+.source-summary { display:grid; grid-template-columns:160px 160px minmax(160px,.7fr) minmax(260px,1.3fr); min-height:62px; margin:0; overflow:hidden; }
+.source-summary>div { display:grid; min-width:0; align-content:center; gap:2px; padding:9px 15px; border-right:1px solid var(--ncp-line); }
+.source-summary>div:last-child { border-right:0; }
+.source-summary dt { color:var(--ncp-text-subtle); font-size:.7rem; }
+.source-summary dd { overflow:hidden; margin:0; color:var(--ncp-text); font-size:.8rem; font-weight:680; text-overflow:ellipsis; white-space:nowrap; }
 .database-error { padding:10px 13px; border:1px solid rgba(212,81,93,.2); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.82rem; }
 .connection-panel { display:grid; grid-template-columns:minmax(280px,.8fr) minmax(420px,1.2fr); gap:28px; padding:24px; }
 .connection-intro { display:flex; align-items:flex-start; gap:13px; padding:4px; }
@@ -194,18 +201,18 @@ function primaryKeys(table: DatabaseTable) {
 .table-list { overflow:hidden; }
 .table-list__head,.table-row { display:grid; grid-template-columns:minmax(230px,1.5fr) 90px 110px 110px 160px 74px; align-items:center; gap:12px; }
 .table-list__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.74rem; font-weight:700; }
-.table-row { position:relative; min-height:78px; padding:0 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-muted); font-size:.78rem; transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
+.table-row { position:relative; min-height:92px; padding:0 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-muted); font-size:.78rem; transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
 .table-row:hover { background:var(--ncp-surface-hover); box-shadow:inset 3px 0 0 var(--ncp-primary); }
 .table-row>span { display:flex; align-items:center; gap:5px; }
-.table-name { display:flex; min-width:0; align-items:center; gap:10px; }
+.table-name { display:flex; min-width:0; align-self:start; align-items:center; gap:10px; margin-top:13px; }
 .table-name>span { display:grid; width:38px; height:38px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.table-name>div { display:grid; min-width:0; }.table-name strong { overflow:hidden; color:var(--ncp-text); font-size:.84rem; text-overflow:ellipsis; white-space:nowrap; }.table-name small { color:var(--ncp-text-subtle); font-size:.7rem; }
+.table-name>div { display:grid; min-width:0; gap:1px; }.table-name strong { overflow:hidden; color:var(--ncp-text); font-size:.84rem; text-overflow:ellipsis; white-space:nowrap; }.table-name small { color:var(--ncp-text-subtle); font-size:.7rem; }
 .open-table { justify-content:flex-end; color:var(--ncp-primary-strong); font-weight:700; }
-.table-row__details { position:absolute; left:64px; bottom:6px; display:flex; align-items:center; gap:6px; color:var(--ncp-text-subtle); font-size:.67rem; }
+.table-row__details { display:flex; align-items:center; gap:6px; min-height:22px; color:var(--ncp-text-subtle); font-size:.7rem; }
 .table-row__details :deep(.el-tag) { gap:3px; }
 .empty-table { padding:40px; color:var(--ncp-text-subtle); text-align:center; }
 .missing-source { display:grid; min-height:260px; place-content:center; gap:8px; text-align:center; }.missing-source h1{margin:0;font-size:1rem}.missing-source a{color:var(--ncp-primary-strong)}
-@media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 75px 95px 95px 120px 64px;gap:8px}.source-summary span:nth-child(2){display:none}}
-@media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{display:none}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:108px; padding:14px}.table-row>span:nth-of-type(3),.table-row>span:nth-of-type(4){display:none}.table-row__details{position:static; grid-column:1/-1}.section-heading>span{display:none}}
+@media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 75px 95px 95px 120px 64px;gap:8px}.source-summary{grid-template-columns:140px 140px 1fr 1.4fr}}
+@media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{grid-template-columns:1fr 1fr}.source-summary>div:nth-child(2){border-right:0}.source-summary>div:nth-child(-n+2){border-bottom:1px solid var(--ncp-line)}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:118px; padding:14px}.table-row>span:nth-of-type(3),.table-row>span:nth-of-type(4){display:none}.section-heading>span{display:none}}
 @media(max-width:560px){.connection-form{grid-template-columns:1fr}.connection-form :deep(.el-form-item:last-of-type),.connection-form>.el-button{grid-column:1}.connection-form>.el-button{width:100%}}
 </style>

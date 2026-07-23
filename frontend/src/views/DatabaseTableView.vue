@@ -261,22 +261,21 @@ function formatBytes(value?: number) {
       <template #actions>
         <ElButton tag="a" :href="`/databases/${sourceId}?sourceName=${encodeURIComponent(source.name)}`"><ArrowLeft :size="16" />返回数据表</ElButton>
       </template>
-      <template #tools>
-        <nav class="table-tabs" aria-label="数据表工作区">
-          <button v-for="item in [
-            { value: 'data', label: '表数据', icon: Rows3 },
-            { value: 'overview', label: '表信息', icon: Info },
-            { value: 'structure', label: '表结构', icon: Columns3 },
-            { value: 'definition', label: 'SQL 定义', icon: FileCode2 },
-            { value: 'sql', label: '执行 SQL', icon: Braces },
-          ]" :key="item.value" type="button" :class="{ active: mode === item.value }" @click="mode = item.value as TableMode">
-            <component :is="item.icon" :size="15" />{{ item.label }}
-          </button>
-        </nav>
-      </template>
     </WorkspaceHeader>
 
     <div v-if="errorMessage" class="database-error" role="alert">{{ errorMessage }}</div>
+
+    <nav class="table-tabs panel" aria-label="数据表工作区">
+      <button v-for="item in [
+        { value: 'data', label: '表数据', icon: Rows3 },
+        { value: 'overview', label: '表信息', icon: Info },
+        { value: 'structure', label: '表结构', icon: Columns3 },
+        { value: 'definition', label: 'SQL 定义', icon: FileCode2 },
+        { value: 'sql', label: '执行 SQL', icon: Braces },
+      ]" :key="item.value" type="button" :class="{ active: mode === item.value }" @click="mode = item.value as TableMode">
+        <component :is="item.icon" :size="16" />{{ item.label }}
+      </button>
+    </nav>
 
     <section v-if="mode === 'data'" class="data-workbench panel">
       <div class="data-toolbar">
@@ -379,10 +378,10 @@ function formatBytes(value?: number) {
 </template>
 
 <style scoped>
-.table-tabs{display:flex;min-width:0;gap:3px;padding:3px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet);overflow:auto}
-.table-tabs button{display:flex;min-height:36px;align-items:center;gap:5px;padding:0 11px;border-radius:7px;background:transparent;color:var(--ncp-text-muted);font-size:.76rem;font-weight:680;white-space:nowrap}.table-tabs button.active{background:#fff;box-shadow:0 2px 8px rgba(28,45,75,.08);color:var(--ncp-primary-strong)}
+.table-tabs{display:flex;min-width:0;min-height:50px;align-items:center;gap:4px;padding:5px;background:var(--ncp-surface-quiet);overflow:auto}
+.table-tabs button{display:flex;min-width:116px;min-height:38px;align-items:center;justify-content:center;gap:6px;padding:0 14px;border-radius:8px;background:transparent;color:var(--ncp-text-muted);font-size:.78rem;font-weight:680;white-space:nowrap}.table-tabs button.active{background:#fff;box-shadow:0 2px 8px rgba(28,45,75,.08);color:var(--ncp-primary-strong)}
 .database-error{padding:10px 13px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}
-.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 202px);min-height:600px;overflow:hidden}
+.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 266px);min-height:560px;overflow:hidden}
 .data-workbench{display:flex;min-width:0;flex-direction:column}.data-toolbar{display:flex;min-height:54px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border-bottom:1px solid var(--ncp-line)}.data-toolbar>div{display:flex;align-items:center;gap:8px}.data-toolbar>div:first-child{color:var(--ncp-text-subtle);font-size:.78rem}.data-toolbar :deep(.el-tag){gap:3px}.primary-key-warning{padding:8px 13px;border-bottom:1px solid rgba(183,116,13,.15);background:var(--ncp-warning-soft);color:var(--ncp-warning-strong);font-size:.76rem}
 .data-table{min-height:0;flex:1}.data-table :deep(.el-table){--el-table-border-color:#e7ecf3;--el-table-header-bg-color:#f7f9fc;--el-table-row-hover-bg-color:#f1f6ff;font-size:.78rem}.data-table :deep(.el-table__header th.el-table__cell){height:44px;padding:0}.data-table :deep(.el-table__body td.el-table__cell){height:46px;padding:0}.data-table :deep(.el-table .cell){padding:0 11px}.column-heading{display:flex;align-items:center;gap:5px;font-weight:720}.column-heading small{margin-left:3px;color:var(--ncp-text-subtle);font-family:'JetBrains Mono Variable',monospace;font-size:.66rem;font-weight:500}.cell-value{display:block;overflow:hidden;color:#344054;font-family:'JetBrains Mono Variable',monospace;font-size:.73rem;text-overflow:ellipsis;white-space:nowrap}.null-value{display:inline-flex;padding:1px 5px;border-radius:4px;background:#f0f2f6;color:var(--ncp-text-subtle);font-family:'JetBrains Mono Variable',monospace;font-size:.7rem;font-style:italic}
 .row-actions{display:flex;justify-content:center;gap:5px}.row-actions button{display:inline-flex;height:31px;align-items:center;gap:4px;padding:0 8px;border:1px solid rgba(36,104,216,.13);border-radius:7px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:700}.row-actions button.danger{border-color:rgba(212,81,93,.14);background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.row-actions button:disabled{cursor:not-allowed;opacity:.35}.data-pagination{display:flex;min-height:52px;align-items:center;justify-content:space-between;padding:7px 12px;border-top:1px solid var(--ncp-line);color:var(--ncp-text-subtle);font-size:.75rem}.data-pagination>div{display:flex;gap:7px}
@@ -392,6 +391,6 @@ function formatBytes(value?: number) {
 .sql-workbench{display:grid;grid-template-rows:52px minmax(240px,.95fr) minmax(220px,1.05fr)}.sql-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 12px;border-bottom:1px solid var(--ncp-line)}.sql-toolbar>div{display:flex;align-items:center;gap:9px}.sql-toolbar strong{font-size:.82rem}.sql-toolbar span,.sql-toolbar small{color:var(--ncp-text-subtle);font-size:.73rem}.sql-toolbar kbd{margin-left:4px;padding:1px 5px;border:1px solid rgba(255,255,255,.35);border-radius:4px;background:rgba(255,255,255,.14);color:inherit;font-size:.58rem}.sql-editor{min-height:0;border-bottom:1px solid var(--ncp-line);overflow:hidden}.query-result{display:flex;min-height:0;flex-direction:column;overflow:hidden}.query-result>header{display:flex;min-height:42px;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid var(--ncp-line);background:var(--ncp-surface-quiet);font-size:.75rem}.query-table{min-height:0;flex:1}.query-message{display:grid;min-height:150px;flex:1;place-content:center;gap:6px;color:var(--ncp-text-subtle);font-size:.78rem;text-align:center}.query-message--error{color:var(--ncp-danger-strong)}.query-message--success strong{color:var(--ncp-success)}
 .row-dialog-context{display:flex;align-items:center;gap:9px;margin:-4px 0 16px;padding:10px 12px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.row-dialog-context>span{display:grid}.row-dialog-context small{color:var(--ncp-text-muted);font-size:.7rem}.row-form{display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;max-height:58vh;overflow:auto;padding-right:5px}.form-label{display:flex;width:100%;align-items:baseline;justify-content:space-between}.form-label>span{display:flex;align-items:baseline;gap:6px}.form-label small{color:var(--ncp-text-subtle);font-family:'JetBrains Mono Variable',monospace;font-size:.66rem}
 .missing-table{display:grid;min-height:260px;place-content:center;gap:8px;text-align:center}.missing-table h1{margin:0;font-size:1rem}.missing-table a{color:var(--ncp-primary-strong)}
-@media(max-width:1000px){.table-tabs button{padding:0 8px}.table-tabs button svg{display:none}.info-workbench{grid-template-columns:1fr}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 250px)}}
-@media(max-width:680px){.table-tabs{width:100%}.table-tabs button{flex:1;justify-content:center}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 310px);min-height:560px}.data-toolbar{align-items:stretch;flex-direction:column}.data-toolbar>div:last-child{width:100%}.data-toolbar>div:last-child :deep(.el-button){flex:1}.data-pagination{align-items:stretch;flex-direction:column;gap:8px}.data-pagination>div :deep(.el-button){flex:1}.table-profile{grid-template-columns:1fr 1fr}.row-form{grid-template-columns:1fr}.sql-toolbar{align-items:flex-start;flex-direction:column}.sql-toolbar>div{width:100%;justify-content:space-between}.sql-toolbar kbd{display:none}}
+@media(max-width:1000px){.table-tabs button{min-width:104px;padding:0 10px}.info-workbench{grid-template-columns:1fr}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 300px)}}
+@media(max-width:680px){.table-tabs{width:100%}.table-tabs button{min-width:100px}.table-tabs button svg{display:none}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 360px);min-height:540px}.data-toolbar{align-items:stretch;flex-direction:column}.data-toolbar>div:last-child{width:100%}.data-toolbar>div:last-child :deep(.el-button){flex:1}.data-pagination{align-items:stretch;flex-direction:column;gap:8px}.data-pagination>div :deep(.el-button){flex:1}.table-profile{grid-template-columns:1fr 1fr}.row-form{grid-template-columns:1fr}.sql-toolbar{align-items:flex-start;flex-direction:column}.sql-toolbar>div{width:100%;justify-content:space-between}.sql-toolbar kbd{display:none}}
 </style>
