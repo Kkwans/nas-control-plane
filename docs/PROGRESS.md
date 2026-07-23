@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-NCP 已完成 Root 控制面第一轮可用性重构。现有链路为“Root Agent → Unix Socket gRPC → Server HTTP API → Vue 控制台”，页面不再依赖静态模拟数据；登录后会立即加载真实主机与 Docker 数据，并通过 SSE 自动刷新，断线时降级为轮询。
+NCP 已进入第二轮控制台体验重构。现有链路为“Root Agent → Unix Socket gRPC → Server HTTP API → Vue 控制台”，本轮在真实实时数据之上补齐管理工作区、项目详情、趋势图表和移动端导航。
 
 ## 本轮完成
 
@@ -17,6 +17,11 @@ NCP 已完成 Root 控制面第一轮可用性重构。现有链路为“Root Ag
 | Docker 工作区 | 已完成 | 新增项目表格、项目容器展开详情、端口入口、启停/重启操作和日志抽屉。 |
 | 服务入口 | 已完成 | 以紧凑三列网格展示 Compose 项目和公开端口，提供搜索、状态汇总和统一访问入口。 |
 | 系统信息 | 已完成 | 以紧凑表格与信息卡展示系统、Root Agent、Docker Engine 和能力接入状态。 |
+| OpenSpec 体验增强变更 | 实现中 | `enhance-console-experience` 已完成 proposal、design、6 份差异规格与 19 项优先级任务。 |
+| 项目详情 | 已完成开发 | 服务入口和 Docker 管理共用项目详情抽屉，支持 `project` 查询参数恢复、全部容器、端口和 Docker 操作。 |
+| 首页实时图表 | 已完成开发 | Pinia 保存最近 60 个真实快照；首页展示 CPU/内存、系统负载和网络吞吐趋势，不使用模拟数据。 |
+| 移动端控制台 | 已完成开发 | 768px 以下使用汉堡菜单与侧滑导航；Docker 表格转换为项目卡片，详情使用全屏抽屉。 |
+| 第二轮视觉系统 | 已完成开发 | 统一工作区顶部、状态筛选、44px 触控目标、字体层级、语义颜色、悬停/按压反馈和 reduced-motion。 |
 
 ## 构建证据
 
@@ -27,7 +32,7 @@ go build -buildvcs=false ./cmd/ncp-agent ./cmd/ncp-server
 pnpm run build
 ```
 
-Windows 同步副本的 Go 编译、Vue 类型检查和生产构建均已通过。NAS ARM64 构建、镜像和部署状态以本轮 SSH 交付结果为准。
+Windows 同步副本的 Vue 类型检查和第二轮生产构建已通过。ECharts 仅随总览路由异步分包加载；NAS ARM64 镜像和部署状态以本轮 SSH 交付结果为准。
 
 ## 当前运行态
 

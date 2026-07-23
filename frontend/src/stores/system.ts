@@ -15,6 +15,16 @@ export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unav
 export type RealtimeState = 'connecting' | 'streaming' | 'polling' | 'offline'
 
 const FALLBACK_INTERVAL = 15_000
+const MAX_HISTORY_POINTS = 60
+
+export interface ResourceSample {
+  timestamp: string
+  cpuPercent: number
+  memoryPercent: number
+  load1: number
+  networkReceiveBps: number
+  networkTransmitBps: number
+}
 
 export const useSystemStore = defineStore('system', () => {
   const connectionState = ref<SystemConnectionState>('loading')
@@ -24,10 +34,12 @@ export const useSystemStore = defineStore('system', () => {
   const inventory = ref<DockerInventory | null>(null)
   const errorCode = ref<string | null>(null)
   const isRefreshing = ref(false)
+  const resourceHistory = ref<ResourceSample[]>([])
 
   let eventSource: EventSource | null = null
   let fallbackTimer: number | null = null
   let refreshPromise: Promise<void> | null = null
+  let previousNetwork: { timestamp: number; receiveBytes: number; transmitBytes: number } | null = null
 
   const deviceName = computed(() => summary.value?.host.hostname || capabilities.value?.hostname || 'NAS 管理面板')
   const lastUpdated = computed(() => summary.value?.collectedAt || inventory.value?.collectedAt || null)
@@ -57,7 +69,11 @@ export const useSystemStore = defineStore('system', () => {
     const inventoryResult = results[1]
     const capabilitiesResult = includeCapabilities ? results[2] : undefined
 
-    if (summaryResult?.status === 'fulfilled') summary.value = summaryResult.value as SystemSummary
+    if (summaryResult?.status === 'fulfilled') {
+      const nextSummary = summaryResult.value as SystemSummary
+      summary.value = nextSummary
+      appendResourceSample(nextSummary)
+    }
     if (inventoryResult?.status === 'fulfilled') inventory.value = inventoryResult.value as DockerInventory
     if (capabilitiesResult?.status === 'fulfilled') capabilities.value = capabilitiesResult.value as SystemCapabilities
 
@@ -113,6 +129,31 @@ export const useSystemStore = defineStore('system', () => {
     inventory.value = null
     errorCode.value = null
     connectionState.value = 'loading'
+    resourceHistory.value = []
+    previousNetwork = null
+  }
+
+  function appendResourceSample(nextSummary: SystemSummary) {
+    if (resourceHistory.value.at(-1)?.timestamp === nextSummary.collectedAt) return
+
+    const timestamp = new Date(nextSummary.collectedAt).valueOf()
+    const validTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now()
+    const receiveBytes = nextSummary.network.reduce((total, item) => total + item.receiveBytes, 0)
+    const transmitBytes = nextSummary.network.reduce((total, item) => total + item.transmitBytes, 0)
+    const elapsedSeconds = previousNetwork ? Math.max((validTimestamp - previousNetwork.timestamp) / 1000, 0) : 0
+    const receiveRate = previousNetwork && elapsedSeconds > 0 ? Math.max((receiveBytes - previousNetwork.receiveBytes) / elapsedSeconds, 0) : 0
+    const transmitRate = previousNetwork && elapsedSeconds > 0 ? Math.max((transmitBytes - previousNetwork.transmitBytes) / elapsedSeconds, 0) : 0
+
+    const sample: ResourceSample = {
+      timestamp: new Date(validTimestamp).toISOString(),
+      cpuPercent: nextSummary.cpu.usagePercent,
+      memoryPercent: nextSummary.memory.totalBytes > 0 ? (nextSummary.memory.usedBytes / nextSummary.memory.totalBytes) * 100 : 0,
+      load1: nextSummary.cpu.load1,
+      networkReceiveBps: receiveRate,
+      networkTransmitBps: transmitRate,
+    }
+    resourceHistory.value = [...resourceHistory.value, sample].slice(-MAX_HISTORY_POINTS)
+    previousNetwork = { timestamp: validTimestamp, receiveBytes, transmitBytes }
   }
 
   return {
@@ -124,6 +165,7 @@ export const useSystemStore = defineStore('system', () => {
     services,
     errorCode,
     isRefreshing,
+    resourceHistory,
     deviceName,
     lastUpdated,
     refresh,
