@@ -45,6 +45,10 @@ export interface DatabaseTable {
   name: string
   type: string
   columns: DatabaseColumn[]
+  rowCount?: number
+  sizeBytes?: number
+  createdAt?: string
+  definition?: string
 }
 
 export interface DatabaseDiscovery {

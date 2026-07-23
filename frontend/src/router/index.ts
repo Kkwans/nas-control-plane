@@ -35,6 +35,18 @@ const router = createRouter({
       meta: { title: '数据库' },
     },
     {
+      path: '/databases/:sourceId/tables/:table',
+      name: 'database-table',
+      component: () => import('@/views/DatabaseTableView.vue'),
+      meta: { title: '数据表' },
+    },
+    {
+      path: '/databases/:sourceId',
+      name: 'database-detail',
+      component: () => import('@/views/DatabaseDetailView.vue'),
+      meta: { title: '数据库详情' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

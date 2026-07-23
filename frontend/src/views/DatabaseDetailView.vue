@@ -1,0 +1,211 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink, useRoute } from 'vue-router'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Columns3,
+  Database,
+  FileCode2,
+  HardDrive,
+  KeyRound,
+  RefreshCw,
+  Rows3,
+  Search,
+  Table2,
+} from '@lucide/vue'
+import { ElButton, ElForm, ElFormItem, ElInput, ElTag } from 'element-plus'
+
+import { NcpApiError } from '@/api/system'
+import type { DatabaseCredentials, DatabaseTable } from '@/api/database'
+import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { useDatabaseStore } from '@/stores/database'
+
+const route = useRoute()
+const databaseStore = useDatabaseStore()
+const sourceId = computed(() => String(route.params.sourceId ?? ''))
+const source = computed(() => databaseStore.source(sourceId.value))
+const catalog = computed(() => databaseStore.catalogs[sourceId.value] ?? null)
+const query = ref('')
+const loading = ref(false)
+const errorMessage = ref('')
+const credentialDraft = ref<DatabaseCredentials>({})
+
+const tables = computed(() => {
+  const term = query.value.trim().toLowerCase()
+  return (catalog.value?.tables ?? []).filter((table) => !term || `${table.schema} ${table.name} ${table.type}`.toLowerCase().includes(term))
+})
+const stats = computed<WorkspaceStat[]>(() => [
+  { label: '数据表', value: catalog.value?.tables.length ?? '—' },
+  { label: '统计行数', value: formatNumber(sumMetric('rowCount')), tone: 'success' },
+  { label: '数据大小', value: formatBytes(sumMetric('sizeBytes')), tone: 'warning' },
+])
+
+onMounted(() => void initialize())
+watch(sourceId, () => void initialize())
+
+async function initialize() {
+  errorMessage.value = ''
+  if (!databaseStore.sources.length) await databaseStore.refreshDiscovery()
+  const current = source.value
+  if (!current || catalog.value || current.requiresLogin) return
+  await reloadCatalog()
+}
+
+async function reloadCatalog() {
+  if (!source.value) return
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    await databaseStore.loadCatalog(sourceId.value)
+  } catch (error) {
+    errorMessage.value = error instanceof NcpApiError ? error.message : '数据库信息读取失败。'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function connectDatabase() {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    await databaseStore.connect(sourceId.value, credentialDraft.value)
+  } catch (error) {
+    errorMessage.value = error instanceof NcpApiError ? error.message : '数据库连接失败，请检查登录信息。'
+  } finally {
+    loading.value = false
+  }
+}
+
+function sumMetric(metric: 'rowCount' | 'sizeBytes') {
+  if (!catalog.value) return null
+  const values = catalog.value.tables.map((table) => table[metric]).filter((value): value is number => typeof value === 'number')
+  return values.length ? values.reduce((total, value) => total + value, 0) : null
+}
+
+function formatNumber(value: number | null) {
+  return value === null ? '—' : new Intl.NumberFormat('zh-CN').format(value)
+}
+
+function formatBytes(value: number | null | undefined) {
+  if (value === null || value === undefined) return '—'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`
+  return `${(value / 1024 ** 3).toFixed(1)} GB`
+}
+
+function primaryKeys(table: DatabaseTable) {
+  return table.columns.filter((column) => column.primaryKey).map((column) => column.name)
+}
+</script>
+
+<template>
+  <div v-if="source" class="page workspace-page database-detail">
+    <WorkspaceHeader :title="source.name" :description="`${source.project} · ${source.module}`" :icon="Database" :stats="stats">
+      <template #actions>
+        <ElButton tag="a" href="/databases"><ArrowLeft :size="16" />返回数据库</ElButton>
+        <ElButton v-if="catalog" :loading="loading" @click="reloadCatalog"><RefreshCw :size="16" />刷新结构</ElButton>
+      </template>
+      <template #tools>
+        <ElInput v-if="catalog" v-model="query" class="table-search" clearable placeholder="搜索数据表" aria-label="搜索数据表">
+          <template #prefix><Search :size="17" /></template>
+        </ElInput>
+        <div class="source-summary">
+          <span><strong>{{ source.driver === 'sqlite' ? 'SQLite' : source.driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL' }}</strong>数据库类型</span>
+          <span><strong>{{ source.category === 'system' ? '系统数据库' : '项目数据库' }}</strong>来源分类</span>
+          <span :title="source.location"><strong>{{ source.location }}</strong>连接位置</span>
+        </div>
+      </template>
+    </WorkspaceHeader>
+
+    <div v-if="errorMessage" class="database-error" role="alert">{{ errorMessage }}</div>
+
+    <section v-if="source.requiresLogin && !catalog" class="connection-panel panel">
+      <div class="connection-intro">
+        <span><Database :size="24" /></span>
+        <div><h2>连接数据库</h2><p>实例和所属项目已自动识别；输入数据库账号后加载数据表。登录框不会再自动弹出。</p></div>
+      </div>
+      <ElForm class="connection-form" label-position="top" @submit.prevent="connectDatabase">
+        <ElFormItem label="用户名"><ElInput v-model="credentialDraft.username" autocomplete="username" /></ElFormItem>
+        <ElFormItem label="密码"><ElInput v-model="credentialDraft.password" type="password" show-password autocomplete="current-password" /></ElFormItem>
+        <ElFormItem label="数据库名"><ElInput v-model="credentialDraft.database" :placeholder="source.defaultDatabase || '请输入数据库名称'" /></ElFormItem>
+        <ElButton type="primary" :loading="loading" @click="connectDatabase">连接并读取数据表<ArrowRight :size="16" /></ElButton>
+      </ElForm>
+    </section>
+
+    <template v-else-if="catalog">
+      <div class="section-heading">
+        <div><h2>数据表</h2><p>{{ tables.length }} 张数据表，点击进入独立工作台</p></div>
+        <span>数据、结构与 SQL 定义在数据表页面集中管理</span>
+      </div>
+
+      <section class="table-list panel" aria-label="数据表列表">
+        <div class="table-list__head">
+          <span>数据表</span><span>字段</span><span>数据行</span><span>大小</span><span>创建时间</span><span>操作</span>
+        </div>
+        <RouterLink
+          v-for="table in tables"
+          :key="`${table.schema}.${table.name}`"
+          class="table-row"
+          :to="{
+            name: 'database-table',
+            params: { sourceId, table: table.name },
+            query: { sourceName: source.name, tableName: table.name, schema: table.schema || undefined },
+          }"
+        >
+          <div class="table-name">
+            <span><Table2 :size="18" /></span>
+            <div><strong>{{ table.name }}</strong><small>{{ table.schema || 'SQLite' }} · {{ table.type === 'view' ? '视图' : '数据表' }}</small></div>
+          </div>
+          <span><Columns3 :size="14" />{{ table.columns.length }}</span>
+          <span><Rows3 :size="14" />{{ formatNumber(table.rowCount ?? null) }}</span>
+          <span><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
+          <span>{{ table.createdAt || '—' }}</span>
+          <span class="open-table">打开<ArrowRight :size="16" /></span>
+          <div class="table-row__details">
+            <ElTag v-for="key in primaryKeys(table)" :key="key" effect="plain" size="small"><KeyRound :size="12" />{{ key }}</ElTag>
+            <span v-if="table.definition"><FileCode2 :size="13" />包含 SQL 定义</span>
+          </div>
+        </RouterLink>
+        <div v-if="!tables.length" class="empty-table">没有匹配的数据表。</div>
+      </section>
+    </template>
+  </div>
+
+  <div v-else class="page"><section class="missing-source panel"><Database :size="26" /><h1>数据库来源不存在</h1><a href="/databases">返回数据库列表</a></section></div>
+</template>
+
+<style scoped>
+.table-search { width:min(340px,36vw); }
+.source-summary { display:flex; min-width:0; align-items:center; justify-content:flex-end; gap:18px; }
+.source-summary span { display:grid; min-width:0; color:var(--ncp-text-subtle); font-size:.7rem; }
+.source-summary strong { max-width:220px; overflow:hidden; color:var(--ncp-text); font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.database-error { padding:10px 13px; border:1px solid rgba(212,81,93,.2); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.82rem; }
+.connection-panel { display:grid; grid-template-columns:minmax(280px,.8fr) minmax(420px,1.2fr); gap:28px; padding:24px; }
+.connection-intro { display:flex; align-items:flex-start; gap:13px; padding:4px; }
+.connection-intro>span { display:grid; width:50px; height:50px; flex:0 0 auto; place-items:center; border-radius:14px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
+.connection-intro h2 { margin:2px 0 5px; font-size:1.05rem; }.connection-intro p { margin:0; color:var(--ncp-text-subtle); font-size:.82rem; line-height:1.65; }
+.connection-form { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+.connection-form :deep(.el-form-item:last-of-type) { grid-column:1/-1; }
+.connection-form>.el-button { grid-column:1/-1; min-height:42px; justify-self:end; }
+.section-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; min-height:42px; }
+.section-heading h2 { margin:0; font-size:1rem; }.section-heading p,.section-heading>span { margin:3px 0 0; color:var(--ncp-text-subtle); font-size:.78rem; }
+.table-list { overflow:hidden; }
+.table-list__head,.table-row { display:grid; grid-template-columns:minmax(230px,1.5fr) 90px 110px 110px 160px 74px; align-items:center; gap:12px; }
+.table-list__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.74rem; font-weight:700; }
+.table-row { position:relative; min-height:78px; padding:0 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-muted); font-size:.78rem; transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
+.table-row:hover { background:var(--ncp-surface-hover); box-shadow:inset 3px 0 0 var(--ncp-primary); }
+.table-row>span { display:flex; align-items:center; gap:5px; }
+.table-name { display:flex; min-width:0; align-items:center; gap:10px; }
+.table-name>span { display:grid; width:38px; height:38px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
+.table-name>div { display:grid; min-width:0; }.table-name strong { overflow:hidden; color:var(--ncp-text); font-size:.84rem; text-overflow:ellipsis; white-space:nowrap; }.table-name small { color:var(--ncp-text-subtle); font-size:.7rem; }
+.open-table { justify-content:flex-end; color:var(--ncp-primary-strong); font-weight:700; }
+.table-row__details { position:absolute; left:64px; bottom:6px; display:flex; align-items:center; gap:6px; color:var(--ncp-text-subtle); font-size:.67rem; }
+.table-row__details :deep(.el-tag) { gap:3px; }
+.empty-table { padding:40px; color:var(--ncp-text-subtle); text-align:center; }
+.missing-source { display:grid; min-height:260px; place-content:center; gap:8px; text-align:center; }.missing-source h1{margin:0;font-size:1rem}.missing-source a{color:var(--ncp-primary-strong)}
+@media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 75px 95px 95px 120px 64px;gap:8px}.source-summary span:nth-child(2){display:none}}
+@media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{display:none}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:108px; padding:14px}.table-row>span:nth-of-type(3),.table-row>span:nth-of-type(4){display:none}.table-row__details{position:static; grid-column:1/-1}.section-heading>span{display:none}}
+@media(max-width:560px){.connection-form{grid-template-columns:1fr}.connection-form :deep(.el-form-item:last-of-type),.connection-form>.el-button{grid-column:1}.connection-form>.el-button{width:100%}}
+</style>
