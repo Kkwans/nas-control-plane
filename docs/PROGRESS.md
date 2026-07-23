@@ -33,7 +33,9 @@ Windows 同步副本的 Go 编译、Vue 类型检查和生产构建均已通过�
 
 - Root Agent systemd 单元已启用并以 root 身份运行。
 - Compose 项目已注册到 UGREEN Docker 项目列表，项目名为 `nas-control-plane`。
-- 部署前运行版本为 `nas-control-plane:2026.7.23-v2`；本轮目标版本为 `nas-control-plane:2026.7.23-v3`。
+- 当前运行版本为 `nas-control-plane:2026.7.23-v3`（ARM64）；Server 与 Console 均为 healthy，控制台 `/healthz` 返回 200。
+- `/api/v1/system/events` 已通过 Nginx 到达 Server；未登录请求返回 401，表明实时端点已启用且保持认证保护。
+- UGREEN Docker 项目记录仍为运行状态，Compose 路径和两个容器的关联数量正确。
 - 旧镜像保留，用于必要时回滚。
 
 ## 后续路线
