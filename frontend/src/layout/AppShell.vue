@@ -46,10 +46,10 @@ const primaryNavigation: NavigationItem[] = [
   { label: '总览', to: '/', icon: LayoutDashboard },
   { label: '服务入口', to: '/services', icon: Boxes },
   { label: 'Docker 管理', to: '/docker', icon: Container },
+  { label: '数据库', to: '/databases', icon: Database },
   { label: '系统信息', to: '/system', icon: Info },
 ]
 const plannedNavigation: NavigationItem[] = [
-  { label: '数据库', icon: Database, planned: true },
   { label: '监控', icon: Gauge, planned: true },
   { label: '日志中心', icon: FileClock, planned: true },
   { label: '终端', icon: TerminalSquare, planned: true },

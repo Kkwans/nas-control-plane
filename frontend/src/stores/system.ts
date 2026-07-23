@@ -14,7 +14,7 @@ import {
 export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unavailable'
 export type RealtimeState = 'connecting' | 'streaming' | 'polling' | 'offline'
 
-const FALLBACK_INTERVAL = 15_000
+const FALLBACK_INTERVAL = 5_000
 const MAX_HISTORY_POINTS = 60
 
 export interface ResourceSample {
@@ -86,11 +86,12 @@ export const useSystemStore = defineStore('system', () => {
 
   function startRealtime() {
     if (eventSource) return
+    void refresh({ includeCapabilities: false })
+    startFallbackPolling()
     realtimeState.value = 'connecting'
     eventSource = new EventSource('/api/v1/system/events')
     eventSource.onopen = () => {
       realtimeState.value = 'streaming'
-      stopFallbackPolling()
     }
     eventSource.addEventListener('snapshot', () => {
       realtimeState.value = 'streaming'

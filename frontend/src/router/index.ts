@@ -29,6 +29,12 @@ const router = createRouter({
       meta: { title: '系统信息' },
     },
     {
+      path: '/databases',
+      name: 'databases',
+      component: () => import('@/views/DatabaseView.vue'),
+      meta: { title: '数据库' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },
