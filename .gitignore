@@ -28,3 +28,5 @@
 # Editor and operating-system files
 .DS_Store
 Thumbs.db
+.syncthing.*.tmp
+~syncthing~*.tmp
