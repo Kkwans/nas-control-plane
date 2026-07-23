@@ -1,0 +1,4 @@
+# Only the release binary is required for this image build.
+*
+!bin/
+!bin/ncp-server-linux-arm64

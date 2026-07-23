@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+# Offline deployment fallback: copy a locally verified ARM64 Server binary.
+FROM alpine:3.23
+
+ARG NCP_SERVER_BINARY=bin/ncp-server-linux-arm64
+
+COPY --chown=1000:100 ${NCP_SERVER_BINARY} /usr/local/bin/ncp-server
+
+USER 1000:100
+
+ENTRYPOINT ["/usr/local/bin/ncp-server"]
