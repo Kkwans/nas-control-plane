@@ -154,6 +154,78 @@ func ReadContainerLogs(ctx context.Context, socketPath string, request docker.Co
 	return decodeContainerLogsResult(response)
 }
 
+func ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInventory, error) {
+	if err := ctx.Err(); err != nil {
+		return docker.ImageInventory{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ImageInventory{}, err
+	}
+	defer connection.Close()
+
+	response, err := NewAgentDockerImagesServiceClient(connection).ListImages(ctx, &emptypb.Empty{})
+	if err != nil {
+		return docker.ImageInventory{}, rpcError(err)
+	}
+	var inventory docker.ImageInventory
+	if err := decodeDashboardResponse(response, &inventory); err != nil {
+		return docker.ImageInventory{}, err
+	}
+	if inventory.CollectedAt.IsZero() || inventory.Images == nil {
+		return docker.ImageInventory{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image inventory is incomplete"))
+	}
+	return inventory, nil
+}
+
+func PullDockerImage(ctx context.Context, socketPath string, request docker.ImagePullRequest) (docker.ImagePullResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ImagePullResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"reference": request.Reference})
+	if err != nil {
+		return docker.ImagePullResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerImagesServiceClient(connection).PullImage(ctx, payload)
+	if err != nil {
+		return docker.ImagePullResult{}, rpcError(err)
+	}
+	var result docker.ImagePullResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ImagePullResult{}, err
+	}
+	if result.Reference == "" || !result.Completed {
+		return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull result is incomplete"))
+	}
+	return result, nil
+}
+
+func RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ImageRemoveResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"image_id": request.ImageID})
+	if err != nil {
+		return docker.ImageRemoveResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerImagesServiceClient(connection).RemoveImage(ctx, payload)
+	if err != nil {
+		return docker.ImageRemoveResult{}, rpcError(err)
+	}
+	var result docker.ImageRemoveResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ImageRemoveResult{}, err
+	}
+	if result.ImageID == "" || !result.Removed {
+		return docker.ImageRemoveResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image remove result is incomplete"))
+	}
+	return result, nil
+}
+
 func dialSocket(socketPath string) (*grpc.ClientConn, error) {
 	if socketPath == "" {
 		return nil, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))

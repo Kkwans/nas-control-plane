@@ -22,6 +22,7 @@ const (
 	defaultTerminalPOCTimeout = 5 * time.Minute
 	defaultRealtimeInterval   = 5 * time.Second
 	defaultDatabaseTimeout    = 20 * time.Second
+	defaultDockerImageTimeout = 10 * time.Minute
 )
 
 type AgentClient interface {
@@ -43,6 +44,12 @@ type DatabaseAgentClient interface {
 	DeleteDatabaseRow(context.Context, string, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+type DockerImageAgentClient interface {
+	ListDockerImages(context.Context, string) (docker.ImageInventory, error)
+	PullDockerImage(context.Context, string, docker.ImagePullRequest) (docker.ImagePullResult, error)
+	RemoveDockerImage(context.Context, string, docker.ImageRemoveRequest) (docker.ImageRemoveResult, error)
+}
+
 type ControlStore interface {
 	Preferences(context.Context, int64) (controlstore.Preferences, error)
 	UpdatePreferences(context.Context, int64, controlstore.Preferences) (controlstore.Preferences, error)
@@ -55,6 +62,7 @@ type ControlStore interface {
 type Config struct {
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
+	DockerImages        DockerImageAgentClient
 	AgentSocketPath     string
 	AgentTimeout        time.Duration
 	Auth                Authenticator
@@ -85,6 +93,7 @@ type ServiceListResponse struct {
 type handler struct {
 	agent               AgentClient
 	databaseAgent       DatabaseAgentClient
+	dockerImages        DockerImageAgentClient
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
@@ -122,6 +131,18 @@ func (socketAgentClient) ReadContainerLogs(ctx context.Context, socketPath strin
 	return agentsocket.ReadContainerLogs(ctx, socketPath, request)
 }
 
+func (socketAgentClient) ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInventory, error) {
+	return agentsocket.ListDockerImages(ctx, socketPath)
+}
+
+func (socketAgentClient) PullDockerImage(ctx context.Context, socketPath string, request docker.ImagePullRequest) (docker.ImagePullResult, error) {
+	return agentsocket.PullDockerImage(ctx, socketPath, request)
+}
+
+func (socketAgentClient) RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {
+	return agentsocket.RemoveDockerImage(ctx, socketPath, request)
+}
+
 func (socketAgentClient) DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
 	return agentsocket.DiscoverDatabases(ctx, socketPath)
 }
@@ -157,6 +178,9 @@ func NewHandler(config Config) http.Handler {
 	if config.DatabaseAgent == nil {
 		config.DatabaseAgent = socketAgentClient{}
 	}
+	if config.DockerImages == nil {
+		config.DockerImages = socketAgentClient{}
+	}
 	if config.AgentSocketPath == "" {
 		config.AgentSocketPath = agentsocket.DefaultSocketPath
 	}
@@ -176,6 +200,7 @@ func NewHandler(config Config) http.Handler {
 	api := &handler{
 		agent:               config.Agent,
 		databaseAgent:       config.DatabaseAgent,
+		dockerImages:        config.DockerImages,
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
@@ -203,6 +228,9 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
+			protected.Get("/docker/images", api.dockerImageInventory)
+			protected.Post("/docker/images/pull", api.pullDockerImage)
+			protected.Post("/docker/images/remove", api.removeDockerImage)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)

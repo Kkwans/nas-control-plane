@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// AgentDockerImagesService exposes explicit Docker image operations to NCP Server.
+service AgentDockerImagesService {
+  rpc ListImages(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc PullImage(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RemoveImage(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

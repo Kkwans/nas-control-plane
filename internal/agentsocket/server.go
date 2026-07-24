@@ -38,6 +38,7 @@ type SocketConfig struct {
 	DashboardProvider DashboardProvider
 	DockerControl     DockerControlProvider
 	DockerLogs        DockerLogsProvider
+	DockerImages      DockerImageProvider
 	Database          DatabaseProvider
 }
 
@@ -68,6 +69,13 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			return coded("AGENT_DOCKER_LOGS_INITIALIZATION_FAILED", err)
 		}
 	}
+	dockerImages := config.DockerImages
+	if dockerImages == nil {
+		dockerImages, err = docker.NewLiveImageManager()
+		if err != nil {
+			return coded("AGENT_DOCKER_IMAGES_INITIALIZATION_FAILED", err)
+		}
+	}
 	databaseProvider := config.Database
 	if databaseProvider == nil {
 		databaseProvider = ncpdatabase.NewManager()
@@ -78,6 +86,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
 	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
+	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager

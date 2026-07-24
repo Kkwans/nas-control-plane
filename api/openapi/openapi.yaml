@@ -289,6 +289,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/images:
+    get:
+      operationId: listDockerImages
+      summary: List local Docker images
+      tags: [docker]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Local Docker image inventory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerImageInventory'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/images/pull:
+    post:
+      operationId: pullDockerImage
+      summary: Pull an explicitly tagged image from Docker Hub or another registry
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerImagePullRequest'
+      responses:
+        '200':
+          description: Image pull completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerImagePullResult'
+        '400':
+          description: Invalid image reference or pull failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/images/remove:
+    post:
+      operationId: removeDockerImage
+      summary: Remove one local image without force
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerImageRemoveRequest'
+      responses:
+        '200':
+          description: Image removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerImageRemoveResult'
+        '409':
+          description: Image is in use or could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/services:
     get:
       operationId: listServices
@@ -672,6 +741,62 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DockerProject'
+    DockerImageInventory:
+      type: object
+      required: [collectedAt, images]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerImageSummary'
+    DockerImageSummary:
+      type: object
+      required: [id, repoTags, repoDigests, sizeBytes, createdAt, containers]
+      properties:
+        id: { type: string }
+        repoTags:
+          type: array
+          items: { type: string }
+        repoDigests:
+          type: array
+          items: { type: string }
+        sizeBytes: { type: integer, minimum: 0 }
+        createdAt:
+          type: string
+          format: date-time
+        containers: { type: integer }
+    DockerImagePullRequest:
+      type: object
+      required: [reference]
+      properties:
+        reference:
+          type: string
+          minLength: 1
+          maxLength: 512
+          examples: [nginx:alpine]
+    DockerImagePullResult:
+      type: object
+      required: [reference, completed]
+      properties:
+        reference: { type: string }
+        completed: { type: boolean }
+    DockerImageRemoveRequest:
+      type: object
+      required: [imageId]
+      properties:
+        imageId:
+          type: string
+          minLength: 1
+          maxLength: 512
+    DockerImageRemoveResult:
+      type: object
+      required: [imageId, removed]
+      properties:
+        imageId: { type: string }
+        removed: { type: boolean }
     DockerEngineInfo:
       type: object
       properties:
