@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
+import { requestPreferences, updatePreferences } from '@/api/control'
 import {
   NcpApiError,
   requestCapabilities,
@@ -14,7 +15,7 @@ import {
 export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unavailable'
 export type RealtimeState = 'connecting' | 'streaming' | 'polling' | 'offline'
 
-const FALLBACK_INTERVAL = 5_000
+const DEFAULT_REFRESH_INTERVAL_SECONDS = 5
 const MAX_HISTORY_POINTS = 60
 
 export interface ResourceSample {
@@ -35,6 +36,7 @@ export const useSystemStore = defineStore('system', () => {
   const errorCode = ref<string | null>(null)
   const isRefreshing = ref(false)
   const resourceHistory = ref<ResourceSample[]>([])
+  const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
 
   let eventSource: EventSource | null = null
   let fallbackTimer: number | null = null
@@ -52,6 +54,20 @@ export const useSystemStore = defineStore('system', () => {
       await refreshPromise
     } finally {
       refreshPromise = null
+    }
+  }
+
+  async function loadPreferences() {
+    const preferences = await requestPreferences()
+    refreshIntervalSeconds.value = preferences.refreshIntervalSeconds
+  }
+
+  async function setRefreshInterval(seconds: number) {
+    const preferences = await updatePreferences({ refreshIntervalSeconds: seconds })
+    refreshIntervalSeconds.value = preferences.refreshIntervalSeconds
+    if (eventSource) {
+      stopRealtime()
+      startRealtime()
     }
   }
 
@@ -86,12 +102,12 @@ export const useSystemStore = defineStore('system', () => {
 
   function startRealtime() {
     if (eventSource) return
-    void refresh({ includeCapabilities: false })
     startFallbackPolling()
     realtimeState.value = 'connecting'
-    eventSource = new EventSource('/api/v1/system/events')
+    eventSource = new EventSource(`/api/v1/system/events?interval=${refreshIntervalSeconds.value}`)
     eventSource.onopen = () => {
       realtimeState.value = 'streaming'
+      stopFallbackPolling()
     }
     eventSource.addEventListener('snapshot', () => {
       realtimeState.value = 'streaming'
@@ -114,7 +130,7 @@ export const useSystemStore = defineStore('system', () => {
     if (fallbackTimer !== null) return
     fallbackTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh({ includeCapabilities: false })
-    }, FALLBACK_INTERVAL)
+    }, refreshIntervalSeconds.value * 1_000)
   }
 
   function stopFallbackPolling() {
@@ -167,9 +183,12 @@ export const useSystemStore = defineStore('system', () => {
     errorCode,
     isRefreshing,
     resourceHistory,
+    refreshIntervalSeconds,
     deviceName,
     lastUpdated,
     refresh,
+    loadPreferences,
+    setRefreshInterval,
     startRealtime,
     stopRealtime,
     clear,

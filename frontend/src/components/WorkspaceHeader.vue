@@ -33,7 +33,10 @@ defineProps<{
       </dl>
       <div class="workspace-header__actions"><slot name="actions" /></div>
     </div>
-    <div v-if="$slots.tools" class="workspace-toolbar">
+    <div v-if="$slots.filters || $slots.tools" class="workspace-toolbar">
+      <div class="workspace-filters">
+        <slot name="filters" />
+      </div>
       <div class="workspace-tools">
         <slot name="tools" />
       </div>
@@ -105,6 +108,7 @@ p { margin: 4px 0 0; color: var(--ncp-text-subtle); font-size: .84rem; line-heig
   border-top: 1px solid var(--ncp-line);
   background: #f8fafc;
 }
+.workspace-filters,
 .workspace-tools,
 .workspace-header__actions {
   display: flex;
@@ -112,8 +116,10 @@ p { margin: 4px 0 0; color: var(--ncp-text-subtle); font-size: .84rem; line-heig
   align-items: center;
   gap: 8px;
 }
-.workspace-tools { flex: 1; justify-content: flex-end; }
+.workspace-filters { justify-content: flex-start; }
+.workspace-tools { margin-left: auto; justify-content: flex-end; }
 .workspace-header__actions:empty,
+.workspace-filters:empty,
 .workspace-tools:empty { display: none; }
 .workspace-header__actions :deep(.el-button),
 .workspace-toolbar :deep(.el-button) {
@@ -153,12 +159,13 @@ p { margin: 4px 0 0; color: var(--ncp-text-subtle); font-size: .84rem; line-heig
   .workspace-stats { grid-column: 1 / -1; }
   .workspace-stats { width: 100%; }
   .workspace-stat { min-width: 0; flex: 1; }
-  .workspace-tools { width: 100%; justify-content: stretch; }
+  .workspace-tools { min-width: min(360px, 45vw); }
 }
 @media (max-width: 640px) {
   .workspace-header__main { grid-template-columns: 1fr; min-height: 0; gap: 13px; padding: 13px; }
   .workspace-stats { grid-column: 1; }
-  .workspace-toolbar { align-items: stretch; }
+  .workspace-toolbar { align-items: stretch; flex-direction:column; gap:8px; }
+  .workspace-filters,
   .workspace-tools,
   .workspace-header__actions { width: 100%; }
   .workspace-header__actions { grid-column: 1; justify-content: stretch; }
@@ -166,6 +173,6 @@ p { margin: 4px 0 0; color: var(--ncp-text-subtle); font-size: .84rem; line-heig
   .workspace-stat { padding: 0 10px; }
   .workspace-stat:first-child { padding-left: 2px; }
   .workspace-stat dt { font-size: .68rem; }
-  .workspace-tools { flex-wrap: wrap; }
+  .workspace-tools { min-width:0; margin-left:0; flex-wrap: wrap; }
 }
 </style>

@@ -118,8 +118,8 @@ function formatTimestamp(value: string | null) {
 
       <article class="panel info-panel">
         <header>
-          <div><h2>常用服务</h2><p>{{ publicServices.length }} 个项目具有公开入口</p></div>
-          <RouterLink to="/services">全部服务<ArrowUpRight :size="15" /></RouterLink>
+          <div><h2>常用站点</h2><p>{{ publicServices.length }} 个项目具有公开入口</p></div>
+          <RouterLink to="/sites">站点中心<ArrowUpRight :size="15" /></RouterLink>
         </header>
         <ul v-if="publicServices.length" class="service-list">
           <li v-for="project in publicServices.slice(0, 5)" :key="project.id">

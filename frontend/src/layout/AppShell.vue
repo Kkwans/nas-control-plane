@@ -22,6 +22,7 @@ import {
 } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
+import NcpLogo from '@/components/NcpLogo.vue'
 import type { RealtimeState, SystemConnectionState } from '@/stores/system'
 
 interface NavigationItem {
@@ -37,6 +38,7 @@ const props = defineProps({
   deviceName: { type: String, required: true },
   connectionState: { type: String as PropType<SystemConnectionState>, required: true },
   realtimeState: { type: String as PropType<RealtimeState>, required: true },
+  refreshIntervalSeconds: { type: Number, required: true },
   userName: { type: String, required: true },
   isRefreshing: { type: Boolean, default: false },
 })
@@ -47,16 +49,16 @@ const menuButton = ref<HTMLButtonElement | null>(null)
 
 const primaryNavigation: NavigationItem[] = [
   { label: '总览', to: '/', icon: LayoutDashboard },
-  { label: '服务入口', to: '/services', icon: Boxes },
+  { label: '站点中心', to: '/sites', icon: Boxes },
   { label: 'Docker 管理', to: '/docker', icon: Container },
   { label: '数据库', to: '/databases', icon: Database },
   { label: '系统信息', to: '/system', icon: Info },
+  { label: '系统设置', to: '/settings', icon: Settings },
 ]
 const plannedNavigation: NavigationItem[] = [
   { label: '监控', icon: Gauge, planned: true },
   { label: '日志中心', icon: FileClock, planned: true },
   { label: '终端', icon: TerminalSquare, planned: true },
-  { label: '系统设置', icon: Settings, planned: true },
 ]
 
 const routeTitle = computed(() => String(route.meta.title ?? 'NAS 管理面板'))
@@ -74,8 +76,8 @@ const breadcrumbs = computed(() => {
 })
 const realtimeLabel = computed(() => {
   if (props.connectionState === 'unavailable') return '数据暂不可用'
-  if (props.realtimeState === 'streaming') return '实时更新'
-  if (props.realtimeState === 'polling') return '轮询更新'
+  if (props.realtimeState === 'streaming') return `实时更新 · ${props.refreshIntervalSeconds} 秒`
+  if (props.realtimeState === 'polling') return `轮询更新 · ${props.refreshIntervalSeconds} 秒`
   if (props.realtimeState === 'connecting') return '正在连接'
   return props.connectionState === 'connected' ? '数据已同步' : '等待数据'
 })
@@ -112,7 +114,7 @@ onBeforeUnmount(() => {
     <aside id="mobile-primary-navigation" :class="['app-sidebar', { 'app-sidebar--open': mobileNavigationOpen }]" aria-label="主导航">
       <div class="sidebar-brand-row">
         <RouterLink class="brand" to="/" aria-label="NAS 管理面板首页">
-          <span class="brand__mark" aria-hidden="true">N</span>
+          <NcpLogo :size="38" />
           <span class="brand__text"><strong>NAS 管理面板</strong><small>{{ deviceName }}</small></span>
         </RouterLink>
         <button class="sidebar-close" type="button" aria-label="关闭主菜单" @click="setMobileNavigation(false, true)">
@@ -203,7 +205,6 @@ onBeforeUnmount(() => {
 .app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: rgba(255,255,255,.98); }
 .sidebar-brand-row { display: flex; align-items: center; }
 .brand { display: flex; min-width: 0; flex: 1; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px; border-radius: 11px; }
-.brand__mark { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 11px; background: linear-gradient(145deg, #337be8, #1d61cf); box-shadow: 0 8px 20px rgba(36,104,216,.22); color: #fff; font-size: 1rem; font-weight: 800; }
 .brand__text { display: grid; gap: 1px; min-width: 0; }
 .brand__text strong { overflow: hidden; color: var(--ncp-text); font-size: .88rem; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
 .brand__text small { overflow: hidden; color: var(--ncp-text-subtle); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }

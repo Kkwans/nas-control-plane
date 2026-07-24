@@ -13,7 +13,7 @@ body {
   overflow-x: hidden;
   background: var(--ncp-canvas);
   color: var(--ncp-text);
-  font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  font-family: 'Manrope Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI Variable', sans-serif;
   font-size: 15px;
   font-synthesis: none;
   line-height: 1.6;

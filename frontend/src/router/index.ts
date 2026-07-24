@@ -11,10 +11,14 @@ const router = createRouter({
       meta: { title: '总览' },
     },
     {
-      path: '/services',
-      name: 'services',
+      path: '/sites',
+      name: 'sites',
       component: () => import('@/views/ServicesView.vue'),
-      meta: { title: '服务入口' },
+      meta: { title: '站点中心' },
+    },
+    {
+      path: '/services',
+      redirect: '/sites',
     },
     {
       path: '/docker',
@@ -45,6 +49,12 @@ const router = createRouter({
       name: 'database-detail',
       component: () => import('@/views/DatabaseDetailView.vue'),
       meta: { title: '数据库详情' },
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/SettingsView.vue'),
+      meta: { title: '系统设置' },
     },
     {
       path: '/:pathMatch(.*)*',

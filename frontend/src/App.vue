@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -13,6 +13,11 @@ import { useSystemStore } from './stores/system'
 const router = useRouter()
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
+let sessionStartPromise: Promise<void> | null = null
+
+watch(() => authStore.isAuthenticated, (authenticated) => {
+  if (authenticated) void startAuthenticatedSession()
+})
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -27,14 +32,28 @@ onBeforeUnmount(() => {
 async function initialize() {
   await authStore.refresh()
   if (authStore.isAuthenticated) {
-    await systemStore.refresh()
-    systemStore.startRealtime()
+    await startAuthenticatedSession()
   }
 }
 
 async function handleAuthenticated() {
-  await systemStore.refresh()
-  systemStore.startRealtime()
+  await startAuthenticatedSession()
+}
+
+function startAuthenticatedSession() {
+  if (sessionStartPromise) return sessionStartPromise
+  sessionStartPromise = (async () => {
+    try {
+      await systemStore.loadPreferences()
+    } catch {
+      // 偏好读取失败不应阻塞首次实时数据加载。
+    }
+    await systemStore.refresh()
+    systemStore.startRealtime()
+  })()
+  return sessionStartPromise.finally(() => {
+    sessionStartPromise = null
+  })
 }
 
 async function handleRefresh() {
@@ -73,6 +92,7 @@ function handleVisibilityChange() {
       :device-name="systemStore.deviceName"
       :connection-state="systemStore.connectionState"
       :realtime-state="systemStore.realtimeState"
+      :refresh-interval-seconds="systemStore.refreshIntervalSeconds"
       :user-name="authStore.user?.username ?? 'root'"
       :is-refreshing="systemStore.isRefreshing"
       @refresh="handleRefresh"

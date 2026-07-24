@@ -2,6 +2,10 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
+  requestDatabaseProjectPreferences,
+  updateDatabaseProjectPreference,
+} from '@/api/control'
+import {
   discoverDatabases,
   loadDatabaseCatalog,
   type DatabaseCatalog,
@@ -10,21 +14,9 @@ import {
   type DatabaseSource,
 } from '@/api/database'
 
-const ARCHIVED_PROJECTS_KEY = 'ncp.database.archived-projects.v1'
-
 export function databaseProjectKey(source: DatabaseSource) {
   const project = source.project?.trim() || source.module?.trim() || '未关联项目'
   return `${source.category}:${project}`
-}
-
-function readArchivedProjectKeys() {
-  if (typeof window === 'undefined') return []
-  try {
-    const value = JSON.parse(window.localStorage.getItem(ARCHIVED_PROJECTS_KEY) ?? '[]')
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
 }
 
 export const useDatabaseStore = defineStore('database', () => {
@@ -33,7 +25,7 @@ export const useDatabaseStore = defineStore('database', () => {
   const credentials = ref<Record<string, DatabaseCredentials>>({})
   const loading = ref(false)
   const collectedAt = ref('')
-  const archivedProjectKeys = ref<string[]>(readArchivedProjectKeys())
+  const archivedProjectKeys = ref<string[]>([])
 
   const systemCount = computed(() => sources.value.filter((source) => source.category === 'system').length)
   const projectCount = computed(() => sources.value.filter((source) => source.category === 'project').length)
@@ -54,18 +46,32 @@ export const useDatabaseStore = defineStore('database', () => {
     return archivedProjectKeys.value.includes(projectKey)
   }
 
-  function setProjectArchived(projectKey: string, archived: boolean) {
+  async function loadProjectPreferences() {
+    const preferences = await requestDatabaseProjectPreferences()
+    archivedProjectKeys.value = preferences.filter((item) => item.archived).map((item) => item.projectKey)
+  }
+
+  async function setProjectArchived(projectKey: string, archived: boolean) {
+    const previous = archivedProjectKeys.value
     const keys = new Set(archivedProjectKeys.value)
     if (archived) keys.add(projectKey)
     else keys.delete(projectKey)
     archivedProjectKeys.value = [...keys]
-    window.localStorage.setItem(ARCHIVED_PROJECTS_KEY, JSON.stringify(archivedProjectKeys.value))
+    try {
+      await updateDatabaseProjectPreference({ projectKey, archived })
+    } catch (error) {
+      archivedProjectKeys.value = previous
+      throw error
+    }
   }
 
   async function refreshDiscovery() {
     loading.value = true
     try {
-      const result = await discoverDatabases()
+      const [result] = await Promise.all([
+        discoverDatabases(),
+        loadProjectPreferences(),
+      ])
       sources.value = result.sources
       collectedAt.value = result.collectedAt
     } finally {
@@ -104,6 +110,7 @@ export const useDatabaseStore = defineStore('database', () => {
     source,
     connection,
     isProjectArchived,
+    loadProjectPreferences,
     setProjectArchived,
     refreshDiscovery,
     loadCatalog,

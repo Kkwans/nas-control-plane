@@ -100,12 +100,14 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 <template>
   <div class="page workspace-page docker-page">
     <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、端口和运行状态" :icon="Boxes" :stats="stats">
-      <template #tools>
+      <template #filters>
         <div class="state-filter" aria-label="Docker 项目状态筛选">
           <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: stateFilter === item.value }" @click="stateFilter = item.value as StateFilter">
             {{ item.label }}
           </button>
         </div>
+      </template>
+      <template #tools>
         <ElInput v-model="query" class="docker-search" clearable placeholder="搜索项目或工作目录" aria-label="搜索 Docker 项目">
           <template #prefix><Search :size="17" /></template>
         </ElInput>

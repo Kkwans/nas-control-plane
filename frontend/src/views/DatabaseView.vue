@@ -12,7 +12,7 @@ import {
   Search,
   Server,
 } from '@lucide/vue'
-import { ElButton, ElInput, ElTag, ElTooltip } from 'element-plus'
+import { ElButton, ElInput, ElMessage, ElTag, ElTooltip } from 'element-plus'
 
 import type { DatabaseDriver, DatabaseSource } from '@/api/database'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -91,6 +91,16 @@ function driverLabel(driver: DatabaseDriver) {
 function driverIcon(source: DatabaseSource) {
   return source.driver === 'sqlite' ? HardDrive : source.category === 'system' ? Server : Database
 }
+
+async function toggleArchive(group: DatabaseProjectGroup) {
+  const archived = !databaseStore.isProjectArchived(group.key)
+  try {
+    await databaseStore.setProjectArchived(group.key, archived)
+    ElMessage.success(archived ? `已归档 ${group.name}` : `已恢复 ${group.name}`)
+  } catch {
+    ElMessage.error('归档状态保存失败')
+  }
+}
 </script>
 
 <template>
@@ -99,12 +109,14 @@ function driverIcon(source: DatabaseSource) {
       <template #actions>
         <ElButton :loading="databaseStore.loading" @click="refreshDiscovery"><RefreshCw :size="16" />重新发现</ElButton>
       </template>
-      <template #tools>
+      <template #filters>
         <div class="source-filter" aria-label="数据库来源筛选">
           <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'project', label: '项目' }, { value: 'system', label: '系统' }, { value: 'archived', label: '已归档' }]" :key="item.value" type="button" :class="{ active: sourceFilter === item.value }" @click="sourceFilter = item.value as SourceFilter">
             {{ item.label }}
           </button>
         </div>
+      </template>
+      <template #tools>
         <ElInput v-model="query" class="database-search" clearable placeholder="搜索数据库、项目或模块" aria-label="搜索数据库">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
@@ -125,7 +137,7 @@ function driverIcon(source: DatabaseSource) {
             {{ group.category === 'system' ? '系统项目' : '用户项目' }}
           </ElTag>
           <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复后将在默认列表显示' : '归档后从默认列表隐藏'" placement="top">
-            <button class="archive-button" type="button" @click="databaseStore.setProjectArchived(group.key, !databaseStore.isProjectArchived(group.key))">
+            <button class="archive-button" type="button" @click="toggleArchive(group)">
               <ArchiveRestore v-if="databaseStore.isProjectArchived(group.key)" :size="16" />
               <Archive v-else :size="16" />
               {{ databaseStore.isProjectArchived(group.key) ? '恢复' : '归档' }}

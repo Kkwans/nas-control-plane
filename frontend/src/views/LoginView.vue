@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { ArrowRight, KeyRound, LoaderCircle, RotateCw, ShieldCheck } from '@lucide/vue'
 
 import { NcpApiError } from '@/api/system'
+import NcpLogo from '@/components/NcpLogo.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const emit = defineEmits<{
@@ -54,7 +55,7 @@ async function submit() {
     <div class="access-page__ambient" aria-hidden="true"></div>
     <section class="access-panel" aria-labelledby="access-title">
       <div class="access-brand">
-        <span class="access-brand__mark" aria-hidden="true">N</span>
+        <NcpLogo :size="38" />
         <span>
           <strong>NAS CONTROL PLANE</strong>
           <small>ROOT OPERATOR CONSOLE</small>
@@ -173,20 +174,6 @@ async function submit() {
   display: flex;
   align-items: center;
   gap: 11px;
-}
-
-.access-brand__mark {
-  display: grid;
-  width: 35px;
-  height: 35px;
-  place-items: center;
-  border-radius: 11px;
-  background: linear-gradient(145deg, #2869dc, #1a4aa8);
-  box-shadow: 0 8px 18px rgba(31, 92, 197, 0.22);
-  color: #fff;
-  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
-  font-size: 0.88rem;
-  font-weight: 800;
 }
 
 .access-brand strong,
