@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ArrowDown, ArrowUp, ArrowUpRight, Boxes, Cpu, Gauge, HardDrive, MemoryStick, Server } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
@@ -8,26 +8,18 @@ import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrend
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { deriveOverviewState, formatBytes, formatOneDecimal, formatUptime, totalStorage, usagePercent } from '@/domain/overview'
+import { useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
 
 const systemStore = useSystemStore()
+const sitesStore = useSitesStore()
 const hostName = window.location.hostname
 const overviewState = computed(() => deriveOverviewState(systemStore.summary, systemStore.inventory))
 const storage = computed(() => totalStorage(systemStore.summary))
 const projects = computed(() => systemStore.services)
 const runningProjects = computed(() => projects.value.filter((project) => project.state === 'running').length)
 const timestamps = computed(() => systemStore.resourceHistory.map((sample) => sample.timestamp))
-const publicServices = computed(() => {
-  const inventory = systemStore.inventory
-  if (!inventory) return []
-  return projects.value.map((project) => {
-    const ports = inventory.containers
-      .filter((container) => container.projectId === project.id)
-      .flatMap((container) => container.ports)
-      .filter((port) => port.publicPort > 0)
-    return { ...project, ports: [...new Set(ports.map((port) => port.publicPort))] }
-  }).filter((project) => project.ports.length)
-})
+const publicServices = computed(() => sitesStore.visibleSites)
 const headerStats = computed<WorkspaceStat[]>(() => [
   { label: '运行项目', value: `${runningProjects.value}/${projects.value.length}`, tone: 'success' },
   { label: '运行时间', value: systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' },
@@ -66,6 +58,10 @@ function formatTimestamp(value: string | null) {
   const date = new Date(value)
   return Number.isNaN(date.valueOf()) ? '刚刚' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
 }
+
+onMounted(() => {
+  void sitesStore.refresh()
+})
 </script>
 
 <template>
@@ -124,7 +120,7 @@ function formatTimestamp(value: string | null) {
         <ul v-if="publicServices.length" class="service-list">
           <li v-for="project in publicServices.slice(0, 5)" :key="project.id">
             <span><Boxes :size="16" /></span>
-            <div><strong>{{ project.name }}</strong><small>{{ project.runningCount }}/{{ project.containerCount }} 运行</small></div>
+            <div><strong>{{ project.name }}</strong><small>{{ project.state === 'running' ? '运行中' : '已停止' }} · {{ project.ports.length }} 个入口</small></div>
             <ElTooltip v-for="port in project.ports.slice(0, 2)" :key="port" :content="`打开端口 ${port}`">
               <a :href="`http://${hostName}:${port}`" target="_blank" rel="noreferrer">{{ port }}</a>
             </ElTooltip>
