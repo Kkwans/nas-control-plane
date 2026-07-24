@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Boxes, ChevronRight, ExternalLink, FileText, LoaderCircle, Search } from '@lucide/vue'
+import { Boxes, Box, ChevronRight, ExternalLink, FileText, Images, LoaderCircle, Search } from '@lucide/vue'
 import { ElDrawer, ElInput, ElTooltip } from 'element-plus'
 
 import { NcpApiError, requestContainerAction, requestContainerLogs, type ContainerAction, type ContainerLogsResult, type DockerProject } from '@/api/system'
+import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
+import DockerImagePanel from '@/components/DockerImagePanel.vue'
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -12,6 +14,8 @@ import { projectStateTone } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 
 type StateFilter = 'all' | DockerProject['state']
+type ContainerStateFilter = 'all' | 'running' | 'stopped'
+type DockerViewMode = 'projects' | 'containers' | 'images'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +23,8 @@ const systemStore = useSystemStore()
 const hostName = window.location.hostname
 const query = ref('')
 const stateFilter = ref<StateFilter>('all')
+const containerStateFilter = ref<ContainerStateFilter>('all')
+const activeView = ref<DockerViewMode>('projects')
 const actionPending = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const logOpen = ref(false)
@@ -49,6 +55,11 @@ const stats = computed<WorkspaceStat[]>(() => [
   { label: '停止容器', value: inventory.value?.engine.containersStopped ?? '—', tone: 'warning' },
   { label: '本地镜像', value: inventory.value?.engine.images ?? '—' },
 ])
+const searchPlaceholder = computed(() => {
+  if (activeView.value === 'containers') return '搜索容器、镜像或所属项目'
+  if (activeView.value === 'images') return '搜索镜像名称、标签或 ID'
+  return '搜索项目或工作目录'
+})
 
 function containersFor(projectId: string) {
   return inventory.value?.containers.filter((container) => container.projectId === projectId) ?? []
@@ -99,16 +110,26 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 
 <template>
   <div class="page workspace-page docker-page">
-    <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、端口和运行状态" :icon="Boxes" :stats="stats">
+    <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、镜像和运行状态" :icon="Boxes" :stats="stats">
       <template #filters>
-        <div class="state-filter" aria-label="Docker 项目状态筛选">
+        <div class="docker-view-tabs" aria-label="Docker 管理视图">
+          <button type="button" :class="{ active: activeView === 'projects' }" @click="activeView = 'projects'"><Boxes :size="16" />项目</button>
+          <button type="button" :class="{ active: activeView === 'containers' }" @click="activeView = 'containers'"><Box :size="16" />容器</button>
+          <button type="button" :class="{ active: activeView === 'images' }" @click="activeView = 'images'"><Images :size="16" />镜像</button>
+        </div>
+        <div v-if="activeView === 'projects'" class="state-filter" aria-label="Docker 项目状态筛选">
           <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: stateFilter === item.value }" @click="stateFilter = item.value as StateFilter">
+            {{ item.label }}
+          </button>
+        </div>
+        <div v-else-if="activeView === 'containers'" class="state-filter" aria-label="Docker 容器状态筛选">
+          <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: containerStateFilter === item.value }" @click="containerStateFilter = item.value as ContainerStateFilter">
             {{ item.label }}
           </button>
         </div>
       </template>
       <template #tools>
-        <ElInput v-model="query" class="docker-search" clearable placeholder="搜索项目或工作目录" aria-label="搜索 Docker 项目">
+        <ElInput v-model="query" class="docker-search" clearable :placeholder="searchPlaceholder" aria-label="搜索 Docker 资源">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
       </template>
@@ -118,7 +139,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
     </div>
 
-    <section class="docker-table panel" aria-label="Docker 项目列表">
+    <section v-if="activeView === 'projects'" class="docker-table panel" aria-label="Docker 项目列表">
       <div class="docker-table__head">
         <span>项目</span><span>状态</span><span>容器</span><span>公开端口</span><span>工作目录</span><span>操作</span>
       </div>
@@ -146,7 +167,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
       <div v-if="!projects.length" class="table-empty">没有匹配的 Docker 项目。</div>
     </section>
 
-    <section class="docker-mobile-list" aria-label="Docker 项目列表">
+    <section v-if="activeView === 'projects'" class="docker-mobile-list" aria-label="Docker 项目列表">
       <article v-for="project in projects" :key="project.id" class="mobile-project panel interactive-surface">
         <header>
           <div class="project-name">
@@ -164,6 +185,22 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
       </article>
       <p v-if="!projects.length" class="table-empty panel">没有匹配的 Docker 项目。</p>
     </section>
+
+    <DockerContainerPanel
+      v-else-if="activeView === 'containers'"
+      :containers="inventory?.containers ?? []"
+      :query="query"
+      :state-filter="containerStateFilter"
+      :action-pending="actionPending"
+      @action="performAction"
+      @logs="openLogs"
+    />
+
+    <DockerImagePanel
+      v-else
+      :query="query"
+      :containers="inventory?.containers ?? []"
+    />
 
     <ProjectDetailDrawer
       v-model="detailOpen"
@@ -188,6 +225,9 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 
 <style scoped>
 .docker-search { width: min(320px, 38vw); }
+.docker-view-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: #fff; }
+.docker-view-tabs button { display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .78rem; font-weight: 720; }
+.docker-view-tabs button.active { background: var(--ncp-primary); box-shadow: 0 4px 12px rgba(36,104,216,.16); color: #fff; }
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
@@ -227,6 +267,8 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 @media(max-width: 767px) {
   .docker-table { display: none; }
   .docker-mobile-list { display: grid; gap: 10px; }
+  .docker-view-tabs { width: 100%; }
+  .docker-view-tabs button { flex: 1; min-height: 40px; justify-content: center; }
   .state-filter { order: 2; width: 100%; }
   .state-filter button { flex: 1; min-height: 40px; }
   .mobile-project { display: grid; gap: 13px; padding: 15px; }

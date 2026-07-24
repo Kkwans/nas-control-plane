@@ -1,0 +1,151 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { FileText, Play, RotateCcw, Square, Box } from '@lucide/vue'
+import { ElTooltip } from 'element-plus'
+
+import type { ContainerAction, DockerInventory } from '@/api/system'
+import StatusPill from '@/components/StatusPill.vue'
+
+type DockerContainer = DockerInventory['containers'][number]
+type ContainerStateFilter = 'all' | 'running' | 'stopped'
+
+const props = defineProps<{
+  containers: DockerContainer[]
+  query: string
+  stateFilter: ContainerStateFilter
+  actionPending: string | null
+}>()
+
+const emit = defineEmits<{
+  action: [containerId: string, action: ContainerAction]
+  logs: [container: { id: string; name: string }]
+}>()
+
+const filteredContainers = computed(() => {
+  const term = props.query.trim().toLowerCase()
+  return props.containers.filter((container) => {
+    const running = container.state === 'running'
+    const matchesState =
+      props.stateFilter === 'all' ||
+      (props.stateFilter === 'running' && running) ||
+      (props.stateFilter === 'stopped' && !running)
+    const matchesQuery =
+      !term ||
+      container.name.toLowerCase().includes(term) ||
+      container.image.toLowerCase().includes(term) ||
+      container.projectName.toLowerCase().includes(term)
+    return matchesState && matchesQuery
+  })
+})
+
+function publicPorts(container: DockerContainer) {
+  return container.ports.filter((port) => port.publicPort > 0)
+}
+
+function pending(containerId: string, action: ContainerAction) {
+  return props.actionPending === `${containerId}:${action}`
+}
+</script>
+
+<template>
+  <section class="container-panel panel" aria-label="Docker 容器列表">
+    <div class="container-table__head">
+      <span>容器</span><span>状态</span><span>所属项目</span><span>镜像</span><span>公开端口</span><span>操作</span>
+    </div>
+    <div v-for="container in filteredContainers" :key="container.id" class="container-row">
+      <div class="container-name">
+        <span><Box :size="18" /></span>
+        <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
+      </div>
+      <div><StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" /><small class="status-detail">{{ container.status }}</small></div>
+      <span class="cell-ellipsis">{{ container.projectName || '独立容器' }}</span>
+      <span class="cell-ellipsis mono">{{ container.image }}</span>
+      <div class="port-list">
+        <span v-for="port in publicPorts(container).slice(0, 3)" :key="`${port.publicPort}/${port.protocol}`">{{ port.publicPort }}</span>
+        <small v-if="!publicPorts(container).length">无公开端口</small>
+      </div>
+      <div class="container-actions">
+        <ElTooltip v-if="container.state !== 'running'" content="启动容器" placement="top">
+          <button type="button" :disabled="Boolean(actionPending)" aria-label="启动容器" @click="emit('action', container.id, 'start')">
+            <Play :size="16" /><span v-if="pending(container.id, 'start')" class="action-dot"></span>
+          </button>
+        </ElTooltip>
+        <ElTooltip v-else content="停止容器" placement="top">
+          <button class="danger" type="button" :disabled="Boolean(actionPending)" aria-label="停止容器" @click="emit('action', container.id, 'stop')">
+            <Square :size="15" /><span v-if="pending(container.id, 'stop')" class="action-dot"></span>
+          </button>
+        </ElTooltip>
+        <ElTooltip content="重启容器" placement="top">
+          <button type="button" :disabled="Boolean(actionPending) || container.state !== 'running'" aria-label="重启容器" @click="emit('action', container.id, 'restart')">
+            <RotateCcw :size="16" />
+          </button>
+        </ElTooltip>
+        <ElTooltip content="查看容器日志" placement="top">
+          <button type="button" aria-label="查看容器日志" @click="emit('logs', container)">
+            <FileText :size="16" />
+          </button>
+        </ElTooltip>
+      </div>
+    </div>
+    <div v-if="!filteredContainers.length" class="table-empty">没有匹配的 Docker 容器。</div>
+  </section>
+
+  <section class="container-mobile-list" aria-label="Docker 容器列表">
+    <article v-for="container in filteredContainers" :key="container.id" class="container-card panel">
+      <header>
+        <div class="container-name">
+          <span><Box :size="18" /></span>
+          <div><strong>{{ container.name }}</strong><small>{{ container.projectName || '独立容器' }}</small></div>
+        </div>
+        <StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" />
+      </header>
+      <dl>
+        <div><dt>镜像</dt><dd>{{ container.image }}</dd></div>
+        <div><dt>状态</dt><dd>{{ container.status }}</dd></div>
+        <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.publicPort).join('、') || '无' }}</dd></div>
+      </dl>
+      <div class="mobile-actions">
+        <button v-if="container.state !== 'running'" type="button" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'start')"><Play :size="16" />启动</button>
+        <button v-else class="danger" type="button" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'stop')"><Square :size="15" />停止</button>
+        <button type="button" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')"><RotateCcw :size="16" />重启</button>
+        <button type="button" @click="emit('logs', container)"><FileText :size="16" />日志</button>
+      </div>
+    </article>
+    <p v-if="!filteredContainers.length" class="table-empty panel">没有匹配的 Docker 容器。</p>
+  </section>
+</template>
+
+<style scoped>
+.container-panel { overflow: hidden; }
+.container-table__head,.container-row { display:grid; grid-template-columns:minmax(180px,1.15fr) 130px minmax(120px,.8fr) minmax(170px,1.1fr) 150px 168px; align-items:center; gap:12px; }
+.container-table__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.75rem; font-weight:730; }
+.container-row { min-height:72px; padding:0 16px; border-top:1px solid var(--ncp-line); background:#fff; color:var(--ncp-text-muted); font-size:.76rem; transition:background-color var(--ncp-duration-fast); }
+.container-row:hover { background:var(--ncp-surface-hover); }
+.container-name { display:flex; min-width:0; align-items:center; gap:9px; }
+.container-name>span { display:grid; width:36px; height:36px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
+.container-name>div { display:grid; min-width:0; gap:1px; }
+.container-name strong,.cell-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.container-name strong { color:var(--ncp-text); font-size:.82rem; }
+.container-name small,.status-detail { color:var(--ncp-text-subtle); font-size:.62rem; }
+.container-row>div:nth-child(2) { display:grid; justify-items:start; gap:4px; }
+.mono { font-family:'JetBrains Mono Variable',monospace; font-size:.65rem; }
+.port-list { display:flex; align-items:center; gap:5px; }
+.port-list span { padding:4px 6px; border-radius:6px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); font-family:'JetBrains Mono Variable',monospace; font-size:.59rem; }
+.port-list small { color:var(--ncp-text-subtle); font-size:.62rem; }
+.container-actions { display:flex; justify-content:flex-end; gap:5px; }
+.container-actions button { position:relative; display:grid; width:34px; height:34px; place-items:center; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-primary-strong); transition:transform var(--ncp-duration-fast),background-color var(--ncp-duration-fast); }
+.container-actions button:hover:not(:disabled) { transform:translateY(-1px); background:var(--ncp-primary-soft); }
+.container-actions button.danger { color:var(--ncp-danger-strong); }
+.container-actions button.danger:hover:not(:disabled) { background:var(--ncp-danger-soft); }
+.container-actions button:disabled { cursor:not-allowed; opacity:.42; }
+.action-dot { position:absolute; right:3px; bottom:3px; width:5px; height:5px; border-radius:50%; background:currentColor; animation:pulse 1s infinite; }
+.table-empty { padding:36px; color:var(--ncp-text-subtle); font-size:.72rem; text-align:center; }
+.container-mobile-list { display:none; }
+@keyframes pulse { 50% { opacity:.25; } }
+@media(max-width:1100px){.container-table__head,.container-row{grid-template-columns:minmax(170px,1fr) 120px minmax(110px,.7fr) minmax(150px,1fr) 120px 152px;gap:8px}.container-actions{gap:3px}}
+@media(max-width:767px){
+  .container-panel{display:none}.container-mobile-list{display:grid;gap:10px}.container-card{display:grid;gap:13px;padding:15px}.container-card header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .container-card dl{display:grid;gap:8px;margin:0;padding:11px;border-radius:10px;background:var(--ncp-surface-quiet)}.container-card dl>div{display:grid;grid-template-columns:68px minmax(0,1fr);gap:8px}.container-card dt{color:var(--ncp-text-subtle);font-size:.65rem}.container-card dd{overflow:hidden;margin:0;color:var(--ncp-text-muted);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}
+  .mobile-actions{display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.mobile-actions button{display:flex;min-height:42px;align-items:center;justify-content:center;gap:5px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.68rem;font-weight:720}.mobile-actions button.danger{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.mobile-actions button:disabled{opacity:.42}
+}
+</style>

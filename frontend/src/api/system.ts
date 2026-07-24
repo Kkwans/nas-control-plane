@@ -134,6 +134,30 @@ export interface ContainerLogsResult {
   entries: ContainerLogEntry[]
 }
 
+export interface DockerImageSummary {
+  id: string
+  repoTags: string[]
+  repoDigests: string[]
+  sizeBytes: number
+  createdAt: string
+  containers: number
+}
+
+export interface DockerImageInventory {
+  collectedAt: string
+  images: DockerImageSummary[]
+}
+
+export interface DockerImagePullResult {
+  reference: string
+  completed: boolean
+}
+
+export interface DockerImageRemoveResult {
+  imageId: string
+  removed: boolean
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -224,6 +248,44 @@ export async function requestContainerLogs(
     isContainerLogsResult,
     fetcher,
     'DOCKER_LOGS_RESPONSE_INVALID',
+  )
+}
+
+export async function requestDockerImages(fetcher: typeof fetch = fetch): Promise<DockerImageInventory> {
+  return requestJson('/api/v1/docker/images', {}, isDockerImageInventory, fetcher, 'DOCKER_IMAGE_LIST_RESPONSE_INVALID')
+}
+
+export async function pullDockerImage(
+  reference: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerImagePullResult> {
+  return requestJson(
+    '/api/v1/docker/images/pull',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference }),
+    },
+    isDockerImagePullResult,
+    fetcher,
+    'DOCKER_IMAGE_PULL_RESPONSE_INVALID',
+  )
+}
+
+export async function removeDockerImage(
+  imageId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerImageRemoveResult> {
+  return requestJson(
+    '/api/v1/docker/images/remove',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageId }),
+    },
+    isDockerImageRemoveResult,
+    fetcher,
+    'DOCKER_IMAGE_REMOVE_RESPONSE_INVALID',
   )
 }
 
@@ -365,4 +427,32 @@ function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
         typeof entry.message === 'string',
     )
   )
+}
+
+function isDockerImageInventory(value: unknown): value is DockerImageInventory {
+  return (
+    isRecord(value) &&
+    typeof value.collectedAt === 'string' &&
+    Array.isArray(value.images) &&
+    value.images.every(
+      (image) =>
+        isRecord(image) &&
+        typeof image.id === 'string' &&
+        Array.isArray(image.repoTags) &&
+        image.repoTags.every((tag) => typeof tag === 'string') &&
+        Array.isArray(image.repoDigests) &&
+        image.repoDigests.every((digest) => typeof digest === 'string') &&
+        typeof image.sizeBytes === 'number' &&
+        typeof image.createdAt === 'string' &&
+        typeof image.containers === 'number',
+    )
+  )
+}
+
+function isDockerImagePullResult(value: unknown): value is DockerImagePullResult {
+  return isRecord(value) && typeof value.reference === 'string' && value.completed === true
+}
+
+function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveResult {
+  return isRecord(value) && typeof value.imageId === 'string' && value.removed === true
 }
