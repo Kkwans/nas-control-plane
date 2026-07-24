@@ -44,7 +44,8 @@ function publicPorts(container: DockerContainer) {
     .filter(
       (port, index, ports) =>
         ports.findIndex(
-          (candidate) => candidate.publicPort === port.publicPort,
+          (candidate) =>
+            Number(candidate.publicPort) === Number(port.publicPort),
         ) === index,
     )
 }
