@@ -16,6 +16,7 @@ import (
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/auth"
+	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	"github.com/Kkwans/nas-control-plane/internal/httpapi"
 )
 
@@ -100,6 +101,11 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		return err
 	}
 	defer authService.Close()
+	controlStore, err := controlstore.Open(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer controlStore.Close()
 
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
@@ -109,6 +115,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		Handler: httpapi.NewHandler(httpapi.Config{
 			AgentSocketPath:     *agentSocketPath,
 			Auth:                authService,
+			ControlStore:        controlStore,
 			SessionCookieSecure: *secureCookie,
 			TerminalPOCEnabled:  *terminalPOC,
 		}),

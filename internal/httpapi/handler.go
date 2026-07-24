@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -42,12 +43,22 @@ type DatabaseAgentClient interface {
 	DeleteDatabaseRow(context.Context, string, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+type ControlStore interface {
+	Preferences(context.Context, int64) (controlstore.Preferences, error)
+	UpdatePreferences(context.Context, int64, controlstore.Preferences) (controlstore.Preferences, error)
+	DatabaseProjectPreferences(context.Context) ([]controlstore.DatabaseProjectPreference, error)
+	SetDatabaseProjectPreference(context.Context, controlstore.DatabaseProjectPreference) (controlstore.DatabaseProjectPreference, error)
+	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
+	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
+}
+
 type Config struct {
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
 	AgentSocketPath     string
 	AgentTimeout        time.Duration
 	Auth                Authenticator
+	ControlStore        ControlStore
 	SessionCookieSecure bool
 	Terminal            TerminalClient
 	TerminalPOCEnabled  bool
@@ -77,6 +88,7 @@ type handler struct {
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
+	controlStore        ControlStore
 	sessionCookieSecure bool
 	terminal            TerminalClient
 	terminalEnabled     bool
@@ -167,6 +179,7 @@ func NewHandler(config Config) http.Handler {
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
+		controlStore:        config.ControlStore,
 		sessionCookieSecure: config.SessionCookieSecure,
 		terminal:            config.Terminal,
 		terminalEnabled:     config.TerminalPOCEnabled,
@@ -187,11 +200,17 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/agent-status", api.agentStatus)
 			protected.Get("/system/summary", api.systemSummary)
 			protected.Get("/system/events", api.systemEvents)
+			protected.Get("/preferences", api.preferences)
+			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
+			protected.Get("/sites", api.sites)
+			protected.Put("/sites/{projectID}", api.updateSite)
 			protected.Get("/databases/discovery", api.databaseDiscovery)
+			protected.Get("/databases/project-preferences", api.databaseProjectPreferences)
+			protected.Put("/databases/project-preferences", api.updateDatabaseProjectPreference)
 			protected.Post("/databases/catalog", api.databaseCatalog)
 			protected.Post("/databases/query", api.databaseQuery)
 			protected.Post("/databases/rows", api.databaseRows)
@@ -276,7 +295,8 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 	response.Header().Set("Connection", "keep-alive")
 	response.Header().Set("X-Accel-Buffering", "no")
 	response.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(response, "retry: 5000\n\n")
+	interval := realtimeInterval(request)
+	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
 	flusher.Flush()
 
 	sendSnapshot := func() bool {
@@ -295,7 +315,7 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 	if !sendSnapshot() {
 		return
 	}
-	ticker := time.NewTicker(defaultRealtimeInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -307,6 +327,18 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 			}
 		}
 	}
+}
+
+func realtimeInterval(request *http.Request) time.Duration {
+	raw := request.URL.Query().Get("interval")
+	if raw == "" {
+		return defaultRealtimeInterval
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds < controlstore.MinRefreshIntervalSeconds || seconds > controlstore.MaxRefreshIntervalSeconds {
+		return defaultRealtimeInterval
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (api *handler) dockerInventory(response http.ResponseWriter, request *http.Request) {

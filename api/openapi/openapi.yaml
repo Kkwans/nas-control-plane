@@ -108,6 +108,82 @@ paths:
       responses:
         '204':
           description: Session cleared
+  /api/v1/preferences:
+    get:
+      operationId: getUserPreferences
+      summary: Get preferences for the current Root user
+      tags: [settings]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Current user preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+    put:
+      operationId: updateUserPreferences
+      summary: Update preferences for the current Root user
+      tags: [settings]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreferences'
+      responses:
+        '200':
+          description: Updated user preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+        '400':
+          description: Invalid preference value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/project-preferences:
+    get:
+      operationId: listDatabaseProjectPreferences
+      summary: List persisted database project preferences
+      tags: [databases]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Database project preferences
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DatabaseProjectPreference'
+    put:
+      operationId: updateDatabaseProjectPreference
+      summary: Persist one database project preference
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseProjectPreference'
+      responses:
+        '200':
+          description: Updated database project preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseProjectPreference'
+        '400':
+          description: Invalid database project preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/system/capabilities:
     get:
       operationId: getSystemCapabilities
@@ -168,6 +244,16 @@ paths:
   /api/v1/system/events:
     get:
       operationId: streamSystemEvents
+      parameters:
+        - name: interval
+          in: query
+          required: false
+          description: Snapshot interval in seconds
+          schema:
+            type: integer
+            minimum: 2
+            maximum: 300
+            default: 5
       summary: 订阅控制台实时刷新事件
       tags: [system]
       security: [{RootSession: []}]
@@ -218,6 +304,55 @@ paths:
                 $ref: '#/components/schemas/ServiceListResponse'
         '503':
           description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites:
+    get:
+      operationId: listSites
+      summary: List automatically discovered NAS websites with editable profiles
+      tags: [sites]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Sites derived from live Docker inventory and saved profiles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteListResponse'
+        '503':
+          description: Root Agent, Docker Engine, or site store is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites/{projectID}:
+    put:
+      operationId: updateSiteProfile
+      summary: Update editable metadata for one discovered NAS website
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteProfileInput'
+      responses:
+        '200':
+          description: Updated site profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteProfileInput'
+        '400':
+          description: Invalid site profile
           content:
             application/json:
               schema:
@@ -319,6 +454,77 @@ paths:
           description: 未启用 P0 终端通道
 components:
   schemas:
+    UserPreferences:
+      type: object
+      required: [refreshIntervalSeconds]
+      properties:
+        refreshIntervalSeconds:
+          type: integer
+          minimum: 2
+          maximum: 300
+          default: 5
+    DatabaseProjectPreference:
+      type: object
+      required: [projectKey, archived]
+      properties:
+        projectKey:
+          type: string
+          minLength: 1
+          maxLength: 512
+        archived:
+          type: boolean
+    SiteProfileInput:
+      type: object
+      required: [projectId, name, description, iconUrl, category, primaryPort, hidden]
+      properties:
+        projectId:
+          type: string
+          minLength: 1
+          maxLength: 256
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 500
+        iconUrl:
+          type: string
+          maxLength: 2048
+        category:
+          type: string
+          maxLength: 64
+        primaryPort:
+          type: integer
+          minimum: 0
+          maximum: 65535
+        hidden:
+          type: boolean
+    Site:
+      allOf:
+        - $ref: '#/components/schemas/SiteProfileInput'
+        - type: object
+          required: [id, state, ports, source]
+          properties:
+            id: { type: string }
+            state: { type: string }
+            ports:
+              type: array
+              items: { type: integer, minimum: 1, maximum: 65535 }
+            source:
+              type: string
+              enum: [auto, edited]
+    SiteListResponse:
+      type: object
+      required: [collectedAt, sites]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+        sites:
+          type: array
+          items:
+            $ref: '#/components/schemas/Site'
     CredentialsRequest:
       type: object
       required: [username, password]
