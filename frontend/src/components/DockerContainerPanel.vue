@@ -39,7 +39,16 @@ const filteredContainers = computed(() => {
 })
 
 function publicPorts(container: DockerContainer) {
-  return container.ports.filter((port) => port.publicPort > 0)
+  return container.ports
+    .filter((port) => port.publicPort > 0)
+    .filter(
+      (port, index, ports) =>
+        ports.findIndex(
+          (candidate) =>
+            candidate.publicPort === port.publicPort &&
+            candidate.protocol === port.protocol,
+        ) === index,
+    )
 }
 
 function pending(containerId: string, action: ContainerAction) {
