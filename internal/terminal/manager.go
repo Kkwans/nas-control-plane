@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -24,9 +26,10 @@ const (
 )
 
 type StartRequest struct {
-	Target Target
-	Rows   uint16
-	Cols   uint16
+	Target      Target
+	ContainerID string
+	Rows        uint16
+	Cols        uint16
 }
 
 type SessionInfo struct {
@@ -181,8 +184,14 @@ func validateStartRequest(request StartRequest) error {
 	if err := ValidateTarget(request.Target); err != nil {
 		return err
 	}
+	request.ContainerID = strings.TrimSpace(request.ContainerID)
+	if request.Target == TargetContainer && !containerTargetPattern.MatchString(request.ContainerID) {
+		return coded("TERMINAL_CONTAINER_TARGET_REJECTED", errors.New("container target is invalid"))
+	}
 	return validateDimensions(request.Rows, request.Cols)
 }
+
+var containerTargetPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 func ValidateTarget(target Target) error {
 	if target != TargetHost && target != TargetContainer {

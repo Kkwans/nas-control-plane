@@ -17,7 +17,7 @@ func TestRunAgentServerRequiresSocketGroup(t *testing.T) {
 }
 
 func TestRunAgentServerRejectsAlternateSocketPathOutsideTerminalPOC(t *testing.T) {
-	err := runAgentServer(context.Background(), []string{"--socket-path", "/tmp/ncp-agent.sock"})
+	err := runAgentServer(context.Background(), []string{"--terminal-poc=false", "--socket-path", "/tmp/ncp-agent.sock"})
 	if agentsocket.ErrorCode(err) != "AGENT_SOCKET_PATH_POC_ONLY" {
 		t.Fatalf("错误码 = %q，期望 AGENT_SOCKET_PATH_POC_ONLY", agentsocket.ErrorCode(err))
 	}

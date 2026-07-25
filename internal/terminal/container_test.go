@@ -7,16 +7,15 @@ import (
 	"testing"
 )
 
-func TestContainerStarterRejectsUnlabelledTargetBeforeOpeningExec(t *testing.T) {
+func TestContainerStarterRejectsStoppedTargetBeforeOpeningExec(t *testing.T) {
 	gateway := &fakeContainerGateway{info: ContainerInfo{
 		ID:      "container-123",
-		Name:    protectedContainerName,
-		Labels:  map[string]string{"ncp.poc": "docker"},
-		Running: true,
+		Name:    "/project-web",
+		Running: false,
 	}}
 	starter := newContainerStarter(gateway)
 
-	_, err := starter.Start(context.Background(), StartRequest{Target: TargetContainer, Rows: 24, Cols: 80})
+	_, err := starter.Start(context.Background(), StartRequest{Target: TargetContainer, ContainerID: "project-web", Rows: 24, Cols: 80})
 
 	if ErrorCode(err) != "TERMINAL_CONTAINER_TARGET_REJECTED" {
 		t.Fatalf("error code = %q", ErrorCode(err))
@@ -26,15 +25,14 @@ func TestContainerStarterRejectsUnlabelledTargetBeforeOpeningExec(t *testing.T) 
 	}
 }
 
-func TestContainerStarterUsesProtectedTargetAndClosesAttachment(t *testing.T) {
+func TestContainerStarterUsesSelectedTargetAndClosesAttachment(t *testing.T) {
 	closed := false
 	closeWrite := false
 	var input bytes.Buffer
 	gateway := &fakeContainerGateway{
 		info: ContainerInfo{
 			ID:      "container-123",
-			Name:    protectedContainerName,
-			Labels:  map[string]string{"ncp.poc": protectedContainerLabel},
+			Name:    "/project-web",
 			Running: true,
 		},
 		attachment: ContainerAttachment{
@@ -47,7 +45,7 @@ func TestContainerStarterUsesProtectedTargetAndClosesAttachment(t *testing.T) {
 	}
 	starter := newContainerStarter(gateway)
 
-	session, err := starter.Start(context.Background(), StartRequest{Target: TargetContainer, Rows: 24, Cols: 80})
+	session, err := starter.Start(context.Background(), StartRequest{Target: TargetContainer, ContainerID: "project-web", Rows: 24, Cols: 80})
 	if err != nil {
 		t.Fatalf("start container terminal: %v", err)
 	}

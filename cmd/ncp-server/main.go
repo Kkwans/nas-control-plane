@@ -89,7 +89,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	agentSocketPath := flags.String("agent-socket", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径")
 	databasePath := flags.String("database", defaultDatabasePath, "SQLite 数据库路径")
 	secureCookie := flags.Bool("secure-cookie", false, "仅通过 HTTPS 发送登录 Cookie")
-	terminalPOC := flags.Bool("terminal-poc", false, "启用受控 P0 终端 WebSocket 通道")
+	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 WebSocket 通道")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

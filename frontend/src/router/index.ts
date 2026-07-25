@@ -63,6 +63,12 @@ const router = createRouter({
       meta: { title: '日志中心' },
     },
     {
+      path: '/terminal',
+      name: 'terminal',
+      component: () => import('@/views/TerminalView.vue'),
+      meta: { title: '终端' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),

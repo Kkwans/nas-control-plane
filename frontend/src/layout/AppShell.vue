@@ -56,11 +56,10 @@ const primaryNavigation: NavigationItem[] = [
   { label: '系统信息', to: '/system', icon: Info },
   { label: '监控', to: '/monitoring', icon: Gauge },
   { label: '日志中心', to: '/logs', icon: FileClock },
+  { label: '终端', to: '/terminal', icon: TerminalSquare },
   { label: '系统设置', to: '/settings', icon: Settings },
 ]
-const plannedNavigation: NavigationItem[] = [
-  { label: '终端', icon: TerminalSquare, planned: true },
-]
+const plannedNavigation: NavigationItem[] = []
 
 const routeTitle = computed(() => String(route.meta.title ?? 'NAS 管理面板'))
 const breadcrumbs = computed(() => {

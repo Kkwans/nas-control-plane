@@ -98,7 +98,7 @@ func runAgentServer(ctx context.Context, args []string) error {
 	flags.SetOutput(io.Discard)
 	socketGroup := flags.String("socket-group", "", "允许连接 Agent Socket 的 Server 组")
 	socketPath := flags.String("socket-path", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径；仅 P0 终端实测可覆写")
-	terminalPOC := flags.Bool("terminal-poc", false, "启用受控 P0 终端 Agent 服务")
+	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 Agent 服务")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

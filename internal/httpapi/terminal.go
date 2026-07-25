@@ -34,7 +34,7 @@ func (socketTerminalClient) Open(ctx context.Context, socketPath string) (Termin
 }
 
 func (api *handler) terminalWebSocket(response http.ResponseWriter, request *http.Request) {
-	target, err := websocketTarget(request)
+	target, containerID, err := websocketTarget(request)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "TERMINAL_TARGET_REJECTED", "终端目标不在当前验证范围内。")
 		return
@@ -61,10 +61,11 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 	defer stream.Close()
 
 	if err := stream.Send(terminal.Message{
-		Type:   terminal.MessageStart,
-		Target: target,
-		Rows:   initialTerminalRows,
-		Cols:   initialTerminalCols,
+		Type:        terminal.MessageStart,
+		Target:      target,
+		ContainerID: containerID,
+		Rows:        initialTerminalRows,
+		Cols:        initialTerminalCols,
 	}); err != nil {
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
@@ -105,14 +106,18 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 	}
 }
 
-func websocketTarget(request *http.Request) (terminal.Target, error) {
+func websocketTarget(request *http.Request) (terminal.Target, string, error) {
 	switch request.URL.Query().Get("target") {
 	case string(terminal.TargetHost):
-		return terminal.TargetHost, nil
+		return terminal.TargetHost, "", nil
 	case string(terminal.TargetContainer):
-		return terminal.TargetContainer, nil
+		containerID := request.URL.Query().Get("containerId")
+		if containerID == "" {
+			return "", "", errors.New("container id is required")
+		}
+		return terminal.TargetContainer, containerID, nil
 	default:
-		return "", errors.New("terminal target is invalid")
+		return "", "", errors.New("terminal target is invalid")
 	}
 }
 

@@ -16,6 +16,9 @@ func terminalMessageToStruct(message terminal.Message) (*structpb.Struct, error)
 	switch message.Type {
 	case terminal.MessageStart:
 		fields["target"] = string(message.Target)
+		if message.ContainerID != "" {
+			fields["containerId"] = message.ContainerID
+		}
 		fields["rows"] = message.Rows
 		fields["cols"] = message.Cols
 	case terminal.MessageStarted, terminal.MessageClosed:
@@ -67,6 +70,9 @@ func terminalMessageFromStruct(input *structpb.Struct) (terminal.Message, error)
 			return terminal.Message{}, err
 		}
 		message.Target = terminal.Target(target)
+		if containerID, ok := fields["containerId"].(string); ok {
+			message.ContainerID = containerID
+		}
 		message.Rows = rows
 		message.Cols = cols
 	case terminal.MessageInput, terminal.MessageOutput:
@@ -108,6 +114,7 @@ func terminalFieldsFor(messageType terminal.MessageType) map[string]struct{} {
 	switch messageType {
 	case terminal.MessageStart:
 		fields["target"] = struct{}{}
+		fields["containerId"] = struct{}{}
 		fields["rows"] = struct{}{}
 		fields["cols"] = struct{}{}
 	case terminal.MessageInput, terminal.MessageOutput:

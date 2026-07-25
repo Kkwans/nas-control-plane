@@ -739,8 +739,8 @@ paths:
   /ws/terminal:
     get:
       operationId: openTerminalPOCWebSocket
-      summary: 打开受控 P0 终端 WebSocket
-      description: 仅在 `ncp-server serve --terminal-poc` 显式启用；仅支持固定 host 或受标签保护的临时 container 目标，不接受命令、Shell、路径或容器 ID。
+      summary: 打开 NAS 主机或 Docker 容器终端 WebSocket
+      description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize 与 close 控制消息。
       tags: [terminal]
       security: [{RootSession: []}]
       parameters:
@@ -750,6 +750,14 @@ paths:
           schema:
             type: string
             enum: [host, container]
+        - name: containerId
+          in: query
+          required: false
+          description: target 为 container 时必填，只接受运行中容器的 ID 或名称。
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
       responses:
         '101':
           description: WebSocket 已切换协议。二进制帧承载终端输入/输出，文本帧承载 resize、close 与会话状态。
@@ -760,7 +768,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: 未启用 P0 终端通道
+          description: 终端通道未启用
 components:
   schemas:
     UserPreferences:

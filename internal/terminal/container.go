@@ -10,12 +10,7 @@ import (
 	"github.com/moby/moby/client"
 )
 
-const (
-	protectedContainerName  = "/ncp-p0-terminal-poc"
-	protectedContainerID    = "ncp-p0-terminal-poc"
-	protectedContainerLabel = "terminal"
-	localDockerHost         = "unix:///var/run/docker.sock"
-)
+const localDockerHost = "unix:///var/run/docker.sock"
 
 type ContainerInfo struct {
 	ID      string
@@ -59,12 +54,12 @@ func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Ses
 	if s.gateway == nil {
 		return nil, coded("TERMINAL_CONTAINER_UNAVAILABLE", errors.New("container gateway is required"))
 	}
-	info, err := s.gateway.Inspect(ctx, protectedContainerID)
+	info, err := s.gateway.Inspect(ctx, request.ContainerID)
 	if err != nil {
 		return nil, coded("TERMINAL_CONTAINER_TARGET_REJECTED", err)
 	}
-	if info.ID == "" || info.Name != protectedContainerName || !info.Running || info.Labels["ncp.poc"] != protectedContainerLabel {
-		return nil, coded("TERMINAL_CONTAINER_TARGET_REJECTED", errors.New("container is not the protected terminal POC target"))
+	if info.ID == "" || !info.Running {
+		return nil, coded("TERMINAL_CONTAINER_TARGET_REJECTED", errors.New("container is not running"))
 	}
 	attachment, err := s.gateway.Open(ctx, info.ID, request.Rows, request.Cols)
 	if err != nil {

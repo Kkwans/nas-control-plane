@@ -21,7 +21,7 @@ import (
 
 const (
 	defaultAgentTimeout       = 5 * time.Second
-	defaultTerminalPOCTimeout = 5 * time.Minute
+	defaultTerminalPOCTimeout = 30 * time.Minute
 	defaultRealtimeInterval   = 5 * time.Second
 	defaultDatabaseTimeout    = 20 * time.Second
 	defaultDockerImageTimeout = 10 * time.Minute

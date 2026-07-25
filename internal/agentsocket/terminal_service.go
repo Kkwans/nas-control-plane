@@ -33,7 +33,7 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if err != nil || start.Type != terminal.MessageStart {
 		return grpcstatus.Error(codes.InvalidArgument, "TERMINAL_START_INVALID")
 	}
-	opened, err := s.manager.Open(stream.Context(), terminal.StartRequest{Target: start.Target, Rows: start.Rows, Cols: start.Cols})
+	opened, err := s.manager.Open(stream.Context(), terminal.StartRequest{Target: start.Target, ContainerID: start.ContainerID, Rows: start.Rows, Cols: start.Cols})
 	if err != nil {
 		return terminalManagerError(err)
 	}

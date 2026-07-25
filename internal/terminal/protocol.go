@@ -14,10 +14,11 @@ const (
 
 // Message 是 Server 与 Agent 之间的受控终端流消息，不包含命令、Shell、路径或环境变量。
 type Message struct {
-	Type      MessageType
-	Target    Target
-	Rows      uint16
-	Cols      uint16
-	Data      []byte
-	SessionID string
+	Type        MessageType
+	Target      Target
+	ContainerID string
+	Rows        uint16
+	Cols        uint16
+	Data        []byte
+	SessionID   string
 }
