@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/struct.proto";
+
+// AgentComposeService exposes bounded Compose configuration operations.
+service AgentComposeService {
+  rpc ReadConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

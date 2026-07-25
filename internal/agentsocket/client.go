@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 
+	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
@@ -222,6 +223,60 @@ func RemoveDockerImage(ctx context.Context, socketPath string, request docker.Im
 	}
 	if result.ImageID == "" || !result.Removed {
 		return docker.ImageRemoveResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image remove result is incomplete"))
+	}
+	return result, nil
+}
+
+func ReadComposeConfig(ctx context.Context, socketPath string, request ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return ncpcompose.ProjectConfig{}, err
+	}
+	defer connection.Close()
+	files := make([]any, 0, len(request.ConfigFiles))
+	for _, path := range request.ConfigFiles {
+		files = append(files, path)
+	}
+	payload, err := structpb.NewStruct(map[string]any{
+		"project_id": request.ProjectID, "working_directory": request.WorkingDirectory, "config_files": files,
+	})
+	if err != nil {
+		return ncpcompose.ProjectConfig{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentComposeServiceClient(connection).ReadConfig(ctx, payload)
+	if err != nil {
+		return ncpcompose.ProjectConfig{}, rpcError(err)
+	}
+	var result ncpcompose.ProjectConfig
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return ncpcompose.ProjectConfig{}, err
+	}
+	if result.ProjectID == "" || result.Files == nil {
+		return ncpcompose.ProjectConfig{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose config response is incomplete"))
+	}
+	return result, nil
+}
+
+func ValidateComposeConfig(ctx context.Context, socketPath string, request ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return ncpcompose.ValidationResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"path": request.Path, "content": request.Content})
+	if err != nil {
+		return ncpcompose.ValidationResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentComposeServiceClient(connection).ValidateConfig(ctx, payload)
+	if err != nil {
+		return ncpcompose.ValidationResult{}, rpcError(err)
+	}
+	var result ncpcompose.ValidationResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return ncpcompose.ValidationResult{}, err
+	}
+	if !result.Valid || result.Services == nil {
+		return ncpcompose.ValidationResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose validation response is incomplete"))
 	}
 	return result, nil
 }

@@ -210,6 +210,26 @@ export interface DockerHubTagsResult {
   results: DockerHubTag[]
 }
 
+export interface ComposeFileSnapshot {
+  path: string
+  name: string
+  content: string
+  size: number
+}
+
+export interface ComposeProjectConfig {
+  projectId: string
+  workingDirectory: string
+  files: ComposeFileSnapshot[]
+  collectedAt: string
+}
+
+export interface ComposeValidationResult {
+  valid: boolean
+  services: string[]
+  normalized: string
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -409,6 +429,45 @@ export async function requestDockerHubTags(
     isDockerHubTagsResult,
     fetcher,
     'DOCKER_HUB_TAGS_RESPONSE_INVALID',
+  )
+}
+
+export async function readComposeConfig(
+  project: Pick<DockerProject, 'id' | 'workingDirectory' | 'configFiles'>,
+  fetcher: typeof fetch = fetch,
+): Promise<ComposeProjectConfig> {
+  return requestJson(
+    '/api/v1/docker/compose/config/read',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: project.id,
+        workingDirectory: project.workingDirectory,
+        configFiles: project.configFiles,
+      }),
+    },
+    isComposeProjectConfig,
+    fetcher,
+    'COMPOSE_CONFIG_RESPONSE_INVALID',
+  )
+}
+
+export async function validateComposeConfig(
+  path: string,
+  content: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ComposeValidationResult> {
+  return requestJson(
+    '/api/v1/docker/compose/config/validate',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
+    },
+    isComposeValidationResult,
+    fetcher,
+    'COMPOSE_VALIDATION_RESPONSE_INVALID',
   )
 }
 
@@ -624,4 +683,21 @@ function isDockerHubTagsResult(value: unknown): value is DockerHubTagsResult {
     typeof value.pageSize === 'number' &&
     Array.isArray(value.results) &&
     value.results.every(isDockerHubTag)
+}
+
+function isComposeProjectConfig(value: unknown): value is ComposeProjectConfig {
+  return isRecord(value) &&
+    typeof value.projectId === 'string' &&
+    typeof value.workingDirectory === 'string' &&
+    typeof value.collectedAt === 'string' &&
+    Array.isArray(value.files) &&
+    value.files.every((file) => isRecord(file) && typeof file.path === 'string' && typeof file.name === 'string' && typeof file.content === 'string' && typeof file.size === 'number')
+}
+
+function isComposeValidationResult(value: unknown): value is ComposeValidationResult {
+  return isRecord(value) &&
+    value.valid === true &&
+    Array.isArray(value.services) &&
+    value.services.every((service) => typeof service === 'string') &&
+    typeof value.normalized === 'string'
 }

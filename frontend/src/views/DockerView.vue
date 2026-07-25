@@ -7,6 +7,7 @@ import { ElDrawer, ElInput, ElTooltip } from 'element-plus'
 import { NcpApiError, requestContainerAction, requestContainerLogs, type ContainerAction, type ContainerLogsResult, type DockerProject } from '@/api/system'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
+import ComposeEditorDrawer from '@/components/ComposeEditorDrawer.vue'
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -31,6 +32,7 @@ const logOpen = ref(false)
 const logLoading = ref(false)
 const logContainerName = ref('')
 const logs = ref<ContainerLogsResult | null>(null)
+const composeEditorOpen = ref(false)
 
 const allProjects = computed(() => systemStore.services)
 const projects = computed(() => {
@@ -211,7 +213,9 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
       :action-pending="actionPending"
       @action="performAction"
       @logs="openLogs"
+      @compose="composeEditorOpen = true"
     />
+    <ComposeEditorDrawer v-model="composeEditorOpen" :project="selectedProject" />
 
     <ElDrawer v-model="logOpen" :title="`${logContainerName} · 容器日志`" size="min(760px, 100%)" append-to-body>
       <div v-if="logLoading" class="log-loading"><LoaderCircle class="spin" :size="18" />正在读取日志</div>

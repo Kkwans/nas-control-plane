@@ -5,6 +5,7 @@ import {
   Boxes,
   CalendarClock,
   CircleStop,
+  Code2,
   FileCode2,
   FileText,
   Folder,
@@ -37,6 +38,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   action: [containerId: string, action: ContainerAction]
   logs: [container: { id: string; name: string }]
+  compose: []
 }>()
 
 const isMobile = ref(window.innerWidth < 768)
@@ -102,6 +104,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
         <div><FileCode2 :size="17" /><span>Compose 配置</span><strong :title="project.configFiles.join('、')">{{ project.configFiles.length ? `${project.configFiles.length} 个配置文件` : '等待定位配置' }}</strong></div>
         <div><Boxes :size="17" /><span>容器状态</span><strong>{{ project.runningCount }}/{{ project.containerCount }} 正在运行</strong></div>
       </section>
+      <button v-if="project.kind === 'compose' && project.configFiles.length" class="compose-open-button" type="button" @click="emit('compose')">
+        <Code2 :size="17" /><span><strong>打开 Compose 配置工作台</strong><small>读取真实 YAML、切换配置文件并执行校验</small></span><ArrowUpRight :size="16" />
+      </button>
 
       <section class="detail-section">
         <header><div><h3>访问入口</h3><p>在新的浏览器标签页打开服务</p></div><span>{{ publicPorts.length }} 个端口</span></header>
@@ -179,6 +184,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .detail-overview svg { grid-row: 1/3; color: var(--ncp-primary-strong); }
 .detail-overview span { color: var(--ncp-text-subtle); font-size: .7rem; }
 .detail-overview strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.compose-open-button{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:54px;padding:9px 13px;border:1px solid rgba(36,104,216,.18);border-radius:11px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);text-align:left;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast)}.compose-open-button:hover{border-color:rgba(36,104,216,.38);transform:translateY(-1px)}.compose-open-button>span{display:grid;gap:2px}.compose-open-button strong{font-size:.78rem}.compose-open-button small{color:var(--ncp-text-muted);font-size:.68rem}
 .detail-section { display: grid; gap: 12px; }
 .detail-section>header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .detail-section h3 { margin: 0; font-size: .88rem; }

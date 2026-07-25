@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -39,6 +40,7 @@ type SocketConfig struct {
 	DockerControl     DockerControlProvider
 	DockerLogs        DockerLogsProvider
 	DockerImages      DockerImageProvider
+	Compose           ComposeProvider
 	Database          DatabaseProvider
 }
 
@@ -76,6 +78,10 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			return coded("AGENT_DOCKER_IMAGES_INITIALIZATION_FAILED", err)
 		}
 	}
+	composeProvider := config.Compose
+	if composeProvider == nil {
+		composeProvider = ncpcompose.NewManager(nil)
+	}
 	databaseProvider := config.Database
 	if databaseProvider == nil {
 		databaseProvider = ncpdatabase.NewManager()
@@ -87,6 +93,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
+	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager

@@ -368,6 +368,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/compose/config/read:
+    post:
+      operationId: readComposeConfig
+      summary: Read discovered Compose project configuration files
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeReadRequest'
+      responses:
+        '200':
+          description: Compose project configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComposeProjectConfig'
+  /api/v1/docker/compose/config/validate:
+    post:
+      operationId: validateComposeConfig
+      summary: Validate an edited Compose configuration without saving it
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeValidateRequest'
+      responses:
+        '200':
+          description: Valid normalized Compose configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComposeValidationResult'
+        '422':
+          description: Invalid YAML or Compose configuration
   /api/v1/docker/images/remove:
     post:
       operationId: removeDockerImage
@@ -912,6 +952,50 @@ components:
           type: string
           minLength: 1
           maxLength: 512
+    ComposeReadRequest:
+      type: object
+      required: [projectId, workingDirectory, configFiles]
+      properties:
+        projectId: { type: string }
+        workingDirectory: { type: string }
+        configFiles:
+          type: array
+          minItems: 1
+          items: { type: string }
+    ComposeProjectConfig:
+      type: object
+      required: [projectId, workingDirectory, files, collectedAt]
+      properties:
+        projectId: { type: string }
+        workingDirectory: { type: string }
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComposeFileSnapshot'
+        collectedAt: { type: string, format: date-time }
+    ComposeFileSnapshot:
+      type: object
+      required: [path, name, content, size]
+      properties:
+        path: { type: string }
+        name: { type: string }
+        content: { type: string }
+        size: { type: integer, minimum: 0 }
+    ComposeValidateRequest:
+      type: object
+      required: [path, content]
+      properties:
+        path: { type: string }
+        content: { type: string, maxLength: 2097152 }
+    ComposeValidationResult:
+      type: object
+      required: [valid, services, normalized]
+      properties:
+        valid: { type: boolean }
+        services:
+          type: array
+          items: { type: string }
+        normalized: { type: string }
     DockerImageRemoveResult:
       type: object
       required: [imageId, removed]

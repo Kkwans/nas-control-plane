@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
@@ -50,6 +51,11 @@ type DockerImageAgentClient interface {
 	RemoveDockerImage(context.Context, string, docker.ImageRemoveRequest) (docker.ImageRemoveResult, error)
 }
 
+type ComposeAgentClient interface {
+	ReadComposeConfig(context.Context, string, ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error)
+	ValidateComposeConfig(context.Context, string, ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error)
+}
+
 type ControlStore interface {
 	Preferences(context.Context, int64) (controlstore.Preferences, error)
 	UpdatePreferences(context.Context, int64, controlstore.Preferences) (controlstore.Preferences, error)
@@ -64,6 +70,7 @@ type Config struct {
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
 	DockerImages        DockerImageAgentClient
+	Compose             ComposeAgentClient
 	AgentSocketPath     string
 	AgentTimeout        time.Duration
 	Auth                Authenticator
@@ -95,6 +102,7 @@ type handler struct {
 	agent               AgentClient
 	databaseAgent       DatabaseAgentClient
 	dockerImages        DockerImageAgentClient
+	compose             ComposeAgentClient
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
@@ -145,6 +153,14 @@ func (socketAgentClient) RemoveDockerImage(ctx context.Context, socketPath strin
 	return agentsocket.RemoveDockerImage(ctx, socketPath, request)
 }
 
+func (socketAgentClient) ReadComposeConfig(ctx context.Context, socketPath string, request ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error) {
+	return agentsocket.ReadComposeConfig(ctx, socketPath, request)
+}
+
+func (socketAgentClient) ValidateComposeConfig(ctx context.Context, socketPath string, request ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error) {
+	return agentsocket.ValidateComposeConfig(ctx, socketPath, request)
+}
+
 func (socketAgentClient) DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
 	return agentsocket.DiscoverDatabases(ctx, socketPath)
 }
@@ -183,6 +199,9 @@ func NewHandler(config Config) http.Handler {
 	if config.DockerImages == nil {
 		config.DockerImages = socketAgentClient{}
 	}
+	if config.Compose == nil {
+		config.Compose = socketAgentClient{}
+	}
 	if config.AgentSocketPath == "" {
 		config.AgentSocketPath = agentsocket.DefaultSocketPath
 	}
@@ -203,6 +222,7 @@ func NewHandler(config Config) http.Handler {
 		agent:               config.Agent,
 		databaseAgent:       config.DatabaseAgent,
 		dockerImages:        config.DockerImages,
+		compose:             config.Compose,
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
@@ -236,6 +256,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/docker/hub/tags", api.dockerHubTags)
 			protected.Post("/docker/images/pull", api.pullDockerImage)
 			protected.Post("/docker/images/remove", api.removeDockerImage)
+			protected.Post("/docker/compose/config/read", api.readComposeConfig)
+			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
 			protected.Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
