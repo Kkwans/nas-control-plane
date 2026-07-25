@@ -226,7 +226,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 <style scoped>
 .docker-search { width: min(320px, 38vw); }
 .docker-view-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: #fff; }
-.docker-view-tabs button { display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .78rem; font-weight: 720; }
+.docker-view-tabs button { display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .78rem; font-weight: 720; white-space: nowrap; }
 .docker-view-tabs button.active { background: var(--ncp-primary); box-shadow: 0 4px 12px rgba(36,104,216,.16); color: #fff; }
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; }
@@ -264,7 +264,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
   .docker-table__head, .project-row { grid-template-columns: minmax(190px,1.2fr) 100px 65px 150px minmax(140px,1fr) 68px; gap: 8px; }
 }
 @media(max-width: 900px) { .docker-search { min-width: 0; width: 100%; } }
-@media(max-width: 767px) {
+@media(max-width: 820px) {
   .docker-table { display: none; }
   .docker-mobile-list { display: grid; gap: 10px; }
   .docker-view-tabs { width: 100%; }

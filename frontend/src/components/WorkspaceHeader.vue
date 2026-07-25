@@ -157,6 +157,12 @@ p { margin: 3px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   .workspace-stat { min-width: 0; flex: 1; }
   .workspace-tools { min-width: min(360px, 45vw); }
 }
+@media (max-width: 900px) {
+  .workspace-toolbar { flex-wrap: wrap; }
+  .workspace-filters,
+  .workspace-tools { width: 100%; }
+  .workspace-tools { min-width: 0; margin-left: 0; }
+}
 @media (max-width: 640px) {
   .workspace-header__main { display: grid; grid-template-columns: 1fr; min-height: 0; gap: 12px; padding: 13px; }
   .workspace-header__title { width: 100%; }
