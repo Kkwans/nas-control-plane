@@ -54,6 +54,7 @@ type DockerImageAgentClient interface {
 type ComposeAgentClient interface {
 	ReadComposeConfig(context.Context, string, ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error)
 	ValidateComposeConfig(context.Context, string, ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error)
+	DeployComposeConfig(context.Context, string, ncpcompose.DeployRequest) (ncpcompose.DeployResult, error)
 }
 
 type ControlStore interface {
@@ -66,6 +67,8 @@ type ControlStore interface {
 	RecordSiteVisit(context.Context, string) (time.Time, error)
 	ComposeDraft(context.Context, string, string) (controlstore.ComposeDraft, error)
 	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)
+	RecordComposeRevision(context.Context, controlstore.ComposeRevision) (controlstore.ComposeRevision, error)
+	ComposeRevisions(context.Context, string, int) ([]controlstore.ComposeRevision, error)
 }
 
 type Config struct {
@@ -161,6 +164,10 @@ func (socketAgentClient) ReadComposeConfig(ctx context.Context, socketPath strin
 
 func (socketAgentClient) ValidateComposeConfig(ctx context.Context, socketPath string, request ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error) {
 	return agentsocket.ValidateComposeConfig(ctx, socketPath, request)
+}
+
+func (socketAgentClient) DeployComposeConfig(ctx context.Context, socketPath string, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+	return agentsocket.DeployComposeConfig(ctx, socketPath, request)
 }
 
 func (socketAgentClient) DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
@@ -262,6 +269,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
 			protected.Get("/docker/compose/drafts", api.composeDraft)
 			protected.Put("/docker/compose/drafts", api.saveComposeDraft)
+			protected.Post("/docker/compose/deploy", api.deployComposeConfig)
+			protected.Get("/docker/compose/revisions", api.composeRevisions)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
 			protected.Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)

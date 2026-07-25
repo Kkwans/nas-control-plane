@@ -10,4 +10,5 @@ import "google/protobuf/struct.proto";
 service AgentComposeService {
   rpc ReadConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc DeployConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
 }

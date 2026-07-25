@@ -11,7 +11,10 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 )
 
-const composeRequestTimeout = 20 * time.Second
+const (
+	composeRequestTimeout = 20 * time.Second
+	composeDeployTimeout  = 10 * time.Minute
+)
 
 func (api *handler) readComposeConfig(response http.ResponseWriter, request *http.Request) {
 	var input ncpcompose.ReadRequest
@@ -78,4 +81,45 @@ func (api *handler) validateComposeConfig(response http.ResponseWriter, request 
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (api *handler) deployComposeConfig(response http.ResponseWriter, request *http.Request) {
+	var input ncpcompose.DeployRequest
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	job := api.jobs.create("compose-deploy", input.ProjectID)
+	go func() {
+		api.jobs.update(job.ID, "running", "正在校验、备份并部署 Compose 项目", "", 15)
+		requestContext, cancel := context.WithTimeout(context.Background(), composeDeployTimeout)
+		defer cancel()
+		result, err := api.compose.DeployComposeConfig(requestContext, api.agentSocketPath, input)
+		if err != nil {
+			api.jobs.update(job.ID, "failed", "Compose 部署失败，已尝试恢复上一版本", "请查看项目日志并核对 Compose 配置。", 100)
+			return
+		}
+		message := "Compose 项目部署完成并已保存版本"
+		if api.controlStore != nil {
+			if _, err := api.controlStore.RecordComposeRevision(context.Background(), controlstore.ComposeRevision{
+				ProjectID: input.ProjectID, ConfigPath: input.TargetPath, Content: input.Content, BackupPath: result.BackupPath,
+			}); err != nil {
+				message = "Compose 项目部署完成，但版本记录保存失败"
+			}
+		}
+		api.jobs.update(job.ID, "completed", message, "", 100)
+	}()
+	writeJSON(response, http.StatusAccepted, job)
+}
+
+func (api *handler) composeRevisions(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "COMPOSE_REVISION_STORE_UNAVAILABLE", "Compose 版本记录暂不可用。")
+		return
+	}
+	revisions, err := api.controlStore.ComposeRevisions(request.Context(), request.URL.Query().Get("projectId"), 30)
+	if err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "COMPOSE_REVISION_READ_FAILED", "Compose 版本记录读取失败。")
+		return
+	}
+	writeJSON(response, http.StatusOK, revisions)
 }

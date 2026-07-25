@@ -13,6 +13,7 @@ import (
 type ComposeProvider interface {
 	Read(context.Context, ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error)
 	Validate(context.Context, ncpcompose.ValidateRequest) (ncpcompose.ValidationResult, error)
+	Deploy(context.Context, ncpcompose.DeployRequest) (ncpcompose.DeployResult, error)
 }
 
 type composeService struct{ provider ComposeProvider }
@@ -59,6 +60,40 @@ func (service *composeService) ValidateConfig(ctx context.Context, request *stru
 	result, err := service.provider.Validate(ctx, ncpcompose.ValidateRequest{Path: path, Content: content})
 	if err != nil {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_CONFIG_INVALID")
+	}
+	return dashboardStruct(result, "AGENT_COMPOSE_RESPONSE_INVALID")
+}
+
+func (service *composeService) DeployConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if service.provider == nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_COMPOSE_UNAVAILABLE")
+	}
+	projectID, err := requiredString(request, "project_id")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
+	}
+	workingDirectory, err := requiredString(request, "working_directory")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
+	}
+	configFiles, err := requiredStringList(request, "config_files")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
+	}
+	targetPath, err := requiredString(request, "target_path")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
+	}
+	content, err := requiredString(request, "content")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
+	}
+	result, err := service.provider.Deploy(ctx, ncpcompose.DeployRequest{
+		ProjectID: projectID, WorkingDirectory: workingDirectory, ConfigFiles: configFiles,
+		TargetPath: targetPath, Content: content,
+	})
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "COMPOSE_DEPLOY_FAILED")
 	}
 	return dashboardStruct(result, "AGENT_COMPOSE_RESPONSE_INVALID")
 }

@@ -45,8 +45,88 @@ type ValidationResult struct {
 	Normalized string   `json:"normalized"`
 }
 
+type DeployRequest struct {
+	ProjectID        string   `json:"projectId"`
+	WorkingDirectory string   `json:"workingDirectory"`
+	ConfigFiles      []string `json:"configFiles"`
+	TargetPath       string   `json:"targetPath"`
+	Content          string   `json:"content"`
+}
+
+type DeployResult struct {
+	ProjectID  string   `json:"projectId"`
+	TargetPath string   `json:"targetPath"`
+	BackupPath string   `json:"backupPath"`
+	Services   []string `json:"services"`
+	Output     string   `json:"output"`
+	Completed  bool     `json:"completed"`
+}
+
 type Runner interface {
 	Validate(context.Context, string, string) (string, error)
+	Deploy(context.Context, string, []string) (string, error)
+}
+
+func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (DeployResult, error) {
+	workingDirectory, err := validateWorkingDirectory(request.WorkingDirectory)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	targetPath, err := validateConfigPath(workingDirectory, request.TargetPath)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	configFiles := make([]string, 0, len(request.ConfigFiles))
+	targetKnown := false
+	for _, value := range request.ConfigFiles {
+		configPath, err := validateConfigPath(workingDirectory, value)
+		if err != nil {
+			return DeployResult{}, err
+		}
+		configFiles = append(configFiles, configPath)
+		targetKnown = targetKnown || configPath == targetPath
+	}
+	if !targetKnown {
+		return DeployResult{}, errors.New("compose target is not part of project config")
+	}
+	validation, err := manager.Validate(ctx, ValidateRequest{Path: targetPath, Content: request.Content})
+	if err != nil {
+		return DeployResult{}, err
+	}
+	original, err := os.ReadFile(targetPath)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	backupDirectory := pathpkg.Join(workingDirectory, ".ncp-backups")
+	if err := os.MkdirAll(backupDirectory, 0o700); err != nil {
+		return DeployResult{}, err
+	}
+	backupPath := pathpkg.Join(backupDirectory, manager.now().UTC().Format("20060102T150405Z")+"-"+pathpkg.Base(targetPath))
+	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
+		return DeployResult{}, err
+	}
+	if err := atomicWrite(targetPath, []byte(request.Content), info.Mode().Perm()); err != nil {
+		return DeployResult{}, err
+	}
+	output, deployErr := manager.runner.Deploy(ctx, workingDirectory, configFiles)
+	if deployErr != nil {
+		restoreErr := atomicWrite(targetPath, original, info.Mode().Perm())
+		if restoreErr == nil {
+			_, restoreErr = manager.runner.Deploy(ctx, workingDirectory, configFiles)
+		}
+		if restoreErr != nil {
+			return DeployResult{}, fmt.Errorf("compose deploy failed and rollback failed: %v; rollback: %w", deployErr, restoreErr)
+		}
+		return DeployResult{}, fmt.Errorf("compose deploy failed and previous version was restored: %w", deployErr)
+	}
+	return DeployResult{
+		ProjectID: request.ProjectID, TargetPath: targetPath, BackupPath: backupPath,
+		Services: validation.Services, Output: output, Completed: true,
+	}, nil
 }
 
 type Manager struct {
@@ -126,6 +206,21 @@ func (OSRunner) Validate(ctx context.Context, workingDirectory, content string) 
 	return stdout.String(), nil
 }
 
+func (OSRunner) Deploy(ctx context.Context, workingDirectory string, configFiles []string) (string, error) {
+	arguments := []string{"compose"}
+	for _, configFile := range configFiles {
+		arguments = append(arguments, "-f", configFile)
+	}
+	arguments = append(arguments, "up", "-d")
+	command := exec.CommandContext(ctx, "docker", arguments...)
+	command.Dir = workingDirectory
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("compose deploy failed: %s", strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func validateWorkingDirectory(value string) (string, error) {
 	cleaned := pathpkg.Clean(strings.TrimSpace(value))
 	if !pathpkg.IsAbs(cleaned) || (!withinRoot(cleaned, "/volume1") && !withinRoot(cleaned, "/volume2")) {
@@ -179,4 +274,29 @@ func extractServiceNames(normalized string) []string {
 		}
 	}
 	return services
+}
+
+func atomicWrite(target string, content []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(pathpkg.Dir(target), ".ncp-compose-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, target)
 }

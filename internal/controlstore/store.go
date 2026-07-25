@@ -58,6 +58,16 @@ type ComposeDraft struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+type ComposeRevision struct {
+	ID          int64     `json:"id"`
+	ProjectID   string    `json:"projectId"`
+	ConfigPath  string    `json:"configPath"`
+	Content     string    `json:"content"`
+	ContentHash string    `json:"contentHash"`
+	BackupPath  string    `json:"backupPath"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
 func Open(databasePath string) (*Store, error) {
 	if strings.TrimSpace(databasePath) == "" {
 		return nil, errors.New("control store database path is required")
@@ -304,6 +314,55 @@ func (s *Store) SaveComposeDraft(ctx context.Context, draft ComposeDraft) (Compo
 	return draft, nil
 }
 
+func (s *Store) RecordComposeRevision(ctx context.Context, revision ComposeRevision) (ComposeRevision, error) {
+	revision.ProjectID = strings.TrimSpace(revision.ProjectID)
+	revision.ConfigPath = strings.TrimSpace(revision.ConfigPath)
+	revision.BackupPath = strings.TrimSpace(revision.BackupPath)
+	if revision.ProjectID == "" || revision.ConfigPath == "" || revision.Content == "" || revision.BackupPath == "" {
+		return ComposeRevision{}, errors.New("compose revision is invalid")
+	}
+	sum := sha256.Sum256([]byte(revision.Content))
+	revision.ContentHash = hex.EncodeToString(sum[:])
+	revision.CreatedAt = s.now().UTC().Truncate(time.Second)
+	result, err := s.database.ExecContext(ctx, `
+		INSERT INTO compose_revisions (project_id, config_path, content, content_hash, backup_path, created_at_unix)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, revision.ProjectID, revision.ConfigPath, revision.Content, revision.ContentHash, revision.BackupPath, revision.CreatedAt.Unix())
+	if err != nil {
+		return ComposeRevision{}, err
+	}
+	revision.ID, err = result.LastInsertId()
+	return revision, err
+}
+
+func (s *Store) ComposeRevisions(ctx context.Context, projectID string, limit int) ([]ComposeRevision, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT id, project_id, config_path, content, content_hash, backup_path, created_at_unix
+		FROM compose_revisions
+		WHERE project_id = ?
+		ORDER BY id DESC
+		LIMIT ?
+	`, strings.TrimSpace(projectID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	revisions := make([]ComposeRevision, 0)
+	for rows.Next() {
+		var revision ComposeRevision
+		var createdAtUnix int64
+		if err := rows.Scan(&revision.ID, &revision.ProjectID, &revision.ConfigPath, &revision.Content, &revision.ContentHash, &revision.BackupPath, &createdAtUnix); err != nil {
+			return nil, err
+		}
+		revision.CreatedAt = time.Unix(createdAtUnix, 0).UTC()
+		revisions = append(revisions, revision)
+	}
+	return revisions, rows.Err()
+}
+
 func (s *Store) migrate(ctx context.Context) error {
 	statements := []string{
 		`PRAGMA busy_timeout = 5000`,
@@ -335,6 +394,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at_unix INTEGER NOT NULL,
 			PRIMARY KEY (project_id, config_path)
 		)`,
+		`CREATE TABLE IF NOT EXISTS compose_revisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_id TEXT NOT NULL,
+			config_path TEXT NOT NULL,
+			content TEXT NOT NULL,
+			content_hash TEXT NOT NULL,
+			backup_path TEXT NOT NULL,
+			created_at_unix INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS compose_revisions_project_created
+			ON compose_revisions(project_id, created_at_unix DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {

@@ -52,6 +52,16 @@ export interface ComposeDraft {
   updatedAt: string
 }
 
+export interface ComposeRevision {
+  id: number
+  projectId: string
+  configPath: string
+  content: string
+  contentHash: string
+  backupPath: string
+  createdAt: string
+}
+
 export function requestPreferences(): Promise<UserPreferences> {
   return request('/api/v1/preferences')
 }
@@ -87,6 +97,10 @@ export function requestComposeDraft(projectId: string, configPath: string): Prom
 
 export function saveComposeDraft(input: Pick<ComposeDraft, 'projectId' | 'configPath' | 'content'>): Promise<ComposeDraft> {
   return request('/api/v1/docker/compose/drafts', { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export function requestComposeRevisions(projectId: string): Promise<ComposeRevision[]> {
+  return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

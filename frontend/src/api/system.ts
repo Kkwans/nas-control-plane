@@ -230,6 +230,14 @@ export interface ComposeValidationResult {
   normalized: string
 }
 
+export interface ComposeDeployInput {
+  projectId: string
+  workingDirectory: string
+  configFiles: string[]
+  targetPath: string
+  content: string
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -468,6 +476,19 @@ export async function validateComposeConfig(
     isComposeValidationResult,
     fetcher,
     'COMPOSE_VALIDATION_RESPONSE_INVALID',
+  )
+}
+
+export async function deployComposeConfig(
+  input: ComposeDeployInput,
+  fetcher: typeof fetch = fetch,
+): Promise<JobSnapshot> {
+  return requestJson(
+    '/api/v1/docker/compose/deploy',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
+    isJobSnapshot,
+    fetcher,
+    'COMPOSE_DEPLOY_RESPONSE_INVALID',
   )
 }
 

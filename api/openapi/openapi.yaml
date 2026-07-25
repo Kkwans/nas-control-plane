@@ -444,6 +444,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ComposeDraft'
+  /api/v1/docker/compose/deploy:
+    post:
+      operationId: deployComposeConfig
+      summary: Validate, back up, atomically save and deploy a Compose project
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeDeployInput'
+      responses:
+        '202':
+          description: Compose deployment job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+  /api/v1/docker/compose/revisions:
+    get:
+      operationId: listComposeRevisions
+      summary: List recorded successful Compose deployments
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: projectId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Recent Compose deployment versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ComposeRevision'
   /api/v1/docker/images/remove:
     post:
       operationId: removeDockerImage
@@ -1047,6 +1083,29 @@ components:
           properties:
             contentHash: { type: string }
             updatedAt: { type: string, format: date-time }
+    ComposeDeployInput:
+      type: object
+      required: [projectId, workingDirectory, configFiles, targetPath, content]
+      properties:
+        projectId: { type: string }
+        workingDirectory: { type: string }
+        configFiles:
+          type: array
+          minItems: 1
+          items: { type: string }
+        targetPath: { type: string }
+        content: { type: string, maxLength: 2097152 }
+    ComposeRevision:
+      type: object
+      required: [id, projectId, configPath, content, contentHash, backupPath, createdAt]
+      properties:
+        id: { type: integer, minimum: 1 }
+        projectId: { type: string }
+        configPath: { type: string }
+        content: { type: string }
+        contentHash: { type: string }
+        backupPath: { type: string }
+        createdAt: { type: string, format: date-time }
     DockerImageRemoveResult:
       type: object
       required: [imageId, removed]

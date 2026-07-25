@@ -15,6 +15,10 @@ func (runner fakeRunner) Validate(context.Context, string, string) (string, erro
 	return runner.output, runner.err
 }
 
+func (runner fakeRunner) Deploy(context.Context, string, []string) (string, error) {
+	return runner.output, runner.err
+}
+
 func TestValidateExtractsComposeServices(t *testing.T) {
 	manager := NewManager(fakeRunner{output: "name: demo\nservices:\n  api:\n    image: api:latest\n  web:\n    image: web:latest\nnetworks:\n  default:\n"})
 	result, err := manager.Validate(context.Background(), ValidateRequest{

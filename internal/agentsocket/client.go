@@ -281,6 +281,37 @@ func ValidateComposeConfig(ctx context.Context, socketPath string, request ncpco
 	return result, nil
 }
 
+func DeployComposeConfig(ctx context.Context, socketPath string, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return ncpcompose.DeployResult{}, err
+	}
+	defer connection.Close()
+	files := make([]any, 0, len(request.ConfigFiles))
+	for _, configPath := range request.ConfigFiles {
+		files = append(files, configPath)
+	}
+	payload, err := structpb.NewStruct(map[string]any{
+		"project_id": request.ProjectID, "working_directory": request.WorkingDirectory,
+		"config_files": files, "target_path": request.TargetPath, "content": request.Content,
+	})
+	if err != nil {
+		return ncpcompose.DeployResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentComposeServiceClient(connection).DeployConfig(ctx, payload)
+	if err != nil {
+		return ncpcompose.DeployResult{}, rpcError(err)
+	}
+	var result ncpcompose.DeployResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return ncpcompose.DeployResult{}, err
+	}
+	if !result.Completed || result.ProjectID == "" || result.BackupPath == "" {
+		return ncpcompose.DeployResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose deploy result is incomplete"))
+	}
+	return result, nil
+}
+
 func dialSocket(socketPath string) (*grpc.ClientConn, error) {
 	if socketPath == "" {
 		return nil, coded("AGENT_RPC_TARGET_INVALID", errors.New("socket path is required"))
