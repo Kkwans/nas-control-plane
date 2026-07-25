@@ -2,7 +2,9 @@ package controlstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -46,6 +48,14 @@ type SiteProfile struct {
 	SortOrder     int        `json:"sortOrder"`
 	LastVisitedAt *time.Time `json:"lastVisitedAt"`
 	Hidden        bool       `json:"hidden"`
+}
+
+type ComposeDraft struct {
+	ProjectID   string    `json:"projectId"`
+	ConfigPath  string    `json:"configPath"`
+	Content     string    `json:"content"`
+	ContentHash string    `json:"contentHash"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 func Open(databasePath string) (*Store, error) {
@@ -255,6 +265,45 @@ func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Tim
 	return visitedAt, err
 }
 
+func (s *Store) ComposeDraft(ctx context.Context, projectID, configPath string) (ComposeDraft, error) {
+	projectID, configPath = strings.TrimSpace(projectID), strings.TrimSpace(configPath)
+	var draft ComposeDraft
+	var updatedAtUnix int64
+	err := s.database.QueryRowContext(ctx, `
+		SELECT project_id, config_path, content, content_hash, updated_at_unix
+		FROM compose_drafts
+		WHERE project_id = ? AND config_path = ?
+	`, projectID, configPath).Scan(&draft.ProjectID, &draft.ConfigPath, &draft.Content, &draft.ContentHash, &updatedAtUnix)
+	if err != nil {
+		return ComposeDraft{}, err
+	}
+	draft.UpdatedAt = time.Unix(updatedAtUnix, 0).UTC()
+	return draft, nil
+}
+
+func (s *Store) SaveComposeDraft(ctx context.Context, draft ComposeDraft) (ComposeDraft, error) {
+	draft.ProjectID = strings.TrimSpace(draft.ProjectID)
+	draft.ConfigPath = strings.TrimSpace(draft.ConfigPath)
+	if draft.ProjectID == "" || len(draft.ProjectID) > 256 || draft.ConfigPath == "" || len(draft.ConfigPath) > 2048 || draft.Content == "" || len(draft.Content) > 2<<20 {
+		return ComposeDraft{}, errors.New("compose draft is invalid")
+	}
+	sum := sha256.Sum256([]byte(draft.Content))
+	draft.ContentHash = hex.EncodeToString(sum[:])
+	draft.UpdatedAt = s.now().UTC().Truncate(time.Second)
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO compose_drafts (project_id, config_path, content, content_hash, updated_at_unix)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(project_id, config_path) DO UPDATE SET
+			content = excluded.content,
+			content_hash = excluded.content_hash,
+			updated_at_unix = excluded.updated_at_unix
+	`, draft.ProjectID, draft.ConfigPath, draft.Content, draft.ContentHash, draft.UpdatedAt.Unix())
+	if err != nil {
+		return ComposeDraft{}, err
+	}
+	return draft, nil
+}
+
 func (s *Store) migrate(ctx context.Context) error {
 	statements := []string{
 		`PRAGMA busy_timeout = 5000`,
@@ -277,6 +326,14 @@ func (s *Store) migrate(ctx context.Context) error {
 			primary_port INTEGER NOT NULL DEFAULT 0,
 			hidden INTEGER NOT NULL DEFAULT 0,
 			updated_at_unix INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS compose_drafts (
+			project_id TEXT NOT NULL,
+			config_path TEXT NOT NULL,
+			content TEXT NOT NULL,
+			content_hash TEXT NOT NULL,
+			updated_at_unix INTEGER NOT NULL,
+			PRIMARY KEY (project_id, config_path)
 		)`,
 	}
 	for _, statement := range statements {

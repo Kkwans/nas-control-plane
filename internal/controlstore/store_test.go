@@ -69,3 +69,29 @@ func TestRecordSiteVisitCreatesActivityForAutoDiscoveredSite(t *testing.T) {
 		t.Fatalf("unexpected auto-discovered site activity: %#v", profiles)
 	}
 }
+
+func TestComposeDraftPersistsContentAndHash(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "ncp.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	store.now = func() time.Time { return time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC) }
+
+	saved, err := store.SaveComposeDraft(context.Background(), ComposeDraft{
+		ProjectID: "compose:ncp", ConfigPath: "/volume2/Project/ncp/compose.yaml", Content: "services:\n  web:\n    image: nginx:alpine\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.ContentHash) != 64 {
+		t.Fatalf("content hash = %q", saved.ContentHash)
+	}
+	loaded, err := store.ComposeDraft(context.Background(), saved.ProjectID, saved.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Content != saved.Content || !loaded.UpdatedAt.Equal(saved.UpdatedAt) {
+		t.Fatalf("loaded draft = %#v", loaded)
+	}
+}

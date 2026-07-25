@@ -1,19 +1,23 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CheckCircle2, FileCode2, LoaderCircle, RefreshCw } from '@lucide/vue'
+import { CheckCircle2, FileCode2, LoaderCircle, RefreshCw, Save } from '@lucide/vue'
 import { ElDrawer, ElMessage } from 'element-plus'
 
 import { NcpApiError, readComposeConfig, validateComposeConfig, type ComposeFileSnapshot, type DockerProject } from '@/api/system'
+import { requestComposeDraft, saveComposeDraft } from '@/api/control'
 import PlainCodeEditor from '@/components/PlainCodeEditor.vue'
 
 const props = defineProps<{ modelValue: boolean; project: DockerProject | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const loading = ref(false)
 const validating = ref(false)
+const saving = ref(false)
 const error = ref<string | null>(null)
 const files = ref<ComposeFileSnapshot[]>([])
 const activePath = ref('')
 const validation = ref<{ services: string[] } | null>(null)
+const savedContent = ref<Record<string, string>>({})
+const draftUpdatedAt = ref<Record<string, string>>({})
 const activeFile = computed(() => files.value.find((file) => file.path === activePath.value) ?? null)
 const activeContent = computed({
   get: () => activeFile.value?.content ?? '',
@@ -23,6 +27,7 @@ const activeContent = computed({
     validation.value = null
   },
 })
+const dirty = computed(() => Boolean(activeFile.value && savedContent.value[activeFile.value.path] !== activeFile.value.content))
 
 async function load() {
   if (!props.project || props.project.kind !== 'compose' || !props.project.configFiles.length) return
@@ -31,11 +36,40 @@ async function load() {
   try {
     const result = await readComposeConfig(props.project)
     files.value = result.files.map((file) => ({ ...file }))
+    savedContent.value = Object.fromEntries(result.files.map((file) => [file.path, file.content]))
+    draftUpdatedAt.value = {}
+    for (const file of files.value) {
+      try {
+        const draft = await requestComposeDraft(props.project.id, file.path)
+        file.content = draft.content
+        savedContent.value[file.path] = draft.content
+        draftUpdatedAt.value[file.path] = draft.updatedAt
+      } catch (caught) {
+        if (!(caught instanceof NcpApiError) || caught.code !== 'COMPOSE_DRAFT_NOT_FOUND') throw caught
+      }
+    }
     activePath.value = result.files[0]?.path ?? ''
   } catch (caught) {
     error.value = caught instanceof NcpApiError ? caught.message : 'Compose 配置读取失败。'
   } finally {
     loading.value = false
+  }
+}
+
+async function saveDraft() {
+  const file = activeFile.value
+  if (!file || !props.project || saving.value) return
+  saving.value = true
+  error.value = null
+  try {
+    const draft = await saveComposeDraft({ projectId: props.project.id, configPath: file.path, content: file.content })
+    savedContent.value[file.path] = file.content
+    draftUpdatedAt.value[file.path] = draft.updatedAt
+    ElMessage.success('Compose 草稿已保存到 NCP')
+  } catch (caught) {
+    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 草稿保存失败。'
+  } finally {
+    saving.value = false
   }
 }
 
@@ -55,6 +89,11 @@ async function validate() {
   }
 }
 
+function draftTimeLabel(path: string) {
+  const value = draftUpdatedAt.value[path]
+  return value ? new Date(value).toLocaleString('zh-CN') : ''
+}
+
 watch(() => props.modelValue, (open) => { if (open) void load() })
 </script>
 
@@ -70,6 +109,7 @@ watch(() => props.modelValue, (open) => { if (open) void load() })
         </nav>
         <div>
           <button class="secondary-button" type="button" :disabled="loading" @click="load"><RefreshCw :class="{ spin: loading }" :size="16" />重新读取</button>
+          <button class="secondary-button" type="button" :disabled="!activeFile || saving || !dirty" @click="saveDraft"><LoaderCircle v-if="saving" class="spin" :size="16" /><Save v-else :size="16" />保存草稿</button>
           <button class="primary-button" type="button" :disabled="!activeFile || validating" @click="validate"><LoaderCircle v-if="validating" class="spin" :size="16" /><CheckCircle2 v-else :size="16" />校验配置</button>
         </div>
       </header>
@@ -78,7 +118,7 @@ watch(() => props.modelValue, (open) => { if (open) void load() })
       <div v-if="loading" class="editor-skeleton"><i v-for="line in 14" :key="line" class="ncp-skeleton" :style="{ width: `${35 + (line * 17) % 58}%` }"></i></div>
       <PlainCodeEditor v-else-if="activeFile" v-model="activeContent" />
       <div v-else class="compose-empty">当前项目未定位到可读取的 Compose 配置文件。</div>
-      <footer><span>本切片支持读取和校验；保存草稿、差异预览、版本与部署将在同一工作台继续接入。</span><code>{{ activeFile?.path }}</code></footer>
+      <footer><span>{{ dirty ? '当前修改尚未保存' : draftUpdatedAt[activePath] ? `草稿已保存 · ${draftTimeLabel(activePath)}` : '当前显示项目原始配置' }}</span><code>{{ activeFile?.path }}</code></footer>
     </div>
   </ElDrawer>
 </template>

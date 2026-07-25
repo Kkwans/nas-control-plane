@@ -64,6 +64,8 @@ type ControlStore interface {
 	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
 	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
 	RecordSiteVisit(context.Context, string) (time.Time, error)
+	ComposeDraft(context.Context, string, string) (controlstore.ComposeDraft, error)
+	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)
 }
 
 type Config struct {
@@ -258,6 +260,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/images/remove", api.removeDockerImage)
 			protected.Post("/docker/compose/config/read", api.readComposeConfig)
 			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
+			protected.Get("/docker/compose/drafts", api.composeDraft)
+			protected.Put("/docker/compose/drafts", api.saveComposeDraft)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
 			protected.Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)

@@ -408,6 +408,42 @@ paths:
                 $ref: '#/components/schemas/ComposeValidationResult'
         '422':
           description: Invalid YAML or Compose configuration
+  /api/v1/docker/compose/drafts:
+    get:
+      operationId: getComposeDraft
+      summary: Read one server-persisted Compose draft
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: projectId, in: query, required: true, schema: { type: string } }
+        - { name: configPath, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Saved Compose draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComposeDraft'
+        '404':
+          description: Draft does not exist
+    put:
+      operationId: saveComposeDraft
+      summary: Persist one Compose draft in NCP SQLite
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeDraftInput'
+      responses:
+        '200':
+          description: Saved Compose draft
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComposeDraft'
   /api/v1/docker/images/remove:
     post:
       operationId: removeDockerImage
@@ -996,6 +1032,21 @@ components:
           type: array
           items: { type: string }
         normalized: { type: string }
+    ComposeDraftInput:
+      type: object
+      required: [projectId, configPath, content]
+      properties:
+        projectId: { type: string, maxLength: 256 }
+        configPath: { type: string, maxLength: 2048 }
+        content: { type: string, maxLength: 2097152 }
+    ComposeDraft:
+      allOf:
+        - $ref: '#/components/schemas/ComposeDraftInput'
+        - type: object
+          required: [contentHash, updatedAt]
+          properties:
+            contentHash: { type: string }
+            updatedAt: { type: string, format: date-time }
     DockerImageRemoveResult:
       type: object
       required: [imageId, removed]

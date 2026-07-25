@@ -44,6 +44,14 @@ export interface SiteProfileInput {
   hidden: boolean
 }
 
+export interface ComposeDraft {
+  projectId: string
+  configPath: string
+  content: string
+  contentHash: string
+  updatedAt: string
+}
+
 export function requestPreferences(): Promise<UserPreferences> {
   return request('/api/v1/preferences')
 }
@@ -70,6 +78,15 @@ export function updateSite(projectId: string, input: SiteProfileInput): Promise<
 
 export function recordSiteVisit(projectId: string): Promise<{ projectId: string; lastVisitedAt: string }> {
   return request(`/api/v1/sites/${encodeURIComponent(projectId)}/visit`, { method: 'POST' })
+}
+
+export function requestComposeDraft(projectId: string, configPath: string): Promise<ComposeDraft> {
+  const parameters = new URLSearchParams({ projectId, configPath })
+  return request(`/api/v1/docker/compose/drafts?${parameters}`)
+}
+
+export function saveComposeDraft(input: Pick<ComposeDraft, 'projectId' | 'configPath' | 'content'>): Promise<ComposeDraft> {
+  return request('/api/v1/docker/compose/drafts', { method: 'PUT', body: JSON.stringify(input) })
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

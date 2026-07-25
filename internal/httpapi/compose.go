@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
+	"strings"
 	"time"
 
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
+	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 )
 
 const composeRequestTimeout = 20 * time.Second
@@ -23,6 +26,43 @@ func (api *handler) readComposeConfig(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (api *handler) composeDraft(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "COMPOSE_DRAFT_STORE_UNAVAILABLE", "Compose 草稿存储暂不可用。")
+		return
+	}
+	projectID := strings.TrimSpace(request.URL.Query().Get("projectId"))
+	configPath := strings.TrimSpace(request.URL.Query().Get("configPath"))
+	draft, err := api.controlStore.ComposeDraft(request.Context(), projectID, configPath)
+	if err != nil {
+		status := http.StatusInternalServerError
+		code, message := "COMPOSE_DRAFT_READ_FAILED", "Compose 草稿读取失败。"
+		if err == sql.ErrNoRows {
+			status, code, message = http.StatusNotFound, "COMPOSE_DRAFT_NOT_FOUND", "当前配置还没有保存草稿。"
+		}
+		api.writeError(response, request, status, code, message)
+		return
+	}
+	writeJSON(response, http.StatusOK, draft)
+}
+
+func (api *handler) saveComposeDraft(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "COMPOSE_DRAFT_STORE_UNAVAILABLE", "Compose 草稿存储暂不可用。")
+		return
+	}
+	var input controlstore.ComposeDraft
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	draft, err := api.controlStore.SaveComposeDraft(request.Context(), input)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "COMPOSE_DRAFT_INVALID", "Compose 草稿内容或项目标识无效。")
+		return
+	}
+	writeJSON(response, http.StatusOK, draft)
 }
 
 func (api *handler) validateComposeConfig(response http.ResponseWriter, request *http.Request) {
