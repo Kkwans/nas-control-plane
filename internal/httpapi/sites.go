@@ -13,17 +13,21 @@ import (
 )
 
 type Site struct {
-	ID          string `json:"id"`
-	ProjectID   string `json:"projectId"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	IconURL     string `json:"iconUrl"`
-	Category    string `json:"category"`
-	State       string `json:"state"`
-	PrimaryPort int    `json:"primaryPort"`
-	Ports       []int  `json:"ports"`
-	Hidden      bool   `json:"hidden"`
-	Source      string `json:"source"`
+	ID            string     `json:"id"`
+	ProjectID     string     `json:"projectId"`
+	Name          string     `json:"name"`
+	Description   string     `json:"description"`
+	IconURL       string     `json:"iconUrl"`
+	Category      string     `json:"category"`
+	State         string     `json:"state"`
+	PrimaryPort   int        `json:"primaryPort"`
+	Ports         []int      `json:"ports"`
+	LaunchURL     string     `json:"launchUrl"`
+	Favorite      bool       `json:"favorite"`
+	SortOrder     int        `json:"sortOrder"`
+	LastVisitedAt *time.Time `json:"lastVisitedAt"`
+	Hidden        bool       `json:"hidden"`
+	Source        string     `json:"source"`
 }
 
 type SiteListResponse struct {
@@ -69,6 +73,23 @@ func (api *handler) updateSite(response http.ResponseWriter, request *http.Reque
 	writeJSON(response, http.StatusOK, profile)
 }
 
+func (api *handler) recordSiteVisit(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
+		return
+	}
+	projectID := chi.URLParam(request, "projectID")
+	visitedAt, err := api.controlStore.RecordSiteVisit(request.Context(), projectID)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_VISIT_INVALID", "站点访问记录保存失败。")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"projectId":     projectID,
+		"lastVisitedAt": visitedAt,
+	})
+}
+
 func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile) []Site {
 	profileByProject := make(map[string]controlstore.SiteProfile, len(profiles))
 	for _, profile := range profiles {
@@ -91,26 +112,150 @@ func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile)
 			Ports:       ports,
 			Source:      "auto",
 		}
+		applySiteProfile(&site, siteProfileFromLabels(inventory.Containers, project.ID), "labels")
+		if profile, ok := builtInSiteProfile(project.Name); ok {
+			applySiteProfile(&site, profile, "built-in")
+		}
 		if profile, ok := profileByProject[project.ID]; ok {
-			site.Name = profile.Name
-			site.Description = profile.Description
-			site.IconURL = profile.IconURL
-			site.Category = profile.Category
-			site.Hidden = profile.Hidden
-			if containsPort(ports, profile.PrimaryPort) {
-				site.PrimaryPort = profile.PrimaryPort
-			}
-			site.Source = "edited"
+			applySiteProfile(&site, profile, "edited")
 		}
 		result = append(result, site)
 	}
 	sort.Slice(result, func(left, right int) bool {
+		if result[left].Favorite != result[right].Favorite {
+			return result[left].Favorite
+		}
+		if result[left].SortOrder != result[right].SortOrder {
+			return result[left].SortOrder < result[right].SortOrder
+		}
+		if result[left].LastVisitedAt != nil || result[right].LastVisitedAt != nil {
+			if result[left].LastVisitedAt == nil {
+				return false
+			}
+			if result[right].LastVisitedAt == nil {
+				return true
+			}
+			if !result[left].LastVisitedAt.Equal(*result[right].LastVisitedAt) {
+				return result[left].LastVisitedAt.After(*result[right].LastVisitedAt)
+			}
+		}
 		if result[left].State != result[right].State {
 			return result[left].State == "running"
 		}
 		return strings.ToLower(result[left].Name) < strings.ToLower(result[right].Name)
 	})
 	return result
+}
+
+func applySiteProfile(site *Site, profile controlstore.SiteProfile, source string) {
+	changed := false
+	if profile.Name != "" {
+		site.Name = profile.Name
+		changed = true
+	}
+	if profile.Description != "" {
+		site.Description = profile.Description
+		changed = true
+	}
+	if profile.IconURL != "" {
+		site.IconURL = profile.IconURL
+		changed = true
+	}
+	if profile.Category != "" {
+		site.Category = profile.Category
+		changed = true
+	}
+	if containsPort(site.Ports, profile.PrimaryPort) {
+		site.PrimaryPort = profile.PrimaryPort
+		changed = true
+	}
+	if profile.LaunchURL != "" {
+		site.LaunchURL = profile.LaunchURL
+		changed = true
+	}
+	site.Favorite = profile.Favorite
+	site.SortOrder = profile.SortOrder
+	site.LastVisitedAt = profile.LastVisitedAt
+	site.Hidden = profile.Hidden
+	if changed {
+		site.Source = source
+	}
+}
+
+func siteProfileFromLabels(containers []docker.InventoryContainer, projectID string) controlstore.SiteProfile {
+	result := controlstore.SiteProfile{}
+	for _, container := range containers {
+		if container.ProjectID != projectID {
+			continue
+		}
+		if result.Name == "" {
+			result.Name = firstLabel(container.Labels, "com.ncp.site.name", "io.ncp.site.name")
+		}
+		if result.Description == "" {
+			result.Description = firstLabel(container.Labels, "com.ncp.site.description", "io.ncp.site.description", "org.opencontainers.image.description")
+		}
+		if result.IconURL == "" {
+			result.IconURL = firstLabel(container.Labels, "com.ncp.site.icon", "io.ncp.site.icon")
+		}
+		if result.Category == "" {
+			result.Category = firstLabel(container.Labels, "com.ncp.site.category", "io.ncp.site.category")
+		}
+		if result.LaunchURL == "" {
+			result.LaunchURL = firstLabel(container.Labels, "com.ncp.site.url", "io.ncp.site.url")
+		}
+		if result.PrimaryPort == 0 {
+			value, _ := strconv.Atoi(firstLabel(container.Labels, "com.ncp.site.port", "io.ncp.site.port"))
+			result.PrimaryPort = value
+		}
+	}
+	return result
+}
+
+func firstLabel(labels map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(labels[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func builtInSiteProfile(name string) (controlstore.SiteProfile, bool) {
+	profiles := map[string]controlstore.SiteProfile{
+		"nas-control-plane": {
+			Name:        "NAS 管理面板",
+			Description: "统一查看 NAS 资源、Docker、数据库与系统运行状态。",
+			Category:    "管理工具",
+		},
+		"nas-file-browser": {
+			Name:        "NAS 文件浏览器",
+			Description: "浏览、预览和编辑 NAS 文件，集中管理多个存储卷。",
+			Category:    "文件与 NAS",
+		},
+		"heimdall": {
+			Name:        "Heimdall",
+			Description: "管理 AI 模型路由，并查看请求、Token 与延迟统计。",
+			Category:    "AI 工具",
+			PrimaryPort: 8889,
+		},
+		"mihomo": {
+			Name:        "Mihomo",
+			Description: "管理 NAS 网络代理配置、节点、规则与实时连接。",
+			Category:    "网络服务",
+		},
+		"claude-code": {
+			Name:        "Claude Code",
+			Description: "在浏览器中使用 Claude Code 处理 NAS 上的开发任务。",
+			Category:    "AI 工具",
+		},
+		"film-forest": {
+			Name:        "影视森林",
+			Description: "整理影视资源、浏览影片资料并维护个人媒体库。",
+			Category:    "影音服务",
+		},
+	}
+	profile, ok := profiles[strings.ToLower(strings.TrimSpace(name))]
+	return profile, ok
 }
 
 func sitePorts(containers []docker.InventoryContainer, projectID string) []int {
@@ -155,7 +300,7 @@ func containsPort(ports []int, target int) bool {
 }
 
 func defaultSiteDescription(project docker.Project) string {
-	return "由 Docker 自动发现的局域网站点，共 " + strconv.Itoa(project.ContainerCount) + " 个容器。"
+	return "打开并管理 " + project.Name + " 提供的 Web 服务。"
 }
 
 func inferSiteCategory(name string) string {

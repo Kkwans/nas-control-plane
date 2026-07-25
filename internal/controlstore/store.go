@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,13 +35,17 @@ type DatabaseProjectPreference struct {
 }
 
 type SiteProfile struct {
-	ProjectID   string `json:"projectId"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	IconURL     string `json:"iconUrl"`
-	Category    string `json:"category"`
-	PrimaryPort int    `json:"primaryPort"`
-	Hidden      bool   `json:"hidden"`
+	ProjectID     string     `json:"projectId"`
+	Name          string     `json:"name"`
+	Description   string     `json:"description"`
+	IconURL       string     `json:"iconUrl"`
+	Category      string     `json:"category"`
+	PrimaryPort   int        `json:"primaryPort"`
+	LaunchURL     string     `json:"launchUrl"`
+	Favorite      bool       `json:"favorite"`
+	SortOrder     int        `json:"sortOrder"`
+	LastVisitedAt *time.Time `json:"lastVisitedAt"`
+	Hidden        bool       `json:"hidden"`
 }
 
 func Open(databasePath string) (*Store, error) {
@@ -141,9 +147,10 @@ func (s *Store) SetDatabaseProjectPreference(ctx context.Context, preference Dat
 
 func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 	rows, err := s.database.QueryContext(ctx, `
-		SELECT project_id, name, description, icon_url, category, primary_port, hidden
+		SELECT project_id, name, description, icon_url, category, primary_port,
+			launch_url, favorite, sort_order, last_visited_at_unix, hidden
 		FROM site_profiles
-		ORDER BY name COLLATE NOCASE
+		ORDER BY favorite DESC, sort_order, name COLLATE NOCASE
 	`)
 	if err != nil {
 		return nil, err
@@ -153,6 +160,7 @@ func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 	result := make([]SiteProfile, 0)
 	for rows.Next() {
 		var profile SiteProfile
+		var lastVisitedAt sql.NullInt64
 		if err := rows.Scan(
 			&profile.ProjectID,
 			&profile.Name,
@@ -160,9 +168,17 @@ func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 			&profile.IconURL,
 			&profile.Category,
 			&profile.PrimaryPort,
+			&profile.LaunchURL,
+			&profile.Favorite,
+			&profile.SortOrder,
+			&lastVisitedAt,
 			&profile.Hidden,
 		); err != nil {
 			return nil, err
+		}
+		if lastVisitedAt.Valid && lastVisitedAt.Int64 > 0 {
+			value := time.Unix(lastVisitedAt.Int64, 0).UTC()
+			profile.LastVisitedAt = &value
 		}
 		result = append(result, profile)
 	}
@@ -175,30 +191,68 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	profile.Description = strings.TrimSpace(profile.Description)
 	profile.IconURL = strings.TrimSpace(profile.IconURL)
 	profile.Category = strings.TrimSpace(profile.Category)
+	profile.LaunchURL = strings.TrimSpace(profile.LaunchURL)
 	if profile.ProjectID == "" || len(profile.ProjectID) > 256 || profile.Name == "" || len(profile.Name) > 120 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
-	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 {
+	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
 		return SiteProfile{}, errors.New("site profile is invalid")
+	}
+	if profile.LaunchURL != "" {
+		parsed, err := url.ParseRequestURI(profile.LaunchURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return SiteProfile{}, errors.New("site launch URL is invalid")
+		}
+	}
+	if profile.IconURL != "" {
+		parsed, err := url.ParseRequestURI(profile.IconURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return SiteProfile{}, errors.New("site icon URL is invalid")
+		}
+	}
+	lastVisitedAtUnix := int64(0)
+	if profile.LastVisitedAt != nil {
+		lastVisitedAtUnix = profile.LastVisitedAt.UTC().Unix()
 	}
 	_, err := s.database.ExecContext(ctx, `
 		INSERT INTO site_profiles (
-			project_id, name, description, icon_url, category, primary_port, hidden, updated_at_unix
+			project_id, name, description, icon_url, category, primary_port,
+			launch_url, favorite, sort_order, last_visited_at_unix, hidden, updated_at_unix
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
 			icon_url = excluded.icon_url,
 			category = excluded.category,
 			primary_port = excluded.primary_port,
+			launch_url = excluded.launch_url,
+			favorite = excluded.favorite,
+			sort_order = excluded.sort_order,
 			hidden = excluded.hidden,
 			updated_at_unix = excluded.updated_at_unix
-	`, profile.ProjectID, profile.Name, profile.Description, profile.IconURL, profile.Category, profile.PrimaryPort, profile.Hidden, s.now().UTC().Unix())
+	`, profile.ProjectID, profile.Name, profile.Description, profile.IconURL, profile.Category, profile.PrimaryPort,
+		profile.LaunchURL, profile.Favorite, profile.SortOrder, lastVisitedAtUnix, profile.Hidden, s.now().UTC().Unix())
 	if err != nil {
 		return SiteProfile{}, err
 	}
 	return profile, nil
+}
+
+func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Time, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" || len(projectID) > 256 {
+		return time.Time{}, errors.New("site project id is invalid")
+	}
+	visitedAt := s.now().UTC().Truncate(time.Second)
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO site_profiles (project_id, name, last_visited_at_unix, updated_at_unix)
+		VALUES (?, '', ?, ?)
+		ON CONFLICT(project_id) DO UPDATE SET
+			last_visited_at_unix = excluded.last_visited_at_unix,
+			updated_at_unix = excluded.updated_at_unix
+	`, projectID, visitedAt.Unix(), visitedAt.Unix())
+	return visitedAt, err
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -230,5 +284,44 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	siteColumns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "launch_url", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "favorite", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "sort_order", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_visited_at_unix", definition: "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range siteColumns {
+		if err := s.ensureColumn(ctx, "site_profiles", column.name, column.definition); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table string, column string, definition string) error {
+	rows, err := s.database.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.database.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
+	return err
 }

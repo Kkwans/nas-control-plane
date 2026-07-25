@@ -57,6 +57,7 @@ type ControlStore interface {
 	SetDatabaseProjectPreference(context.Context, controlstore.DatabaseProjectPreference) (controlstore.DatabaseProjectPreference, error)
 	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
 	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
+	RecordSiteVisit(context.Context, string) (time.Time, error)
 }
 
 type Config struct {
@@ -236,6 +237,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/services", api.services)
 			protected.Get("/sites", api.sites)
 			protected.Put("/sites/{projectID}", api.updateSite)
+			protected.Post("/sites/{projectID}/visit", api.recordSiteVisit)
 			protected.Get("/databases/discovery", api.databaseDiscovery)
 			protected.Get("/databases/project-preferences", api.databaseProjectPreferences)
 			protected.Put("/databases/project-preferences", api.updateDatabaseProjectPreference)

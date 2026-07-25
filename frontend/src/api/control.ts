@@ -19,8 +19,12 @@ export interface Site {
   state: 'running' | 'stopped' | 'degraded'
   primaryPort: number
   ports: number[]
+  launchUrl: string
+  favorite: boolean
+  sortOrder: number
+  lastVisitedAt: string | null
   hidden: boolean
-  source: 'auto' | 'edited'
+  source: 'auto' | 'labels' | 'built-in' | 'edited'
 }
 
 export interface SiteListResponse {
@@ -34,6 +38,9 @@ export interface SiteProfileInput {
   iconUrl: string
   category: string
   primaryPort: number
+  launchUrl: string
+  favorite: boolean
+  sortOrder: number
   hidden: boolean
 }
 
@@ -59,6 +66,10 @@ export function requestSites(): Promise<SiteListResponse> {
 
 export function updateSite(projectId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
   return request(`/api/v1/sites/${encodeURIComponent(projectId)}`, { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export function recordSiteVisit(projectId: string): Promise<{ projectId: string; lastVisitedAt: string }> {
+  return request(`/api/v1/sites/${encodeURIComponent(projectId)}/visit`, { method: 'POST' })
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

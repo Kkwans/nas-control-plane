@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   ArrowUpRight,
+  Clock3,
   EyeOff,
   Globe2,
   Image,
@@ -9,14 +10,15 @@ import {
   RefreshCw,
   Search,
   Settings2,
-  Sparkles,
+  Star,
 } from '@lucide/vue'
 import {
   ElButton,
-  ElDialog,
+  ElDrawer,
   ElForm,
   ElFormItem,
   ElInput,
+  ElInputNumber,
   ElMessage,
   ElOption,
   ElSelect,
@@ -37,51 +39,91 @@ const systemStore = useSystemStore()
 const hostName = window.location.hostname
 const query = ref('')
 const siteFilter = ref<SiteFilter>('running')
+const selectedCategory = ref('全部分类')
 const editOpen = ref(false)
 const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
 const failedIcons = ref(new Set<string>())
-const draft = ref<SiteProfileInput>({
-  name: '',
-  description: '',
-  iconUrl: '',
-  category: '',
-  primaryPort: 0,
-  hidden: false,
-})
+const favoritePending = ref<string | null>(null)
+const draft = ref<SiteProfileInput>(emptyProfile())
 
 const sites = computed(() => sitesStore.sites.map((site) => {
   const project = systemStore.services.find((item) => item.id === site.projectId)
   return project ? { ...site, state: project.state } : site
 }))
-const visibleSites = computed(() => {
+const categoryOptions = computed(() => ['全部分类', ...new Set(sites.value.map((site) => site.category).filter(Boolean))])
+const filteredSites = computed(() => {
   const term = query.value.trim().toLowerCase()
   return sites.value.filter((site) => {
     const matchesFilter = siteFilter.value === 'hidden'
       ? site.hidden
       : !site.hidden && (siteFilter.value === 'all' || site.state === 'running')
-    const matchesQuery = !term || `${site.name} ${site.description} ${site.category} ${site.ports.join(' ')}`.toLowerCase().includes(term)
-    return matchesFilter && matchesQuery
+    const matchesCategory = selectedCategory.value === '全部分类' || site.category === selectedCategory.value
+    const searchable = `${site.name} ${site.description} ${site.category} ${site.ports.join(' ')} ${site.launchUrl}`.toLowerCase()
+    return matchesFilter && matchesCategory && (!term || searchable.includes(term))
   })
 })
+const featuredSites = computed(() => {
+  const available = filteredSites.value.filter((site) => site.state === 'running')
+  const favorites = available.filter((site) => site.favorite)
+  return (favorites.length ? favorites : available).slice(0, 4)
+})
+const directorySites = computed(() => {
+  const featured = new Set(featuredSites.value.map((site) => site.id))
+  return filteredSites.value.filter((site) => !featured.has(site.id))
+})
+const groupedSites = computed(() => {
+  const groups = new Map<string, Site[]>()
+  for (const site of directorySites.value) {
+    const category = site.category || '未分类'
+    groups.set(category, [...(groups.get(category) ?? []), site])
+  }
+  return [...groups.entries()].map(([category, items]) => ({ category, items }))
+})
 const stats = computed<WorkspaceStat[]>(() => [
-  { label: '已发现站点', value: sites.value.filter((site) => !site.hidden).length },
+  { label: '全部站点', value: sites.value.filter((site) => !site.hidden).length },
   { label: '正在运行', value: sites.value.filter((site) => !site.hidden && site.state === 'running').length, tone: 'success' },
-  { label: '分类', value: new Set(sites.value.filter((site) => !site.hidden).map((site) => site.category)).size },
+  { label: '已收藏', value: sites.value.filter((site) => !site.hidden && site.favorite).length },
 ])
-const categoryOptions = computed(() => [...new Set([
-  '管理工具',
-  '文件与 NAS',
-  'AI 工具',
-  '影音服务',
-  '网络服务',
-  ...sites.value.map((site) => site.category).filter(Boolean),
-])])
 
 onMounted(() => void sitesStore.refresh())
 
+function emptyProfile(): SiteProfileInput {
+  return {
+    name: '',
+    description: '',
+    iconUrl: '',
+    category: '',
+    primaryPort: 0,
+    launchUrl: '',
+    favorite: false,
+    sortOrder: 0,
+    hidden: false,
+  }
+}
+
+function profileFor(site: Site, overrides: Partial<SiteProfileInput> = {}): SiteProfileInput {
+  return {
+    name: site.name,
+    description: site.description,
+    iconUrl: site.iconUrl,
+    category: site.category,
+    primaryPort: site.primaryPort,
+    launchUrl: site.launchUrl,
+    favorite: site.favorite,
+    sortOrder: site.sortOrder,
+    hidden: site.hidden,
+    ...overrides,
+  }
+}
+
 function siteURL(site: Site, port = site.primaryPort) {
+  if (port === site.primaryPort && site.launchUrl) return site.launchUrl
   return `http://${hostName}:${port}`
+}
+
+function trackVisit(site: Site) {
+  void sitesStore.visit(site.projectId)
 }
 
 function siteTone(state: Site['state']) {
@@ -98,16 +140,27 @@ function siteHue(site: Site) {
   return { '--site-hue': String(hash) }
 }
 
+function sourceLabel(site: Site) {
+  if (site.source === 'edited') return '自定义资料'
+  if (site.source === 'built-in') return '内置项目资料'
+  if (site.source === 'labels') return '项目标签'
+  return '自动识别'
+}
+
+function visitedLabel(value: string | null) {
+  if (!value) return '尚未访问'
+  const date = new Date(value)
+  if (Number.isNaN(date.valueOf())) return '尚未访问'
+  const elapsed = Date.now() - date.valueOf()
+  if (elapsed < 60_000) return '刚刚访问'
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
+  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(date)
+}
+
 function openEditor(site: Site) {
   selectedSite.value = site
-  draft.value = {
-    name: site.name,
-    description: site.description,
-    iconUrl: site.iconUrl,
-    category: site.category,
-    primaryPort: site.primaryPort,
-    hidden: site.hidden,
-  }
+  draft.value = profileFor(site)
   editOpen.value = true
 }
 
@@ -119,9 +172,21 @@ async function saveSite() {
     editOpen.value = false
     ElMessage.success('站点资料已保存')
   } catch {
-    ElMessage.error('站点资料保存失败')
+    ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
   } finally {
     saving.value = false
+  }
+}
+
+async function toggleFavorite(site: Site) {
+  if (favoritePending.value) return
+  favoritePending.value = site.id
+  try {
+    await sitesStore.save(site.projectId, profileFor(site, { favorite: !site.favorite }))
+  } catch {
+    ElMessage.error('收藏状态保存失败')
+  } finally {
+    favoritePending.value = null
   }
 }
 
@@ -132,7 +197,7 @@ function markIconFailed(site: Site) {
 
 <template>
   <div class="page workspace-page sites-page">
-    <WorkspaceHeader title="站点中心" description="统一访问和维护 NAS 上正在运行的 Web 站点" :icon="Globe2" :stats="stats">
+    <WorkspaceHeader title="站点中心" description="快速启动 NAS 上的 Web 应用，并维护入口资料" :icon="Globe2" :stats="stats">
       <template #actions>
         <ElButton :loading="sitesStore.loading" @click="sitesStore.refresh"><RefreshCw :size="16" />重新识别</ElButton>
       </template>
@@ -142,86 +207,126 @@ function markIconFailed(site: Site) {
             {{ item.label }}
           </button>
         </div>
+        <ElSelect v-model="selectedCategory" class="category-filter" aria-label="按分类筛选站点">
+          <ElOption v-for="category in categoryOptions" :key="category" :label="category" :value="category" />
+        </ElSelect>
       </template>
       <template #tools>
-        <ElInput v-model="query" class="site-search" clearable placeholder="搜索站点、分类或端口" aria-label="搜索站点">
+        <ElInput v-model="query" class="site-search" clearable placeholder="搜索站点、用途或端口" aria-label="搜索站点">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
       </template>
     </WorkspaceHeader>
 
-    <div v-if="sitesStore.error" class="site-error" role="alert">{{ sitesStore.error }}</div>
+    <div v-if="sitesStore.error" class="site-error" role="alert">
+      <span>{{ sitesStore.error }}</span>
+      <button type="button" @click="sitesStore.refresh">重新加载</button>
+    </div>
 
-    <section v-if="visibleSites.length" class="site-grid" aria-label="NAS 站点列表">
-      <article v-for="site in visibleSites" :key="site.id" class="site-card panel">
-        <div class="site-card__accent" :style="siteHue(site)" aria-hidden="true"></div>
-        <header>
-          <div class="site-logo" :style="siteHue(site)">
-            <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site)" />
-            <span v-else>{{ site.name.slice(0, 1).toUpperCase() }}</span>
-          </div>
-          <div class="site-identity">
-            <strong>{{ site.name }}</strong>
-            <span>{{ site.category || '未分类' }}</span>
-          </div>
-          <StatusPill :label="siteStateLabel(site.state)" :tone="siteTone(site.state)" />
-        </header>
-
-        <p class="site-description">{{ site.description || '尚未填写站点简介。' }}</p>
-
-        <div class="site-meta">
-          <span><Sparkles :size="14" />{{ site.source === 'edited' ? '资料已编辑' : 'Docker 自动发现' }}</span>
-          <span>{{ site.ports.length }} 个 Web 入口</span>
-        </div>
-
-        <footer>
-          <div class="site-ports">
-            <ElTooltip v-for="port in site.ports.slice(0, 3)" :key="port" :content="port === site.primaryPort ? '主入口' : `打开端口 ${port}`" placement="top">
-              <a :class="{ primary: port === site.primaryPort }" :href="siteURL(site, port)" target="_blank" rel="noreferrer">{{ port }}</a>
-            </ElTooltip>
-            <span v-if="site.ports.length > 3">+{{ site.ports.length - 3 }}</span>
-          </div>
-          <div class="site-actions">
-            <ElTooltip content="编辑名称、简介、图标和主入口" placement="top">
-              <button type="button" :aria-label="`编辑 ${site.name}`" @click="openEditor(site)"><Pencil :size="16" /></button>
-            </ElTooltip>
-            <a class="open-site" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" target="_blank" rel="noreferrer">
-              打开站点<ArrowUpRight :size="16" />
-            </a>
-          </div>
-        </footer>
+    <section v-if="sitesStore.loading && !sites.length" class="launch-grid" aria-label="正在加载站点">
+      <article v-for="item in 4" :key="item" class="launch-card panel launch-card--skeleton">
+        <i class="ncp-skeleton"></i><div><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
       </article>
     </section>
 
-    <section v-else class="empty-sites panel">
-      <Globe2 :size="28" />
-      <div>
-        <h2>{{ siteFilter === 'hidden' ? '没有隐藏的站点' : '没有匹配的运行站点' }}</h2>
-        <p>站点中心只识别具有 Web 端口的 Docker 项目，可调整筛选或重新识别。</p>
+    <section v-else-if="featuredSites.length" class="launch-section" aria-labelledby="launch-title">
+      <div class="section-heading">
+        <div><h2 id="launch-title">快捷启动</h2><p>收藏站点优先；未收藏时展示常用运行站点</p></div>
+      </div>
+      <div class="launch-grid">
+        <article v-for="site in featuredSites" :key="site.id" class="launch-card panel" :style="siteHue(site)">
+          <div class="launch-card__top">
+            <div class="site-logo site-logo--large">
+              <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site)" />
+              <span v-else>{{ site.name.slice(0, 1).toUpperCase() }}</span>
+            </div>
+            <button class="favorite-button" :class="{ active: site.favorite }" type="button" :aria-label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" :disabled="favoritePending === site.id" @click="toggleFavorite(site)">
+              <Star :size="17" :fill="site.favorite ? 'currentColor' : 'none'" />
+            </button>
+          </div>
+          <div class="launch-card__content">
+            <span>{{ site.category || '未分类' }}</span>
+            <h3>{{ site.name }}</h3>
+            <p>{{ site.description }}</p>
+          </div>
+          <footer>
+            <span><Clock3 :size="14" />{{ visitedLabel(site.lastVisitedAt) }}</span>
+            <a :href="siteURL(site)" target="_blank" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
+          </footer>
+        </article>
       </div>
     </section>
 
-    <ElDialog v-model="editOpen" class="site-editor" title="编辑站点资料" width="min(620px, calc(100vw - 28px))">
+    <section v-if="groupedSites.length" class="directory-section" aria-labelledby="directory-title">
+      <div class="section-heading">
+        <div><h2 id="directory-title">站点目录</h2><p>按用途分类，快速查看状态和全部入口</p></div>
+      </div>
+      <div class="directory-panel panel">
+        <section v-for="group in groupedSites" :key="group.category" class="site-group">
+          <header><h3>{{ group.category }}</h3><span>{{ group.items.length }}</span></header>
+          <article v-for="site in group.items" :key="site.id" class="site-row">
+            <div class="site-identity">
+              <div class="site-logo" :style="siteHue(site)">
+                <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site)" />
+                <span v-else>{{ site.name.slice(0, 1).toUpperCase() }}</span>
+              </div>
+              <div><strong>{{ site.name }}</strong><p>{{ site.description }}</p></div>
+            </div>
+            <StatusPill :label="siteStateLabel(site.state)" :tone="siteTone(site.state)" />
+            <div class="site-ports">
+              <ElTooltip v-for="port in site.ports.slice(0, 3)" :key="port" :content="port === site.primaryPort ? '主入口' : `打开端口 ${port}`" placement="top">
+                <a :class="{ primary: port === site.primaryPort }" :href="siteURL(site, port)" target="_blank" rel="noreferrer" @click="trackVisit(site)">{{ port }}</a>
+              </ElTooltip>
+              <span v-if="site.ports.length > 3">+{{ site.ports.length - 3 }}</span>
+            </div>
+            <span class="site-source">{{ sourceLabel(site) }}</span>
+            <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
+            <div class="row-actions">
+              <ElTooltip :content="site.favorite ? '取消收藏' : '加入收藏'" placement="top">
+                <button :class="{ active: site.favorite }" type="button" @click="toggleFavorite(site)"><Star :size="16" :fill="site.favorite ? 'currentColor' : 'none'" /></button>
+              </ElTooltip>
+              <ElTooltip content="编辑站点资料" placement="top">
+                <button type="button" @click="openEditor(site)"><Pencil :size="16" /></button>
+              </ElTooltip>
+              <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" target="_blank" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
+            </div>
+          </article>
+        </section>
+      </div>
+    </section>
+
+    <section v-if="!sitesStore.loading && !featuredSites.length && !groupedSites.length" class="empty-sites panel">
+      <Globe2 :size="28" />
+      <div>
+        <h2>{{ siteFilter === 'hidden' ? '没有隐藏的站点' : '没有匹配的站点' }}</h2>
+        <p>可调整筛选条件，或重新识别具有 Web 入口的 Docker 项目。</p>
+      </div>
+    </section>
+
+    <ElDrawer v-model="editOpen" class="site-editor" title="编辑站点资料" size="min(540px, 100%)" append-to-body>
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
           <span v-else>{{ draft.name.slice(0, 1).toUpperCase() }}</span>
         </div>
-        <div><strong>{{ selectedSite.projectId }}</strong><span>Docker 项目关联保持不变</span></div>
+        <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
       </div>
       <ElForm label-position="top">
         <div class="editor-grid">
           <ElFormItem label="站点名称"><ElInput v-model="draft.name" maxlength="120" /></ElFormItem>
           <ElFormItem label="站点分类">
             <ElSelect v-model="draft.category" filterable allow-create default-first-option>
-              <ElOption v-for="category in categoryOptions" :key="category" :label="category" :value="category" />
+              <ElOption v-for="category in categoryOptions.filter((item) => item !== '全部分类')" :key="category" :label="category" :value="category" />
             </ElSelect>
           </ElFormItem>
         </div>
         <ElFormItem label="简介"><ElInput v-model="draft.description" type="textarea" :rows="3" maxlength="500" show-word-limit /></ElFormItem>
+        <ElFormItem label="完整入口 URL">
+          <ElInput v-model="draft.launchUrl" placeholder="例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成" />
+        </ElFormItem>
         <ElFormItem>
-          <template #label><span class="field-label"><Image :size="15" />图标地址</span></template>
-          <ElInput v-model="draft.iconUrl" placeholder="可填写站点 Logo 或 favicon 地址；留空使用自动字标" />
+          <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
+          <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
         </ElFormItem>
         <div class="editor-grid">
           <ElFormItem label="主入口端口">
@@ -229,58 +334,33 @@ function markIconFailed(site: Site) {
               <ElOption v-for="port in selectedSite?.ports ?? []" :key="port" :label="String(port)" :value="port" />
             </ElSelect>
           </ElFormItem>
-          <ElFormItem label="列表可见性">
-            <div class="visibility-control"><ElSwitch v-model="draft.hidden" /><span><EyeOff :size="14" />隐藏此站点</span></div>
+          <ElFormItem label="目录排序">
+            <ElInputNumber v-model="draft.sortOrder" :min="-100000" :max="100000" :step="10" controls-position="right" />
           </ElFormItem>
+        </div>
+        <div class="switch-grid">
+          <label><ElSwitch v-model="draft.favorite" /><span><Star :size="15" />加入快捷启动</span></label>
+          <label><ElSwitch v-model="draft.hidden" /><span><EyeOff :size="15" />隐藏此站点</span></label>
         </div>
       </ElForm>
       <template #footer>
         <ElButton @click="editOpen = false">取消</ElButton>
         <ElButton type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />保存站点资料</ElButton>
       </template>
-    </ElDialog>
+    </ElDrawer>
   </div>
 </template>
 
 <style scoped>
-.site-search { width:min(360px,36vw); }
-.state-filter { display:flex; flex:0 0 auto; gap:3px; padding:3px; border:1px solid var(--ncp-line); border-radius:10px; background:var(--ncp-surface-quiet); }
-.state-filter button { min-height:36px; padding:0 14px; border-radius:7px; background:transparent; color:var(--ncp-text-muted); font-size:.8rem; font-weight:700; transition:color var(--ncp-duration-fast),background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
-.state-filter button.active { background:#fff; box-shadow:0 2px 8px rgba(28,45,75,.08); color:var(--ncp-primary-strong); }
-.site-error { padding:10px 13px; border:1px solid rgba(212,81,93,.2); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.8rem; }
-.site-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
-.site-card { position:relative; display:grid; min-width:0; min-height:252px; grid-template-rows:auto 1fr auto auto; gap:14px; padding:18px; overflow:hidden; transition:border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base),transform var(--ncp-duration-fast); }
-.site-card:hover { border-color:rgba(36,104,216,.25); box-shadow:var(--ncp-shadow-hover); transform:translateY(-2px); }
-.site-card__accent { position:absolute; top:0; left:18px; width:58px; height:3px; border-radius:0 0 8px 8px; background:hsl(var(--site-hue) 72% 53%); }
-.site-card header { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:11px; }
-.site-logo { display:grid; width:44px; height:44px; flex:0 0 auto; place-items:center; overflow:hidden; border:1px solid hsl(var(--site-hue) 65% 85%); border-radius:13px; background:hsl(var(--site-hue) 78% 95%); color:hsl(var(--site-hue) 67% 40%); font-size:1rem; font-weight:800; }
-.site-logo img { width:100%; height:100%; object-fit:cover; }
-.site-identity { display:grid; min-width:0; gap:2px; }
-.site-identity strong { overflow:hidden; font-size:.93rem; text-overflow:ellipsis; white-space:nowrap; }
-.site-identity span { color:var(--ncp-text-subtle); font-size:.73rem; }
-.site-description { display:-webkit-box; min-height:48px; margin:0; overflow:hidden; color:var(--ncp-text-muted); font-size:.8rem; line-height:1.65; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
-.site-meta { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; border-radius:9px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.7rem; }
-.site-meta span { display:flex; align-items:center; gap:5px; }
-.site-card footer,.site-ports,.site-actions { display:flex; align-items:center; }
-.site-card footer { justify-content:space-between; gap:12px; }
-.site-ports { min-width:0; gap:5px; }
-.site-ports a { display:grid; min-width:46px; min-height:34px; place-items:center; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-family:'JetBrains Mono Variable',monospace; font-size:.7rem; font-weight:700; }
-.site-ports a.primary { border-color:rgba(36,104,216,.2); background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.site-ports>span { color:var(--ncp-text-subtle); font-size:.68rem; }
-.site-actions { gap:6px; }
-.site-actions button { display:grid; width:40px; height:40px; place-items:center; border-radius:9px; background:transparent; color:var(--ncp-text-muted); transition:background var(--ncp-duration-fast),color var(--ncp-duration-fast); }
-.site-actions button:hover { background:var(--ncp-surface-quiet); color:var(--ncp-primary-strong); }
-.open-site { display:flex; min-height:40px; align-items:center; gap:5px; padding:0 12px; border-radius:9px; background:var(--ncp-primary); color:#fff; font-size:.73rem; font-weight:720; }
-.open-site.disabled { pointer-events:none; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); }
-.empty-sites { display:flex; min-height:220px; align-items:center; justify-content:center; gap:14px; color:var(--ncp-text-subtle); }
-.empty-sites h2 { margin:0; color:var(--ncp-text); font-size:.95rem; }.empty-sites p { margin:4px 0 0; font-size:.78rem; }
-.editor-context { display:flex; align-items:center; gap:11px; margin:-5px 0 18px; padding:12px; border-radius:11px; background:var(--ncp-surface-quiet); }
-.editor-context>div:last-child { display:grid; min-width:0; gap:2px; }.editor-context strong { overflow:hidden; font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }.editor-context span { color:var(--ncp-text-subtle); font-size:.7rem; }
-.editor-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-.editor-grid :deep(.el-select) { width:100%; }
-.field-label,.visibility-control,.visibility-control span { display:flex; align-items:center; gap:6px; }
-.visibility-control { min-height:40px; }.visibility-control span { color:var(--ncp-text-muted); font-size:.78rem; }
-@media(max-width:1240px){.site-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:900px){.site-search{width:100%}}
-@media(max-width:680px){.site-grid{grid-template-columns:1fr}.state-filter{width:100%}.state-filter button{flex:1;padding-inline:8px}.site-card{min-height:238px}.editor-grid{grid-template-columns:1fr}.empty-sites{padding:28px 18px;text-align:center;flex-direction:column}}
+.site-search{width:min(360px,36vw)}.category-filter{width:132px}.state-filter{display:flex;flex:0 0 auto;gap:3px;padding:3px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.state-filter button{min-height:36px;padding:0 14px;border-radius:7px;background:transparent;color:var(--ncp-text-muted);font-size:.82rem;font-weight:700;white-space:nowrap}.state-filter button.active{background:#fff;box-shadow:0 2px 8px rgba(28,45,75,.08);color:var(--ncp-primary-strong)}
+.site-error{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.site-error button{min-height:34px;padding:0 11px;border-radius:8px;background:#fff;color:inherit;font-weight:700}
+.section-heading{display:flex;align-items:end;justify-content:space-between;margin:2px 2px 9px}.section-heading h2{margin:0;font-size:1rem;letter-spacing:-.02em}.section-heading p{margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.78rem}
+.launch-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.launch-card{position:relative;display:grid;min-height:220px;grid-template-rows:auto 1fr auto;gap:16px;padding:17px;overflow:hidden;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base)}.launch-card::before{position:absolute;inset:0 0 auto;height:3px;background:hsl(var(--site-hue) 70% 52%);content:''}.launch-card:hover{border-color:hsl(var(--site-hue) 60% 78%);box-shadow:var(--ncp-shadow-hover);transform:translateY(-2px)}.launch-card__top,.launch-card footer{display:flex;align-items:center;justify-content:space-between}.favorite-button{display:grid;width:38px;height:38px;place-items:center;border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-button:hover,.favorite-button.active,.row-actions button.active{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.launch-card__content>span{color:hsl(var(--site-hue) 55% 42%);font-size:.73rem;font-weight:700}.launch-card h3{margin:4px 0 5px;font-size:1.08rem}.launch-card p{display:-webkit-box;margin:0;overflow:hidden;color:var(--ncp-text-muted);font-size:.84rem;line-height:1.6;-webkit-box-orient:vertical;-webkit-line-clamp:2}.launch-card footer>span{display:flex;align-items:center;gap:5px;color:var(--ncp-text-subtle);font-size:.74rem}.launch-card footer>a{display:flex;min-height:38px;align-items:center;gap:4px;padding:0 11px;border-radius:9px;background:var(--ncp-primary);color:#fff;font-size:.8rem;font-weight:700}
+.site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:cover}
+.launch-card--skeleton{grid-template-columns:52px 1fr;min-height:140px}.launch-card--skeleton>i{width:52px;height:52px}.launch-card--skeleton>div{display:grid;align-content:start;gap:12px}.launch-card--skeleton>div i:first-child{width:55%;height:15px}.launch-card--skeleton>div i:last-child{width:88%;height:42px}
+.directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 160px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;align-items:center;gap:3px;padding:0 10px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
+.empty-sites{display:flex;min-height:220px;align-items:center;justify-content:center;gap:14px;color:var(--ncp-text-subtle)}.empty-sites h2{margin:0;color:var(--ncp-text);font-size:.95rem}.empty-sites p{margin:4px 0 0;font-size:.8rem}.editor-context{display:flex;align-items:center;gap:11px;margin:-5px 0 18px;padding:12px;border-radius:11px;background:var(--ncp-surface-quiet)}.editor-context>div:last-child{display:grid;min-width:0;gap:2px}.editor-context strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.editor-context span{color:var(--ncp-text-subtle);font-size:.74rem}.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.editor-grid :deep(.el-select),.editor-grid :deep(.el-input-number){width:100%}.field-label,.switch-grid label,.switch-grid span{display:flex;align-items:center;gap:6px}.switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.switch-grid label{min-height:48px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.switch-grid span{color:var(--ncp-text-muted);font-size:.8rem}
+@media(max-width:1280px){.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(230px,1.5fr) 98px 165px 92px 145px}.site-source{display:none}}
+@media(max-width:900px){.site-search{width:100%}.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(220px,1.4fr) 94px 1fr 145px}.site-source,.site-visited{display:none}}
+@media(max-width:680px){.category-filter{width:100%}.state-filter{width:100%}.state-filter button{flex:1;padding-inline:7px}.launch-grid{grid-template-columns:1fr}.launch-card{min-height:196px}.directory-panel{border:0;background:transparent;box-shadow:none}.site-group>header{border:1px solid var(--ncp-line);border-radius:10px}.site-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:9px;padding:14px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff}.site-identity{grid-column:1/-1}.site-ports{grid-column:1}.site-row>.status-pill{grid-column:2;grid-row:2}.row-actions{grid-column:1/-1}.row-actions .row-open{flex:1;justify-content:center}.editor-grid,.switch-grid{grid-template-columns:1fr}.empty-sites{padding:28px 18px;text-align:center;flex-direction:column}}
 </style>

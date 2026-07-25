@@ -426,6 +426,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites/{projectID}/visit:
+    post:
+      operationId: recordSiteVisit
+      summary: Record a site launch for recent-access ordering
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: Recorded site visit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteVisitResponse'
+        '400':
+          description: Invalid project identifier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/containers/{containerID}/actions/{action}:
     post:
       operationId: controlDockerContainer
@@ -544,7 +568,7 @@ components:
           type: boolean
     SiteProfileInput:
       type: object
-      required: [projectId, name, description, iconUrl, category, primaryPort, hidden]
+      required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
       properties:
         projectId:
           type: string
@@ -563,17 +587,26 @@ components:
         category:
           type: string
           maxLength: 64
+        launchUrl:
+          type: string
+          maxLength: 2048
         primaryPort:
           type: integer
           minimum: 0
           maximum: 65535
+        favorite:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: -100000
+          maximum: 100000
         hidden:
           type: boolean
     Site:
       allOf:
         - $ref: '#/components/schemas/SiteProfileInput'
         - type: object
-          required: [id, state, ports, source]
+          required: [id, state, ports, source, lastVisitedAt]
           properties:
             id: { type: string }
             state: { type: string }
@@ -582,7 +615,12 @@ components:
               items: { type: integer, minimum: 1, maximum: 65535 }
             source:
               type: string
-              enum: [auto, edited]
+              enum: [auto, labels, built-in, edited]
+            lastVisitedAt:
+              oneOf:
+                - type: string
+                  format: date-time
+                - type: 'null'
     SiteListResponse:
       type: object
       required: [collectedAt, sites]
@@ -594,6 +632,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Site'
+    SiteVisitResponse:
+      type: object
+      required: [projectId, lastVisitedAt]
+      properties:
+        projectId:
+          type: string
+        lastVisitedAt:
+          type: string
+          format: date-time
     CredentialsRequest:
       type: object
       required: [username, password]

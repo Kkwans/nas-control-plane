@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 
 import {
   requestSites,
+  recordSiteVisit,
   updateSite,
   type Site,
   type SiteProfileInput,
@@ -35,6 +36,12 @@ export const useSitesStore = defineStore('sites', () => {
     await refresh()
   }
 
+  async function visit(projectId: string) {
+    const result = await recordSiteVisit(projectId)
+    const site = sites.value.find((item) => item.projectId === projectId)
+    if (site) site.lastVisitedAt = result.lastVisitedAt
+  }
+
   return {
     sites,
     visibleSites,
@@ -43,5 +50,6 @@ export const useSitesStore = defineStore('sites', () => {
     error,
     refresh,
     save,
+    visit,
   }
 })
