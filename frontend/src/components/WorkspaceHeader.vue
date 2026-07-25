@@ -170,6 +170,7 @@ p { margin: 3px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   .workspace-filters,
   .workspace-tools,
   .workspace-header__actions { width: 100%; }
+  .workspace-filters { align-items: stretch; flex-direction: column; }
   .workspace-header__actions { justify-content: stretch; }
   .workspace-header__actions :deep(.el-button) { flex: 1; }
   .workspace-stat { padding: 0 10px; }
