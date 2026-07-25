@@ -158,9 +158,16 @@ interface DockerImageWireInventory {
   images: DockerImageWireSummary[]
 }
 
-export interface DockerImagePullResult {
-  reference: string
-  completed: boolean
+export interface JobSnapshot {
+  id: string
+  type: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  reference?: string
+  message: string
+  progress: number
+  error?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface DockerImageRemoveResult {
@@ -316,7 +323,7 @@ export async function requestDockerImages(fetcher: typeof fetch = fetch): Promis
 export async function pullDockerImage(
   reference: string,
   fetcher: typeof fetch = fetch,
-): Promise<DockerImagePullResult> {
+): Promise<JobSnapshot> {
   return requestJson(
     '/api/v1/docker/images/pull',
     {
@@ -324,10 +331,34 @@ export async function pullDockerImage(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reference }),
     },
-    isDockerImagePullResult,
+    isJobSnapshot,
     fetcher,
     'DOCKER_IMAGE_PULL_RESPONSE_INVALID',
   )
+}
+
+export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void): Promise<JobSnapshot> {
+  return new Promise((resolve, reject) => {
+    const source = new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events`)
+    source.addEventListener('progress', (event) => {
+      try {
+        const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
+        if (!isJobSnapshot(payload)) throw new Error('任务进度格式无效')
+        onProgress(payload)
+        if (payload.status === 'completed' || payload.status === 'failed') {
+          source.close()
+          resolve(payload)
+        }
+      } catch (error) {
+        source.close()
+        reject(error)
+      }
+    })
+    source.onerror = () => {
+      source.close()
+      reject(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
+    }
+  })
 }
 
 export async function removeDockerImage(
@@ -542,8 +573,15 @@ function isDockerImageWireInventory(value: unknown): value is DockerImageWireInv
   )
 }
 
-function isDockerImagePullResult(value: unknown): value is DockerImagePullResult {
-  return isRecord(value) && typeof value.reference === 'string' && value.completed === true
+function isJobSnapshot(value: unknown): value is JobSnapshot {
+  return isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.type === 'string' &&
+    (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed') &&
+    typeof value.message === 'string' &&
+    typeof value.progress === 'number' &&
+    typeof value.createdAt === 'string' &&
+    typeof value.updatedAt === 'string'
 }
 
 function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveResult {

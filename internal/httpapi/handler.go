@@ -104,6 +104,7 @@ type handler struct {
 	terminalEnabled     bool
 	terminalTimeout     time.Duration
 	newRequestID        func() string
+	jobs                *jobRegistry
 }
 
 type socketAgentClient struct{}
@@ -211,6 +212,7 @@ func NewHandler(config Config) http.Handler {
 		terminalEnabled:     config.TerminalPOCEnabled,
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
+		jobs:                newJobRegistry(),
 	}
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
@@ -234,6 +236,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/docker/hub/tags", api.dockerHubTags)
 			protected.Post("/docker/images/pull", api.pullDockerImage)
 			protected.Post("/docker/images/remove", api.removeDockerImage)
+			protected.Get("/jobs/{jobID}", api.jobStatus)
+			protected.Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)

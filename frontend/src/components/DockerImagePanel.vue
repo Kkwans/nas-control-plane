@@ -5,6 +5,7 @@ import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import {
   NcpApiError,
+  followJob,
   pullDockerImage,
   removeDockerImage,
   requestDockerHubTags,
@@ -36,6 +37,7 @@ const tags = ref<DockerHubTag[]>([])
 const tagsLoading = ref(false)
 const selectedTag = ref('latest')
 const pullPending = ref(false)
+const pullProgress = ref(0)
 
 const filteredImages = computed(() => {
   const term = props.query.trim().toLowerCase()
@@ -100,14 +102,18 @@ async function selectRepository(repository: DockerHubRepository) {
 async function submitPull() {
   if (!pullReference.value || pullPending.value) return
   pullPending.value = true
+  pullProgress.value = 0
   try {
-    await pullDockerImage(pullReference.value)
+    const job = await pullDockerImage(pullReference.value)
+    const completed = await followJob(job.id, (snapshot) => { pullProgress.value = snapshot.progress })
+    if (completed.status === 'failed') throw new NcpApiError('DOCKER_IMAGE_PULL_FAILED', completed.error || completed.message)
     ElMessage.success(`镜像 ${pullReference.value} 已拉取`)
     await refresh()
   } catch (caught) {
     ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像拉取失败。')
   } finally {
     pullPending.value = false
+    pullProgress.value = 0
   }
 }
 
@@ -204,7 +210,7 @@ onMounted(refresh)
           <div v-else class="tag-grid">
             <button v-for="tag in tags" :key="tag.name" type="button" :class="{ active: selectedTag === tag.name }" @click="selectedTag = tag.name"><strong>{{ tag.name }}</strong><small>{{ formatBytes(tag.fullSize) }} · {{ tag.architectures.slice(0, 2).join('、') || '架构未知' }}</small></button>
           </div>
-          <footer><span>拉取完成后会自动出现在本地镜像列表</span><button class="primary-button" type="button" :disabled="pullPending || !selectedTag" @click="submitPull"><Download :size="17" />{{ pullPending ? '正在拉取…' : '一键拉取' }}</button></footer>
+          <footer><span>{{ pullPending ? `后台拉取中 · ${pullProgress}%` : '拉取完成后会自动出现在本地镜像列表' }}</span><button class="primary-button" type="button" :disabled="pullPending || !selectedTag" @click="submitPull"><Download :size="17" />{{ pullPending ? `正在拉取 ${pullProgress}%` : '一键拉取' }}</button></footer>
         </template>
         <div v-else class="detail-empty"><Search :size="28" /><strong>选择一个镜像仓库</strong><span>查看标签、架构并直接拉取到 NAS</span></div>
       </section>

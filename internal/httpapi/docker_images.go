@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 )
@@ -23,14 +24,23 @@ func (api *handler) pullDockerImage(response http.ResponseWriter, request *http.
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), defaultDockerImageTimeout)
-	defer cancel()
-	result, err := api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input)
-	if err != nil {
-		api.writeError(response, request, http.StatusBadRequest, "DOCKER_IMAGE_PULL_FAILED", "镜像拉取失败，请检查镜像地址、标签和仓库连接。")
+	input.Reference = strings.TrimSpace(input.Reference)
+	if input.Reference == "" {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_IMAGE_PULL_INVALID", "请输入完整的镜像引用。")
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	job := api.jobs.create("docker-image-pull", input.Reference)
+	go func() {
+		api.jobs.update(job.ID, "running", "正在从镜像仓库拉取", "", 10)
+		requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
+		defer cancel()
+		if _, err := api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input); err != nil {
+			api.jobs.update(job.ID, "failed", "镜像拉取失败", "请检查镜像地址、标签和仓库连接。", 100)
+			return
+		}
+		api.jobs.update(job.ID, "completed", "镜像拉取完成", "", 100)
+	}()
+	writeJSON(response, http.StatusAccepted, job)
 }
 
 func (api *handler) removeDockerImage(response http.ResponseWriter, request *http.Request) {

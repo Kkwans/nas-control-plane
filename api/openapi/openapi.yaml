@@ -356,12 +356,12 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerImagePullRequest'
       responses:
-        '200':
-          description: Image pull completed
+        '202':
+          description: Image pull job accepted
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DockerImagePullResult'
+                $ref: '#/components/schemas/JobSnapshot'
         '400':
           description: Invalid image reference or pull failed
           content:
@@ -393,6 +393,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/jobs/{jobID}:
+    get:
+      operationId: getJob
+      summary: Get current background job status
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Current job snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+  /api/v1/jobs/{jobID}/events:
+    get:
+      operationId: followJob
+      summary: Follow background job progress over SSE
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: text/event-stream progress snapshots
   /api/v1/services:
     get:
       operationId: listServices
@@ -865,6 +891,19 @@ components:
       properties:
         reference: { type: string }
         completed: { type: boolean }
+    JobSnapshot:
+      type: object
+      required: [id, type, status, message, progress, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed] }
+        reference: { type: string }
+        message: { type: string }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     DockerImageRemoveRequest:
       type: object
       required: [imageId]
