@@ -253,6 +253,26 @@ func builtInSiteProfile(name string) (controlstore.SiteProfile, bool) {
 			Description: "整理影视资源、浏览影片资料并维护个人媒体库。",
 			Category:    "影音服务",
 		},
+		"ddns-go": {
+			Name:        "DDNS-GO",
+			Description: "自动同步公网地址到 DNS 服务商，维护 NAS 的远程访问域名。",
+			Category:    "网络服务",
+		},
+		"openclaw": {
+			Name:        "OpenClaw",
+			Description: "统一运行与管理本地 AI 助手、渠道接入和自动化任务。",
+			Category:    "AI 工具",
+		},
+		"hermes": {
+			Name:        "Hermes",
+			Description: "面向 NAS 的 AI Agent 工作台，用于执行开发与自动化任务。",
+			Category:    "AI 工具",
+		},
+		"firefox": {
+			Name:        "Firefox",
+			Description: "运行在 NAS 上的远程浏览器，用于局域网网页访问和调试。",
+			Category:    "效率工具",
+		},
 	}
 	profile, ok := profiles[strings.ToLower(strings.TrimSpace(name))]
 	return profile, ok
@@ -300,7 +320,18 @@ func containsPort(ports []int, target int) bool {
 }
 
 func defaultSiteDescription(project docker.Project) string {
-	return "打开并管理 " + project.Name + " 提供的 Web 服务。"
+	switch inferSiteCategory(project.Name) {
+	case "文件与 NAS":
+		return "浏览和管理该项目提供的 NAS 文件与存储功能。"
+	case "影音服务":
+		return "访问该项目的媒体浏览、整理与播放界面。"
+	case "AI 工具":
+		return "进入该项目的 AI 工作台、任务或模型管理界面。"
+	case "网络服务":
+		return "查看该项目的网络状态、规则与连接配置。"
+	default:
+		return project.Name + " 的 Web 管理入口。"
+	}
 }
 
 func inferSiteCategory(name string) string {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ChevronRight, ExternalLink, FileText, Images, LoaderCircle, Search } from '@lucide/vue'
 import { ElDrawer, ElInput, ElTooltip } from 'element-plus'
@@ -84,7 +84,7 @@ async function performAction(containerId: string, action: ContainerAction) {
   actionError.value = null
   try {
     await requestContainerAction(containerId, action)
-    await systemStore.refresh({ includeCapabilities: false })
+    await systemStore.refresh({ inventory: true })
   } catch (error) {
     actionError.value = error instanceof NcpApiError ? error.message : '容器操作失败，请稍后重试。'
   } finally {
@@ -108,6 +108,7 @@ async function openLogs(container: { id: string; name: string }) {
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
 })
+onMounted(() => void systemStore.refresh({ inventory: true }))
 </script>
 
 <template>
@@ -230,8 +231,8 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 <style scoped>
 .docker-search { width: min(320px, 38vw); }
 .docker-view-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: #fff; }
-.docker-view-tabs button { display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .78rem; font-weight: 720; white-space: nowrap; }
-.docker-view-tabs button.active { background: var(--ncp-primary); box-shadow: 0 4px 12px rgba(36,104,216,.16); color: #fff; }
+.docker-view-tabs button { display: flex; min-height: 38px; align-items: center; gap: 6px; padding: 0 13px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; white-space: nowrap; }
+.docker-view-tabs button.active { background: var(--ncp-primary); box-shadow: 0 4px 12px rgba(23,104,229,.16); color: #fff; }
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
@@ -240,20 +241,20 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
 .docker-table { overflow: hidden; }
 .docker-table__head, .project-row { display: grid; grid-template-columns: minmax(210px,1.3fr) 108px 74px 180px minmax(170px,1fr) 78px; align-items: center; gap: 12px; }
 .docker-table__head { min-height: 42px; padding: 0 16px; background: var(--ncp-surface-quiet); color: var(--ncp-text-subtle); font-size: .75rem; font-weight: 730; }
-.project-row { width: 100%; min-height: 68px; padding: 0 16px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); font-size: .78rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
+.project-row { width: 100%; min-height: 72px; padding: 0 16px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); font-size: .82rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
 .project-row:hover { position: relative; z-index: 1; background: var(--ncp-surface-hover); box-shadow: inset 3px 0 0 var(--ncp-primary); }
 .project-name { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .project-name>span { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .project-name>div { display: grid; min-width: 0; gap: 1px; }
-.project-name strong { overflow: hidden; color: var(--ncp-text); font-size: .84rem; text-overflow: ellipsis; white-space: nowrap; }
-.project-name small { color: var(--ncp-text-subtle); font-size: .7rem; }
+.project-name strong { overflow: hidden; color: var(--ncp-text); font-size: .88rem; text-overflow: ellipsis; white-space: nowrap; }
+.project-name small { color: var(--ncp-text-subtle); font-size: .74rem; }
 .mono { font-family: 'JetBrains Mono Variable', monospace; }
 .port-cell { display: flex; min-width: 0; align-items: center; gap: 5px; }
-.port-cell a { display: flex; min-height: 32px; align-items: center; gap: 3px; padding: 0 7px; border-radius: 7px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .61rem; }
-.port-cell>span { color: var(--ncp-text-subtle); font-size: .62rem; }
+.port-cell a { display: flex; min-height: 32px; align-items: center; gap: 3px; padding: 0 8px; border-radius: 7px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .72rem; }
+.port-cell>span { color: var(--ncp-text-subtle); font-size: .72rem; }
 .path-cell { overflow: hidden; padding-right: 8px; color: var(--ncp-text-subtle); text-overflow: ellipsis; white-space: nowrap; }
-.row-detail { display: flex; min-height: 44px; align-items: center; justify-content: flex-end; gap: 2px; color: var(--ncp-primary-strong); font-size: .65rem; font-weight: 700; }
-.table-empty { padding: 36px; color: var(--ncp-text-subtle); font-size: .72rem; text-align: center; }
+.row-detail { display: flex; min-height: 44px; align-items: center; justify-content: flex-end; gap: 2px; color: var(--ncp-primary-strong); font-size: .78rem; font-weight: 720; }
+.table-empty { padding: 36px; color: var(--ncp-text-subtle); font-size: .82rem; text-align: center; }
 .docker-mobile-list { display: none; }
 .log-loading { display: flex; align-items: center; gap: 8px; color: var(--ncp-text-muted); font-size: .75rem; }
 .log-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; }

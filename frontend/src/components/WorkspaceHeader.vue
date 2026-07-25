@@ -48,10 +48,10 @@ defineProps<{
 .workspace-header { overflow: hidden; }
 .workspace-header__main {
   display: flex;
-  min-height: 82px;
+  min-height: 88px;
   align-items: center;
-  gap: 18px;
-  padding: 14px 16px;
+  gap: 22px;
+  padding: 16px 18px;
 }
 .workspace-header__title {
   display: flex;
@@ -62,50 +62,49 @@ defineProps<{
 }
 .workspace-header__icon {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid rgba(36, 104, 216, .13);
-  border-radius: 12px;
+  border-radius: 13px;
   background: var(--ncp-primary-soft);
   color: var(--ncp-primary-strong);
 }
-h1 { margin: 0; font-size: clamp(1.3rem, 1.8vw, 1.55rem); font-weight: 760; letter-spacing: -.035em; line-height: 1.2; }
-p { margin: 3px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height: 1.45; }
+h1 { margin: 0; font-size: clamp(1.34rem, 1.8vw, 1.58rem); font-weight: 770; letter-spacing: -.035em; line-height: 1.2; }
+p { margin: 4px 0 0; color: var(--ncp-text-muted); font-size: .86rem; line-height: 1.45; }
 .workspace-stats {
   display: flex;
   flex: 0 0 auto;
   align-items: stretch;
   margin: 0;
-  padding: 3px;
-  border: 1px solid var(--ncp-line);
-  border-radius: 12px;
-  background: var(--ncp-surface-quiet);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .workspace-stat {
   display: grid;
-  min-width: 86px;
+  min-width: 92px;
   align-content: center;
   gap: 2px;
-  padding: 4px 12px;
+  padding: 3px 16px;
   border-right: 1px solid var(--ncp-line);
 }
 .workspace-stat:last-child { border-right: 0; }
-.workspace-stat dt { color: var(--ncp-text-subtle); font-size: .76rem; font-weight: 650; white-space: nowrap; }
-.workspace-stat dd { order: -1; margin: 0; font-family: var(--ncp-font-mono); font-size: 1.08rem; font-weight: 730; line-height: 1.2; }
+.workspace-stat dt { color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 650; white-space: nowrap; }
+.workspace-stat dd { order: -1; margin: 0; font-family: var(--ncp-font-latin); font-size: 1.16rem; font-weight: 760; line-height: 1.2; }
 .workspace-stat--success dd { color: var(--ncp-success); }
 .workspace-stat--warning dd { color: var(--ncp-warning-strong); }
 .workspace-toolbar {
   display: flex;
   min-width: 0;
-  min-height: 52px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-top: 1px solid var(--ncp-line);
-  background: #f7f9fc;
+  background: #fff;
 }
 .workspace-filters,
 .workspace-tools,
@@ -141,7 +140,7 @@ p { margin: 3px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   padding: 2px;
   border: 0;
   border-radius: 10px;
-  background: rgba(226, 232, 241, .78);
+  background: var(--ncp-surface-quiet);
 }
 .workspace-toolbar :deep(.source-filter button),
 .workspace-toolbar :deep(.state-filter button) {

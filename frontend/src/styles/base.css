@@ -16,7 +16,7 @@ body {
   font-family: var(--ncp-font-ui);
   font-size: var(--ncp-base-font-size);
   font-synthesis: none;
-  line-height: 1.6;
+  line-height: 1.55;
   text-rendering: optimizeLegibility;
 }
 
@@ -63,7 +63,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .page {
   width: 100%;
   margin: 0 auto;
-  padding: 18px clamp(18px, 2vw, 30px) 36px;
+  padding: 20px clamp(20px, 2.2vw, 34px) 38px;
 }
 
 .page-toolbar {
@@ -78,7 +78,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .workspace-page {
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 16px;
   min-height: 0;
 }
 
@@ -142,6 +142,25 @@ button:not(:disabled), a[href] { cursor: pointer; }
   border-radius: var(--ncp-radius-md);
   background: var(--ncp-surface);
   box-shadow: var(--ncp-shadow-panel);
+}
+
+.panel,
+.workspace-page button,
+.workspace-page a {
+  -webkit-font-smoothing: antialiased;
+}
+
+.workspace-page button {
+  transition:
+    color var(--ncp-duration-fast) var(--ncp-ease-out),
+    background-color var(--ncp-duration-fast) var(--ncp-ease-out),
+    border-color var(--ncp-duration-fast) var(--ncp-ease-out),
+    box-shadow var(--ncp-duration-fast) var(--ncp-ease-out),
+    transform var(--ncp-duration-fast) var(--ncp-ease-out);
+}
+
+.workspace-page button:not(:disabled):active {
+  transform: translateY(1px);
 }
 
 .interactive-surface {
