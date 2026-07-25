@@ -109,6 +109,13 @@ export interface DockerInventory {
   projects: DockerProject[]
 }
 
+export interface RealtimeSnapshot {
+  collectedAt: string
+  summary?: SystemSummary
+  docker?: DockerInventory
+  errors?: string[]
+}
+
 export interface ServiceListResponse {
   collectedAt: string
   services: DockerProject[]
@@ -297,6 +304,33 @@ export async function requestSystemSummary(fetcher: typeof fetch = fetch): Promi
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {
   return requestJson('/api/v1/docker/inventory', {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
+}
+
+export function subscribeSystemEvents(
+  scopes: Array<'summary' | 'docker'>,
+  intervalSeconds: number,
+  handlers: {
+    open: () => void
+    snapshot: (snapshot: RealtimeSnapshot) => void
+    error: () => void
+  },
+): EventSource {
+  const parameters = new URLSearchParams({ interval: String(intervalSeconds) })
+  for (const scope of scopes) parameters.append('scope', scope)
+  const source = new EventSource(`/api/v1/system/events?${parameters}`)
+  source.onopen = handlers.open
+  source.addEventListener('snapshot', (event) => {
+    try {
+      const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
+      if (!isRealtimeSnapshot(payload)) throw new Error('实时快照格式无效')
+      handlers.snapshot(payload)
+    } catch {
+      handlers.error()
+      source.close()
+    }
+  })
+  source.onerror = handlers.error
+  return source
 }
 
 export async function requestServices(fetcher: typeof fetch = fetch): Promise<ServiceListResponse> {
@@ -600,6 +634,14 @@ function isSystemSummary(value: unknown): value is SystemSummary {
 
 function isDockerInventory(value: unknown): value is DockerInventory {
   return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
+}
+
+function isRealtimeSnapshot(value: unknown): value is RealtimeSnapshot {
+  return isRecord(value) &&
+    typeof value.collectedAt === 'string' &&
+    (value.summary === undefined || isSystemSummary(value.summary)) &&
+    (value.docker === undefined || isDockerInventory(value.docker)) &&
+    (value.errors === undefined || (Array.isArray(value.errors) && value.errors.every((item) => typeof item === 'string')))
 }
 
 function isServiceListResponse(value: unknown): value is ServiceListResponse {

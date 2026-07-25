@@ -109,6 +109,13 @@ type ServiceListResponse struct {
 	Services    []docker.Project `json:"services"`
 }
 
+type RealtimeSnapshot struct {
+	CollectedAt time.Time         `json:"collectedAt"`
+	Summary     *system.Summary   `json:"summary,omitempty"`
+	Docker      *docker.Inventory `json:"docker,omitempty"`
+	Errors      []string          `json:"errors,omitempty"`
+}
+
 type handler struct {
 	agent               AgentClient
 	databaseAgent       DatabaseAgentClient
@@ -277,6 +284,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
 			protected.Get("/logs", api.logs)
+			protected.Get("/logs/events", api.logEvents)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
@@ -363,36 +371,12 @@ func (api *handler) agentStatus(response http.ResponseWriter, request *http.Requ
 }
 
 func (api *handler) systemSummary(response http.ResponseWriter, request *http.Request) {
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
-	defer cancel()
-
-	summary, err := api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
+	summary, err := api.collectSystemSummary(request.Context())
 	if err != nil {
 		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
 		return
 	}
-	if api.controlStore != nil {
-		var storageTotal, storageUsed, networkReceive, networkTransmit uint64
-		for _, disk := range summary.Storage {
-			storageTotal += disk.TotalBytes
-			storageUsed += disk.UsedBytes
-		}
-		for _, item := range summary.Network {
-			networkReceive += item.ReceiveBytes
-			networkTransmit += item.TransmitBytes
-		}
-		memoryPercent, diskPercent := 0.0, 0.0
-		if summary.Memory.TotalBytes > 0 {
-			memoryPercent = float64(summary.Memory.UsedBytes) / float64(summary.Memory.TotalBytes) * 100
-		}
-		if storageTotal > 0 {
-			diskPercent = float64(storageUsed) / float64(storageTotal) * 100
-		}
-		_ = api.controlStore.RecordMetricSample(request.Context(), controlstore.MetricSample{
-			CollectedAt: summary.CollectedAt, CPUPercent: summary.CPU.UsagePercent, MemoryPercent: memoryPercent,
-			Load1: summary.CPU.Load1, DiskPercent: diskPercent, NetworkReceive: networkReceive, NetworkTransmit: networkTransmit,
-		})
-	}
+	api.recordMetricSample(request.Context(), summary)
 	writeJSON(response, http.StatusOK, summary)
 }
 
@@ -429,15 +413,34 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 	response.Header().Set("X-Accel-Buffering", "no")
 	response.WriteHeader(http.StatusOK)
 	interval := realtimeInterval(request)
+	scope := realtimeScope(request)
 	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
 	flusher.Flush()
 
 	sendSnapshot := func() bool {
-		_, err := fmt.Fprintf(
-			response,
-			"event: snapshot\ndata: {\"collectedAt\":%q}\n\n",
-			time.Now().UTC().Format(time.RFC3339),
-		)
+		snapshot := RealtimeSnapshot{CollectedAt: time.Now().UTC()}
+		if scope.summary {
+			summary, err := api.collectSystemSummary(request.Context())
+			if err != nil {
+				snapshot.Errors = append(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE")
+			} else {
+				snapshot.Summary = &summary
+				api.recordMetricSample(request.Context(), summary)
+			}
+		}
+		if scope.docker {
+			inventory, err := api.collectDockerInventoryContext(request.Context())
+			if err != nil {
+				snapshot.Errors = append(snapshot.Errors, "DOCKER_INVENTORY_UNAVAILABLE")
+			} else {
+				snapshot.Docker = &inventory
+			}
+		}
+		payload, err := json.Marshal(snapshot)
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Fprintf(response, "event: snapshot\ndata: %s\n\n", payload)
 		if err != nil {
 			return false
 		}
@@ -460,6 +463,27 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 			}
 		}
 	}
+}
+
+type realtimeStreamScope struct {
+	summary bool
+	docker  bool
+}
+
+func realtimeScope(request *http.Request) realtimeStreamScope {
+	scope := realtimeStreamScope{}
+	for _, name := range request.URL.Query()["scope"] {
+		switch name {
+		case "summary":
+			scope.summary = true
+		case "docker":
+			scope.docker = true
+		}
+	}
+	if !scope.summary && !scope.docker {
+		scope.summary = true
+	}
+	return scope
 }
 
 func realtimeInterval(request *http.Request) time.Duration {
@@ -547,15 +571,50 @@ func (api *handler) containerLogs(response http.ResponseWriter, request *http.Re
 }
 
 func (api *handler) collectDockerInventory(response http.ResponseWriter, request *http.Request) (docker.Inventory, bool) {
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
-	defer cancel()
-
-	inventory, err := api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
+	inventory, err := api.collectDockerInventoryContext(request.Context())
 	if err != nil {
 		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_INVENTORY_UNAVAILABLE", "Docker 实时清单暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
 		return docker.Inventory{}, false
 	}
 	return inventory, true
+}
+
+func (api *handler) collectSystemSummary(ctx context.Context) (system.Summary, error) {
+	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
+	defer cancel()
+	return api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
+}
+
+func (api *handler) collectDockerInventoryContext(ctx context.Context) (docker.Inventory, error) {
+	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
+	defer cancel()
+	return api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
+}
+
+func (api *handler) recordMetricSample(ctx context.Context, summary system.Summary) {
+	if api.controlStore == nil {
+		return
+	}
+	var storageTotal, storageUsed, networkReceive, networkTransmit uint64
+	for _, disk := range summary.Storage {
+		storageTotal += disk.TotalBytes
+		storageUsed += disk.UsedBytes
+	}
+	for _, item := range summary.Network {
+		networkReceive += item.ReceiveBytes
+		networkTransmit += item.TransmitBytes
+	}
+	memoryPercent, diskPercent := 0.0, 0.0
+	if summary.Memory.TotalBytes > 0 {
+		memoryPercent = float64(summary.Memory.UsedBytes) / float64(summary.Memory.TotalBytes) * 100
+	}
+	if storageTotal > 0 {
+		diskPercent = float64(storageUsed) / float64(storageTotal) * 100
+	}
+	_ = api.controlStore.RecordMetricSample(ctx, controlstore.MetricSample{
+		CollectedAt: summary.CollectedAt, CPUPercent: summary.CPU.UsagePercent, MemoryPercent: memoryPercent,
+		Load1: summary.CPU.Load1, DiskPercent: diskPercent, NetworkReceive: networkReceive, NetworkTransmit: networkTransmit,
+	})
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {

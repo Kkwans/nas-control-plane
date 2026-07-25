@@ -42,6 +42,7 @@ const props = defineProps({
   sidebarDefault: { type: String as PropType<'collapsed' | 'expanded'>, default: 'collapsed' },
   userName: { type: String, required: true },
   isRefreshing: { type: Boolean, default: false },
+  liveDataActive: { type: Boolean, default: false },
 })
 
 const mobileNavigationOpen = ref(false)
@@ -77,7 +78,6 @@ const breadcrumbs = computed(() => {
 const realtimeLabel = computed(() => {
   if (props.connectionState === 'unavailable') return '数据暂不可用'
   if (props.realtimeState === 'streaming') return `实时更新 · ${props.refreshIntervalSeconds} 秒`
-  if (props.realtimeState === 'polling') return `轮询更新 · ${props.refreshIntervalSeconds} 秒`
   if (props.realtimeState === 'connecting') return '正在连接'
   return props.connectionState === 'connected' ? '数据已同步' : '等待数据'
 })
@@ -185,10 +185,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="topbar__actions">
-          <span class="connection-state" :class="`connection-state--${realtimeState}`">
+          <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${realtimeState}`">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
-          <ElTooltip content="立即刷新数据" placement="bottom">
+          <ElTooltip v-if="liveDataActive" content="立即刷新数据" placement="bottom">
             <button class="refresh-button" type="button" :disabled="isRefreshing" aria-label="立即刷新数据" @click="emit('refresh')">
               <RefreshCw :class="{ spin: isRefreshing }" :size="18" aria-hidden="true" /><span>刷新</span>
             </button>
@@ -203,7 +203,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-shell { display: grid; grid-template-columns: var(--ncp-sidebar-width) minmax(0, 1fr); min-height: 100dvh; }
 .app-shell--collapsed { grid-template-columns: var(--ncp-sidebar-collapsed-width) minmax(0, 1fr); }
-.app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: rgba(255,255,255,.98); }
+.app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: #fff; }
 .sidebar-brand-row { display: flex; align-items: center; }
 .brand { display: flex; min-width: 0; flex: 1; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px; border-radius: 11px; }
 .brand__text { display: grid; gap: 1px; min-width: 0; }
@@ -213,9 +213,9 @@ onBeforeUnmount(() => {
 .navigation { display: grid; gap: 4px; margin-top: 24px; }
 .navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 750; letter-spacing: .02em; }
 .navigation__label--secondary { margin-top: 18px; }
-.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); font-size: .84rem; font-weight: 680; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
-.navigation__item:hover { border-color: rgba(36,104,216,.08); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
-.navigation__item.router-link-exact-active { border-color: rgba(36,104,216,.1); background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); font-size: .86rem; font-weight: 680; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.navigation__item:hover { border-color: rgba(23,104,229,.08); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
+.navigation__item.router-link-exact-active { border-color: rgba(23,104,229,.12); background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .navigation__item--planned { cursor: not-allowed; opacity: .55; }
 .navigation__item--planned small { margin-left: auto; font-size: .68rem; }
 .navigation__arrow { margin-left: auto; opacity: 0; transform: translateX(-3px); transition: opacity var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
@@ -247,15 +247,15 @@ onBeforeUnmount(() => {
 .app-shell--collapsed .navigation__item:hover { transform: none; }
 .app-shell--collapsed .sidebar-footer__identity { justify-content: center; }
 .app-stage { min-width: 0; }
-.topbar { position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--ncp-topbar-height); align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(18px, 2.2vw, 34px); border-bottom: 1px solid rgba(220,228,238,.92); background: rgba(244,247,251,.88); backdrop-filter: blur(18px) saturate(150%); }
+.topbar { position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--ncp-topbar-height); align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(20px, 2.2vw, 34px); border-bottom: 1px solid var(--ncp-line); background: rgba(255,255,255,.9); backdrop-filter: blur(18px) saturate(150%); }
 .topbar__leading, .topbar__location, .topbar__actions, .connection-state, .refresh-button { display: flex; align-items: center; }
 .topbar__leading { min-width: 0; gap: 8px; }
-.topbar__location { gap: 8px; color: var(--ncp-text-subtle); font-size: .8rem; }
+.topbar__location { gap: 8px; color: var(--ncp-text-subtle); font-size: .84rem; }
 .topbar__location strong { color: var(--ncp-text); font-weight: 750; }
 .topbar__location a { color: var(--ncp-text-muted); font-weight: 680; transition: color var(--ncp-duration-fast); }
 .topbar__location a:hover { color: var(--ncp-primary-strong); }
 .topbar__actions { gap: 12px; }
-.connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .78rem; }
+.connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .8rem; }
 .connection-state > span { width: 7px; height: 7px; border-radius: 50%; background: var(--ncp-primary); box-shadow: 0 0 0 4px var(--ncp-primary-soft); }
 .connection-state--polling > span, .connection-state--connecting > span { background: var(--ncp-warning); box-shadow: 0 0 0 4px var(--ncp-warning-soft); }
 .connection-state--streaming > span { background: var(--ncp-success); box-shadow: 0 0 0 4px var(--ncp-success-soft); }

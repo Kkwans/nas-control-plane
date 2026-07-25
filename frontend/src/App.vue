@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from 'vue'
-import { RouterView, useRouter } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { LoaderCircle } from '@lucide/vue'
@@ -9,14 +9,19 @@ import AppShell from './layout/AppShell.vue'
 import LoginView from './views/LoginView.vue'
 import { useAuthStore } from './stores/auth'
 import { useSystemStore } from './stores/system'
+import type { RealtimeScope } from './stores/system'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
 let sessionStartPromise: Promise<void> | null = null
 
 watch(() => authStore.isAuthenticated, (authenticated) => {
   if (authenticated) void startAuthenticatedSession()
+})
+watch(() => route.fullPath, () => {
+  if (authStore.isAuthenticated) void syncRouteData()
 })
 
 onMounted(() => {
@@ -48,8 +53,7 @@ function startAuthenticatedSession() {
     } catch {
       // 偏好读取失败不应阻塞首次实时数据加载。
     }
-    await systemStore.refresh()
-    systemStore.startRealtime()
+    await syncRouteData()
   })()
   return sessionStartPromise.finally(() => {
     sessionStartPromise = null
@@ -73,8 +77,17 @@ async function handleLogout() {
 function handleVisibilityChange() {
   if (!authStore.isAuthenticated) return
   if (document.visibilityState === 'visible') {
-    void systemStore.refresh({ includeCapabilities: false })
-    systemStore.startRealtime()
+    void syncRouteData()
+  }
+}
+
+async function syncRouteData() {
+  const scopes = Array.isArray(route.meta.realtime)
+    ? route.meta.realtime.filter((scope): scope is RealtimeScope => scope === 'summary' || scope === 'docker')
+    : []
+  systemStore.startRealtime(scopes)
+  if (route.meta.capabilities && !systemStore.capabilities) {
+    await systemStore.refresh({ capabilities: true })
   }
 }
 </script>
@@ -96,6 +109,7 @@ function handleVisibilityChange() {
       :sidebar-default="systemStore.preferences.sidebarDefault"
       :user-name="authStore.user?.username ?? 'root'"
       :is-refreshing="systemStore.isRefreshing"
+      :live-data-active="systemStore.realtimeScopes.length > 0"
       @refresh="handleRefresh"
       @logout="handleLogout"
     >

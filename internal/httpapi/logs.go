@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,6 +29,15 @@ type logResponse struct {
 }
 
 func (api *handler) logs(response http.ResponseWriter, request *http.Request) {
+	result, status, err := api.collectLogs(request)
+	if err != nil {
+		api.writeError(response, request, status, "LOG_QUERY_FAILED", err.Error())
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (api *handler) collectLogs(request *http.Request) (logResponse, int, error) {
 	source := request.URL.Query().Get("source")
 	if source == "" {
 		source = "system"
@@ -43,15 +54,62 @@ func (api *handler) logs(response http.ResponseWriter, request *http.Request) {
 	case "container":
 		result, err = api.readContainerLogCenter(timeoutContext, limit, request.URL.Query().Get("containerId"))
 	default:
-		api.writeError(response, request, http.StatusBadRequest, "LOG_SOURCE_INVALID", "日志来源无效。")
-		return
+		return logResponse{}, http.StatusBadRequest, fmt.Errorf("日志来源无效。")
 	}
 	if err != nil {
-		api.writeError(response, request, http.StatusServiceUnavailable, "LOG_QUERY_FAILED", "日志读取失败，请确认 Root Agent 和目标服务正在运行。")
-		return
+		return logResponse{}, http.StatusServiceUnavailable, fmt.Errorf("日志读取失败，请确认 Root Agent 和目标服务正在运行。")
 	}
 	result.Entries = filterLogEntries(result.Entries, request.URL.Query().Get("level"), request.URL.Query().Get("query"))
-	writeJSON(response, http.StatusOK, result)
+	return result, http.StatusOK, nil
+}
+
+func (api *handler) logEvents(response http.ResponseWriter, request *http.Request) {
+	flusher, ok := response.(http.Flusher)
+	if !ok {
+		api.writeError(response, request, http.StatusInternalServerError, "LOG_STREAM_UNSUPPORTED", "当前服务不支持日志实时流。")
+		return
+	}
+	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-cache, no-transform")
+	response.Header().Set("Connection", "keep-alive")
+	response.Header().Set("X-Accel-Buffering", "no")
+	response.WriteHeader(http.StatusOK)
+	interval := realtimeInterval(request)
+	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
+	flusher.Flush()
+
+	send := func() bool {
+		result, _, err := api.collectLogs(request)
+		if err != nil {
+			_, err = fmt.Fprintf(response, "event: unavailable\ndata: {}\n\n")
+		} else {
+			var payload []byte
+			payload, err = json.Marshal(result)
+			if err == nil {
+				_, err = fmt.Fprintf(response, "event: logs\ndata: %s\n\n", payload)
+			}
+		}
+		if err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send() {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
 }
 
 func (api *handler) readJournalLogs(ctx context.Context, source string, limit int, request *http.Request) (logResponse, error) {

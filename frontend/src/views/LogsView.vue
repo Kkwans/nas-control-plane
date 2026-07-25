@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CirclePause, FileClock, Play, RefreshCw, Search } from '@lucide/vue'
 import { ElButton, ElInput, ElOption, ElSelect, ElSwitch } from 'element-plus'
 
-import { requestLogs, type LogEntry } from '@/api/control'
+import { followLogs, requestLogs, type LogEntry } from '@/api/control'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSystemStore } from '@/stores/system'
 
@@ -18,7 +18,7 @@ const following = ref(false)
 const loading = ref(false)
 const error = ref('')
 const entries = ref<LogEntry[]>([])
-let followTimer: number | null = null
+let logSource: EventSource | null = null
 
 const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
@@ -47,15 +47,36 @@ async function load(silent = false) {
   }
 }
 
-function syncFollowTimer() {
-  if (followTimer !== null) window.clearInterval(followTimer)
-  followTimer = following.value ? window.setInterval(() => void load(true), 3000) : null
+function syncFollowStream() {
+  logSource?.close()
+  logSource = null
+  if (!following.value || (source.value === 'container' && !containerId.value)) return
+  logSource = followLogs({
+    source: source.value, containerId: containerId.value, level: level.value,
+    query: query.value, hours: hours.value, limit: 200,
+  }, systemStore.refreshIntervalSeconds, (result) => {
+    entries.value = result.entries
+    error.value = ''
+  }, () => {
+    error.value = '实时日志连接已中断，可暂停后重新开启。'
+  })
 }
 
-watch([source, containerId, level, hours], () => void load())
-watch(following, syncFollowTimer)
-onMounted(() => void load())
-onBeforeUnmount(() => { if (followTimer !== null) window.clearInterval(followTimer) })
+function refreshLogs() {
+  void load()
+  if (following.value) syncFollowStream()
+}
+
+watch([source, containerId, level, hours], () => {
+  void load()
+  if (following.value) syncFollowStream()
+})
+watch(following, syncFollowStream)
+onMounted(() => {
+  void systemStore.refresh({ inventory: true })
+  void load()
+})
+onBeforeUnmount(() => logSource?.close())
 
 function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
@@ -65,7 +86,7 @@ function levelLabel(value: LogEntry['level']) {
 <template>
   <div class="page workspace-page logs-page">
     <WorkspaceHeader title="日志中心" description="统一检索系统、NCP Agent 与 Docker 容器日志" :icon="FileClock" :stats="stats">
-      <template #actions><ElButton :loading="loading" @click="load()"><RefreshCw :size="16" />刷新</ElButton></template>
+      <template #actions><ElButton :loading="loading" @click="refreshLogs"><RefreshCw :size="16" />刷新</ElButton></template>
     </WorkspaceHeader>
 
     <section class="log-toolbar panel">
@@ -80,7 +101,7 @@ function levelLabel(value: LogEntry['level']) {
         <ElSelect v-model="hours" aria-label="时间范围"><ElOption label="最近 1 小时" :value="1" /><ElOption label="最近 6 小时" :value="6" /><ElOption label="最近 24 小时" :value="24" /><ElOption label="最近 7 天" :value="168" /></ElSelect>
       </div>
       <div class="log-tools">
-        <ElInput v-model="query" clearable placeholder="搜索消息或服务" @keyup.enter="load()"><template #prefix><Search :size="16" /></template></ElInput>
+        <ElInput v-model="query" clearable placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
         <label class="follow-switch"><component :is="following ? Play : CirclePause" :size="16" /><span>实时跟随</span><ElSwitch v-model="following" /></label>
       </div>
     </section>

@@ -7,13 +7,22 @@ import {
   requestCapabilities,
   requestDockerInventory,
   requestSystemSummary,
+  subscribeSystemEvents,
   type DockerInventory,
+  type RealtimeSnapshot,
   type SystemCapabilities,
   type SystemSummary,
 } from '@/api/system'
 
 export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unavailable'
-export type RealtimeState = 'connecting' | 'streaming' | 'polling' | 'offline'
+export type RealtimeState = 'connecting' | 'streaming' | 'offline'
+export type RealtimeScope = 'summary' | 'docker'
+
+export interface RefreshOptions {
+  summary?: boolean
+  inventory?: boolean
+  capabilities?: boolean
+}
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 5
 const MAX_HISTORY_POINTS = 60
@@ -37,6 +46,7 @@ export const useSystemStore = defineStore('system', () => {
   const isRefreshing = ref(false)
   const resourceHistory = ref<ResourceSample[]>([])
   const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
+  const realtimeScopes = ref<RealtimeScope[]>([])
   const preferences = ref<UserPreferences>({
     refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
     interfaceDensity: 'comfortable',
@@ -50,7 +60,6 @@ export const useSystemStore = defineStore('system', () => {
   })
 
   let eventSource: EventSource | null = null
-  let fallbackTimer: number | null = null
   let refreshPromise: Promise<void> | null = null
   let previousNetwork: { timestamp: number; receiveBytes: number; transmitBytes: number } | null = null
 
@@ -58,9 +67,17 @@ export const useSystemStore = defineStore('system', () => {
   const lastUpdated = computed(() => summary.value?.collectedAt || inventory.value?.collectedAt || null)
   const services = computed(() => inventory.value?.projects ?? [])
 
-  async function refresh(options: { includeCapabilities?: boolean } = {}) {
+  async function refresh(options: RefreshOptions = {}) {
     if (refreshPromise) return refreshPromise
-    refreshPromise = runRefresh(options.includeCapabilities ?? !capabilities.value)
+    const hasExplicitScope = options.summary !== undefined || options.inventory !== undefined || options.capabilities !== undefined
+    const normalized = hasExplicitScope
+      ? options
+      : {
+          summary: realtimeScopes.value.includes('summary'),
+          inventory: realtimeScopes.value.includes('docker'),
+          capabilities: false,
+        }
+    refreshPromise = runRefresh(normalized)
     try {
       await refreshPromise
     } finally {
@@ -86,32 +103,35 @@ export const useSystemStore = defineStore('system', () => {
     refreshIntervalSeconds.value = saved.refreshIntervalSeconds
     applyExperiencePreferences(saved)
     if (eventSource && intervalChanged) {
+      const scopes = [...realtimeScopes.value]
       stopRealtime()
-      startRealtime()
+      startRealtime(scopes)
     }
   }
 
-  async function runRefresh(includeCapabilities: boolean) {
+  async function runRefresh(options: RefreshOptions) {
     isRefreshing.value = true
     connectionState.value = summary.value || inventory.value ? 'degraded' : 'loading'
-    const requests: Array<Promise<SystemCapabilities | SystemSummary | DockerInventory>> = [
-      requestSystemSummary(),
-      requestDockerInventory(),
-    ]
-    if (includeCapabilities) requests.push(requestCapabilities())
-
-    const results = await Promise.allSettled(requests)
-    const summaryResult = results[0]
-    const inventoryResult = results[1]
-    const capabilitiesResult = includeCapabilities ? results[2] : undefined
-
-    if (summaryResult?.status === 'fulfilled') {
-      const nextSummary = summaryResult.value as SystemSummary
-      summary.value = nextSummary
-      appendResourceSample(nextSummary)
+    const requests: Array<{
+      type: 'summary' | 'inventory' | 'capabilities'
+      promise: Promise<SystemCapabilities | SystemSummary | DockerInventory>
+    }> = []
+    if (options.summary) requests.push({ type: 'summary', promise: requestSystemSummary() })
+    if (options.inventory) requests.push({ type: 'inventory', promise: requestDockerInventory() })
+    if (options.capabilities) requests.push({ type: 'capabilities', promise: requestCapabilities() })
+    if (!requests.length) {
+      isRefreshing.value = false
+      return
     }
-    if (inventoryResult?.status === 'fulfilled') inventory.value = inventoryResult.value as DockerInventory
-    if (capabilitiesResult?.status === 'fulfilled') capabilities.value = capabilitiesResult.value as SystemCapabilities
+
+    const results = await Promise.allSettled(requests.map((request) => request.promise))
+    results.forEach((result, index) => {
+      if (result.status !== 'fulfilled') return
+      const type = requests[index]?.type
+      if (type === 'summary') applySummary(result.value as SystemSummary)
+      if (type === 'inventory') inventory.value = result.value as DockerInventory
+      if (type === 'capabilities') capabilities.value = result.value as SystemCapabilities
+    })
 
     const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     errorCode.value = failures.length > 0 ? errorCodeFor(failures[0]?.reason) : null
@@ -120,43 +140,44 @@ export const useSystemStore = defineStore('system', () => {
     isRefreshing.value = false
   }
 
-  function startRealtime() {
-    if (eventSource) return
-    startFallbackPolling()
+  function startRealtime(scopes: RealtimeScope[]) {
+    const normalized = [...new Set(scopes)].sort()
+    const unchanged = normalized.length === realtimeScopes.value.length &&
+      normalized.every((scope, index) => scope === realtimeScopes.value[index])
+    if (unchanged && eventSource) return
+    stopRealtime()
+    realtimeScopes.value = normalized
+    if (!normalized.length) return
     realtimeState.value = 'connecting'
-    eventSource = new EventSource(`/api/v1/system/events?interval=${refreshIntervalSeconds.value}`)
-    eventSource.onopen = () => {
-      realtimeState.value = 'streaming'
-      stopFallbackPolling()
-    }
-    eventSource.addEventListener('snapshot', () => {
-      realtimeState.value = 'streaming'
-      void refresh({ includeCapabilities: false })
+    eventSource = subscribeSystemEvents(normalized, refreshIntervalSeconds.value, {
+      open: () => { realtimeState.value = 'streaming' },
+      snapshot: applyRealtimeSnapshot,
+      error: () => {
+        realtimeState.value = 'offline'
+        connectionState.value = summary.value || inventory.value ? 'degraded' : 'unavailable'
+      },
     })
-    eventSource.onerror = () => {
-      realtimeState.value = 'polling'
-      startFallbackPolling()
-    }
   }
 
   function stopRealtime() {
     eventSource?.close()
     eventSource = null
-    stopFallbackPolling()
     realtimeState.value = 'offline'
   }
 
-  function startFallbackPolling() {
-    if (fallbackTimer !== null) return
-    fallbackTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh({ includeCapabilities: false })
-    }, refreshIntervalSeconds.value * 1_000)
+  function applyRealtimeSnapshot(snapshot: RealtimeSnapshot) {
+    if (snapshot.summary) applySummary(snapshot.summary)
+    if (snapshot.docker) inventory.value = snapshot.docker
+    errorCode.value = snapshot.errors?.[0] ?? null
+    const expected = realtimeScopes.value.length
+    const received = Number(Boolean(snapshot.summary)) + Number(Boolean(snapshot.docker))
+    connectionState.value = received === expected ? 'connected' : received > 0 ? 'degraded' : 'unavailable'
+    realtimeState.value = 'streaming'
   }
 
-  function stopFallbackPolling() {
-    if (fallbackTimer === null) return
-    window.clearInterval(fallbackTimer)
-    fallbackTimer = null
+  function applySummary(nextSummary: SystemSummary) {
+    summary.value = nextSummary
+    appendResourceSample(nextSummary)
   }
 
   function clear() {
@@ -168,6 +189,7 @@ export const useSystemStore = defineStore('system', () => {
     connectionState.value = 'loading'
     resourceHistory.value = []
     previousNetwork = null
+    realtimeScopes.value = []
   }
 
   function appendResourceSample(nextSummary: SystemSummary) {
@@ -204,6 +226,7 @@ export const useSystemStore = defineStore('system', () => {
     isRefreshing,
     resourceHistory,
     refreshIntervalSeconds,
+    realtimeScopes,
     preferences,
     deviceName,
     lastUpdated,

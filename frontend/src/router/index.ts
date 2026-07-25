@@ -8,7 +8,7 @@ const router = createRouter({
       path: '/',
       name: 'overview',
       component: () => import('@/views/OverviewView.vue'),
-      meta: { title: '总览' },
+      meta: { title: '总览', realtime: ['summary', 'docker'] },
     },
     {
       path: '/sites',
@@ -30,7 +30,7 @@ const router = createRouter({
       path: '/system',
       name: 'system',
       component: () => import('@/views/InfrastructureView.vue'),
-      meta: { title: '系统信息' },
+      meta: { title: '系统信息', realtime: ['summary', 'docker'], capabilities: true },
     },
     {
       path: '/databases',
@@ -54,7 +54,7 @@ const router = createRouter({
       path: '/monitoring',
       name: 'monitoring',
       component: () => import('@/views/MonitoringView.vue'),
-      meta: { title: '监控' },
+      meta: { title: '监控', realtime: ['summary'] },
     },
     {
       path: '/logs',

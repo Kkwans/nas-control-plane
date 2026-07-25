@@ -148,6 +148,48 @@ export function requestLogs(input: {
   hours?: number
   limit?: number
 }): Promise<LogResponse> {
+  return request(`/api/v1/logs?${logParameters(input)}`)
+}
+
+export function followLogs(
+  input: {
+    source: 'system' | 'agent' | 'container'
+    containerId?: string
+    level?: string
+    query?: string
+    hours?: number
+    limit?: number
+  },
+  intervalSeconds: number,
+  onLogs: (result: LogResponse) => void,
+  onError: () => void,
+): EventSource {
+  const parameters = logParameters(input)
+  parameters.set('interval', String(intervalSeconds))
+  const source = new EventSource(`/api/v1/logs/events?${parameters}`)
+  source.addEventListener('logs', (event) => {
+    try {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as LogResponse
+      if (!Array.isArray(payload.entries) || typeof payload.collectedAt !== 'string') throw new Error('invalid log stream')
+      onLogs(payload)
+    } catch {
+      source.close()
+      onError()
+    }
+  })
+  source.addEventListener('unavailable', onError)
+  source.onerror = onError
+  return source
+}
+
+function logParameters(input: {
+  source: 'system' | 'agent' | 'container'
+  containerId?: string
+  level?: string
+  query?: string
+  hours?: number
+  limit?: number
+}) {
   const parameters = new URLSearchParams({
     source: input.source,
     level: input.level || 'all',
@@ -156,7 +198,7 @@ export function requestLogs(input: {
     limit: String(input.limit || 150),
   })
   if (input.containerId) parameters.set('containerId', input.containerId)
-  return request(`/api/v1/logs?${parameters}`)
+  return parameters
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
