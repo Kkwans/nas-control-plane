@@ -70,6 +70,16 @@ export interface ComposeRevision {
   createdAt: string
 }
 
+export interface MetricSample {
+  collectedAt: string
+  cpuPercent: number
+  memoryPercent: number
+  load1: number
+  diskPercent: number
+  networkReceiveBytes: number
+  networkTransmitBytes: number
+}
+
 export function requestPreferences(): Promise<UserPreferences> {
   return request('/api/v1/preferences')
 }
@@ -109,6 +119,10 @@ export function saveComposeDraft(input: Pick<ComposeDraft, 'projectId' | 'config
 
 export function requestComposeRevisions(projectId: string): Promise<ComposeRevision[]> {
   return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
+}
+
+export function requestMetricSamples(range: '1h' | '6h' | '24h' | '7d'): Promise<MetricSample[]> {
+  return request(`/api/v1/monitoring/samples?${new URLSearchParams({ range })}`)
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

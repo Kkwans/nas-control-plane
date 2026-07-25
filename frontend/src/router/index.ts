@@ -51,6 +51,12 @@ const router = createRouter({
       meta: { title: '数据库详情' },
     },
     {
+      path: '/monitoring',
+      name: 'monitoring',
+      component: () => import('@/views/MonitoringView.vue'),
+      meta: { title: '监控' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),

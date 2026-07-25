@@ -90,6 +90,16 @@ type ComposeRevision struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+type MetricSample struct {
+	CollectedAt     time.Time `json:"collectedAt"`
+	CPUPercent      float64   `json:"cpuPercent"`
+	MemoryPercent   float64   `json:"memoryPercent"`
+	Load1           float64   `json:"load1"`
+	DiskPercent     float64   `json:"diskPercent"`
+	NetworkReceive  uint64    `json:"networkReceiveBytes"`
+	NetworkTransmit uint64    `json:"networkTransmitBytes"`
+}
+
 func Open(databasePath string) (*Store, error) {
 	if strings.TrimSpace(databasePath) == "" {
 		return nil, errors.New("control store database path is required")
@@ -162,6 +172,48 @@ func (s *Store) UpdatePreferences(ctx context.Context, userID int64, preferences
 		return Preferences{}, err
 	}
 	return preferences, nil
+}
+
+func (s *Store) RecordMetricSample(ctx context.Context, sample MetricSample) error {
+	bucket := sample.CollectedAt.UTC().Unix() / 60 * 60
+	_, err := s.database.ExecContext(ctx, `
+		INSERT OR IGNORE INTO metric_samples (
+			collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
+			network_receive_bytes, network_transmit_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, bucket, sample.CPUPercent, sample.MemoryPercent, sample.Load1, sample.DiskPercent,
+		sample.NetworkReceive, sample.NetworkTransmit)
+	if err != nil {
+		return err
+	}
+	_, err = s.database.ExecContext(ctx, `DELETE FROM metric_samples WHERE collected_at_unix < ?`, s.now().UTC().Add(-7*24*time.Hour).Unix())
+	return err
+}
+
+func (s *Store) MetricSamples(ctx context.Context, since time.Time) ([]MetricSample, error) {
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
+			network_receive_bytes, network_transmit_bytes
+		FROM metric_samples
+		WHERE collected_at_unix >= ?
+		ORDER BY collected_at_unix
+	`, since.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	samples := make([]MetricSample, 0)
+	for rows.Next() {
+		var sample MetricSample
+		var collectedAtUnix int64
+		if err := rows.Scan(&collectedAtUnix, &sample.CPUPercent, &sample.MemoryPercent, &sample.Load1, &sample.DiskPercent,
+			&sample.NetworkReceive, &sample.NetworkTransmit); err != nil {
+			return nil, err
+		}
+		sample.CollectedAt = time.Unix(collectedAtUnix, 0).UTC()
+		samples = append(samples, sample)
+	}
+	return samples, rows.Err()
 }
 
 func validatePreferences(preferences Preferences) error {
@@ -474,6 +526,15 @@ func (s *Store) migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS compose_revisions_project_created
 			ON compose_revisions(project_id, created_at_unix DESC)`,
+		`CREATE TABLE IF NOT EXISTS metric_samples (
+			collected_at_unix INTEGER PRIMARY KEY,
+			cpu_percent REAL NOT NULL,
+			memory_percent REAL NOT NULL,
+			load1 REAL NOT NULL,
+			disk_percent REAL NOT NULL,
+			network_receive_bytes INTEGER NOT NULL,
+			network_transmit_bytes INTEGER NOT NULL
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {

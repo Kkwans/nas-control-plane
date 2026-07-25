@@ -45,6 +45,32 @@ func TestPreferencesPersistCompleteConsoleExperience(t *testing.T) {
 	}
 }
 
+func TestMetricSamplesDeduplicateMinuteAndRespectRange(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metrics.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 25, 15, 4, 30, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	for _, sample := range []MetricSample{
+		{CollectedAt: now.Add(-2 * time.Minute), CPUPercent: 12},
+		{CollectedAt: now.Add(-30 * time.Second), CPUPercent: 25},
+		{CollectedAt: now.Add(-10 * time.Second), CPUPercent: 99},
+	} {
+		if err := store.RecordMetricSample(context.Background(), sample); err != nil {
+			t.Fatal(err)
+		}
+	}
+	samples, err := store.MetricSamples(context.Background(), now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 1 || samples[0].CPUPercent != 25 {
+		t.Fatalf("samples = %#v", samples)
+	}
+}
+
 func TestSiteProfilePersistenceAndVisit(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {

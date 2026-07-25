@@ -145,6 +145,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/monitoring/samples:
+    get:
+      operationId: listMetricSamples
+      summary: Read persisted host metric samples
+      tags: [monitoring]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 6h } }
+      responses:
+        '200':
+          description: Metric samples ordered by collection time
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MetricSample'
   /api/v1/databases/project-preferences:
     get:
       operationId: listDatabaseProjectPreferences
@@ -764,6 +781,17 @@ components:
           maxLength: 512
         archived:
           type: boolean
+    MetricSample:
+      type: object
+      required: [collectedAt, cpuPercent, memoryPercent, load1, diskPercent, networkReceiveBytes, networkTransmitBytes]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        cpuPercent: { type: number, format: double }
+        memoryPercent: { type: number, format: double }
+        load1: { type: number, format: double }
+        diskPercent: { type: number, format: double }
+        networkReceiveBytes: { type: integer, format: int64 }
+        networkTransmitBytes: { type: integer, format: int64 }
     SiteProfileInput:
       type: object
       required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]

@@ -69,6 +69,8 @@ type ControlStore interface {
 	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)
 	RecordComposeRevision(context.Context, controlstore.ComposeRevision) (controlstore.ComposeRevision, error)
 	ComposeRevisions(context.Context, string, int) ([]controlstore.ComposeRevision, error)
+	RecordMetricSample(context.Context, controlstore.MetricSample) error
+	MetricSamples(context.Context, time.Time) ([]controlstore.MetricSample, error)
 }
 
 type Config struct {
@@ -257,6 +259,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/agent-status", api.agentStatus)
 			protected.Get("/system/summary", api.systemSummary)
 			protected.Get("/system/events", api.systemEvents)
+			protected.Get("/monitoring/samples", api.monitoringSamples)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
@@ -351,7 +354,49 @@ func (api *handler) systemSummary(response http.ResponseWriter, request *http.Re
 		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
 		return
 	}
+	if api.controlStore != nil {
+		var storageTotal, storageUsed, networkReceive, networkTransmit uint64
+		for _, disk := range summary.Storage {
+			storageTotal += disk.TotalBytes
+			storageUsed += disk.UsedBytes
+		}
+		for _, item := range summary.Network {
+			networkReceive += item.ReceiveBytes
+			networkTransmit += item.TransmitBytes
+		}
+		memoryPercent, diskPercent := 0.0, 0.0
+		if summary.Memory.TotalBytes > 0 {
+			memoryPercent = float64(summary.Memory.UsedBytes) / float64(summary.Memory.TotalBytes) * 100
+		}
+		if storageTotal > 0 {
+			diskPercent = float64(storageUsed) / float64(storageTotal) * 100
+		}
+		_ = api.controlStore.RecordMetricSample(request.Context(), controlstore.MetricSample{
+			CollectedAt: summary.CollectedAt, CPUPercent: summary.CPU.UsagePercent, MemoryPercent: memoryPercent,
+			Load1: summary.CPU.Load1, DiskPercent: diskPercent, NetworkReceive: networkReceive, NetworkTransmit: networkTransmit,
+		})
+	}
 	writeJSON(response, http.StatusOK, summary)
+}
+
+func (api *handler) monitoringSamples(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "MONITORING_STORE_UNAVAILABLE", "监控历史暂不可用。")
+		return
+	}
+	ranges := map[string]time.Duration{
+		"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
+	}
+	duration, ok := ranges[request.URL.Query().Get("range")]
+	if !ok {
+		duration = 6 * time.Hour
+	}
+	samples, err := api.controlStore.MetricSamples(request.Context(), time.Now().UTC().Add(-duration))
+	if err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
+		return
+	}
+	writeJSON(response, http.StatusOK, samples)
 }
 
 func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
