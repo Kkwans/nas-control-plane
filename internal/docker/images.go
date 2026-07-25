@@ -86,6 +86,17 @@ func (m *ImageManager) List(ctx context.Context) (ImageInventory, error) {
 	if err != nil {
 		return ImageInventory{}, coded("DOCKER_IMAGE_LIST_FAILED", err)
 	}
+	if images == nil {
+		images = make([]ImageSummary, 0)
+	}
+	for index := range images {
+		if images[index].RepoTags == nil {
+			images[index].RepoTags = make([]string, 0)
+		}
+		if images[index].RepoDigests == nil {
+			images[index].RepoDigests = make([]string, 0)
+		}
+	}
 	sort.Slice(images, func(left, right int) bool {
 		leftName := imageDisplayName(images[left])
 		rightName := imageDisplayName(images[right])
@@ -157,8 +168,8 @@ func (g *mobyImageGateway) ListImages(ctx context.Context) ([]ImageSummary, erro
 	for _, item := range response.Items {
 		result = append(result, ImageSummary{
 			ID:          item.ID,
-			RepoTags:    append([]string(nil), item.RepoTags...),
-			RepoDigests: append([]string(nil), item.RepoDigests...),
+			RepoTags:    append([]string{}, item.RepoTags...),
+			RepoDigests: append([]string{}, item.RepoDigests...),
 			SizeBytes:   item.Size,
 			CreatedAt:   time.Unix(item.Created, 0).UTC(),
 			Containers:  item.Containers,

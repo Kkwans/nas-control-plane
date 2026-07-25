@@ -148,6 +148,16 @@ export interface DockerImageInventory {
   images: DockerImageSummary[]
 }
 
+interface DockerImageWireSummary extends Omit<DockerImageSummary, 'repoTags' | 'repoDigests'> {
+  repoTags: string[] | null
+  repoDigests: string[] | null
+}
+
+interface DockerImageWireInventory {
+  collectedAt: string
+  images: DockerImageWireSummary[]
+}
+
 export interface DockerImagePullResult {
   reference: string
   completed: boolean
@@ -252,7 +262,21 @@ export async function requestContainerLogs(
 }
 
 export async function requestDockerImages(fetcher: typeof fetch = fetch): Promise<DockerImageInventory> {
-  return requestJson('/api/v1/docker/images', {}, isDockerImageInventory, fetcher, 'DOCKER_IMAGE_LIST_RESPONSE_INVALID')
+  const payload = await requestJson(
+    '/api/v1/docker/images',
+    {},
+    isDockerImageWireInventory,
+    fetcher,
+    'DOCKER_IMAGE_LIST_RESPONSE_INVALID',
+  )
+  return {
+    collectedAt: payload.collectedAt,
+    images: payload.images.map((image) => ({
+      ...image,
+      repoTags: image.repoTags ?? [],
+      repoDigests: image.repoDigests ?? [],
+    })),
+  }
 }
 
 export async function pullDockerImage(
@@ -429,7 +453,11 @@ function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
   )
 }
 
-function isDockerImageInventory(value: unknown): value is DockerImageInventory {
+function isStringArrayOrNull(value: unknown): value is string[] | null {
+  return value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string'))
+}
+
+function isDockerImageWireInventory(value: unknown): value is DockerImageWireInventory {
   return (
     isRecord(value) &&
     typeof value.collectedAt === 'string' &&
@@ -438,10 +466,8 @@ function isDockerImageInventory(value: unknown): value is DockerImageInventory {
       (image) =>
         isRecord(image) &&
         typeof image.id === 'string' &&
-        Array.isArray(image.repoTags) &&
-        image.repoTags.every((tag) => typeof tag === 'string') &&
-        Array.isArray(image.repoDigests) &&
-        image.repoDigests.every((digest) => typeof digest === 'string') &&
+        isStringArrayOrNull(image.repoTags) &&
+        isStringArrayOrNull(image.repoDigests) &&
         typeof image.sizeBytes === 'number' &&
         typeof image.createdAt === 'string' &&
         typeof image.containers === 'number',

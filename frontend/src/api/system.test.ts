@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { NcpApiError, loginRoot, requestCapabilities, requestContainerAction, requestContainerLogs, requestSystemSummary } from './system'
+import { loginRoot, requestCapabilities, requestContainerAction, requestContainerLogs, requestDockerImages, requestSystemSummary } from './system'
 
 describe('NCP API client', () => {
   it('requests protected system data with same-origin credentials', async () => {
@@ -98,5 +98,28 @@ describe('NCP API client', () => {
       '/api/v1/docker/containers/abc123/logs?tail=40',
       expect.objectContaining({ credentials: 'same-origin' }),
     )
+  })
+
+  it('normalizes legacy null image tags during rolling updates', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          collectedAt: '2026-07-25T02:00:00Z',
+          images: [{
+            id: 'sha256:dangling',
+            repoTags: null,
+            repoDigests: null,
+            sizeBytes: 1024,
+            createdAt: '2026-07-25T01:00:00Z',
+            containers: 0,
+          }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(requestDockerImages(fetcher)).resolves.toMatchObject({
+      images: [{ repoTags: [], repoDigests: [] }],
+    })
   })
 })
