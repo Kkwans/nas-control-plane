@@ -230,6 +230,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
 			protected.Get("/docker/images", api.dockerImageInventory)
+			protected.Get("/docker/hub/search", api.searchDockerHub)
+			protected.Get("/docker/hub/tags", api.dockerHubTags)
 			protected.Post("/docker/images/pull", api.pullDockerImage)
 			protected.Post("/docker/images/remove", api.removeDockerImage)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)

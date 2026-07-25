@@ -168,6 +168,40 @@ export interface DockerImageRemoveResult {
   removed: boolean
 }
 
+export interface DockerHubRepository {
+  name: string
+  namespace: string
+  description: string
+  starCount: number
+  pullCount: number
+  official: boolean
+  publisher: string
+  lastUpdated: string
+  repositoryType: string
+  statusDescription: string
+}
+
+export interface DockerHubSearchResult {
+  count: number
+  page: number
+  pageSize: number
+  results: DockerHubRepository[]
+}
+
+export interface DockerHubTag {
+  name: string
+  lastUpdated: string
+  fullSize: number
+  architectures: string[]
+}
+
+export interface DockerHubTagsResult {
+  count: number
+  page: number
+  pageSize: number
+  results: DockerHubTag[]
+}
+
 interface ApiErrorResponse {
   code: string
   message: string
@@ -310,6 +344,39 @@ export async function removeDockerImage(
     isDockerImageRemoveResult,
     fetcher,
     'DOCKER_IMAGE_REMOVE_RESPONSE_INVALID',
+  )
+}
+
+export async function searchDockerHub(
+  query: string,
+  page = 1,
+  pageSize = 20,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerHubSearchResult> {
+  const parameters = new URLSearchParams({ query, page: String(page), pageSize: String(pageSize) })
+  return requestJson(
+    `/api/v1/docker/hub/search?${parameters}`,
+    {},
+    isDockerHubSearchResult,
+    fetcher,
+    'DOCKER_HUB_SEARCH_RESPONSE_INVALID',
+  )
+}
+
+export async function requestDockerHubTags(
+  namespace: string,
+  repository: string,
+  page = 1,
+  pageSize = 25,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerHubTagsResult> {
+  const parameters = new URLSearchParams({ namespace, repository, page: String(page), pageSize: String(pageSize) })
+  return requestJson(
+    `/api/v1/docker/hub/tags?${parameters}`,
+    {},
+    isDockerHubTagsResult,
+    fetcher,
+    'DOCKER_HUB_TAGS_RESPONSE_INVALID',
   )
 }
 
@@ -481,4 +548,41 @@ function isDockerImagePullResult(value: unknown): value is DockerImagePullResult
 
 function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveResult {
   return isRecord(value) && typeof value.imageId === 'string' && value.removed === true
+}
+
+function isDockerHubRepository(value: unknown): value is DockerHubRepository {
+  return isRecord(value) &&
+    typeof value.name === 'string' &&
+    typeof value.namespace === 'string' &&
+    typeof value.description === 'string' &&
+    typeof value.starCount === 'number' &&
+    typeof value.pullCount === 'number' &&
+    typeof value.official === 'boolean'
+}
+
+function isDockerHubSearchResult(value: unknown): value is DockerHubSearchResult {
+  return isRecord(value) &&
+    typeof value.count === 'number' &&
+    typeof value.page === 'number' &&
+    typeof value.pageSize === 'number' &&
+    Array.isArray(value.results) &&
+    value.results.every(isDockerHubRepository)
+}
+
+function isDockerHubTag(value: unknown): value is DockerHubTag {
+  return isRecord(value) &&
+    typeof value.name === 'string' &&
+    typeof value.lastUpdated === 'string' &&
+    typeof value.fullSize === 'number' &&
+    Array.isArray(value.architectures) &&
+    value.architectures.every((item) => typeof item === 'string')
+}
+
+function isDockerHubTagsResult(value: unknown): value is DockerHubTagsResult {
+  return isRecord(value) &&
+    typeof value.count === 'number' &&
+    typeof value.page === 'number' &&
+    typeof value.pageSize === 'number' &&
+    Array.isArray(value.results) &&
+    value.results.every(isDockerHubTag)
 }

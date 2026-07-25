@@ -308,6 +308,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/hub/search:
+    get:
+      operationId: searchDockerHub
+      summary: Search public image repositories on Docker Hub
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: query, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 120 } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: Matching public repositories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerHubSearchResult'
+  /api/v1/docker/hub/tags:
+    get:
+      operationId: listDockerHubTags
+      summary: List recent tags and architectures for a Docker Hub repository
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: namespace, in: query, required: true, schema: { type: string } }
+        - { name: repository, in: query, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses:
+        '200':
+          description: Repository tags
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerHubTagsResult'
   /api/v1/docker/images/pull:
     post:
       operationId: pullDockerImage
@@ -844,6 +879,52 @@ components:
       properties:
         imageId: { type: string }
         removed: { type: boolean }
+    DockerHubSearchResult:
+      type: object
+      required: [count, page, pageSize, results]
+      properties:
+        count: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerHubRepository'
+    DockerHubRepository:
+      type: object
+      required: [name, namespace, description, starCount, pullCount, official, publisher, lastUpdated, repositoryType, statusDescription]
+      properties:
+        name: { type: string }
+        namespace: { type: string }
+        description: { type: string }
+        starCount: { type: integer, minimum: 0 }
+        pullCount: { type: integer, minimum: 0 }
+        official: { type: boolean }
+        publisher: { type: string }
+        lastUpdated: { type: string }
+        repositoryType: { type: string }
+        statusDescription: { type: string }
+    DockerHubTagsResult:
+      type: object
+      required: [count, page, pageSize, results]
+      properties:
+        count: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerHubTag'
+    DockerHubTag:
+      type: object
+      required: [name, lastUpdated, fullSize, architectures]
+      properties:
+        name: { type: string }
+        lastUpdated: { type: string }
+        fullSize: { type: integer, minimum: 0 }
+        architectures:
+          type: array
+          items: { type: string }
     DockerEngineInfo:
       type: object
       properties:
