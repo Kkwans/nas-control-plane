@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,7 +65,7 @@ func (api *handler) updateSite(response http.ResponseWriter, request *http.Reque
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	input.ProjectID = chi.URLParam(request, "projectID")
+	input.ProjectID = siteProjectID(request)
 	profile, err := api.controlStore.UpsertSiteProfile(request.Context(), input)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "SITE_INPUT_INVALID", "站点资料参数无效。")
@@ -78,7 +79,7 @@ func (api *handler) recordSiteVisit(response http.ResponseWriter, request *http.
 		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
 		return
 	}
-	projectID := chi.URLParam(request, "projectID")
+	projectID := siteProjectID(request)
 	visitedAt, err := api.controlStore.RecordSiteVisit(request.Context(), projectID)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "SITE_VISIT_INVALID", "站点访问记录保存失败。")
@@ -88,6 +89,14 @@ func (api *handler) recordSiteVisit(response http.ResponseWriter, request *http.
 		"projectId":     projectID,
 		"lastVisitedAt": visitedAt,
 	})
+}
+
+func siteProjectID(request *http.Request) string {
+	projectID := chi.URLParam(request, "projectID")
+	if decodedProjectID, err := url.PathUnescape(projectID); err == nil {
+		return decodedProjectID
+	}
+	return projectID
 }
 
 func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile) []Site {

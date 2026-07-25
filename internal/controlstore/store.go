@@ -291,7 +291,7 @@ func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 		SELECT project_id, name, description, icon_url, category, primary_port,
 			launch_url, favorite, sort_order, last_visited_at_unix, hidden
 		FROM site_profiles
-		ORDER BY favorite DESC, sort_order, name COLLATE NOCASE
+		ORDER BY updated_at_unix ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -320,6 +320,9 @@ func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 		if lastVisitedAt.Valid && lastVisitedAt.Int64 > 0 {
 			value := time.Unix(lastVisitedAt.Int64, 0).UTC()
 			profile.LastVisitedAt = &value
+		}
+		if decodedProjectID, err := url.PathUnescape(profile.ProjectID); err == nil {
+			profile.ProjectID = decodedProjectID
 		}
 		result = append(result, profile)
 	}

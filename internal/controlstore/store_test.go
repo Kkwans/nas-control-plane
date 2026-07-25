@@ -134,6 +134,29 @@ func TestRecordSiteVisitCreatesActivityForAutoDiscoveredSite(t *testing.T) {
 	}
 }
 
+func TestSiteProfilesNormalizesLegacyEscapedProjectID(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatalf("open control store: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.database.Exec(`
+		INSERT INTO site_profiles (project_id, name, favorite, updated_at_unix)
+		VALUES ('compose%3Aclaude-code', 'Claude Code', 1, 1)
+	`); err != nil {
+		t.Fatalf("insert legacy profile: %v", err)
+	}
+
+	profiles, err := store.SiteProfiles(context.Background())
+	if err != nil {
+		t.Fatalf("list site profiles: %v", err)
+	}
+	if len(profiles) != 1 || profiles[0].ProjectID != "compose:claude-code" || !profiles[0].Favorite {
+		t.Fatalf("legacy project id was not normalized: %#v", profiles)
+	}
+}
+
 func TestComposeDraftPersistsContentAndHash(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "ncp.sqlite"))
 	if err != nil {
