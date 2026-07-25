@@ -125,7 +125,20 @@ async function toggleArchive(group: DatabaseProjectGroup) {
 
     <div v-if="errorMessage" class="database-error" role="alert">{{ errorMessage }}</div>
 
-    <section v-if="filteredGroups.length" class="database-groups" aria-label="按项目分组的数据库来源">
+    <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-loading" aria-label="正在发现数据库">
+      <article v-for="group in 3" :key="group" class="database-project panel">
+        <header class="database-project__header database-project__header--skeleton">
+          <i class="ncp-skeleton"></i><div><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
+        </header>
+        <div class="database-table">
+          <div v-for="row in 3" :key="row" class="database-row database-row--skeleton">
+            <i v-for="cell in 5" :key="cell" class="ncp-skeleton"></i>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section v-else-if="filteredGroups.length" class="database-groups" aria-label="按项目分组的数据库来源">
       <article v-for="group in filteredGroups" :key="group.key" class="database-project panel">
         <header class="database-project__header">
           <span class="database-project__icon"><FolderKanban :size="20" /></span>
@@ -144,32 +157,29 @@ async function toggleArchive(group: DatabaseProjectGroup) {
             </button>
           </ElTooltip>
         </header>
-        <div class="database-grid">
+        <div class="database-table">
+          <div class="database-table__head" aria-hidden="true">
+            <span>数据库</span><span>用途模块</span><span>类型</span><span>连接位置</span><span>操作</span>
+          </div>
           <RouterLink
             v-for="source in group.sources"
             :key="source.id"
-            class="database-card"
+            class="database-row"
             :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
           >
-            <header>
+            <div class="database-identity">
               <span :class="['database-card__icon', `database-card__icon--${source.driver}`]">
                 <component :is="driverIcon(source)" :size="20" />
               </span>
               <div>
                 <strong>{{ source.name }}</strong>
-                <small>{{ driverLabel(source.driver) }}</small>
+                <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
               </div>
-            </header>
-            <dl>
-              <div><dt>用途模块</dt><dd>{{ source.module }}</dd></div>
-              <div><dt>位置</dt><dd :title="source.location">{{ source.location }}</dd></div>
-            </dl>
-            <footer>
-              <div class="source-tags">
-                <span v-for="tag in source.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
-              </div>
-              <span class="enter-database">{{ source.requiresLogin ? '连接并查看' : '查看数据库' }}<ArrowRight :size="16" /></span>
-            </footer>
+            </div>
+            <span class="database-module">{{ source.module || '未标注用途' }}</span>
+            <span class="driver-badge">{{ driverLabel(source.driver) }}</span>
+            <code :title="source.location">{{ source.location }}</code>
+            <span class="enter-database">{{ source.requiresLogin ? '连接' : '管理' }}<ArrowRight :size="16" /></span>
           </RouterLink>
         </div>
       </article>
@@ -188,7 +198,7 @@ async function toggleArchive(group: DatabaseProjectGroup) {
 .source-filter button { min-height:36px; padding:0 13px; border-radius:7px; background:transparent; color:var(--ncp-text-muted); font-size:.8rem; font-weight:680; }
 .source-filter button.active { background:#fff; box-shadow:0 2px 9px rgba(28,45,75,.08); color:var(--ncp-primary-strong); }
 .database-error { padding:10px 13px; border:1px solid rgba(212,81,93,.2); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.82rem; }
-.database-groups { display:grid; gap:12px; }
+.database-groups,.database-loading { display:grid; gap:12px; }
 .database-project { overflow:hidden; }
 .database-project__header { display:grid; min-height:62px; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--ncp-line); background:#f8fafc; }
 .database-project__icon { display:grid; width:38px; height:38px; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
@@ -197,28 +207,14 @@ async function toggleArchive(group: DatabaseProjectGroup) {
 .database-project__header small { color:var(--ncp-text-subtle); font-size:.72rem; }
 .archive-button { display:flex; min-height:36px; align-items:center; gap:5px; padding:0 10px; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-size:.72rem; font-weight:700; transition:border-color var(--ncp-duration-fast),color var(--ncp-duration-fast),background var(--ncp-duration-fast); }
 .archive-button:hover { border-color:rgba(36,104,216,.25); background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.database-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
-.database-card { display:grid; min-width:0; min-height:190px; grid-template-rows:auto 1fr auto; gap:13px; padding:15px; border-right:1px solid var(--ncp-line); border-bottom:1px solid var(--ncp-line); transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-base); }
-.database-card:nth-child(3n) { border-right:0; }
-.database-card:hover { position:relative; z-index:1; background:var(--ncp-surface-hover); box-shadow:inset 3px 0 0 var(--ncp-primary); }
-.database-card header { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:11px; }
+.database-table{overflow:hidden}.database-table__head,.database-row{display:grid;grid-template-columns:minmax(260px,1.25fr) minmax(150px,.7fr) 150px minmax(260px,1.25fr) 82px;align-items:center;gap:14px}.database-table__head{min-height:42px;padding:0 16px;background:#fbfcfe;color:var(--ncp-text-subtle);font-size:.73rem;font-weight:720}.database-row{min-height:72px;padding:10px 16px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast)}.database-row:hover{background:var(--ncp-surface-hover);box-shadow:inset 3px 0 0 var(--ncp-primary)}.database-identity{display:flex;min-width:0;align-items:center;gap:11px}.database-identity>div{display:grid;min-width:0;gap:2px}.database-identity strong,.database-identity small,.database-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.database-identity strong{font-size:.86rem}.database-identity small{color:var(--ncp-text-subtle);font-size:.7rem}.database-module{overflow:hidden;color:var(--ncp-text-muted);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.driver-badge{justify-self:start;padding:4px 8px;border-radius:7px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:720}.database-row code{color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.7rem}.database-row--skeleton i{width:75%;height:12px}.database-project__header--skeleton>i{width:38px;height:38px;border-radius:10px}.database-project__header--skeleton>div i:first-child{width:180px;height:12px}.database-project__header--skeleton>div i:last-child{width:90px;height:9px}
 .database-card__icon { display:grid; width:42px; height:42px; place-items:center; border-radius:12px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
 .database-card__icon--mysql { background:#fff3e2; color:#b66a0a; }
 .database-card__icon--postgresql { background:#eaf4ff; color:#27689f; }
-.database-card header>div { display:grid; min-width:0; gap:2px; }
-.database-card header strong { overflow:hidden; font-size:.9rem; text-overflow:ellipsis; white-space:nowrap; }
-.database-card header small { color:var(--ncp-text-subtle); font-size:.76rem; }
-.database-card dl { display:grid; gap:8px; margin:0; padding:11px 12px; border-radius:10px; background:var(--ncp-surface-quiet); }
-.database-card dl>div { display:grid; grid-template-columns:64px minmax(0,1fr); gap:8px; }
-.database-card dt { color:var(--ncp-text-subtle); font-size:.75rem; }
-.database-card dd { display:flex; min-width:0; align-items:center; gap:5px; overflow:hidden; margin:0; color:var(--ncp-text-muted); font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }
-.database-card footer { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:10px; }
-.source-tags { display:flex; min-width:0; gap:5px; overflow:hidden; }
-.source-tags span { flex:0 0 auto; padding:3px 6px; border-radius:5px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.68rem; }
-.enter-database { display:flex; flex:0 0 auto; align-items:center; gap:4px; color:var(--ncp-primary-strong); font-size:.77rem; font-weight:720; }
+.enter-database { display:flex; align-items:center; justify-content:flex-end; gap:4px; color:var(--ncp-primary-strong); font-size:.77rem; font-weight:720; }
 .empty-panel { display:flex; min-height:180px; align-items:center; justify-content:center; gap:12px; color:var(--ncp-text-subtle); }
 .empty-panel h2 { margin:0; color:var(--ncp-text); font-size:.92rem; }.empty-panel p { margin:3px 0 0; font-size:.8rem; }
-@media(max-width:1220px){.database-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.database-card:nth-child(3n){border-right:1px solid var(--ncp-line)}.database-card:nth-child(2n){border-right:0}.database-search{width:min(300px,32vw);}}
+@media(max-width:1220px){.database-table__head,.database-row{grid-template-columns:minmax(240px,1fr) 140px 130px minmax(210px,1fr) 72px}.database-search{width:min(300px,32vw);}}
 @media(max-width:900px){.database-search{width:100%;}.source-filter{width:100%;}.source-filter button{flex:1;}}
-@media(max-width:680px){.database-project__header{grid-template-columns:auto minmax(0,1fr) auto}.database-project__header :deep(.el-tag){display:none}.archive-button{width:40px;justify-content:center;padding:0}.archive-button{font-size:0}.database-grid{grid-template-columns:1fr}.database-card,.database-card:nth-child(2n),.database-card:nth-child(3n){min-height:185px;border-right:0}.source-filter{overflow:auto}.source-filter button{min-width:68px}}
+@media(max-width:760px){.database-project__header{grid-template-columns:auto minmax(0,1fr) auto}.database-project__header :deep(.el-tag){display:none}.archive-button{width:40px;justify-content:center;padding:0;font-size:0}.database-table__head{display:none}.database-row{grid-template-columns:minmax(0,1fr) auto;gap:8px;min-height:116px}.database-module,.database-row code{grid-column:1/-1}.driver-badge{grid-row:1;grid-column:2}.enter-database{grid-column:2}.source-filter{overflow:auto}.source-filter button{min-width:68px}}
 </style>

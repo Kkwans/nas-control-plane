@@ -122,7 +122,15 @@ function primaryKeys(table: DatabaseTable) {
       <div><dt>连接位置</dt><dd :title="source.location">{{ source.location }}</dd></div>
     </dl>
 
-    <section v-if="source.requiresLogin && !catalog" class="connection-panel panel">
+    <section v-if="loading && !catalog" class="table-list panel" aria-label="正在读取数据库结构">
+      <div class="table-list__head"><span>数据表</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>操作</span></div>
+      <div v-for="row in 7" :key="row" class="table-row table-row--skeleton">
+        <span><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></span>
+        <i v-for="cell in 5" :key="cell" class="ncp-skeleton"></i>
+      </div>
+    </section>
+
+    <section v-else-if="source.requiresLogin && !catalog" class="connection-panel panel">
       <div class="connection-intro">
         <span><Database :size="24" /></span>
         <div><h2>连接数据库</h2><p>实例和所属项目已自动识别；输入数据库账号后加载数据表。登录框不会再自动弹出。</p></div>
@@ -195,6 +203,7 @@ function primaryKeys(table: DatabaseTable) {
 .table-list__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.74rem; font-weight:700; }
 .table-row { position:relative; min-height:92px; padding:0 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-muted); font-size:.78rem; transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast); }
 .table-row:hover { background:var(--ncp-surface-hover); box-shadow:inset 3px 0 0 var(--ncp-primary); }
+.table-row--skeleton>span{display:grid;gap:7px}.table-row--skeleton>span i:first-child{width:58%;height:12px}.table-row--skeleton>span i:last-child{width:34%;height:9px}.table-row--skeleton>i{width:68%;height:11px}
 .table-row>span { display:flex; align-items:center; gap:5px; }
 .table-name { display:flex; min-width:0; align-self:center; align-items:center; gap:10px; }
 .table-name>span { display:grid; width:38px; height:38px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
