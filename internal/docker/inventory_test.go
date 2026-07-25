@@ -21,9 +21,10 @@ func TestInventoryCollectorGroupsComposeProjectsAndStandaloneContainers(t *testi
 			{
 				ID: "aaa111", Name: "/ncp-web", Image: "ncp:latest", State: "running", Status: "Up 2 minutes",
 				Labels: map[string]string{
-					"com.docker.compose.project":             "nas-control-plane",
-					"com.docker.compose.project.working_dir": "/volume2/Project/nas-control-plane",
-					"com.docker.compose.service":             "web",
+					"com.docker.compose.project":              "nas-control-plane",
+					"com.docker.compose.project.working_dir":  "/volume2/Project/nas-control-plane",
+					"com.docker.compose.project.config_files": "/volume2/Project/nas-control-plane/compose.yaml,/volume2/Project/nas-control-plane/compose.override.yaml",
+					"com.docker.compose.service":              "web",
 				},
 				Ports: []PortMapping{{PrivatePort: 80, PublicPort: 8760, Protocol: "tcp"}},
 			},
@@ -62,6 +63,9 @@ func TestInventoryCollectorGroupsComposeProjectsAndStandaloneContainers(t *testi
 	}
 	if project.WorkingDirectory != "/volume2/Project/nas-control-plane" {
 		t.Fatalf("working directory = %q", project.WorkingDirectory)
+	}
+	if len(project.ConfigFiles) != 2 || project.ConfigFiles[0] != "/volume2/Project/nas-control-plane/compose.yaml" {
+		t.Fatalf("config files = %#v", project.ConfigFiles)
 	}
 	if inventory.Projects[1].Kind != ProjectKindStandalone || inventory.Projects[1].ContainerCount != 1 {
 		t.Fatalf("standalone project = %#v", inventory.Projects[1])

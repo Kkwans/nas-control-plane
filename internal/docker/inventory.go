@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	composeProjectLabel    = "com.docker.compose.project"
-	composeWorkingDirLabel = "com.docker.compose.project.working_dir"
-	composeServiceLabel    = "com.docker.compose.service"
-	standaloneProjectID    = "standalone"
-	standaloneProjectName  = "独立容器"
+	composeProjectLabel     = "com.docker.compose.project"
+	composeWorkingDirLabel  = "com.docker.compose.project.working_dir"
+	composeConfigFilesLabel = "com.docker.compose.project.config_files"
+	composeServiceLabel     = "com.docker.compose.service"
+	standaloneProjectID     = "standalone"
+	standaloneProjectName   = "独立容器"
 )
 
 type ProjectKind string
@@ -69,6 +70,7 @@ type Project struct {
 	Kind             ProjectKind `json:"kind"`
 	State            string      `json:"state"`
 	WorkingDirectory string      `json:"workingDirectory"`
+	ConfigFiles      []string    `json:"configFiles"`
 	ContainerCount   int         `json:"containerCount"`
 	RunningCount     int         `json:"runningCount"`
 }
@@ -155,6 +157,7 @@ func groupProjects(containers []InventoryContainer) []Project {
 			}
 			if project.Kind == ProjectKindCompose {
 				project.WorkingDirectory = strings.TrimSpace(container.Labels[composeWorkingDirLabel])
+				project.ConfigFiles = splitComposeConfigFiles(container.Labels[composeConfigFilesLabel])
 			}
 			projects[container.ProjectID] = project
 		}
@@ -166,6 +169,9 @@ func groupProjects(containers []InventoryContainer) []Project {
 
 	result := make([]Project, 0, len(projects))
 	for _, project := range projects {
+		if project.ConfigFiles == nil {
+			project.ConfigFiles = make([]string, 0)
+		}
 		project.State = projectState(project.ContainerCount, project.RunningCount)
 		result = append(result, *project)
 	}
@@ -177,6 +183,17 @@ func groupProjects(containers []InventoryContainer) []Project {
 		}
 		return result[left].Name < result[right].Name
 	})
+	return result
+}
+
+func splitComposeConfigFiles(value string) []string {
+	result := make([]string, 0)
+	for _, item := range strings.Split(value, ",") {
+		path := strings.TrimSpace(item)
+		if path != "" {
+			result = append(result, path)
+		}
+	}
 	return result
 }
 

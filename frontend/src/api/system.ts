@@ -73,6 +73,7 @@ export interface DockerProject {
   kind: 'compose' | 'standalone'
   state: 'running' | 'stopped' | 'degraded'
   workingDirectory: string
+  configFiles: string[]
   containerCount: number
   runningCount: number
 }

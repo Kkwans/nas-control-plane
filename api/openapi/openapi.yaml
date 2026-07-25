@@ -1011,6 +1011,9 @@ components:
           type: string
           enum: [running, stopped, degraded]
         workingDirectory: { type: string }
+        configFiles:
+          type: array
+          items: { type: string }
         containerCount: { type: integer, minimum: 0 }
         runningCount: { type: integer, minimum: 0 }
     ContainerActionResult:

@@ -5,6 +5,7 @@ import {
   Boxes,
   CalendarClock,
   CircleStop,
+  FileCode2,
   FileText,
   Folder,
   Image,
@@ -98,6 +99,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
     <div v-if="project" class="project-detail">
       <section class="detail-overview">
         <div><Folder :size="17" /><span>工作目录</span><strong :title="project.workingDirectory">{{ project.workingDirectory || 'Docker 自动发现项目' }}</strong></div>
+        <div><FileCode2 :size="17" /><span>Compose 配置</span><strong :title="project.configFiles.join('、')">{{ project.configFiles.length ? `${project.configFiles.length} 个配置文件` : '等待定位配置' }}</strong></div>
         <div><Boxes :size="17" /><span>容器状态</span><strong>{{ project.runningCount }}/{{ project.containerCount }} 正在运行</strong></div>
       </section>
 
@@ -172,7 +174,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .drawer-title strong { overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-title span:not(.drawer-title__icon) { color: var(--ncp-text-subtle); font-size: .72rem; }
 .project-detail { display: grid; gap: 18px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
-.detail-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .detail-overview>div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 2px 8px; padding: 14px; border: 1px solid var(--ncp-line); border-radius: 12px; background: var(--ncp-surface-quiet); }
 .detail-overview svg { grid-row: 1/3; color: var(--ncp-primary-strong); }
 .detail-overview span { color: var(--ncp-text-subtle); font-size: .7rem; }
@@ -214,6 +216,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
   .drawer-title>:last-child { grid-column: 2; justify-self: start; }
   .container-card { padding: 13px; }
   .container-card dl>div { grid-template-columns: 78px minmax(0,1fr); }
+}
+@media(max-width: 900px) and (min-width: 561px) {
+  .detail-overview { grid-template-columns: 1fr 1fr; }
+  .detail-overview>div:last-child { grid-column: 1 / -1; }
 }
 </style>
 

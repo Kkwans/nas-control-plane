@@ -146,7 +146,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
       <div v-for="project in projects" :key="project.id" class="project-row" role="button" tabindex="0" @click="updateSelectedProject(project.id)" @keydown.enter="updateSelectedProject(project.id)" @keydown.space.prevent="updateSelectedProject(project.id)">
         <div class="project-name">
           <span><Boxes :size="18" /></span>
-          <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</small></div>
+          <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? `Compose · ${project.configFiles.length || 1} 个配置文件` : '独立容器组' }}</small></div>
         </div>
         <StatusPill :label="stateLabel(project.state)" :tone="projectStateTone(project.state)" />
         <span class="mono">{{ project.runningCount }}/{{ project.containerCount }}</span>
@@ -172,7 +172,7 @@ watch([() => route.query.project, allProjects], ([projectId, items]) => {
         <header>
           <div class="project-name">
             <span><Boxes :size="18" /></span>
-            <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</small></div>
+            <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? `Compose · ${project.configFiles.length || 1} 个配置文件` : '独立容器组' }}</small></div>
           </div>
           <StatusPill :label="stateLabel(project.state)" :tone="projectStateTone(project.state)" />
         </header>
