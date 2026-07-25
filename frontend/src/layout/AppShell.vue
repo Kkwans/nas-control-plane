@@ -39,12 +39,13 @@ const props = defineProps({
   connectionState: { type: String as PropType<SystemConnectionState>, required: true },
   realtimeState: { type: String as PropType<RealtimeState>, required: true },
   refreshIntervalSeconds: { type: Number, required: true },
+  sidebarDefault: { type: String as PropType<'collapsed' | 'expanded'>, default: 'collapsed' },
   userName: { type: String, required: true },
   isRefreshing: { type: Boolean, default: false },
 })
 
 const mobileNavigationOpen = ref(false)
-const sidebarCollapsed = ref(true)
+const sidebarCollapsed = ref(props.sidebarDefault === 'collapsed')
 const menuButton = ref<HTMLButtonElement | null>(null)
 
 const primaryNavigation: NavigationItem[] = [
@@ -93,6 +94,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 watch(() => route.fullPath, () => setMobileNavigation(false))
+watch(() => props.sidebarDefault, (value) => { sidebarCollapsed.value = value === 'collapsed' })
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)

@@ -722,13 +722,38 @@ components:
   schemas:
     UserPreferences:
       type: object
-      required: [refreshIntervalSeconds]
+      required: [refreshIntervalSeconds, interfaceDensity, baseFontSize, pageSize, sidebarDefault, linkOpenMode, siteDefaultProtocol, chineseFont, latinFont]
       properties:
         refreshIntervalSeconds:
           type: integer
           minimum: 2
           maximum: 300
           default: 5
+        interfaceDensity:
+          type: string
+          enum: [comfortable, compact]
+        baseFontSize:
+          type: integer
+          minimum: 13
+          maximum: 18
+        pageSize:
+          type: integer
+          enum: [20, 25, 50, 100]
+        sidebarDefault:
+          type: string
+          enum: [collapsed, expanded]
+        linkOpenMode:
+          type: string
+          enum: [new-tab, same-tab]
+        siteDefaultProtocol:
+          type: string
+          enum: [http, https]
+        chineseFont:
+          type: string
+          enum: [system, noto-sans-sc]
+        latinFont:
+          type: string
+          enum: [system, manrope]
     DatabaseProjectPreference:
       type: object
       required: [projectKey, archived]

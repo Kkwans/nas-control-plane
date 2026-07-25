@@ -28,7 +28,29 @@ type Store struct {
 }
 
 type Preferences struct {
-	RefreshIntervalSeconds int `json:"refreshIntervalSeconds"`
+	RefreshIntervalSeconds int    `json:"refreshIntervalSeconds"`
+	InterfaceDensity       string `json:"interfaceDensity"`
+	BaseFontSize           int    `json:"baseFontSize"`
+	PageSize               int    `json:"pageSize"`
+	SidebarDefault         string `json:"sidebarDefault"`
+	LinkOpenMode           string `json:"linkOpenMode"`
+	SiteDefaultProtocol    string `json:"siteDefaultProtocol"`
+	ChineseFont            string `json:"chineseFont"`
+	LatinFont              string `json:"latinFont"`
+}
+
+func DefaultPreferences() Preferences {
+	return Preferences{
+		RefreshIntervalSeconds: DefaultRefreshIntervalSeconds,
+		InterfaceDensity:       "comfortable",
+		BaseFontSize:           15,
+		PageSize:               25,
+		SidebarDefault:         "collapsed",
+		LinkOpenMode:           "new-tab",
+		SiteDefaultProtocol:    "http",
+		ChineseFont:            "system",
+		LatinFont:              "system",
+	}
 }
 
 type DatabaseProjectPreference struct {
@@ -98,31 +120,78 @@ func (s *Store) Close() error {
 func (s *Store) Preferences(ctx context.Context, userID int64) (Preferences, error) {
 	var result Preferences
 	err := s.database.QueryRowContext(ctx, `
-		SELECT refresh_interval_seconds
+		SELECT refresh_interval_seconds, interface_density, base_font_size, page_size,
+			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font
 		FROM user_preferences
 		WHERE user_id = ?
-	`, userID).Scan(&result.RefreshIntervalSeconds)
+	`, userID).Scan(
+		&result.RefreshIntervalSeconds, &result.InterfaceDensity, &result.BaseFontSize, &result.PageSize,
+		&result.SidebarDefault, &result.LinkOpenMode, &result.SiteDefaultProtocol, &result.ChineseFont, &result.LatinFont,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Preferences{RefreshIntervalSeconds: DefaultRefreshIntervalSeconds}, nil
+		return DefaultPreferences(), nil
 	}
 	return result, err
 }
 
 func (s *Store) UpdatePreferences(ctx context.Context, userID int64, preferences Preferences) (Preferences, error) {
-	if preferences.RefreshIntervalSeconds < MinRefreshIntervalSeconds || preferences.RefreshIntervalSeconds > MaxRefreshIntervalSeconds {
-		return Preferences{}, errors.New("refresh interval is out of range")
+	if err := validatePreferences(preferences); err != nil {
+		return Preferences{}, err
 	}
 	_, err := s.database.ExecContext(ctx, `
-		INSERT INTO user_preferences (user_id, refresh_interval_seconds, updated_at_unix)
-		VALUES (?, ?, ?)
+		INSERT INTO user_preferences (
+			user_id, refresh_interval_seconds, interface_density, base_font_size, page_size,
+			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font, updated_at_unix
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			refresh_interval_seconds = excluded.refresh_interval_seconds,
+			interface_density = excluded.interface_density,
+			base_font_size = excluded.base_font_size,
+			page_size = excluded.page_size,
+			sidebar_default = excluded.sidebar_default,
+			link_open_mode = excluded.link_open_mode,
+			site_default_protocol = excluded.site_default_protocol,
+			chinese_font = excluded.chinese_font,
+			latin_font = excluded.latin_font,
 			updated_at_unix = excluded.updated_at_unix
-	`, userID, preferences.RefreshIntervalSeconds, s.now().UTC().Unix())
+	`, userID, preferences.RefreshIntervalSeconds, preferences.InterfaceDensity, preferences.BaseFontSize, preferences.PageSize,
+		preferences.SidebarDefault, preferences.LinkOpenMode, preferences.SiteDefaultProtocol, preferences.ChineseFont,
+		preferences.LatinFont, s.now().UTC().Unix())
 	if err != nil {
 		return Preferences{}, err
 	}
 	return preferences, nil
+}
+
+func validatePreferences(preferences Preferences) error {
+	if preferences.RefreshIntervalSeconds < MinRefreshIntervalSeconds || preferences.RefreshIntervalSeconds > MaxRefreshIntervalSeconds {
+		return errors.New("refresh interval is out of range")
+	}
+	if preferences.BaseFontSize < 13 || preferences.BaseFontSize > 18 {
+		return errors.New("base font size is out of range")
+	}
+	if preferences.PageSize != 20 && preferences.PageSize != 25 && preferences.PageSize != 50 && preferences.PageSize != 100 {
+		return errors.New("page size is invalid")
+	}
+	if !oneOf(preferences.InterfaceDensity, "comfortable", "compact") ||
+		!oneOf(preferences.SidebarDefault, "collapsed", "expanded") ||
+		!oneOf(preferences.LinkOpenMode, "new-tab", "same-tab") ||
+		!oneOf(preferences.SiteDefaultProtocol, "http", "https") ||
+		!oneOf(preferences.ChineseFont, "system", "noto-sans-sc") ||
+		!oneOf(preferences.LatinFont, "system", "manrope") {
+		return errors.New("preference option is invalid")
+	}
+	return nil
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) DatabaseProjectPreferences(ctx context.Context) ([]DatabaseProjectPreference, error) {
@@ -419,6 +488,24 @@ func (s *Store) migrate(ctx context.Context) error {
 		{name: "favorite", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "sort_order", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_visited_at_unix", definition: "INTEGER NOT NULL DEFAULT 0"},
+	}
+	preferenceColumns := []struct {
+		name       string
+		definition string
+	}{
+		{name: "interface_density", definition: "TEXT NOT NULL DEFAULT 'comfortable'"},
+		{name: "base_font_size", definition: "INTEGER NOT NULL DEFAULT 15"},
+		{name: "page_size", definition: "INTEGER NOT NULL DEFAULT 25"},
+		{name: "sidebar_default", definition: "TEXT NOT NULL DEFAULT 'collapsed'"},
+		{name: "link_open_mode", definition: "TEXT NOT NULL DEFAULT 'new-tab'"},
+		{name: "site_default_protocol", definition: "TEXT NOT NULL DEFAULT 'http'"},
+		{name: "chinese_font", definition: "TEXT NOT NULL DEFAULT 'system'"},
+		{name: "latin_font", definition: "TEXT NOT NULL DEFAULT 'system'"},
+	}
+	for _, column := range preferenceColumns {
+		if err := s.ensureColumn(ctx, "user_preferences", column.name, column.definition); err != nil {
+			return err
+		}
 	}
 	for _, column := range siteColumns {
 		if err := s.ensureColumn(ctx, "site_profiles", column.name, column.definition); err != nil {

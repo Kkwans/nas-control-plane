@@ -14,7 +14,7 @@ body {
   background: var(--ncp-canvas);
   color: var(--ncp-text);
   font-family: var(--ncp-font-ui);
-  font-size: 15px;
+  font-size: var(--ncp-base-font-size);
   font-synthesis: none;
   line-height: 1.6;
   text-rendering: optimizeLegibility;

@@ -93,6 +93,7 @@ function handleVisibilityChange() {
       :connection-state="systemStore.connectionState"
       :realtime-state="systemStore.realtimeState"
       :refresh-interval-seconds="systemStore.refreshIntervalSeconds"
+      :sidebar-default="systemStore.preferences.sidebarDefault"
       :user-name="authStore.user?.username ?? 'root'"
       :is-refreshing="systemStore.isRefreshing"
       @refresh="handleRefresh"

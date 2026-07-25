@@ -119,8 +119,10 @@ function profileFor(site: Site, overrides: Partial<SiteProfileInput> = {}): Site
 
 function siteURL(site: Site, port = site.primaryPort) {
   if (port === site.primaryPort && site.launchUrl) return site.launchUrl
-  return `http://${hostName}:${port}`
+  return `${systemStore.preferences.siteDefaultProtocol}://${hostName}:${port}`
 }
+
+const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 
 function trackVisit(site: Site) {
   void sitesStore.visit(site.projectId)
@@ -251,7 +253,7 @@ function markIconFailed(site: Site) {
           </div>
           <footer>
             <span><Clock3 :size="14" />{{ visitedLabel(site.lastVisitedAt) }}</span>
-            <a :href="siteURL(site)" target="_blank" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
+            <a :href="siteURL(site)" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
           </footer>
         </article>
       </div>
@@ -275,7 +277,7 @@ function markIconFailed(site: Site) {
             <StatusPill :label="siteStateLabel(site.state)" :tone="siteTone(site.state)" />
             <div class="site-ports">
               <ElTooltip v-for="port in site.ports.slice(0, 3)" :key="port" :content="port === site.primaryPort ? '主入口' : `打开端口 ${port}`" placement="top">
-                <a :class="{ primary: port === site.primaryPort }" :href="siteURL(site, port)" target="_blank" rel="noreferrer" @click="trackVisit(site)">{{ port }}</a>
+                <a :class="{ primary: port === site.primaryPort }" :href="siteURL(site, port)" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">{{ port }}</a>
               </ElTooltip>
               <span v-if="site.ports.length > 3">+{{ site.ports.length - 3 }}</span>
             </div>
@@ -288,7 +290,7 @@ function markIconFailed(site: Site) {
               <ElTooltip content="编辑站点资料" placement="top">
                 <button type="button" @click="openEditor(site)"><Pencil :size="16" /></button>
               </ElTooltip>
-              <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" target="_blank" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
+              <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
             </div>
           </article>
         </section>

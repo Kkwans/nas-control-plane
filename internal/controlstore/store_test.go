@@ -7,6 +7,44 @@ import (
 	"time"
 )
 
+func TestPreferencesPersistCompleteConsoleExperience(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "preferences.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	defaults, err := store.Preferences(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults != DefaultPreferences() {
+		t.Fatalf("defaults = %#v", defaults)
+	}
+
+	input := Preferences{
+		RefreshIntervalSeconds: 15,
+		InterfaceDensity:       "compact",
+		BaseFontSize:           16,
+		PageSize:               50,
+		SidebarDefault:         "expanded",
+		LinkOpenMode:           "same-tab",
+		SiteDefaultProtocol:    "https",
+		ChineseFont:            "noto-sans-sc",
+		LatinFont:              "manrope",
+	}
+	if _, err := store.UpdatePreferences(context.Background(), 1, input); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Preferences(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != input {
+		t.Fatalf("loaded = %#v", loaded)
+	}
+}
+
 func TestSiteProfilePersistenceAndVisit(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {

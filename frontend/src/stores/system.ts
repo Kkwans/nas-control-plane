@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { requestPreferences, updatePreferences } from '@/api/control'
+import { requestPreferences, updatePreferences, type UserPreferences } from '@/api/control'
 import {
   NcpApiError,
   requestCapabilities,
@@ -37,6 +37,17 @@ export const useSystemStore = defineStore('system', () => {
   const isRefreshing = ref(false)
   const resourceHistory = ref<ResourceSample[]>([])
   const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
+  const preferences = ref<UserPreferences>({
+    refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
+    interfaceDensity: 'comfortable',
+    baseFontSize: 15,
+    pageSize: 25,
+    sidebarDefault: 'collapsed',
+    linkOpenMode: 'new-tab',
+    siteDefaultProtocol: 'http',
+    chineseFont: 'system',
+    latinFont: 'system',
+  })
 
   let eventSource: EventSource | null = null
   let fallbackTimer: number | null = null
@@ -58,14 +69,23 @@ export const useSystemStore = defineStore('system', () => {
   }
 
   async function loadPreferences() {
-    const preferences = await requestPreferences()
-    refreshIntervalSeconds.value = preferences.refreshIntervalSeconds
+    const loaded = await requestPreferences()
+    preferences.value = loaded
+    refreshIntervalSeconds.value = loaded.refreshIntervalSeconds
+    applyExperiencePreferences(loaded)
   }
 
   async function setRefreshInterval(seconds: number) {
-    const preferences = await updatePreferences({ refreshIntervalSeconds: seconds })
-    refreshIntervalSeconds.value = preferences.refreshIntervalSeconds
-    if (eventSource) {
+    await setPreferences({ ...preferences.value, refreshIntervalSeconds: seconds })
+  }
+
+  async function setPreferences(input: UserPreferences) {
+    const saved = await updatePreferences(input)
+    const intervalChanged = saved.refreshIntervalSeconds !== refreshIntervalSeconds.value
+    preferences.value = saved
+    refreshIntervalSeconds.value = saved.refreshIntervalSeconds
+    applyExperiencePreferences(saved)
+    if (eventSource && intervalChanged) {
       stopRealtime()
       startRealtime()
     }
@@ -184,16 +204,38 @@ export const useSystemStore = defineStore('system', () => {
     isRefreshing,
     resourceHistory,
     refreshIntervalSeconds,
+    preferences,
     deviceName,
     lastUpdated,
     refresh,
     loadPreferences,
     setRefreshInterval,
+    setPreferences,
     startRealtime,
     stopRealtime,
     clear,
   }
 })
+
+function applyExperiencePreferences(preferences: UserPreferences) {
+  const root = document.documentElement
+  root.style.setProperty('--ncp-base-font-size', `${preferences.baseFontSize}px`)
+  root.style.setProperty('--ncp-density-scale', preferences.interfaceDensity === 'compact' ? '0.88' : '1')
+  root.style.setProperty(
+    '--ncp-font-ui',
+    preferences.chineseFont === 'noto-sans-sc'
+      ? "'Noto Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif"
+      : "'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI Variable', sans-serif",
+  )
+  root.style.setProperty(
+    '--ncp-font-latin',
+    preferences.latinFont === 'manrope'
+      ? "'Manrope Variable', 'Segoe UI Variable', sans-serif"
+      : "'Segoe UI Variable', 'Microsoft YaHei UI', sans-serif",
+  )
+  root.dataset.density = preferences.interfaceDensity
+  if (preferences.latinFont === 'manrope') void import('@fontsource-variable/manrope/wght.css')
+}
 
 function errorCodeFor(error: unknown): string {
   return error instanceof NcpApiError ? error.code : 'NETWORK_UNAVAILABLE'

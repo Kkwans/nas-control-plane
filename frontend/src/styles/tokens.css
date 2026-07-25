@@ -52,6 +52,8 @@
   --ncp-duration-slow: 420ms;
   --ncp-touch-target: 44px;
   --ncp-control-height: 42px;
+  --ncp-base-font-size: 15px;
+  --ncp-density-scale: 1;
   --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
   --ncp-font-latin: 'Manrope Variable', 'Segoe UI Variable', sans-serif;
   --ncp-font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', monospace;

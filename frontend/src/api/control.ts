@@ -2,6 +2,14 @@ import { NcpApiError } from '@/api/system'
 
 export interface UserPreferences {
   refreshIntervalSeconds: number
+  interfaceDensity: 'comfortable' | 'compact'
+  baseFontSize: number
+  pageSize: 20 | 25 | 50 | 100
+  sidebarDefault: 'collapsed' | 'expanded'
+  linkOpenMode: 'new-tab' | 'same-tab'
+  siteDefaultProtocol: 'http' | 'https'
+  chineseFont: 'system' | 'noto-sans-sc'
+  latinFont: 'system' | 'manrope'
 }
 
 export interface DatabaseProjectPreference {
