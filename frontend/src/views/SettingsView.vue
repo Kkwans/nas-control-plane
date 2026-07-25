@@ -43,8 +43,8 @@ async function save() {
 
     <section class="settings-grid">
       <article class="settings-section panel">
-        <header><span><Waves :size="20" /></span><div><h2>实时数据</h2><p>决定概览、Docker 与站点状态的推送和断线轮询频率。</p></div></header>
-        <label class="setting-row"><span><strong>刷新间隔</strong><small>SSE 正常时按该间隔推送更新信号</small></span>
+        <header><span><Waves :size="20" /></span><div><h2>实时数据</h2><p>决定总览、系统信息与监控页面的实时快照推送频率。</p></div></header>
+        <label class="setting-row"><span><strong>刷新间隔</strong><small>仅应用于需要实时数据的页面</small></span>
           <ElSelect v-model="draft.refreshIntervalSeconds"><ElOption v-for="item in intervals" :key="item.value" :label="item.label" :value="item.value" /></ElSelect>
         </label>
       </article>
