@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/proto/ncp/agent/v1;agentv1";
+
+service AgentJournalService {
+  rpc Query(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

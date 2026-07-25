@@ -55,10 +55,10 @@ const primaryNavigation: NavigationItem[] = [
   { label: '数据库', to: '/databases', icon: Database },
   { label: '系统信息', to: '/system', icon: Info },
   { label: '监控', to: '/monitoring', icon: Gauge },
+  { label: '日志中心', to: '/logs', icon: FileClock },
   { label: '系统设置', to: '/settings', icon: Settings },
 ]
 const plannedNavigation: NavigationItem[] = [
-  { label: '日志中心', icon: FileClock, planned: true },
   { label: '终端', icon: TerminalSquare, planned: true },
 ]
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
@@ -260,6 +261,9 @@ type fakeAgentClient struct {
 	logsResult       docker.ContainerLogsResult
 	logsErr          error
 	logsRequest      docker.ContainerLogsRequest
+	journalPage      journal.Page
+	journalErr       error
+	journalQuery     journal.Query
 	socketPath       string
 	deadlineObserved bool
 }
@@ -299,4 +303,11 @@ func (f *fakeAgentClient) ReadContainerLogs(ctx context.Context, socketPath stri
 	f.logsRequest = request
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.logsResult, f.logsErr
+}
+
+func (f *fakeAgentClient) QueryJournal(ctx context.Context, socketPath string, query journal.Query) (journal.Page, error) {
+	f.socketPath = socketPath
+	f.journalQuery = query
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.journalPage, f.journalErr
 }

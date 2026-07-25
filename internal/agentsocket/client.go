@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -153,6 +155,39 @@ func ReadContainerLogs(ctx context.Context, socketPath string, request docker.Co
 		return docker.ContainerLogsResult{}, rpcError(err)
 	}
 	return decodeContainerLogsResult(response)
+}
+
+func QueryJournal(ctx context.Context, socketPath string, query journal.Query) (journal.Page, error) {
+	if err := ctx.Err(); err != nil {
+		return journal.Page{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return journal.Page{}, err
+	}
+	defer connection.Close()
+	since := ""
+	if query.Since != nil {
+		since = query.Since.UTC().Format(time.RFC3339)
+	}
+	payload, err := structpb.NewStruct(map[string]any{
+		"unit": query.Unit, "cursor": query.Cursor, "limit": query.Limit, "since": since,
+	})
+	if err != nil {
+		return journal.Page{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentJournalServiceClient(connection).Query(ctx, payload)
+	if err != nil {
+		return journal.Page{}, rpcError(err)
+	}
+	var page journal.Page
+	if err := decodeDashboardResponse(response, &page); err != nil {
+		return journal.Page{}, err
+	}
+	if page.Entries == nil {
+		page.Entries = make([]journal.Entry, 0)
+	}
+	return page, nil
 }
 
 func ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInventory, error) {

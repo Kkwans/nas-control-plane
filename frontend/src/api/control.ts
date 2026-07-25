@@ -80,6 +80,21 @@ export interface MetricSample {
   networkTransmitBytes: number
 }
 
+export interface LogEntry {
+  id: string
+  timestamp: string
+  source: 'system' | 'agent' | 'container'
+  unit: string
+  level: 'error' | 'warning' | 'info' | 'debug'
+  message: string
+}
+
+export interface LogResponse {
+  collectedAt: string
+  entries: LogEntry[]
+  nextCursor: string
+}
+
 export function requestPreferences(): Promise<UserPreferences> {
   return request('/api/v1/preferences')
 }
@@ -123,6 +138,25 @@ export function requestComposeRevisions(projectId: string): Promise<ComposeRevis
 
 export function requestMetricSamples(range: '1h' | '6h' | '24h' | '7d'): Promise<MetricSample[]> {
   return request(`/api/v1/monitoring/samples?${new URLSearchParams({ range })}`)
+}
+
+export function requestLogs(input: {
+  source: 'system' | 'agent' | 'container'
+  containerId?: string
+  level?: string
+  query?: string
+  hours?: number
+  limit?: number
+}): Promise<LogResponse> {
+  const parameters = new URLSearchParams({
+    source: input.source,
+    level: input.level || 'all',
+    query: input.query || '',
+    hours: String(input.hours || 6),
+    limit: String(input.limit || 150),
+  })
+  if (input.containerId) parameters.set('containerId', input.containerId)
+  return request(`/api/v1/logs?${parameters}`)
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

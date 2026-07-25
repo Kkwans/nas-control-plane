@@ -710,6 +710,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/logs:
+    get:
+      operationId: queryLogCenter
+      summary: Query systemd journal or Docker container logs
+      tags: [logs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: source, in: query, schema: { type: string, enum: [system, agent, container], default: system } }
+        - { name: containerId, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: string, enum: [all, error, warning, info, debug], default: all } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: hours, in: query, schema: { type: integer, minimum: 1, maximum: 168, default: 6 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 150 } }
+      responses:
+        '200':
+          description: Normalized and redacted log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogResponse'
+        '503':
+          description: Root Agent or requested log source is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /ws/terminal:
     get:
       operationId: openTerminalPOCWebSocket
@@ -1407,6 +1433,26 @@ components:
         details:
           type: object
           additionalProperties: true
+    LogResponse:
+      type: object
+      required: [collectedAt, entries, nextCursor]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LogEntry'
+        nextCursor: { type: string }
+    LogEntry:
+      type: object
+      required: [id, timestamp, source, unit, level, message]
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        source: { type: string, enum: [system, agent, container] }
+        unit: { type: string }
+        level: { type: string, enum: [error, warning, info, debug] }
+        message: { type: string }
   securitySchemes:
     RootSession:
       type: apiKey

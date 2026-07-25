@@ -14,6 +14,7 @@ import (
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"google.golang.org/grpc"
@@ -42,6 +43,7 @@ type SocketConfig struct {
 	DockerImages      DockerImageProvider
 	Compose           ComposeProvider
 	Database          DatabaseProvider
+	Journal           JournalProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -86,6 +88,10 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	if databaseProvider == nil {
 		databaseProvider = ncpdatabase.NewManager()
 	}
+	journalProvider := config.Journal
+	if journalProvider == nil {
+		journalProvider = journal.NewReader(journal.OSRunner{})
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
@@ -95,6 +101,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
+	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

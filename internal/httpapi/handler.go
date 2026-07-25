@@ -14,6 +14,7 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/go-chi/chi/v5"
 )
@@ -33,6 +34,7 @@ type AgentClient interface {
 	CollectDockerInventory(context.Context, string) (docker.Inventory, error)
 	ControlContainer(context.Context, string, docker.ContainerActionRequest) (docker.ContainerActionResult, error)
 	ReadContainerLogs(context.Context, string, docker.ContainerLogsRequest) (docker.ContainerLogsResult, error)
+	QueryJournal(context.Context, string, journal.Query) (journal.Page, error)
 }
 
 type DatabaseAgentClient interface {
@@ -148,6 +150,10 @@ func (socketAgentClient) ReadContainerLogs(ctx context.Context, socketPath strin
 	return agentsocket.ReadContainerLogs(ctx, socketPath, request)
 }
 
+func (socketAgentClient) QueryJournal(ctx context.Context, socketPath string, query journal.Query) (journal.Page, error) {
+	return agentsocket.QueryJournal(ctx, socketPath, query)
+}
+
 func (socketAgentClient) ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInventory, error) {
 	return agentsocket.ListDockerImages(ctx, socketPath)
 }
@@ -260,6 +266,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/summary", api.systemSummary)
 			protected.Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
+			protected.Get("/logs", api.logs)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/docker/inventory", api.dockerInventory)
