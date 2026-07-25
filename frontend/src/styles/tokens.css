@@ -10,8 +10,8 @@
   --ncp-line: #dce4ee;
   --ncp-line-strong: #c5d0de;
   --ncp-text: #14213a;
-  --ncp-text-muted: #53627a;
-  --ncp-text-subtle: #7b8aa1;
+  --ncp-text-muted: #46566f;
+  --ncp-text-subtle: #687991;
   --ncp-primary: #2468d8;
   --ncp-primary-strong: #1758bb;
   --ncp-primary-soft: rgba(36, 104, 216, 0.09);
@@ -51,6 +51,10 @@
   --ncp-duration-base: 240ms;
   --ncp-duration-slow: 420ms;
   --ncp-touch-target: 44px;
+  --ncp-control-height: 42px;
+  --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
+  --ncp-font-latin: 'Manrope Variable', 'Segoe UI Variable', sans-serif;
+  --ncp-font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', monospace;
   --ncp-sidebar-width: 232px;
   --ncp-sidebar-collapsed-width: 68px;
   --ncp-topbar-height: 64px;
