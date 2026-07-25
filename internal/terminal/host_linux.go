@@ -21,11 +21,27 @@ func NewHostStarter() Starter {
 }
 
 func (hostStarter) Start(ctx context.Context, request StartRequest) (Session, error) {
-	command := exec.CommandContext(ctx, "/bin/sh")
+	shell := "/bin/bash"
+	arguments := []string{"--noprofile", "--norc", "-i"}
+	if _, err := os.Stat(shell); err != nil {
+		shell = "/bin/sh"
+		arguments = []string{"-i"}
+	}
+	command := exec.CommandContext(ctx, shell, arguments...)
+	command.Dir = "/root"
 	command.Env = []string{
-		"HOME=/tmp",
+		"HOME=/root",
+		"USER=root",
+		"LOGNAME=root",
+		"SHELL=" + shell,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"TERM=xterm-256color",
+		"COLORTERM=truecolor",
+		"HISTFILE=/root/.ncp_bash_history",
+		"HISTCONTROL=ignoredups:erasedups",
+		"HISTSIZE=2000",
+		"HISTFILESIZE=4000",
+		"PS1=\\[\\e[38;5;25m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[38;5;30m\\]\\w\\[\\e[0m\\]# ",
 	}
 	terminalFile, err := pty.StartWithSize(command, &pty.Winsize{Rows: request.Rows, Cols: request.Cols})
 	if err != nil {

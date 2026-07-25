@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Container, Plug, Server, SquareTerminal, Unplug } from '@lucide/vue'
 import { ElButton, ElOption, ElSelect } from 'element-plus'
 import { Terminal } from '@xterm/xterm'
@@ -28,6 +28,8 @@ const stats = computed<WorkspaceStat[]>(() => [
   { label: '身份', value: target.value === 'host' ? 'root' : '容器用户' },
 ])
 
+onMounted(() => void systemStore.refresh({ inventory: true }))
+
 async function connect() {
   if (!canConnect.value || state.value === 'connecting' || state.value === 'connected') return
   close()
@@ -43,17 +45,17 @@ async function connect() {
     lineHeight: 1.32,
     scrollback: 5000,
     theme: {
-      background: '#101722', foreground: '#dce7f5', cursor: '#65a5ff',
-      selectionBackground: '#31547a', black: '#182231', brightBlack: '#718096',
-      red: '#ff6b7a', green: '#43d39e', yellow: '#f6c85f', blue: '#65a5ff',
-      magenta: '#c792ea', cyan: '#54d1db', white: '#dce7f5',
+      background: '#fbfcfe', foreground: '#24344d', cursor: '#1f66d1',
+      selectionBackground: '#cfe0fb', black: '#1d2b3f', brightBlack: '#77869b',
+      red: '#c93f52', green: '#16805d', yellow: '#a76608', blue: '#1f66d1',
+      magenta: '#8156b3', cyan: '#087b83', white: '#e9eef5', brightWhite: '#ffffff',
     },
   })
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.open(element)
   fitAddon.fit()
-  terminal.writeln('\x1b[38;5;75mNCP Root Terminal\x1b[0m  正在建立会话…')
+  terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const params = new URLSearchParams({ target: target.value })
@@ -125,7 +127,7 @@ onBeforeUnmount(close)
       <ElSelect v-if="target === 'container'" v-model="containerId" filterable :disabled="state === 'connected'" placeholder="选择运行中的容器">
         <ElOption v-for="item in containers" :key="item.id" :label="`${item.name} · ${item.image}`" :value="item.id" />
       </ElSelect>
-      <span class="terminal-hint">支持 Ctrl+C、窗口自适应；离开页面时自动关闭并回收 PTY。</span>
+      <span class="terminal-hint">支持 Tab 补全、方向键历史、Ctrl+C 与窗口自适应；离开页面自动回收 PTY。</span>
     </section>
 
     <section class="terminal-frame panel">
@@ -137,5 +139,5 @@ onBeforeUnmount(close)
 </template>
 
 <style scoped>
-.terminal-toolbar{display:flex;min-height:66px;align-items:center;gap:12px;padding:10px 12px}.target-tabs{display:flex;gap:4px;padding:4px;border:1px solid var(--ncp-line);border-radius:11px;background:var(--ncp-surface-quiet)}.target-tabs button{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 13px;border-radius:8px;color:var(--ncp-text-muted)}.target-tabs button.active{background:#fff;box-shadow:0 3px 10px rgb(24 42 72 / 8%);color:var(--ncp-primary-strong)}.target-tabs span{display:grid;text-align:left}.target-tabs strong{font-size:.76rem}.target-tabs small{font-size:.62rem}.terminal-toolbar :deep(.el-select){width:min(360px,30vw)}.terminal-toolbar :deep(.el-select__wrapper){min-height:42px;border-radius:9px}.terminal-hint{margin-left:auto;color:var(--ncp-text-subtle);font-size:.72rem}.terminal-frame{position:relative;min-height:620px;overflow:hidden;background:#101722}.terminal-frame>header{display:flex;height:44px;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid #273346;background:#182231;color:#dce7f5}.terminal-frame>header strong{font-family:var(--ncp-font-mono);font-size:.74rem}.terminal-frame>header small{margin-left:auto;color:#718096;font-family:var(--ncp-font-mono);font-size:.64rem}.connection-dot{width:8px;height:8px;border-radius:50%;background:#718096}.connection-dot--connected{background:#43d39e;box-shadow:0 0 0 4px rgb(67 211 158 / 12%)}.connection-dot--connecting{background:#f6c85f}.connection-dot--error{background:#ff6b7a}.terminal-canvas{position:absolute;inset:56px 10px 10px}.terminal-canvas :deep(.xterm){height:100%;padding:4px}.terminal-placeholder{position:absolute;z-index:2;inset:44px 0 0;display:grid;place-items:center;align-content:center;gap:7px;background:#101722;color:#718096}.terminal-placeholder strong{color:#dce7f5;font-size:.86rem}.terminal-placeholder span{font-size:.72rem}@media(max-width:760px){.terminal-toolbar{align-items:stretch;flex-direction:column}.target-tabs button{flex:1}.target-tabs{display:flex}.terminal-toolbar :deep(.el-select){width:100%}.terminal-hint{margin-left:0}.terminal-frame{min-height:calc(100dvh - 310px)}}
+.terminal-toolbar{display:flex;min-height:66px;align-items:center;gap:12px;padding:10px 12px}.target-tabs{display:flex;gap:4px;padding:4px;border:1px solid var(--ncp-line);border-radius:11px;background:var(--ncp-surface-quiet)}.target-tabs button{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 13px;border-radius:8px;color:var(--ncp-text-muted)}.target-tabs button.active{background:#fff;box-shadow:0 3px 10px rgb(24 42 72 / 8%);color:var(--ncp-primary-strong)}.target-tabs span{display:grid;text-align:left}.target-tabs strong{font-size:.76rem}.target-tabs small{font-size:.62rem}.terminal-toolbar :deep(.el-select){width:min(360px,30vw)}.terminal-toolbar :deep(.el-select__wrapper){min-height:42px;border-radius:9px}.terminal-hint{margin-left:auto;color:var(--ncp-text-subtle);font-size:.72rem}.terminal-frame{position:relative;min-height:620px;overflow:hidden;border-color:#d8e1ed;background:#fbfcfe;box-shadow:0 12px 32px rgb(29 53 87 / 7%)}.terminal-frame>header{display:flex;height:46px;align-items:center;gap:8px;padding:0 15px;border-bottom:1px solid #dce4ee;background:#f1f5fa;color:#24344d}.terminal-frame>header strong{font-family:var(--ncp-font-mono);font-size:.76rem}.terminal-frame>header small{margin-left:auto;color:#77869b;font-family:var(--ncp-font-mono);font-size:.66rem}.connection-dot{width:8px;height:8px;border-radius:50%;background:#8996a8}.connection-dot--connected{background:#16805d;box-shadow:0 0 0 4px rgb(22 128 93 / 11%)}.connection-dot--connecting{background:#b87814}.connection-dot--error{background:#c93f52}.terminal-canvas{position:absolute;inset:58px 12px 12px}.terminal-canvas :deep(.xterm){height:100%;padding:5px}.terminal-placeholder{position:absolute;z-index:2;inset:46px 0 0;display:grid;place-items:center;align-content:center;gap:7px;background:#fbfcfe;color:#77869b}.terminal-placeholder strong{color:#24344d;font-size:.88rem}.terminal-placeholder span{font-size:.74rem}@media(max-width:760px){.terminal-toolbar{align-items:stretch;flex-direction:column}.target-tabs button{flex:1}.target-tabs{display:flex}.terminal-toolbar :deep(.el-select){width:100%}.terminal-hint{margin-left:0}.terminal-frame{min-height:calc(100dvh - 310px)}}
 </style>

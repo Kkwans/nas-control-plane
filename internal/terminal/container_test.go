@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -74,8 +75,11 @@ func TestProtectedContainerExecOptionsAreInteractiveButNotPrivileged(t *testing.
 	if options.ConsoleSize.Height != 34 || options.ConsoleSize.Width != 120 {
 		t.Fatalf("console size = %#v", options.ConsoleSize)
 	}
-	if len(options.Cmd) != 1 || options.Cmd[0] != "/bin/sh" {
+	if len(options.Cmd) != 3 || options.Cmd[0] != "/bin/sh" || options.Cmd[1] != "-lc" {
 		t.Fatalf("command = %#v", options.Cmd)
+	}
+	if !strings.Contains(options.Cmd[2], "exec bash") || len(options.Env) < 3 {
+		t.Fatalf("interactive shell bootstrap = %#v, env = %#v", options.Cmd, options.Env)
 	}
 }
 

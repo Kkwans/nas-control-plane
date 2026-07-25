@@ -89,6 +89,16 @@ func protectedContainerExecOptions(rows, cols uint16) client.ExecCreateOptions {
 		AttachStderr: true,
 		TTY:          true,
 		ConsoleSize:  client.ConsoleSize{Height: uint(rows), Width: uint(cols)},
-		Cmd:          []string{"/bin/sh"},
+		Env: []string{
+			"TERM=xterm-256color",
+			"COLORTERM=truecolor",
+			"HISTFILE=/tmp/.ncp_shell_history",
+			"HISTCONTROL=ignoredups",
+			"HISTSIZE=1000",
+		},
+		Cmd: []string{
+			"/bin/sh", "-lc",
+			`if command -v bash >/dev/null 2>&1; then export PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]\$ '; exec bash --noprofile --norc -i; fi; export PS1='\u@\h:\w\$ '; exec /bin/sh -i`,
+		},
 	}
 }
