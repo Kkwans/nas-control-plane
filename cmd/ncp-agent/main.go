@@ -99,6 +99,7 @@ func runAgentServer(ctx context.Context, args []string) error {
 	socketGroup := flags.String("socket-group", "", "允许连接 Agent Socket 的 Server 组")
 	socketPath := flags.String("socket-path", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径；仅 P0 终端实测可覆写")
 	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 Agent 服务")
+	outboundProxy := flags.String("outbound-proxy", "", "Docker Hub 标签查询使用的宿主机 HTTP 代理")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -115,6 +116,7 @@ func runAgentServer(ctx context.Context, args []string) error {
 		SocketPath:        *socketPath,
 		SocketGroup:       *socketGroup,
 		EnableTerminalPOC: *terminalPOC,
+		OutboundProxy:     *outboundProxy,
 	})
 }
 

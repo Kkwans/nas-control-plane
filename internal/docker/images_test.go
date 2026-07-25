@@ -14,6 +14,10 @@ func (stub imageGatewayStub) ListImages(context.Context) ([]ImageSummary, error)
 	return stub.images, nil
 }
 
+func (imageGatewayStub) SearchImages(context.Context, string, int) ([]HubRepository, error) {
+	return nil, nil
+}
+
 func (imageGatewayStub) PullImageReference(context.Context, string) error {
 	return nil
 }

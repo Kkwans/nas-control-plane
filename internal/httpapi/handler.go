@@ -49,6 +49,8 @@ type DatabaseAgentClient interface {
 
 type DockerImageAgentClient interface {
 	ListDockerImages(context.Context, string) (docker.ImageInventory, error)
+	SearchDockerHub(context.Context, string, docker.HubSearchRequest) (docker.HubSearchResult, error)
+	ListDockerHubTags(context.Context, string, docker.HubTagsRequest) (docker.HubTagsResult, error)
 	PullDockerImage(context.Context, string, docker.ImagePullRequest) (docker.ImagePullResult, error)
 	RemoveDockerImage(context.Context, string, docker.ImageRemoveRequest) (docker.ImageRemoveResult, error)
 }
@@ -156,6 +158,14 @@ func (socketAgentClient) QueryJournal(ctx context.Context, socketPath string, qu
 
 func (socketAgentClient) ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInventory, error) {
 	return agentsocket.ListDockerImages(ctx, socketPath)
+}
+
+func (socketAgentClient) SearchDockerHub(ctx context.Context, socketPath string, request docker.HubSearchRequest) (docker.HubSearchResult, error) {
+	return agentsocket.SearchDockerHub(ctx, socketPath, request)
+}
+
+func (socketAgentClient) ListDockerHubTags(ctx context.Context, socketPath string, request docker.HubTagsRequest) (docker.HubTagsResult, error) {
+	return agentsocket.ListDockerHubTags(ctx, socketPath, request)
 }
 
 func (socketAgentClient) PullDockerImage(ctx context.Context, socketPath string, request docker.ImagePullRequest) (docker.ImagePullResult, error) {

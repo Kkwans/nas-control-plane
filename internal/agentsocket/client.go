@@ -214,6 +214,64 @@ func ListDockerImages(ctx context.Context, socketPath string) (docker.ImageInven
 	return inventory, nil
 }
 
+func SearchDockerHub(ctx context.Context, socketPath string, request docker.HubSearchRequest) (docker.HubSearchResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.HubSearchResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{
+		"query": request.Query, "page": request.Page, "page_size": request.PageSize,
+	})
+	if err != nil {
+		return docker.HubSearchResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerImagesServiceClient(connection).SearchImages(ctx, payload)
+	if err != nil {
+		return docker.HubSearchResult{}, rpcError(err)
+	}
+	var result docker.HubSearchResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.HubSearchResult{}, err
+	}
+	if result.Results == nil {
+		result.Results = make([]docker.HubRepository, 0)
+	}
+	return result, nil
+}
+
+func ListDockerHubTags(ctx context.Context, socketPath string, request docker.HubTagsRequest) (docker.HubTagsResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.HubTagsResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{
+		"namespace": request.Namespace, "repository": request.Repository,
+		"page": request.Page, "page_size": request.PageSize,
+	})
+	if err != nil {
+		return docker.HubTagsResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerImagesServiceClient(connection).ListTags(ctx, payload)
+	if err != nil {
+		return docker.HubTagsResult{}, rpcError(err)
+	}
+	var result docker.HubTagsResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.HubTagsResult{}, err
+	}
+	if result.Results == nil {
+		result.Results = make([]docker.HubTag, 0)
+	}
+	for index := range result.Results {
+		if result.Results[index].Architectures == nil {
+			result.Results[index].Architectures = make([]string, 0)
+		}
+	}
+	return result, nil
+}
+
 func PullDockerImage(ctx context.Context, socketPath string, request docker.ImagePullRequest) (docker.ImagePullResult, error) {
 	connection, err := dialSocket(socketPath)
 	if err != nil {

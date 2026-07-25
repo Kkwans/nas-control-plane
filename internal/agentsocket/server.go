@@ -41,6 +41,7 @@ type SocketConfig struct {
 	DockerControl     DockerControlProvider
 	DockerLogs        DockerLogsProvider
 	DockerImages      DockerImageProvider
+	OutboundProxy     string
 	Compose           ComposeProvider
 	Database          DatabaseProvider
 	Journal           JournalProvider
@@ -75,7 +76,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	}
 	dockerImages := config.DockerImages
 	if dockerImages == nil {
-		dockerImages, err = docker.NewLiveImageManager()
+		dockerImages, err = docker.NewLiveImageManagerWithProxy(config.OutboundProxy)
 		if err != nil {
 			return coded("AGENT_DOCKER_IMAGES_INITIALIZATION_FAILED", err)
 		}

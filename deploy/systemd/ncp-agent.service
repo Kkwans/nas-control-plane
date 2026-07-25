@@ -12,7 +12,7 @@ RuntimeDirectoryMode=0750
 # Server 容器绑定的是该目录。重启 Agent 时必须保留目录 inode，
 # 否则容器会继续挂载已经失效的旧目录，无法看到新建的 Socket。
 RuntimeDirectoryPreserve=yes
-ExecStart=/opt/ncp/bin/ncp-agent serve --socket-group users
+ExecStart=/opt/ncp/bin/ncp-agent serve --socket-group users --outbound-proxy http://127.0.0.1:7890
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=15s

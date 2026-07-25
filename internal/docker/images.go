@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -47,14 +48,63 @@ type ImageRemoveResult struct {
 	Removed bool   `json:"removed"`
 }
 
+type HubRepository struct {
+	Name              string `json:"name"`
+	Namespace         string `json:"namespace"`
+	Description       string `json:"description"`
+	StarCount         int64  `json:"starCount"`
+	PullCount         int64  `json:"pullCount"`
+	Official          bool   `json:"official"`
+	Publisher         string `json:"publisher"`
+	LastUpdated       string `json:"lastUpdated"`
+	RepositoryType    string `json:"repositoryType"`
+	StatusDescription string `json:"statusDescription"`
+}
+
+type HubSearchRequest struct {
+	Query    string `json:"query"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"pageSize"`
+}
+
+type HubSearchResult struct {
+	Count    int64           `json:"count"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"pageSize"`
+	Results  []HubRepository `json:"results"`
+}
+
+type HubTagsRequest struct {
+	Namespace  string `json:"namespace"`
+	Repository string `json:"repository"`
+	Page       int    `json:"page"`
+	PageSize   int    `json:"pageSize"`
+}
+
+type HubTag struct {
+	Name          string   `json:"name"`
+	LastUpdated   string   `json:"lastUpdated"`
+	FullSize      int64    `json:"fullSize"`
+	Architectures []string `json:"architectures"`
+}
+
+type HubTagsResult struct {
+	Count    int64    `json:"count"`
+	Page     int      `json:"page"`
+	PageSize int      `json:"pageSize"`
+	Results  []HubTag `json:"results"`
+}
+
 type ImageGateway interface {
 	ListImages(context.Context) ([]ImageSummary, error)
+	SearchImages(context.Context, string, int) ([]HubRepository, error)
 	PullImageReference(context.Context, string) error
 	RemoveImage(context.Context, string) error
 }
 
 type ImageManager struct {
 	gateway ImageGateway
+	hubHTTP *http.Client
 	now     func() time.Time
 	timeout time.Duration
 }
@@ -71,11 +121,15 @@ func NewImageManager(gateway ImageGateway) *ImageManager {
 }
 
 func NewLiveImageManager() (*ImageManager, error) {
+	return NewLiveImageManagerWithProxy("")
+}
+
+func newMobyClient() (*client.Client, error) {
 	apiClient, err := client.New(client.WithHost(localDockerHost), client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, err
 	}
-	return NewImageManager(&mobyImageGateway{client: apiClient}), nil
+	return apiClient, nil
 }
 
 func (m *ImageManager) List(ctx context.Context) (ImageInventory, error) {
@@ -106,6 +160,36 @@ func (m *ImageManager) List(ctx context.Context) (ImageInventory, error) {
 		return images[left].CreatedAt.After(images[right].CreatedAt)
 	})
 	return ImageInventory{CollectedAt: m.now().UTC(), Images: images}, nil
+}
+
+func (m *ImageManager) Search(ctx context.Context, request HubSearchRequest) (HubSearchResult, error) {
+	query := strings.TrimSpace(request.Query)
+	if query == "" || len(query) > 120 || request.Page < 1 || request.PageSize < 1 || request.PageSize > 50 {
+		return HubSearchResult{}, coded("DOCKER_HUB_QUERY_INVALID", errors.New("image search request is invalid"))
+	}
+	limit := request.Page * request.PageSize
+	if limit > 100 {
+		limit = 100
+	}
+	results, err := m.gateway.SearchImages(ctx, query, limit)
+	if err != nil {
+		return HubSearchResult{}, coded("DOCKER_HUB_SEARCH_FAILED", err)
+	}
+	if results == nil {
+		results = make([]HubRepository, 0)
+	}
+	start := (request.Page - 1) * request.PageSize
+	if start >= len(results) {
+		return HubSearchResult{Count: int64(len(results)), Page: request.Page, PageSize: request.PageSize, Results: []HubRepository{}}, nil
+	}
+	end := start + request.PageSize
+	if end > len(results) {
+		end = len(results)
+	}
+	return HubSearchResult{
+		Count: int64(len(results)), Page: request.Page, PageSize: request.PageSize,
+		Results: append([]HubRepository(nil), results[start:end]...),
+	}, nil
 }
 
 func (m *ImageManager) Pull(ctx context.Context, request ImagePullRequest) (ImagePullResult, error) {
@@ -178,6 +262,23 @@ func (g *mobyImageGateway) ListImages(ctx context.Context) ([]ImageSummary, erro
 	return result, nil
 }
 
+func (g *mobyImageGateway) SearchImages(ctx context.Context, query string, limit int) ([]HubRepository, error) {
+	response, err := g.client.ImageSearch(ctx, query, client.ImageSearchOptions{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]HubRepository, 0, len(response.Items))
+	for _, item := range response.Items {
+		namespace, name := splitRepositoryName(item.Name)
+		results = append(results, HubRepository{
+			Name: name, Namespace: namespace, Description: strings.TrimSpace(item.Description),
+			StarCount: int64(item.StarCount), Official: item.IsOfficial, Publisher: namespace,
+			RepositoryType: "image", StatusDescription: "active",
+		})
+	}
+	return results, nil
+}
+
 func (g *mobyImageGateway) PullImageReference(ctx context.Context, reference string) error {
 	response, err := g.client.ImagePull(ctx, reference, client.ImagePullOptions{})
 	if err != nil {
@@ -201,10 +302,22 @@ func (unavailableImageGateway) ListImages(context.Context) ([]ImageSummary, erro
 	return nil, errors.New("image gateway is not configured")
 }
 
+func (unavailableImageGateway) SearchImages(context.Context, string, int) ([]HubRepository, error) {
+	return nil, errors.New("image gateway is not configured")
+}
+
 func (unavailableImageGateway) PullImageReference(context.Context, string) error {
 	return errors.New("image gateway is not configured")
 }
 
 func (unavailableImageGateway) RemoveImage(context.Context, string) error {
 	return errors.New("image gateway is not configured")
+}
+
+func splitRepositoryName(value string) (string, string) {
+	parts := strings.SplitN(strings.Trim(value, "/"), "/", 2)
+	if len(parts) == 1 {
+		return "library", parts[0]
+	}
+	return parts[0], parts[1]
 }
