@@ -5,7 +5,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/console/Dockerfile.server
-    image: nas-control-plane:2026.7.25-v3
+    image: nas-control-plane:2026.7.25-v4
     container_name: nas-control-plane
     restart: unless-stopped
     command:
