@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { BadgeCheck, Box, ChevronLeft, ChevronRight, Download, HardDrive, Image as ImageIcon, RefreshCw, Search, Star, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
@@ -18,7 +18,7 @@ import {
 } from '@/api/system'
 import { formatBytes } from '@/domain/overview'
 
-const props = defineProps<{ query: string; containers: DockerInventory['containers'] }>()
+const props = defineProps<{ query: string; containers: DockerInventory['containers']; pageSize: number }>()
 type ImageMode = 'local' | 'hub'
 
 const mode = ref<ImageMode>('local')
@@ -38,17 +38,28 @@ const tagsLoading = ref(false)
 const selectedTag = ref('latest')
 const pullPending = ref(false)
 const pullProgress = ref(0)
+const localPage = ref(1)
 
 const filteredImages = computed(() => {
   const term = props.query.trim().toLowerCase()
   if (!term) return images.value
   return images.value.filter((image) => [image.id, ...image.repoTags, ...image.repoDigests].some((value) => value.toLowerCase().includes(term)))
 })
+const localPageCount = computed(() => Math.max(1, Math.ceil(filteredImages.value.length / props.pageSize)))
+const pagedImages = computed(() => {
+  const start = (localPage.value - 1) * props.pageSize
+  return filteredImages.value.slice(start, start + props.pageSize)
+})
 const totalPages = computed(() => Math.max(1, Math.ceil(hubCount.value / 20)))
 const pullReference = computed(() => {
   if (!selectedRepository.value) return ''
   const prefix = selectedRepository.value.namespace === 'library' ? '' : `${selectedRepository.value.namespace}/`
   return `${prefix}${selectedRepository.value.name}:${selectedTag.value || 'latest'}`
+})
+
+watch(() => [props.query, props.pageSize], () => { localPage.value = 1 })
+watch(localPageCount, (count) => {
+  if (localPage.value > count) localPage.value = count
 })
 
 async function refresh() {
@@ -178,13 +189,21 @@ onMounted(refresh)
         <template v-if="loading && !images.length">
           <div v-for="row in 7" :key="row" class="resource-row skeleton-row"><i v-for="cell in 6" :key="cell" class="ncp-skeleton"></i></div>
         </template>
-        <div v-for="image in filteredImages" :key="image.id" class="resource-row">
+        <div v-for="image in pagedImages" :key="image.id" class="resource-row">
           <div class="resource-name"><span><ImageIcon :size="18" /></span><div><strong>{{ displayName(image) }}</strong><small>{{ image.repoDigests[0] ?? '本地构建镜像' }}</small></div></div>
           <code>{{ shortId(image.id) }}</code><span>{{ formatBytes(image.sizeBytes) }}</span><span>{{ dateLabel(image.createdAt) }}</span>
           <span>{{ usageCount(image) ? `${usageCount(image)} 个容器` : '未被引用' }}</span>
           <ElTooltip content="删除未使用的本地镜像"><button class="danger-button" type="button" :disabled="removePending === image.id" @click="confirmRemove(image)"><Trash2 :size="15" />删除</button></ElTooltip>
         </div>
         <div v-if="!loading && !filteredImages.length" class="empty-state">没有匹配的本地镜像</div>
+        <footer v-else-if="localPageCount > 1" class="resource-pagination">
+          <span>共 {{ filteredImages.length }} 个镜像 · 每页 {{ pageSize }} 项</span>
+          <div>
+            <button type="button" :disabled="localPage <= 1" @click="localPage -= 1">上一页</button>
+            <strong>{{ localPage }} / {{ localPageCount }}</strong>
+            <button type="button" :disabled="localPage >= localPageCount" @click="localPage += 1">下一页</button>
+          </div>
+        </footer>
       </section>
     </div>
 
@@ -221,6 +240,7 @@ onMounted(refresh)
 <style scoped>
 .image-workspace{display:grid;gap:12px}.image-modebar{display:flex;min-height:58px;align-items:center;justify-content:space-between;gap:16px}.image-modebar nav{display:flex;gap:4px;padding:4px;border:1px solid var(--ncp-line);border-radius:11px;background:var(--ncp-surface-quiet)}.image-modebar nav button{display:flex;min-height:38px;align-items:center;gap:7px;padding:0 13px;border-radius:8px;color:var(--ncp-text-muted);font-size:.82rem;font-weight:720}.image-modebar nav button.active{background:#fff;box-shadow:0 3px 10px rgba(24,42,72,.08);color:var(--ncp-primary-strong)}.image-modebar nav span{padding:1px 6px;border-radius:10px;background:var(--ncp-primary-soft);font-size:.68rem}.mode-actions,.hub-search{display:flex;align-items:center;gap:8px}.mode-actions>span{color:var(--ncp-text-subtle);font-size:.78rem}.hub-search{width:min(560px,55vw)}.hub-search :deep(.el-input){flex:1}.icon-button,.primary-button,.danger-button{display:inline-flex;min-height:40px;align-items:center;justify-content:center;gap:6px;border-radius:9px;font-size:.8rem;font-weight:720}.icon-button{width:40px;border:1px solid var(--ncp-line);background:#fff;color:var(--ncp-text-muted)}.primary-button{padding:0 15px;background:var(--ncp-primary);box-shadow:0 6px 16px rgba(36,104,216,.16);color:#fff}.primary-button:disabled{opacity:.5}.inline-error{display:flex;min-height:44px;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid rgba(212,81,93,.18);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.8rem}.inline-error button{font-weight:720}.resource-table{overflow:hidden}.resource-head,.resource-row{display:grid;grid-template-columns:minmax(260px,1.5fr) 130px 100px 120px 120px 86px;align-items:center;gap:12px}.resource-head{min-height:44px;padding:0 16px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.8rem;font-weight:720}.resource-row{min-height:68px;padding:0 16px;border-top:1px solid var(--ncp-line);color:var(--ncp-text-muted);font-size:.82rem}.resource-row:hover{background:var(--ncp-surface-hover)}.resource-name{display:flex;min-width:0;align-items:center;gap:10px}.resource-name>span,.repo-icon,.detail-icon{display:grid;flex:0 0 auto;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.resource-name>span{width:36px;height:36px}.resource-name>div{display:grid;min-width:0;gap:2px}.resource-name strong,.resource-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.resource-name strong{color:var(--ncp-text);font-size:.88rem}.resource-name small{color:var(--ncp-text-subtle);font-size:.73rem}.resource-row code{font-family:var(--ncp-font-mono);font-size:.76rem}.danger-button{min-height:34px;padding:0 9px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.skeleton-row i{width:76%;height:12px}.empty-state{display:grid;min-height:170px;place-items:center;align-content:center;padding:24px;color:var(--ncp-text-subtle);font-size:.82rem;text-align:center}
 .hub-workspace{display:grid;grid-template-columns:minmax(340px,.85fr) minmax(500px,1.35fr);gap:12px;min-height:590px}.repository-list{display:flex;overflow:hidden;flex-direction:column}.repository-list>button{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:70px;padding:10px 14px;border-bottom:1px solid var(--ncp-line);text-align:left;transition:background-color .16s ease,box-shadow .16s ease}.repository-list>button:hover,.repository-list>button.active{background:var(--ncp-surface-hover)}.repository-list>button.active{box-shadow:inset 3px 0 0 var(--ncp-primary)}.repo-icon{width:36px;height:36px}.repo-copy{display:grid;min-width:0;gap:3px}.repo-copy strong{display:flex;align-items:center;gap:4px;overflow:hidden;color:var(--ncp-text);font-size:.85rem;text-overflow:ellipsis;white-space:nowrap}.repo-copy small{display:-webkit-box;overflow:hidden;color:var(--ncp-text-subtle);font-size:.72rem;line-height:1.35;-webkit-box-orient:vertical;-webkit-line-clamp:2}.repo-stars{display:flex;align-items:center;gap:3px;color:#a66b08;font-size:.7rem}.repository-list>footer{display:flex;min-height:50px;align-items:center;justify-content:center;gap:14px;margin-top:auto;border-top:1px solid var(--ncp-line);color:var(--ncp-text-muted);font-size:.75rem}.repository-list>footer button{display:grid;width:32px;height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px}.repository-loading{display:grid}.repository-loading>div{display:grid;gap:8px;padding:15px;border-bottom:1px solid var(--ncp-line)}.repository-loading i:first-child{width:45%;height:12px}.repository-loading i:last-child{width:82%;height:9px}
+.resource-pagination{display:flex;min-height:52px;align-items:center;justify-content:space-between;gap:12px;padding:8px 16px;border-top:1px solid var(--ncp-line);color:var(--ncp-text-subtle);font-size:.82rem}.resource-pagination div{display:flex;align-items:center;gap:8px}.resource-pagination button{min-height:34px;padding:0 11px;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-weight:680}.resource-pagination button:disabled{cursor:not-allowed;opacity:.42}.resource-pagination strong{min-width:62px;color:var(--ncp-text);text-align:center}
 .repository-detail{display:flex;flex-direction:column;padding:20px}.repository-detail>header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.repository-detail>header>div{display:flex;align-items:center;gap:11px}.repository-detail>header>div>div{display:grid;gap:3px}.repository-detail header strong{font-size:1.05rem}.repository-detail header small,.pull-count{color:var(--ncp-text-subtle);font-size:.76rem}.detail-icon{width:44px;height:44px}.repository-detail>p{min-height:46px;margin:18px 0;color:var(--ncp-text-muted);font-size:.84rem;line-height:1.7}.tag-title{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-top:14px;border-top:1px solid var(--ncp-line)}.tag-title>div{display:grid;gap:2px}.tag-title strong{font-size:.88rem}.tag-title span{color:var(--ncp-text-subtle);font-size:.72rem}.tag-title code{max-width:55%;overflow:hidden;padding:5px 8px;border-radius:7px;background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong);font-family:var(--ncp-font-mono);font-size:.72rem;text-overflow:ellipsis;white-space:nowrap}.tag-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}.tag-grid>button{display:grid;gap:3px;padding:11px 12px;border:1px solid var(--ncp-line);border-radius:9px;background:#fff;text-align:left}.tag-grid>button:hover,.tag-grid>button.active{border-color:rgba(36,104,216,.42);background:var(--ncp-primary-soft)}.tag-grid strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.tag-grid small{overflow:hidden;color:var(--ncp-text-subtle);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.tag-grid>i{height:54px}.repository-detail>footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;padding-top:18px;border-top:1px solid var(--ncp-line)}.repository-detail>footer>span{color:var(--ncp-text-subtle);font-size:.74rem}.detail-empty{display:grid;flex:1;place-items:center;align-content:center;gap:8px;color:var(--ncp-text-subtle)}.detail-empty strong{color:var(--ncp-text);font-size:.92rem}.detail-empty span{font-size:.78rem}.spin{animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 78px;gap:8px}.hub-workspace{grid-template-columns:minmax(300px,.8fr) minmax(430px,1.2fr)}}
 @media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.hub-search{width:100%}.resource-table{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-grid{grid-template-columns:1fr}}

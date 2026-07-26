@@ -33,6 +33,7 @@ const logLoading = ref(false)
 const logContainerName = ref('')
 const logs = ref<ContainerLogsResult | null>(null)
 const composeEditorOpen = ref(false)
+const projectPage = ref(1)
 
 const allProjects = computed(() => systemStore.services)
 const projects = computed(() => {
@@ -41,6 +42,12 @@ const projects = computed(() => {
     const matchesState = stateFilter.value === 'all' || project.state === stateFilter.value
     return matchesState && (!term || project.name.toLowerCase().includes(term) || project.workingDirectory.toLowerCase().includes(term))
   })
+})
+const pageSize = computed(() => systemStore.preferences.pageSize)
+const projectPageCount = computed(() => Math.max(1, Math.ceil(projects.value.length / pageSize.value)))
+const pagedProjects = computed(() => {
+  const start = (projectPage.value - 1) * pageSize.value
+  return projects.value.slice(start, start + pageSize.value)
 })
 const inventory = computed(() => systemStore.inventory)
 const selectedProject = computed(() => allProjects.value.find((project) => project.id === route.query.project) ?? null)
@@ -108,6 +115,10 @@ async function openLogs(container: { id: string; name: string }) {
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
 })
+watch([query, stateFilter, pageSize], () => { projectPage.value = 1 })
+watch(projectPageCount, (count) => {
+  if (projectPage.value > count) projectPage.value = count
+})
 onMounted(() => void systemStore.refresh({ inventory: true }))
 </script>
 
@@ -146,7 +157,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       <div class="docker-table__head">
         <span>项目</span><span>状态</span><span>容器</span><span>公开端口</span><span>工作目录</span><span>操作</span>
       </div>
-      <div v-for="project in projects" :key="project.id" class="project-row" role="button" tabindex="0" @click="updateSelectedProject(project.id)" @keydown.enter="updateSelectedProject(project.id)" @keydown.space.prevent="updateSelectedProject(project.id)">
+      <div v-for="project in pagedProjects" :key="project.id" class="project-row" role="button" tabindex="0" @click="updateSelectedProject(project.id)" @keydown.enter="updateSelectedProject(project.id)" @keydown.space.prevent="updateSelectedProject(project.id)">
         <div class="project-name">
           <span><Boxes :size="18" /></span>
           <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? `Compose · ${project.configFiles.length || 1} 个配置文件` : '独立容器组' }}</small></div>
@@ -168,10 +179,18 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <span class="row-detail">详情<ChevronRight :size="17" /></span>
       </div>
       <div v-if="!projects.length" class="table-empty">没有匹配的 Docker 项目。</div>
+      <footer v-else-if="projectPageCount > 1" class="resource-pagination">
+        <span>共 {{ projects.length }} 个项目 · 每页 {{ pageSize }} 项</span>
+        <div>
+          <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
+          <strong>{{ projectPage }} / {{ projectPageCount }}</strong>
+          <button type="button" :disabled="projectPage >= projectPageCount" @click="projectPage += 1">下一页</button>
+        </div>
+      </footer>
     </section>
 
     <section v-if="activeView === 'projects'" class="docker-mobile-list" aria-label="Docker 项目列表">
-      <article v-for="project in projects" :key="project.id" class="mobile-project panel interactive-surface">
+      <article v-for="project in pagedProjects" :key="project.id" class="mobile-project panel interactive-surface">
         <header>
           <div class="project-name">
             <span><Boxes :size="18" /></span>
@@ -187,6 +206,13 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <button type="button" @click="updateSelectedProject(project.id)">查看项目详情<ChevronRight :size="17" /></button>
       </article>
       <p v-if="!projects.length" class="table-empty panel">没有匹配的 Docker 项目。</p>
+      <footer v-else-if="projectPageCount > 1" class="resource-pagination panel">
+        <span>{{ projectPage }} / {{ projectPageCount }}</span>
+        <div>
+          <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
+          <button type="button" :disabled="projectPage >= projectPageCount" @click="projectPage += 1">下一页</button>
+        </div>
+      </footer>
     </section>
 
     <DockerContainerPanel
@@ -195,6 +221,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       :query="query"
       :state-filter="containerStateFilter"
       :action-pending="actionPending"
+      :page-size="pageSize"
       @action="performAction"
       @logs="openLogs"
     />
@@ -203,6 +230,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       v-else
       :query="query"
       :containers="inventory?.containers ?? []"
+      :page-size="pageSize"
     />
 
     <ProjectDetailDrawer
@@ -257,6 +285,11 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .row-detail { display: flex; min-height: 44px; align-items: center; justify-content: flex-end; gap: 2px; color: var(--ncp-primary-strong); font-size: .82rem; font-weight: 720; opacity:.7; transition:opacity var(--ncp-duration-fast),transform var(--ncp-duration-fast) }
 .project-row:hover .row-detail{opacity:1;transform:translateX(2px)}
 .table-empty { padding: 36px; color: var(--ncp-text-subtle); font-size: .82rem; text-align: center; }
+.resource-pagination { display:flex; min-height:52px; align-items:center; justify-content:space-between; gap:16px; padding:8px 18px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-subtle); font-size:.82rem; }
+.resource-pagination div { display:flex; align-items:center; gap:8px; }
+.resource-pagination button { min-height:34px; padding:0 11px; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-weight:680; }
+.resource-pagination button:disabled { cursor:not-allowed; opacity:.42; }
+.resource-pagination strong { min-width:62px; color:var(--ncp-text); text-align:center; }
 .docker-mobile-list { display: none; }
 .log-loading { display: flex; align-items: center; gap: 8px; color: var(--ncp-text-muted); font-size: .75rem; }
 .log-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; }

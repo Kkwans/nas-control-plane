@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { FileText, Play, RotateCcw, Square, Box } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
@@ -14,6 +14,7 @@ const props = defineProps<{
   query: string
   stateFilter: ContainerStateFilter
   actionPending: string | null
+  pageSize: number
 }>()
 
 const emit = defineEmits<{
@@ -36,6 +37,17 @@ const filteredContainers = computed(() => {
       container.projectName.toLowerCase().includes(term)
     return matchesState && matchesQuery
   })
+})
+const page = ref(1)
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredContainers.value.length / props.pageSize)))
+const pagedContainers = computed(() => {
+  const start = (page.value - 1) * props.pageSize
+  return filteredContainers.value.slice(start, start + props.pageSize)
+})
+
+watch(() => [props.query, props.stateFilter, props.pageSize], () => { page.value = 1 })
+watch(pageCount, (count) => {
+  if (page.value > count) page.value = count
 })
 
 function publicPorts(container: DockerContainer) {
@@ -60,7 +72,7 @@ function pending(containerId: string, action: ContainerAction) {
     <div class="container-table__head">
       <span>容器</span><span>状态</span><span>所属项目</span><span>镜像</span><span>公开端口</span><span>操作</span>
     </div>
-    <div v-for="container in filteredContainers" :key="container.id" class="container-row">
+    <div v-for="container in pagedContainers" :key="container.id" class="container-row">
       <div class="container-name">
         <span><Box :size="18" /></span>
         <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
@@ -96,10 +108,18 @@ function pending(containerId: string, action: ContainerAction) {
       </div>
     </div>
     <div v-if="!filteredContainers.length" class="table-empty">没有匹配的 Docker 容器。</div>
+    <footer v-else-if="pageCount > 1" class="container-pagination">
+      <span>共 {{ filteredContainers.length }} 个容器 · 每页 {{ pageSize }} 项</span>
+      <div>
+        <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
+        <strong>{{ page }} / {{ pageCount }}</strong>
+        <button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
+      </div>
+    </footer>
   </section>
 
   <section class="container-mobile-list" aria-label="Docker 容器列表">
-    <article v-for="container in filteredContainers" :key="container.id" class="container-card panel">
+    <article v-for="container in pagedContainers" :key="container.id" class="container-card panel">
       <header>
         <div class="container-name">
           <span><Box :size="18" /></span>
@@ -120,6 +140,13 @@ function pending(containerId: string, action: ContainerAction) {
       </div>
     </article>
     <p v-if="!filteredContainers.length" class="table-empty panel">没有匹配的 Docker 容器。</p>
+    <footer v-else-if="pageCount > 1" class="container-pagination panel">
+      <span>{{ page }} / {{ pageCount }}</span>
+      <div>
+        <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
+        <button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
+      </div>
+    </footer>
   </section>
 </template>
 
@@ -148,6 +175,11 @@ function pending(containerId: string, action: ContainerAction) {
 .container-actions button:disabled { cursor:not-allowed; opacity:.42; }
 .action-dot { position:absolute; right:3px; bottom:3px; width:5px; height:5px; border-radius:50%; background:currentColor; animation:pulse 1s infinite; }
 .table-empty { padding:36px; color:var(--ncp-text-subtle); font-size:.72rem; text-align:center; }
+.container-pagination { display:flex; min-height:52px; align-items:center; justify-content:space-between; gap:12px; padding:8px 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-subtle); font-size:.82rem; }
+.container-pagination div { display:flex; align-items:center; gap:8px; }
+.container-pagination button { min-height:34px; padding:0 11px; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-weight:680; }
+.container-pagination button:disabled { cursor:not-allowed; opacity:.42; }
+.container-pagination strong { min-width:62px; color:var(--ncp-text); text-align:center; }
 .container-mobile-list { display:none; }
 @keyframes pulse { 50% { opacity:.25; } }
 @media(max-width:1100px){.container-table__head,.container-row{grid-template-columns:minmax(170px,1fr) 120px minmax(110px,.7fr) minmax(150px,1fr) 120px 152px;gap:8px}.container-actions{gap:3px}}
