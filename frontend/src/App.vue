@@ -35,6 +35,7 @@ onBeforeUnmount(() => {
 })
 
 async function initialize() {
+  await router.isReady()
   await authStore.refresh()
   if (authStore.isAuthenticated) {
     await startAuthenticatedSession()
