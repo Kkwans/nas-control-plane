@@ -12,7 +12,7 @@ import {
   Search,
   Server,
 } from '@lucide/vue'
-import { ElButton, ElInput, ElMessage, ElTag, ElTooltip } from 'element-plus'
+import { ElButton, ElInput, ElMessage, ElTooltip } from 'element-plus'
 
 import type { DatabaseDriver, DatabaseSource } from '@/api/database'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -35,8 +35,8 @@ const projectGroups = computed<DatabaseProjectGroup[]>(() => {
   const groups = new Map<string, DatabaseProjectGroup>()
   for (const source of databaseStore.sources) {
     const key = databaseProjectKey(source)
-    const group = groups.get(key)
-    if (group) group.sources.push(source)
+    const existing = groups.get(key)
+    if (existing) existing.sources.push(source)
     else groups.set(key, {
       key,
       name: source.project?.trim() || source.module?.trim() || '未关联项目',
@@ -71,9 +71,13 @@ const filteredGroups = computed(() => {
   })
 })
 
-onMounted(() => {
-  if (!databaseStore.sources.length) void refreshDiscovery()
-})
+function driverLabel(driver: DatabaseDriver) {
+  return driver === 'sqlite' ? 'SQLite' : driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL'
+}
+
+function driverIcon(driver: DatabaseDriver) {
+  return driver === 'sqlite' ? HardDrive : driver === 'postgresql' ? Server : Database
+}
 
 async function refreshDiscovery() {
   errorMessage.value = ''
@@ -84,36 +88,36 @@ async function refreshDiscovery() {
   }
 }
 
-function driverLabel(driver: DatabaseDriver) {
-  return driver === 'sqlite' ? 'SQLite' : driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL'
-}
-
-function driverIcon(source: DatabaseSource) {
-  return source.driver === 'sqlite' ? HardDrive : source.category === 'system' ? Server : Database
-}
-
 async function toggleArchive(group: DatabaseProjectGroup) {
   const archived = !databaseStore.isProjectArchived(group.key)
   try {
     await databaseStore.setProjectArchived(group.key, archived)
     ElMessage.success(archived ? `已归档 ${group.name}` : `已恢复 ${group.name}`)
   } catch {
-    ElMessage.error('归档状态保存失败')
+    ElMessage.error('归档状态保存失败。')
   }
 }
+
+onMounted(() => {
+  if (!databaseStore.sources.length) void refreshDiscovery()
+})
 </script>
 
 <template>
   <div class="page workspace-page database-overview">
-    <WorkspaceHeader title="数据库" description="自动发现 NAS 系统与项目数据库，按来源进入管理" :icon="Database" :stats="stats">
+    <WorkspaceHeader title="数据库" description="自动发现 NAS 系统与项目数据库，按项目和用途集中管理" :icon="Database" :stats="stats">
       <template #actions>
         <ElButton :loading="databaseStore.loading" @click="refreshDiscovery"><RefreshCw :size="16" />重新发现</ElButton>
       </template>
       <template #filters>
         <div class="source-filter" aria-label="数据库来源筛选">
-          <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'project', label: '项目' }, { value: 'system', label: '系统' }, { value: 'archived', label: '已归档' }]" :key="item.value" type="button" :class="{ active: sourceFilter === item.value }" @click="sourceFilter = item.value as SourceFilter">
-            {{ item.label }}
-          </button>
+          <button
+            v-for="item in [{ value: 'all', label: '全部' }, { value: 'project', label: '项目' }, { value: 'system', label: '系统' }, { value: 'archived', label: '已归档' }]"
+            :key="item.value"
+            type="button"
+            :class="{ active: sourceFilter === item.value }"
+            @click="sourceFilter = item.value as SourceFilter"
+          >{{ item.label }}</button>
         </div>
       </template>
       <template #tools>
@@ -125,31 +129,20 @@ async function toggleArchive(group: DatabaseProjectGroup) {
 
     <div v-if="errorMessage" class="database-error" role="alert">{{ errorMessage }}</div>
 
-    <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-loading" aria-label="正在发现数据库">
-      <article v-for="group in 3" :key="group" class="database-project panel">
-        <header class="database-project__header database-project__header--skeleton">
-          <i class="ncp-skeleton"></i><div><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
-        </header>
-        <div class="database-table">
-          <div v-for="row in 3" :key="row" class="database-row database-row--skeleton">
-            <i v-for="cell in 5" :key="cell" class="ncp-skeleton"></i>
-          </div>
-        </div>
-      </article>
+    <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-catalog panel" aria-label="正在发现数据库">
+      <div v-for="group in 3" :key="group" class="database-skeleton">
+        <header><i class="ncp-skeleton"></i><span class="ncp-skeleton"></span></header>
+        <div v-for="row in 2" :key="row"><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
+      </div>
     </section>
 
-    <section v-else-if="filteredGroups.length" class="database-groups" aria-label="按项目分组的数据库来源">
-      <article v-for="group in filteredGroups" :key="group.key" class="database-project panel">
-        <header class="database-project__header">
-          <span class="database-project__icon"><FolderKanban :size="20" /></span>
-          <div>
-            <strong>{{ group.name }}</strong>
-            <small>{{ group.sources.length }} 个数据库来源</small>
-          </div>
-          <ElTag :type="group.category === 'system' ? 'warning' : 'success'" effect="light" size="small">
-            {{ group.category === 'system' ? '系统项目' : '用户项目' }}
-          </ElTag>
-          <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复后将在默认列表显示' : '归档后从默认列表隐藏'" placement="top">
+    <section v-else-if="filteredGroups.length" class="database-catalog panel" aria-label="按项目分组的数据库来源">
+      <article v-for="group in filteredGroups" :key="group.key" class="database-group">
+        <header class="database-group__header">
+          <span :class="['project-icon', { 'project-icon--system': group.category === 'system' }]"><FolderKanban :size="19" /></span>
+          <div><strong>{{ group.name }}</strong><small>{{ group.sources.length }} 个数据库来源</small></div>
+          <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]">{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span>
+          <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
             <button class="archive-button" type="button" @click="toggleArchive(group)">
               <ArchiveRestore v-if="databaseStore.isProjectArchived(group.key)" :size="16" />
               <Archive v-else :size="16" />
@@ -157,6 +150,7 @@ async function toggleArchive(group: DatabaseProjectGroup) {
             </button>
           </ElTooltip>
         </header>
+
         <div class="database-table">
           <div class="database-table__head" aria-hidden="true">
             <span>数据库</span><span>用途模块</span><span>类型</span><span>连接位置</span><span>操作</span>
@@ -168,8 +162,8 @@ async function toggleArchive(group: DatabaseProjectGroup) {
             :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
           >
             <div class="database-identity">
-              <span :class="['database-card__icon', `database-card__icon--${source.driver}`]">
-                <component :is="driverIcon(source)" :size="20" />
+              <span :class="['database-type-icon', `database-type-icon--${source.driver}`, { 'database-type-icon--system': source.category === 'system' }]">
+                <component :is="driverIcon(source.driver)" :size="19" />
               </span>
               <div>
                 <strong>{{ source.name }}</strong>
@@ -177,7 +171,7 @@ async function toggleArchive(group: DatabaseProjectGroup) {
               </div>
             </div>
             <span class="database-module">{{ source.module || '未标注用途' }}</span>
-            <span class="driver-badge">{{ driverLabel(source.driver) }}</span>
+            <span :class="['driver-badge', `driver-badge--${source.driver}`]">{{ driverLabel(source.driver) }}</span>
             <code :title="source.location">{{ source.location }}</code>
             <span class="enter-database">{{ source.requiresLogin ? '连接' : '管理' }}<ArrowRight :size="16" /></span>
           </RouterLink>
@@ -186,35 +180,12 @@ async function toggleArchive(group: DatabaseProjectGroup) {
     </section>
 
     <section v-else class="empty-panel panel">
-      <Search :size="25" />
+      <span><Search :size="25" /></span>
       <div><h2>没有匹配的数据库</h2><p>调整筛选条件，或重新执行数据库发现。</p></div>
     </section>
   </div>
 </template>
 
 <style scoped>
-.database-search { width: min(340px, 34vw); }
-.source-filter { display:flex; flex:0 0 auto; gap:3px; padding:3px; border:1px solid var(--ncp-line); border-radius:10px; background:var(--ncp-surface-quiet); }
-.source-filter button { min-height:36px; padding:0 13px; border-radius:7px; background:transparent; color:var(--ncp-text-muted); font-size:.8rem; font-weight:680; }
-.source-filter button.active { background:#fff; box-shadow:0 2px 9px rgba(28,45,75,.08); color:var(--ncp-primary-strong); }
-.database-error { padding:10px 13px; border:1px solid rgba(212,81,93,.2); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.82rem; }
-.database-groups,.database-loading { display:grid; gap:14px; }
-.database-project { overflow:hidden; border-color:rgba(203,214,228,.9); }
-.database-project__header { display:grid; min-height:66px; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:12px; padding:11px 18px; border-bottom:1px solid var(--ncp-line); background:linear-gradient(90deg,#fff,var(--ncp-surface-quiet)); }
-.database-project__icon { display:grid; width:40px; height:40px; place-items:center; border-radius:11px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.database-project__header>div { display:grid; min-width:0; gap:2px; }
-.database-project__header strong { overflow:hidden; font-size:1rem; text-overflow:ellipsis; white-space:nowrap; }
-.database-project__header small { color:var(--ncp-text-subtle); font-size:.8rem; }
-.archive-button { display:flex; min-height:36px; align-items:center; gap:5px; padding:0 10px; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-size:.72rem; font-weight:700; transition:border-color var(--ncp-duration-fast),color var(--ncp-duration-fast),background var(--ncp-duration-fast); }
-.archive-button:hover { border-color:rgba(36,104,216,.25); background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.database-table{overflow:hidden}.database-table__head,.database-row{display:grid;grid-template-columns:minmax(260px,1.25fr) minmax(150px,.7fr) 150px minmax(260px,1.25fr) 82px;align-items:center;gap:14px}.database-table__head{min-height:46px;padding:0 18px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.82rem;font-weight:720}.database-row{min-height:72px;padding:10px 18px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast)}.database-row:hover{background:var(--ncp-surface-hover);box-shadow:inset 3px 0 0 var(--ncp-primary)}.database-identity{display:flex;min-width:0;align-items:center;gap:12px}.database-identity>div{display:grid;min-width:0;gap:2px}.database-identity strong,.database-identity small,.database-row code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.database-identity strong{font-size:.94rem}.database-identity small{color:var(--ncp-text-subtle);font-size:.8rem}.database-module{overflow:hidden;color:var(--ncp-text-muted);font-size:.86rem;text-overflow:ellipsis;white-space:nowrap}.driver-badge{justify-self:start;padding:4px 9px;border-radius:7px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:720}.database-row code{color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.78rem}.database-row--skeleton i{width:75%;height:12px}.database-project__header--skeleton>i{width:38px;height:38px;border-radius:10px}.database-project__header--skeleton>div i:first-child{width:180px;height:12px}.database-project__header--skeleton>div i:last-child{width:90px;height:9px}
-.database-card__icon { display:grid; width:42px; height:42px; place-items:center; border-radius:12px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.database-card__icon--mysql { background:#fff3e2; color:#b66a0a; }
-.database-card__icon--postgresql { background:#eaf4ff; color:#27689f; }
-.enter-database { display:flex; align-items:center; justify-content:flex-end; gap:4px; color:var(--ncp-primary-strong); font-size:.82rem; font-weight:720; opacity:.72;transition:opacity var(--ncp-duration-fast),transform var(--ncp-duration-fast)}.database-row:hover .enter-database{opacity:1;transform:translateX(2px)}
-.empty-panel { display:flex; min-height:180px; align-items:center; justify-content:center; gap:12px; color:var(--ncp-text-subtle); }
-.empty-panel h2 { margin:0; color:var(--ncp-text); font-size:.92rem; }.empty-panel p { margin:3px 0 0; font-size:.8rem; }
-@media(max-width:1220px){.database-table__head,.database-row{grid-template-columns:minmax(240px,1fr) 140px 130px minmax(210px,1fr) 72px}.database-search{width:min(300px,32vw);}}
-@media(max-width:900px){.database-search{width:100%;}.source-filter{width:100%;}.source-filter button{flex:1;}}
-@media(max-width:760px){.database-project__header{grid-template-columns:auto minmax(0,1fr) auto}.database-project__header :deep(.el-tag){display:none}.archive-button{width:40px;justify-content:center;padding:0;font-size:0}.database-table__head{display:none}.database-row{grid-template-columns:minmax(0,1fr) auto;gap:8px;min-height:116px}.database-module,.database-row code{grid-column:1/-1}.driver-badge{grid-row:1;grid-column:2}.enter-database{grid-column:2}.source-filter{overflow:auto}.source-filter button{min-width:68px}}
+.database-search{width:min(360px,36vw)}.source-filter{display:flex;flex:0 0 auto;gap:3px;padding:3px;border:1px solid var(--ncp-line);border-radius:11px;background:var(--ncp-surface-quiet)}.source-filter button{min-height:36px;padding:0 14px;border-radius:8px;background:transparent;color:var(--ncp-text-muted);font-size:.8rem;font-weight:680}.source-filter button:hover{background:rgba(255,255,255,.66);color:var(--ncp-text)}.source-filter button.active{background:#fff;box-shadow:0 2px 10px rgba(28,45,75,.08);color:var(--ncp-primary-strong)}.database-error{padding:11px 14px;border:1px solid rgba(201,83,97,.18);border-radius:11px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.database-catalog{overflow:hidden}.database-group+.database-group{border-top:8px solid var(--ncp-canvas)}.database-group__header{display:grid;min-height:64px;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--ncp-line);background:linear-gradient(90deg,#fbfcfe,#f7f9fc)}.project-icon{display:grid;width:38px;height:38px;place-items:center;border-radius:11px;background:#edf3fc;color:#3b70bd}.project-icon--system{background:#f8efe5;color:#a86d2a}.database-group__header>div{display:grid;min-width:0;gap:1px}.database-group__header strong{overflow:hidden;font-size:.94rem;text-overflow:ellipsis;white-space:nowrap}.database-group__header small{color:var(--ncp-text-subtle);font-size:.75rem}.project-kind{padding:4px 8px;border-radius:7px;background:#ecf6f2;color:#2b816b;font-size:.72rem;font-weight:700}.project-kind--system{background:#fbf1e5;color:#a76922}.archive-button{display:flex;min-height:34px;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:9px;background:#fff;color:var(--ncp-text-muted);font-size:.76rem;font-weight:680}.archive-button:hover{border-color:rgba(52,116,212,.24);color:var(--ncp-primary-strong)}.database-table__head,.database-row{display:grid;grid-template-columns:minmax(290px,1.25fr) minmax(180px,.75fr) 150px minmax(260px,1.2fr) 90px;align-items:center;gap:18px;padding-inline:18px}.database-table__head{min-height:44px;background:#fff;color:var(--ncp-text-subtle);font-size:.75rem;font-weight:730}.database-table__head span:last-child{text-align:center}.database-row{min-height:76px;border-top:1px solid var(--ncp-line);transition:background-color var(--ncp-duration-fast)}.database-row:hover{background:#f8fbff}.database-identity{display:flex;min-width:0;align-items:center;gap:12px}.database-type-icon{display:grid;width:40px;height:40px;flex:0 0 auto;place-items:center;border-radius:12px;background:#edf3fc;color:#3974ca}.database-type-icon--mysql{background:#fff1df;color:#b76a13}.database-type-icon--postgresql{background:#e9f1fb;color:#356da9}.database-type-icon--system{box-shadow:inset 0 0 0 1px rgba(184,118,34,.12)}.database-identity>div{display:grid;min-width:0;gap:2px}.database-identity strong{overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.database-identity small,.database-module{overflow:hidden;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.driver-badge{display:inline-flex;width:max-content;padding:5px 8px;border-radius:8px;background:#edf3fc;color:#3974ca;font-size:.72rem;font-weight:720}.driver-badge--mysql{background:#fff2e3;color:#a9661f}.driver-badge--postgresql{background:#eaf1f9;color:#386d9e}.database-row code{overflow:hidden;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.enter-database{display:flex;align-items:center;justify-content:center;gap:5px;color:var(--ncp-primary-strong);font-size:.78rem;font-weight:730}.database-row:hover .enter-database svg{transform:translateX(2px)}.enter-database svg{transition:transform var(--ncp-duration-fast)}.empty-panel{display:flex;min-height:280px;align-items:center;justify-content:center;gap:14px}.empty-panel>span{display:grid;width:48px;height:48px;place-items:center;border-radius:14px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.empty-panel h2{margin:0;font-size:.98rem}.empty-panel p{margin:4px 0 0;font-size:.8rem}.database-skeleton+.database-skeleton{border-top:8px solid var(--ncp-canvas)}.database-skeleton header{display:flex;min-height:64px;align-items:center;gap:12px;padding:0 18px;background:var(--ncp-surface-quiet)}.database-skeleton header i{width:38px;height:38px}.database-skeleton header span{width:180px;height:15px}.database-skeleton>div{display:grid;min-height:76px;grid-template-columns:260px 160px 120px 1fr;align-items:center;gap:38px;padding:0 18px;border-top:1px solid var(--ncp-line)}.database-skeleton>div i{height:13px}@media(max-width:1180px){.database-table{overflow-x:auto}.database-table__head,.database-row{min-width:980px}}@media(max-width:700px){.database-search{width:100%}.database-group__header{grid-template-columns:auto minmax(0,1fr) auto}.project-kind{display:none}.database-table{overflow:visible}.database-table__head{display:none}.database-row{display:grid;min-width:0;grid-template-columns:1fr auto;gap:10px;padding:14px 16px}.database-module,.database-row code{grid-column:1/-1}.driver-badge{grid-column:1}.enter-database{grid-column:2;grid-row:2}.database-group+.database-group{border-top-width:12px}.database-skeleton>div{grid-template-columns:1fr 90px}.database-skeleton>div i:nth-child(n+3){display:none}}@media(max-width:500px){.database-group__header{padding-inline:14px}.archive-button{width:36px;padding:0;justify-content:center}.archive-button{font-size:0}.source-filter{width:100%}.source-filter button{flex:1;padding-inline:6px}}
 </style>
