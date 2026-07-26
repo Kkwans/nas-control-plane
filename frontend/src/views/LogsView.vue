@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CirclePause, FileClock, Play, RefreshCw, Search } from '@lucide/vue'
-import { ElButton, ElInput, ElOption, ElSelect, ElSwitch } from 'element-plus'
+import { CirclePause, Eye, FileClock, Play, RefreshCw, Search } from '@lucide/vue'
+import { ElButton, ElDrawer, ElInput, ElOption, ElSelect, ElSwitch } from 'element-plus'
 
 import { followLogs, requestLogs, type LogEntry } from '@/api/control'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
@@ -21,7 +21,9 @@ const following = ref(false)
 const loading = ref(false)
 const error = ref('')
 const entries = ref<LogEntry[]>([])
+const selectedEntry = ref<LogEntry | null>(null)
 let logSource: EventSource | null = null
+let loadController: AbortController | null = null
 
 const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
@@ -37,13 +39,16 @@ async function load(silent = false) {
   }
   if (!silent) loading.value = true
   error.value = ''
+  loadController?.abort()
+  loadController = new AbortController()
   try {
     const result = await requestLogs({
       source: source.value, containerId: containerId.value, level: level.value,
       query: query.value, hours: hours.value, limit: pageSize.value,
-    })
+    }, loadController.signal)
     entries.value = result.entries
-  } catch {
+  } catch (caught) {
+    if (caught instanceof DOMException && caught.name === 'AbortError') return
     error.value = '日志读取失败，请确认目标服务正在运行。'
   } finally {
     loading.value = false
@@ -58,7 +63,9 @@ function syncFollowStream() {
     source: source.value, containerId: containerId.value, level: level.value,
     query: query.value, hours: hours.value, limit: pageSize.value,
   }, systemStore.refreshIntervalSeconds, (result) => {
-    entries.value = result.entries
+    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
+    for (const entry of result.entries) merged.set(entry.id, entry)
+    entries.value = [...merged.values()].sort((left, right) => new Date(left.timestamp).valueOf() - new Date(right.timestamp).valueOf()).slice(-500)
     error.value = ''
   }, () => {
     error.value = '实时日志连接已中断，可暂停后重新开启。'
@@ -79,10 +86,32 @@ onMounted(() => {
   void systemStore.refresh({ inventory: true })
   void load()
 })
-onBeforeUnmount(() => logSource?.close())
+onBeforeUnmount(() => {
+  loadController?.abort()
+  logSource?.close()
+})
 
 function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
+}
+
+function timestampLabel(value: string) {
+  const timestamp = new Date(value)
+  return Number.isNaN(timestamp.valueOf()) || timestamp.valueOf() <= 0 ? '时间未知' : timestamp.toLocaleString('zh-CN', { hour12: false })
+}
+
+function logTokens(message: string) {
+  const pattern = /(\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|\b(?:[1-5]\d{2})\b|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:error|warn(?:ing)?|fatal|panic|exception|success|ready)\b|[{}[\],:])/gi
+  return message.split(pattern).filter(Boolean).map((text) => {
+    const normalized = text.toLowerCase()
+    const tone = /^(get|post|put|patch|delete|head|options)$/.test(normalized) ? 'method'
+      : /^[1-5]\d{2}$/.test(text) ? (text.startsWith('2') || text.startsWith('3') ? 'success' : 'danger')
+        : /^(error|warning|warn|fatal|panic|exception)$/.test(normalized) ? 'danger'
+          : /^(success|ready)$/.test(normalized) ? 'success'
+            : /^(?:\d{1,3}\.){3}\d{1,3}$/.test(text) ? 'ip'
+              : /^[{}[\],:]$/.test(text) ? 'punctuation' : ''
+    return { text, tone }
+  })
 }
 </script>
 
@@ -112,21 +141,31 @@ function levelLabel(value: LogEntry['level']) {
 
     <div v-if="error" class="log-error">{{ error }}</div>
     <section class="log-console panel">
-      <div class="log-head"><span>时间</span><span>级别</span><span>来源</span><span>消息</span></div>
+      <div class="log-head"><span>时间</span><span>级别</span><span>消息</span><span>操作</span></div>
       <template v-if="loading && !entries.length">
         <div v-for="row in 12" :key="row" class="log-row log-row--skeleton"><i v-for="cell in 4" :key="cell" class="ncp-skeleton"></i></div>
       </template>
       <div v-for="entry in entries" v-else :key="entry.id" class="log-row">
-        <time>{{ new Date(entry.timestamp).toLocaleString('zh-CN', { hour12: false }) }}</time>
+        <time>{{ timestampLabel(entry.timestamp) }}</time>
         <span :class="['level-badge', `level-badge--${entry.level}`]">{{ levelLabel(entry.level) }}</span>
-        <code :title="entry.unit">{{ entry.unit }}</code>
-        <pre>{{ entry.message }}</pre>
+        <p class="log-message" :title="entry.message"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></p>
+        <button class="log-detail-button" type="button" title="查看日志详情" @click="selectedEntry = entry"><Eye :size="16" /></button>
       </div>
       <div v-if="!loading && !entries.length" class="log-empty">当前筛选条件下没有日志记录</div>
     </section>
+    <ElDrawer :model-value="Boolean(selectedEntry)" title="日志详情" size="min(620px, 92vw)" @close="selectedEntry = null">
+      <dl v-if="selectedEntry" class="log-detail-meta">
+        <div><dt>时间</dt><dd>{{ timestampLabel(selectedEntry.timestamp) }}</dd></div>
+        <div><dt>级别</dt><dd>{{ levelLabel(selectedEntry.level) }}</dd></div>
+        <div><dt>来源</dt><dd>{{ selectedEntry.source }}</dd></div>
+        <div><dt>服务 / 容器</dt><dd>{{ selectedEntry.unit }}</dd></div>
+      </dl>
+      <pre v-if="selectedEntry" class="log-detail-message"><span v-for="(token, index) in logTokens(selectedEntry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></pre>
+    </ElDrawer>
   </div>
 </template>
 
 <style scoped>
 .log-toolbar{display:flex;min-height:66px;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px}.log-filters,.log-tools{display:flex;align-items:center;gap:8px}.log-filters :deep(.el-select){width:160px}.log-tools :deep(.el-input){width:min(360px,30vw)}.log-toolbar :deep(.el-select__wrapper),.log-toolbar :deep(.el-input__wrapper){min-height:42px;border-radius:10px}.follow-switch{display:flex;min-height:42px;align-items:center;gap:7px;padding:0 11px;border:1px solid var(--ncp-line);border-radius:10px;color:var(--ncp-text-muted);font-size:.82rem}.log-console{overflow:hidden}.log-head,.log-row{display:grid;grid-template-columns:188px 78px 200px minmax(360px,1fr);align-items:start;gap:13px}.log-head{min-height:46px;align-items:center;padding:0 16px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.8rem;font-weight:720}.log-row{min-height:52px;padding:10px 16px;border-top:1px solid var(--ncp-line);font-size:.8rem}.log-row:hover{background:var(--ncp-surface-hover)}.log-row time,.log-row code{overflow:hidden;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.log-row pre{margin:0;overflow-wrap:anywhere;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.55;white-space:pre-wrap}.level-badge{justify-self:start;padding:3px 8px;border-radius:7px;background:var(--ncp-info-soft);color:var(--ncp-info);font-size:.74rem;font-weight:720}.level-badge--error{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.level-badge--warning{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.level-badge--debug{background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.log-row--skeleton i{width:75%;height:10px}.log-empty{display:grid;min-height:220px;place-items:center;color:var(--ncp-text-subtle);font-size:.84rem}.log-error{padding:11px 14px;border-radius:9px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}@media(max-width:1050px){.log-toolbar{align-items:stretch;flex-direction:column}.log-filters,.log-tools{width:100%}.log-filters :deep(.el-select){flex:1}.log-tools :deep(.el-input){min-width:0;flex:1}.log-head,.log-row{grid-template-columns:155px 68px 150px minmax(280px,1fr)}}@media(max-width:700px){.log-filters{display:grid;grid-template-columns:1fr 1fr}.log-filters :deep(.el-select){width:100%}.log-head{display:none}.log-row{grid-template-columns:1fr auto}.log-row code{grid-column:1}.log-row pre{grid-column:1/-1}.log-row time{grid-row:1;grid-column:1}}
+.log-toolbar :deep(.el-select__input),.log-toolbar :deep(.el-select__input-wrapper){border:0!important;outline:0!important;box-shadow:none!important}.log-head,.log-row{grid-template-columns:188px 78px minmax(360px,1fr) 64px;align-items:center}.log-head>span:nth-child(2),.log-head>span:last-child{text-align:center}.level-badge{justify-self:center}.log-message{overflow:hidden;margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.55;text-overflow:ellipsis;white-space:nowrap}.log-detail-button{display:grid;width:34px;height:34px;place-items:center;justify-self:center;border:1px solid transparent;border-radius:8px;color:var(--ncp-text-subtle);transition:background-color .18s ease,border-color .18s ease,color .18s ease}.log-row:hover .log-detail-button,.log-detail-button:focus-visible{border-color:var(--ncp-line);background:#fff;color:var(--ncp-primary-strong)}.log-token--method{color:#2769ba;font-weight:700}.log-token--success{color:#23866f;font-weight:700}.log-token--danger{color:#c95361;font-weight:700}.log-token--ip{color:#8a5db0}.log-token--punctuation{color:#7b8798}.log-detail-meta{display:grid;grid-template-columns:1fr 1fr;margin:0;border:1px solid var(--ncp-line);border-radius:12px}.log-detail-meta>div{display:grid;gap:5px;padding:12px}.log-detail-meta dt{color:var(--ncp-text-subtle);font-size:.75rem}.log-detail-meta dd{margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.82rem}.log-detail-message{margin:16px 0 0;padding:16px;border:1px solid var(--ncp-line);border-radius:12px;background:var(--ncp-surface-quiet);color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.8rem;line-height:1.65;white-space:pre-wrap;word-break:break-word}@media(max-width:1050px){.log-head,.log-row{grid-template-columns:155px 68px minmax(280px,1fr) 58px}}@media(max-width:700px){.log-row{grid-template-columns:1fr auto auto}.log-message{grid-column:1/-1}.log-row time{grid-row:1;grid-column:1}.log-detail-meta{grid-template-columns:1fr}}
 </style>

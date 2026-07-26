@@ -186,6 +186,7 @@ func ReadContainerLogs(ctx context.Context, socketPath string, request docker.Co
 	payload, err := structpb.NewStruct(map[string]any{
 		"container_id": request.ContainerID,
 		"tail":         request.Tail,
+		"since":        request.Since,
 	})
 	if err != nil {
 		return docker.ContainerLogsResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)

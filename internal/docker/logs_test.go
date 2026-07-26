@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestContainerLogCollectorNormalizesDefaultTailAndPreservesEntries(t *testing.T) {
@@ -76,6 +77,16 @@ type fakeContainerLogGateway struct {
 	err     error
 }
 
-func (f fakeContainerLogGateway) ReadContainerLogs(context.Context, string, int) ([]ContainerLogEntry, error) {
+func (f fakeContainerLogGateway) ReadContainerLogs(context.Context, string, int, string) ([]ContainerLogEntry, error) {
 	return f.entries, f.err
+}
+
+func TestDecodeDockerLogEntriesPreservesRealTimestamp(t *testing.T) {
+	entries := textLogEntries("stdout", "2026-07-26T09:15:39.123456789Z service ready\n")
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if entries[0].Timestamp.Format(time.RFC3339Nano) != "2026-07-26T09:15:39.123456789Z" || entries[0].Message != "service ready" {
+		t.Fatalf("entry = %#v", entries[0])
+	}
 }

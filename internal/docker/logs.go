@@ -21,6 +21,7 @@ const (
 type ContainerLogsRequest struct {
 	ContainerID string `json:"containerId"`
 	Tail        int    `json:"tail"`
+	Since       string `json:"since,omitempty"`
 }
 
 func (r ContainerLogsRequest) Normalize() (ContainerLogsRequest, error) {
@@ -34,12 +35,19 @@ func (r ContainerLogsRequest) Normalize() (ContainerLogsRequest, error) {
 	if r.Tail < 1 || r.Tail > MaxContainerLogTail {
 		return ContainerLogsRequest{}, coded("DOCKER_LOGS_INPUT_INVALID", errors.New("tail is outside the supported range"))
 	}
+	r.Since = strings.TrimSpace(r.Since)
+	if r.Since != "" {
+		if _, err := time.Parse(time.RFC3339Nano, r.Since); err != nil {
+			return ContainerLogsRequest{}, coded("DOCKER_LOGS_INPUT_INVALID", errors.New("since is invalid"))
+		}
+	}
 	return r, nil
 }
 
 type ContainerLogEntry struct {
-	Stream  string `json:"stream"`
-	Message string `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
+	Stream    string    `json:"stream"`
+	Message   string    `json:"message"`
 }
 
 type ContainerLogsResult struct {
@@ -50,7 +58,7 @@ type ContainerLogsResult struct {
 }
 
 type ContainerLogGateway interface {
-	ReadContainerLogs(context.Context, string, int) ([]ContainerLogEntry, error)
+	ReadContainerLogs(context.Context, string, int, string) ([]ContainerLogEntry, error)
 }
 
 type ContainerLogCollector struct {
@@ -81,7 +89,7 @@ func (c *ContainerLogCollector) Read(ctx context.Context, request ContainerLogsR
 	if err := ctx.Err(); err != nil {
 		return ContainerLogsResult{}, err
 	}
-	entries, err := c.gateway.ReadContainerLogs(ctx, request.ContainerID, request.Tail)
+	entries, err := c.gateway.ReadContainerLogs(ctx, request.ContainerID, request.Tail, request.Since)
 	if err != nil {
 		return ContainerLogsResult{}, coded("DOCKER_LOGS_UNAVAILABLE", err)
 	}
@@ -108,11 +116,13 @@ func NewMobyContainerLogGateway() (ContainerLogGateway, error) {
 	return &mobyContainerLogGateway{client: apiClient}, nil
 }
 
-func (g *mobyContainerLogGateway) ReadContainerLogs(ctx context.Context, containerID string, tail int) ([]ContainerLogEntry, error) {
+func (g *mobyContainerLogGateway) ReadContainerLogs(ctx context.Context, containerID string, tail int, since string) ([]ContainerLogEntry, error) {
 	response, err := g.client.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       strconv.Itoa(tail),
+		Since:      since,
+		Timestamps: true,
 	})
 	if err != nil {
 		return nil, err
@@ -154,7 +164,8 @@ func (a *logAccumulator) append(stream, text string) {
 	if text == "" {
 		return
 	}
-	a.entries = append(a.entries, ContainerLogEntry{Stream: stream, Message: text})
+	timestamp, message := parseDockerLogLine(text)
+	a.entries = append(a.entries, ContainerLogEntry{Timestamp: timestamp, Stream: stream, Message: message})
 }
 
 func (a *logAccumulator) flush() {
@@ -187,14 +198,27 @@ func textLogEntries(stream, text string) []ContainerLogEntry {
 	entries := make([]ContainerLogEntry, 0, len(lines))
 	for _, line := range lines {
 		if line != "" {
-			entries = append(entries, ContainerLogEntry{Stream: stream, Message: line})
+			timestamp, message := parseDockerLogLine(line)
+			entries = append(entries, ContainerLogEntry{Timestamp: timestamp, Stream: stream, Message: message})
 		}
 	}
 	return entries
 }
 
+func parseDockerLogLine(line string) (time.Time, string) {
+	timestampText, message, found := strings.Cut(line, " ")
+	if !found {
+		return time.Time{}, line
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
+	if err != nil {
+		return time.Time{}, line
+	}
+	return timestamp.UTC(), message
+}
+
 type unavailableContainerLogGateway struct{}
 
-func (unavailableContainerLogGateway) ReadContainerLogs(context.Context, string, int) ([]ContainerLogEntry, error) {
+func (unavailableContainerLogGateway) ReadContainerLogs(context.Context, string, int, string) ([]ContainerLogEntry, error) {
 	return nil, errors.New("container log gateway is not configured")
 }

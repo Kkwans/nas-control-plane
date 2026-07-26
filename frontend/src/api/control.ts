@@ -191,8 +191,8 @@ export function requestLogs(input: {
   query?: string
   hours?: number
   limit?: number
-}): Promise<LogResponse> {
-  return request(`/api/v1/logs?${logParameters(input)}`)
+}, signal?: AbortSignal): Promise<LogResponse> {
+  return request(`/api/v1/logs?${logParameters(input)}`, { signal })
 }
 
 export function followLogs(

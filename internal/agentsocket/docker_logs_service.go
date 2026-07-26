@@ -55,6 +55,9 @@ func decodeContainerLogsRequest(request *structpb.Struct) (docker.ContainerLogsR
 		return docker.ContainerLogsRequest{}, errors.New("tail is invalid")
 	}
 	result := docker.ContainerLogsRequest{ContainerID: containerID, Tail: int(tailValue)}
+	if since, ok := values["since"].(string); ok {
+		result.Since = since
+	}
 	if _, err := result.Normalize(); err != nil {
 		return docker.ContainerLogsRequest{}, err
 	}

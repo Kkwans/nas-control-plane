@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -52,7 +53,7 @@ func (api *handler) collectLogs(request *http.Request) (logResponse, int, error)
 	case "system", "agent":
 		result, err = api.readJournalLogs(timeoutContext, source, limit, request)
 	case "container":
-		result, err = api.readContainerLogCenter(timeoutContext, limit, request.URL.Query().Get("containerId"))
+		result, err = api.readContainerLogCenter(timeoutContext, limit, request.URL.Query().Get("containerId"), request)
 	default:
 		return logResponse{}, http.StatusBadRequest, fmt.Errorf("日志来源无效。")
 	}
@@ -78,16 +79,47 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
 	flusher.Flush()
 
+	streamRequest := request.Clone(request.Context())
+	streamQuery := streamRequest.URL.Query()
+	streamQuery.Set("since", time.Now().UTC().Format(time.RFC3339Nano))
+	streamRequest.URL.RawQuery = streamQuery.Encode()
+	seen := make(map[string]struct{})
 	send := func() bool {
-		result, _, err := api.collectLogs(request)
+		result, _, err := api.collectLogs(streamRequest)
 		if err != nil {
 			_, err = fmt.Fprintf(response, "event: unavailable\ndata: {}\n\n")
 		} else {
+			incremental := make([]logEntry, 0, len(result.Entries))
+			var latest time.Time
+			for _, entry := range result.Entries {
+				if _, exists := seen[entry.ID]; exists {
+					continue
+				}
+				seen[entry.ID] = struct{}{}
+				incremental = append(incremental, entry)
+				if entry.Timestamp.After(latest) {
+					latest = entry.Timestamp
+				}
+			}
+			if len(incremental) == 0 {
+				_, err = fmt.Fprint(response, ": heartbeat\n\n")
+				flusher.Flush()
+				return err == nil
+			}
+			result.Entries = incremental
 			var payload []byte
 			payload, err = json.Marshal(result)
 			if err == nil {
 				_, err = fmt.Fprintf(response, "event: logs\ndata: %s\n\n", payload)
 			}
+			query := streamRequest.URL.Query()
+			if result.NextCursor != "" {
+				query.Set("cursor", result.NextCursor)
+			}
+			if !latest.IsZero() {
+				query.Set("since", latest.Add(time.Nanosecond).Format(time.RFC3339Nano))
+			}
+			streamRequest.URL.RawQuery = query.Encode()
 		}
 		if err != nil {
 			return false
@@ -117,7 +149,9 @@ func (api *handler) readJournalLogs(ctx context.Context, source string, limit in
 	if source == "agent" {
 		query.Unit = "ncp-agent.service"
 	}
-	if hours, err := strconv.Atoi(request.URL.Query().Get("hours")); err == nil && hours > 0 && hours <= 168 {
+	if since, err := time.Parse(time.RFC3339Nano, request.URL.Query().Get("since")); err == nil {
+		query.Since = &since
+	} else if hours, err := strconv.Atoi(request.URL.Query().Get("hours")); err == nil && hours > 0 && hours <= 168 {
 		since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 		query.Since = &since
 	}
@@ -135,19 +169,26 @@ func (api *handler) readJournalLogs(ctx context.Context, source string, limit in
 	return logResponse{CollectedAt: time.Now().UTC(), Entries: entries, NextCursor: page.NextCursor}, nil
 }
 
-func (api *handler) readContainerLogCenter(ctx context.Context, limit int, containerID string) (logResponse, error) {
-	result, err := api.agent.ReadContainerLogs(ctx, api.agentSocketPath, docker.ContainerLogsRequest{ContainerID: containerID, Tail: limit})
+func (api *handler) readContainerLogCenter(ctx context.Context, limit int, containerID string, request *http.Request) (logResponse, error) {
+	since := request.URL.Query().Get("since")
+	if since == "" {
+		if hours, err := strconv.Atoi(request.URL.Query().Get("hours")); err == nil && hours > 0 && hours <= 168 {
+			since = time.Now().UTC().Add(-time.Duration(hours) * time.Hour).Format(time.RFC3339Nano)
+		}
+	}
+	result, err := api.agent.ReadContainerLogs(ctx, api.agentSocketPath, docker.ContainerLogsRequest{ContainerID: containerID, Tail: limit, Since: since})
 	if err != nil {
 		return logResponse{}, err
 	}
 	entries := make([]logEntry, 0, len(result.Entries))
-	for index, item := range result.Entries {
+	for _, item := range result.Entries {
 		level := "info"
 		if item.Stream == "stderr" {
 			level = "error"
 		}
+		identifier := fmt.Sprintf("%x", sha256.Sum256([]byte(containerID+"\x00"+item.Stream+"\x00"+item.Timestamp.Format(time.RFC3339Nano)+"\x00"+item.Message)))
 		entries = append(entries, logEntry{
-			ID: containerID + "-" + strconv.Itoa(index), Timestamp: result.CollectedAt, Source: "container",
+			ID: identifier[:20], Timestamp: item.Timestamp, Source: "container",
 			Unit: containerID, Level: level, Message: item.Message,
 		})
 	}
