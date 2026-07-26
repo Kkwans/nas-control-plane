@@ -6,9 +6,11 @@ import { ElButton, ElSegmented } from 'element-plus'
 import { requestMetricSamples, type MetricSample } from '@/api/control'
 import RealtimeTrendChart from '@/components/RealtimeTrendChart.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 const range = ref<TimeRange>('6h')
+const systemStore = useSystemStore()
 const samples = ref<MetricSample[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -37,6 +39,9 @@ async function load() {
   finally { loading.value = false }
 }
 watch(range, () => void load())
+watch(() => systemStore.summary?.collectedAt, (next, previous) => {
+  if (next && previous && next !== previous) void load()
+})
 onMounted(() => void load())
 </script>
 
@@ -60,5 +65,16 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
-.monitor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.chart-card{min-width:0;padding:17px}.chart-card>header{display:flex;align-items:center;gap:9px;margin-bottom:8px;color:var(--ncp-primary-strong)}.chart-card>header div{display:grid}.chart-card strong{color:var(--ncp-text);font-size:.86rem}.chart-card small{color:var(--ncp-text-subtle);font-size:.7rem}.chart-card>.ncp-skeleton{display:block;width:100%;height:18px;margin:10px 0}.monitor-error{margin-bottom:14px;padding:12px 14px;border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.8rem}@media(max-width:920px){.monitor-grid{grid-template-columns:1fr}}
+.monitor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.chart-card { min-width:0; padding:20px; transition:border-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.chart-card:hover { border-color:rgba(52,116,212,.22); box-shadow:0 15px 34px rgba(44,66,94,.08); transform:translateY(-1px); }
+.chart-card>header { display:flex; align-items:center; gap:11px; margin-bottom:12px; color:var(--ncp-primary-strong); }
+.chart-card>header>svg { padding:8px; box-sizing:content-box; border-radius:10px; background:var(--ncp-primary-soft); }
+.chart-card>header div { display:grid; gap:2px; }
+.chart-card strong { color:var(--ncp-text); font-size:1rem; }
+.chart-card small { color:var(--ncp-text-muted); font-size:.82rem; }
+.chart-card>.ncp-skeleton { display:block; width:100%; height:18px; margin:10px 0; }
+.monitor-error { margin-bottom:14px; padding:12px 14px; border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.86rem; }
+@media(max-width:920px) { .monitor-grid { grid-template-columns:1fr; } }
+@media(max-width:640px) { .chart-card { padding:16px; } }
 </style>
