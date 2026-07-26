@@ -44,8 +44,9 @@ export const useSitesStore = defineStore('sites', () => {
     await refresh()
   }
 
-  async function create(input: SiteProfileInput) {
+  async function create(input: SiteProfileInput, icon?: File | null) {
     const result = await createSite(input)
+    if (icon) await uploadSiteIcon(result.projectId, icon)
     await refresh()
     return result
   }

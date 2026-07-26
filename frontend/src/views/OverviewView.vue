@@ -87,10 +87,12 @@ onMounted(() => {
 
     <section class="favorite-launcher panel" aria-labelledby="favorite-launcher-title">
       <header class="favorite-launcher__header">
-        <div>
-          <span class="favorite-launcher__eyebrow"><Globe2 :size="16" />快捷入口</span>
-          <h2 id="favorite-launcher-title">收藏站点</h2>
-          <p>直接进入最常使用的 NAS 应用</p>
+        <div class="favorite-launcher__title">
+          <span><Globe2 :size="18" /></span>
+          <div>
+            <h2 id="favorite-launcher-title">收藏站点</h2>
+            <p>快速进入最常使用的 NAS 应用</p>
+          </div>
         </div>
         <RouterLink to="/sites">管理站点<ArrowUpRight :size="16" /></RouterLink>
       </header>
@@ -144,18 +146,6 @@ onMounted(() => {
 
     <section class="detail-grid">
       <article class="panel info-panel">
-        <header><div><h2>主机信息</h2><p>Root Agent 实时快照</p></div><Server :size="19" /></header>
-        <dl class="host-facts">
-          <div><dt>主机名</dt><dd>{{ systemStore.summary?.host.hostname ?? '—' }}</dd></div>
-          <div><dt>操作系统</dt><dd>{{ systemStore.summary?.host.operatingSystem ?? '—' }}</dd></div>
-          <div><dt>内核</dt><dd>{{ systemStore.summary?.host.kernelVersion ?? '—' }}</dd></div>
-          <div><dt>架构</dt><dd>{{ systemStore.summary?.host.architecture ?? '—' }}</dd></div>
-          <div><dt>运行时间</dt><dd>{{ systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' }}</dd></div>
-          <div><dt>进程</dt><dd>{{ systemStore.summary?.host.processCount ?? '—' }}</dd></div>
-        </dl>
-      </article>
-
-      <article class="panel info-panel">
         <header><div><h2>存储空间</h2><p>数据卷与挂载点</p></div><HardDrive :size="19" /></header>
         <div class="storage-list">
           <div v-for="disk in systemStore.summary?.storage ?? []" :key="disk.mountpoint" class="storage-row">
@@ -170,6 +160,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.favorite-launcher.favorite-launcher{gap:14px;padding:17px 20px 20px}.favorite-launcher__header.favorite-launcher__header{min-height:42px;align-items:center}.favorite-launcher__title{display:flex;align-items:center;gap:10px}.favorite-launcher__title>span{display:grid;width:36px;height:36px;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.favorite-launcher__header .favorite-launcher__title h2{margin:0;font-size:1.04rem}.favorite-launcher__header .favorite-launcher__title p{margin:2px 0 0;font-size:.78rem}.detail-grid.detail-grid{grid-template-columns:1fr}
 .favorite-launcher{display:grid;gap:17px;padding:20px;overflow:hidden;background:radial-gradient(circle at 88% -30%,rgba(52,116,212,.1),transparent 32%),#fff}.favorite-launcher__header{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.favorite-launcher__header h2{margin:4px 0 0;font-size:1.25rem;letter-spacing:-.025em}.favorite-launcher__header p{margin:3px 0 0;color:var(--ncp-text-muted);font-size:.86rem}.favorite-launcher__eyebrow{display:flex;align-items:center;gap:6px;color:var(--ncp-primary-strong);font-size:.8rem;font-weight:730}.favorite-launcher__header>a{display:flex;min-height:38px;align-items:center;gap:5px;padding:0 11px;border-radius:9px;color:var(--ncp-primary-strong);font-size:.84rem;font-weight:700}.favorite-launcher__header>a:hover{background:var(--ncp-primary-soft)}.favorite-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.favorite-site{position:relative;display:grid;min-height:92px;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;border:1px solid var(--ncp-line);border-radius:13px;background:rgba(255,255,255,.88);transition:border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base),transform var(--ncp-duration-fast)}.favorite-site:hover{border-color:rgba(52,116,212,.28);box-shadow:var(--ncp-shadow-hover);transform:translateY(-2px)}.favorite-site__logo{display:grid;width:48px;height:48px;place-items:center;overflow:hidden;border-radius:13px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-family:var(--ncp-font-latin);font-size:1.05rem}.favorite-site__logo img{width:100%;height:100%;object-fit:cover}.favorite-site__copy{display:grid;min-width:0;gap:4px}.favorite-site__copy strong{font-size:.94rem}.favorite-site__copy small{overflow:hidden;color:var(--ncp-text-muted);font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.favorite-site__state{align-self:start;padding:3px 7px;border-radius:7px;background:var(--ncp-success-soft);color:var(--ncp-success);font-size:.72rem;font-weight:700}.favorite-site__state--offline{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.favorite-site__arrow{position:absolute;right:12px;bottom:11px;color:var(--ncp-text-subtle);opacity:0;transform:translate(-3px,3px);transition:opacity var(--ncp-duration-fast),transform var(--ncp-duration-fast)}.favorite-site:hover .favorite-site__arrow{opacity:1;transform:none}.favorite-empty{display:flex;min-height:96px;align-items:center;gap:12px;padding:15px;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-empty>div{display:grid;gap:2px}.favorite-empty strong{color:var(--ncp-text)}.favorite-empty span{font-size:.82rem}.favorite-empty>a{margin-left:auto;padding:9px 12px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.82rem;font-weight:700}
 .metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
 .metric-card { display: grid; min-width: 0; gap: 4px; padding: 16px; }

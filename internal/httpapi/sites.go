@@ -492,8 +492,9 @@ func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile)
 			Description:   profile.Description,
 			IconURL:       preferredSiteIcon(profile),
 			Category:      profile.Category,
-			State:         "running",
+			State:         "stopped",
 			PrimaryPort:   profile.PrimaryPort,
+			Ports:         make([]int, 0),
 			LaunchURL:     profile.LaunchURL,
 			Favorite:      profile.Favorite,
 			SortOrder:     profile.SortOrder,
@@ -503,6 +504,9 @@ func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile)
 		}
 		if profile.PrimaryPort > 0 {
 			site.Ports = []int{profile.PrimaryPort}
+		}
+		if profile.PrimaryPort > 0 || strings.TrimSpace(profile.LaunchURL) != "" {
+			site.State = "running"
 		}
 		result = append(result, site)
 	}

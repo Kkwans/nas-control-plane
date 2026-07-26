@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   ArrowUpRight,
   EyeOff,
@@ -27,6 +27,8 @@ import {
   ElSelect,
   ElSwitch,
   ElTooltip,
+  type FormInstance,
+  type FormRules,
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
@@ -50,6 +52,12 @@ const failedIcons = ref(new Set<string>())
 const favoritePending = ref<string | null>(null)
 const draft = ref<SiteProfileInput>(emptyProfile())
 const iconInput = ref<HTMLInputElement | null>(null)
+const siteForm = ref<FormInstance>()
+const pendingIcon = ref<File | null>(null)
+const pendingIconPreview = ref('')
+const formRules: FormRules<SiteProfileInput> = {
+  name: [{ required: true, message: '请输入站点名称', trigger: 'blur' }],
+}
 
 const sites = computed(() => sitesStore.sites)
 const categoryOptions = computed(() => ['全部分类', ...new Set(sites.value.map((site) => site.category).filter(Boolean))])
@@ -61,7 +69,7 @@ const filteredSites = computed(() => {
       ? site.hidden
       : !site.hidden && (siteFilter.value === 'all' || site.state === 'running')
     const matchesCategory = selectedCategory.value === '全部分类' || site.category === selectedCategory.value
-    const searchable = `${site.name} ${site.description} ${site.category} ${site.ports.join(' ')} ${site.launchUrl}`.toLowerCase()
+    const searchable = `${site.name} ${site.description} ${site.category} ${(site.ports ?? []).join(' ')} ${site.launchUrl}`.toLowerCase()
     return matchesFilter && matchesCategory && (!term || searchable.includes(term))
   })
 })
@@ -120,6 +128,10 @@ function siteURL(site: Site, port = site.primaryPort) {
   return `${systemStore.preferences.siteDefaultProtocol}://${hostName}:${port}`
 }
 
+function siteLaunchable(site: Site) {
+  return Boolean(site.launchUrl?.trim()) || site.primaryPort > 0
+}
+
 const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 
 function trackVisit(site: Site) {
@@ -160,23 +172,32 @@ function visitedLabel(value: string | null) {
 }
 
 function openEditor(site: Site) {
+  resetPendingIcon()
   selectedSite.value = site
   draft.value = profileFor(site)
   editOpen.value = true
 }
 
 function openCreator() {
+  resetPendingIcon()
   selectedSite.value = null
   draft.value = emptyProfile()
   editOpen.value = true
 }
 
 async function saveSite() {
+  const valid = await siteForm.value?.validate().catch(() => false)
+  if (valid === false) return
+  if (!draft.value.launchUrl.trim() && draft.value.primaryPort <= 0) {
+    ElMessage.warning('请填写完整入口 URL，或设置主入口端口')
+    return
+  }
   saving.value = true
   try {
     if (selectedSite.value) await sitesStore.save(selectedSite.value.projectId, draft.value)
-    else await sitesStore.create(draft.value)
+    else await sitesStore.create(draft.value, pendingIcon.value)
     editOpen.value = false
+    resetPendingIcon()
     ElMessage.success(selectedSite.value ? '站点资料已保存' : '站点已添加')
   } catch {
     ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
@@ -212,7 +233,14 @@ async function restoreIgnoredSite(siteId: string) {
 
 async function uploadIcon(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file || !selectedSite.value) return
+  if (!file) return
+  if (!selectedSite.value) {
+    pendingIcon.value = file
+    if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
+    pendingIconPreview.value = URL.createObjectURL(file)
+    if (iconInput.value) iconInput.value.value = ''
+    return
+  }
   try {
     await sitesStore.uploadIcon(selectedSite.value.id, file)
     failedIcons.value.delete(selectedSite.value.id)
@@ -223,6 +251,15 @@ async function uploadIcon(event: Event) {
     if (iconInput.value) iconInput.value.value = ''
   }
 }
+
+function resetPendingIcon() {
+  pendingIcon.value = null
+  if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
+  pendingIconPreview.value = ''
+  if (iconInput.value) iconInput.value.value = ''
+}
+
+onBeforeUnmount(resetPendingIcon)
 
 async function toggleFavorite(site: Site) {
   if (favoritePending.value) return
@@ -293,10 +330,10 @@ function markIconFailed(site: Site) {
             </div>
             <StatusPill :label="siteStateLabel(site.state)" :tone="siteTone(site.state)" />
             <div class="site-ports">
-              <ElTooltip v-for="port in site.ports.slice(0, 3)" :key="port" :content="port === site.primaryPort ? '主入口' : `打开端口 ${port}`" placement="top">
+              <ElTooltip v-for="port in (site.ports ?? []).slice(0, 3)" :key="port" :content="port === site.primaryPort ? '主入口' : `打开端口 ${port}`" placement="top">
                 <a :class="{ primary: port === site.primaryPort }" :href="siteURL(site, port)" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">{{ port }}</a>
               </ElTooltip>
-              <span v-if="site.ports.length > 3">+{{ site.ports.length - 3 }}</span>
+              <span v-if="(site.ports ?? []).length > 3">+{{ site.ports.length - 3 }}</span>
             </div>
             <span class="site-source">{{ sourceLabel(site) }}</span>
             <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
@@ -310,7 +347,7 @@ function markIconFailed(site: Site) {
               <ElTooltip :content="site.source === 'manual' ? '删除站点' : '忽略自动站点'" placement="top">
                 <button class="danger" type="button" :aria-label="`删除 ${site.name}`" @click="removeSite(site)"><Trash2 :size="16" /></button>
               </ElTooltip>
-              <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
+              <a class="row-open" :class="{ disabled: site.state !== 'running' || !siteLaunchable(site) }" :href="site.state === 'running' && siteLaunchable(site) ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
             </div>
           </article>
         </section>
@@ -341,9 +378,9 @@ function markIconFailed(site: Site) {
         </div>
         <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
       </div>
-      <ElForm label-position="top">
+      <ElForm ref="siteForm" :model="draft" :rules="formRules" label-position="top">
         <div class="editor-grid">
-          <ElFormItem label="站点名称"><ElInput v-model="draft.name" maxlength="120" /></ElFormItem>
+          <ElFormItem label="站点名称" prop="name" required><ElInput v-model="draft.name" maxlength="120" placeholder="例如 NAS 文件浏览器" /></ElFormItem>
           <ElFormItem label="站点分类">
             <ElSelect v-model="draft.category" filterable allow-create default-first-option>
               <ElOption v-for="category in categoryOptions.filter((item) => item !== '全部分类')" :key="category" :label="category" :value="category" />
@@ -351,16 +388,25 @@ function markIconFailed(site: Site) {
           </ElFormItem>
         </div>
         <ElFormItem label="简介"><ElInput v-model="draft.description" type="textarea" :rows="3" maxlength="500" show-word-limit /></ElFormItem>
-        <ElFormItem label="完整入口 URL">
+        <ElFormItem>
+          <template #label><span class="required-group-label">完整入口 URL <small>与端口二选一</small></span></template>
           <ElInput v-model="draft.launchUrl" placeholder="例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成" />
+          <span class="field-help">入口 URL 与主入口端口至少填写一项</span>
         </ElFormItem>
         <ElFormItem>
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
-          <div v-if="selectedSite" class="icon-upload">
+          <div class="icon-upload">
             <input ref="iconInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
-            <ElButton @click="iconInput?.click()"><Upload :size="15" />上传本地图标</ElButton>
-            <span>本地图标优先于 URL 和自动识别 favicon</span>
+            <button class="icon-upload__preview" type="button" @click="iconInput?.click()">
+              <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
+              <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
+              <Upload v-else :size="20" />
+            </button>
+            <div>
+              <ElButton @click="iconInput?.click()"><Upload :size="15" />{{ selectedSite ? '更换本地图标' : '上传站点图标' }}</ElButton>
+              <span>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
+            </div>
           </div>
         </ElFormItem>
         <div class="editor-grid">
@@ -369,7 +415,10 @@ function markIconFailed(site: Site) {
               <ElOption v-for="port in selectedSite?.ports ?? []" :key="port" :label="String(port)" :value="port" />
             </ElSelect>
           </ElFormItem>
-          <ElFormItem v-else label="主入口端口"><ElInputNumber v-model="draft.primaryPort" :min="0" :max="65535" controls-position="right" /></ElFormItem>
+          <ElFormItem v-else>
+            <template #label><span class="required-group-label">主入口端口 <small>与 URL 二选一</small></span></template>
+            <ElInputNumber v-model="draft.primaryPort" :min="0" :max="65535" controls-position="right" />
+          </ElFormItem>
           <ElFormItem label="目录排序">
             <ElInputNumber v-model="draft.sortOrder" :min="-100000" :max="100000" :step="10" controls-position="right" />
           </ElFormItem>
@@ -388,18 +437,19 @@ function markIconFailed(site: Site) {
 </template>
 
 <style scoped>
+.required-group-label::before{margin-right:4px;color:var(--el-color-danger);content:'*'}.required-group-label small{margin-left:5px;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:500}
 .site-search{width:min(360px,36vw)}.category-filter{width:132px}.state-filter{display:flex;flex:0 0 auto;gap:3px;padding:3px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.state-filter button{min-height:36px;padding:0 14px;border-radius:7px;background:transparent;color:var(--ncp-text-muted);font-size:.82rem;font-weight:700;white-space:nowrap}.state-filter button.active{background:#fff;box-shadow:0 2px 8px rgba(28,45,75,.08);color:var(--ncp-primary-strong)}
 .site-error{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.site-error button{min-height:34px;padding:0 11px;border-radius:8px;background:#fff;color:inherit;font-weight:700}
 .section-heading{display:flex;align-items:end;justify-content:space-between;margin:2px 2px 9px}.section-heading h2{margin:0;font-size:1rem;letter-spacing:-.02em}.section-heading p{margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.78rem}
 .launch-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.launch-card{position:relative;display:grid;min-height:210px;grid-template-rows:auto 1fr auto;gap:14px;padding:16px;overflow:hidden;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base)}.launch-card::before{position:absolute;inset:0 0 auto;height:3px;background:hsl(var(--site-hue) 70% 52%);content:''}.launch-card:hover{border-color:hsl(var(--site-hue) 60% 78%);box-shadow:var(--ncp-shadow-hover);transform:translateY(-3px)}.launch-card__top,.launch-card footer{display:flex;align-items:center;justify-content:space-between}.favorite-button{display:grid;width:38px;height:38px;place-items:center;border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-button:hover,.favorite-button.active,.row-actions button.active{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.launch-card__content>span{color:hsl(var(--site-hue) 55% 42%);font-size:.76rem;font-weight:720}.launch-card h3{margin:5px 0 6px;font-size:1.02rem}.launch-card p{display:-webkit-box;margin:0;overflow:hidden;color:var(--ncp-text-muted);font-size:.82rem;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:2}.launch-card footer>span{display:flex;align-items:center;gap:5px;color:var(--ncp-text-subtle);font-size:.74rem}.launch-card footer>a{display:flex;min-height:38px;align-items:center;gap:4px;padding:0 12px;border-radius:9px;background:var(--ncp-primary);box-shadow:0 5px 14px rgba(23,104,229,.16);color:#fff;font-size:.8rem;font-weight:720}.launch-card footer>a:hover{background:var(--ncp-primary-strong);box-shadow:0 8px 18px rgba(23,104,229,.2);transform:translateY(-1px)}
 .site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:cover}
 .launch-card--skeleton{grid-template-columns:52px 1fr;min-height:140px}.launch-card--skeleton>i{width:52px;height:52px}.launch-card--skeleton>div{display:grid;align-content:start;gap:12px}.launch-card--skeleton>div i:first-child{width:55%;height:15px}.launch-card--skeleton>div i:last-child{width:88%;height:42px}
-.directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 160px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;align-items:center;gap:3px;padding:0 10px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
+.directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}
 .ignored-sites .site-row{grid-template-columns:minmax(280px,1fr) 100px 140px}
 .row-actions button.danger:hover{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
 .empty-sites{display:flex;min-height:220px;align-items:center;justify-content:center;gap:14px;color:var(--ncp-text-subtle)}.empty-sites h2{margin:0;color:var(--ncp-text);font-size:.95rem}.empty-sites p{margin:4px 0 0;font-size:.8rem}.editor-context{display:flex;align-items:center;gap:11px;margin:-5px 0 18px;padding:12px;border-radius:11px;background:var(--ncp-surface-quiet)}.editor-context>div:last-child{display:grid;min-width:0;gap:2px}.editor-context strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.editor-context span{color:var(--ncp-text-subtle);font-size:.74rem}.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.editor-grid :deep(.el-select),.editor-grid :deep(.el-input-number){width:100%}.field-label,.switch-grid label,.switch-grid span{display:flex;align-items:center;gap:6px}.switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.switch-grid label{min-height:48px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.switch-grid span{color:var(--ncp-text-muted);font-size:.8rem}
-.icon-upload{display:flex;align-items:center;gap:8px;margin-top:8px}.icon-upload input{display:none}.icon-upload span{color:var(--ncp-text-subtle);font-size:.72rem}
+.field-help{display:block;margin-top:5px;color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload{display:flex;align-items:center;gap:11px;margin-top:9px}.icon-upload input{display:none}.icon-upload>div{display:grid;justify-items:start;gap:5px}.icon-upload span{color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload__preview{display:grid;width:58px;height:58px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.icon-upload__preview:hover{border-color:rgba(52,116,212,.45);background:var(--ncp-primary-soft)}.icon-upload__preview img{width:100%;height:100%;object-fit:cover}
 @media(max-width:1480px){.launch-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:1280px){.launch-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.site-row{grid-template-columns:minmax(230px,1.5fr) 98px 165px 92px 145px}.site-source{display:none}}
 @media(max-width:900px){.site-search{width:100%}.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(220px,1.4fr) 94px 1fr 145px}.site-source,.site-visited{display:none}}

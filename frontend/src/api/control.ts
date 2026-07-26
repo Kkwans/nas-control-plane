@@ -140,7 +140,17 @@ export function updateDatabaseProjectPreference(input: DatabaseProjectPreference
 }
 
 export function requestSites(): Promise<SiteListResponse> {
-  return request('/api/v1/sites')
+  return request<SiteListResponse>('/api/v1/sites').then((result) => ({
+    ...result,
+    sites: (result.sites ?? []).map((site) => ({
+      ...site,
+      ports: Array.isArray(site.ports) ? site.ports : [],
+      description: site.description ?? '',
+      iconUrl: site.iconUrl ?? '',
+      category: site.category ?? '',
+      launchUrl: site.launchUrl ?? '',
+    })),
+  }))
 }
 
 export function updateSite(projectId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
