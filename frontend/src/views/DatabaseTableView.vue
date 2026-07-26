@@ -45,6 +45,7 @@ import { NcpApiError } from '@/api/system'
 import SqlEditor from '@/components/SqlEditor.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
+import { useSystemStore } from '@/stores/system'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
@@ -52,6 +53,8 @@ type RowDialogMode = 'insert' | 'edit'
 const route = useRoute()
 const router = useRouter()
 const databaseStore = useDatabaseStore()
+const systemStore = useSystemStore()
+const pageSize = computed(() => systemStore.preferences.pageSize)
 const sourceId = computed(() => String(route.params.sourceId ?? ''))
 const tableName = computed(() => String(route.params.table ?? ''))
 const schema = computed(() => String(route.query.schema ?? ''))
@@ -99,7 +102,7 @@ async function initialize() {
     return
   }
   if (!table.value) return
-  sql.value = `SELECT * FROM ${sqlTableName()} LIMIT 100`
+  sql.value = `SELECT * FROM ${sqlTableName()} LIMIT ${pageSize.value}`
   await refreshRows()
 }
 
@@ -116,7 +119,7 @@ async function refreshRows() {
       ...connection(),
       schema: table.value.schema,
       table: table.value.name,
-      limit: 50,
+      limit: pageSize.value,
       offset: offset.value,
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
@@ -311,8 +314,8 @@ function formatBytes(value?: number) {
         </ElTable>
       </div>
       <footer class="data-pagination">
-        <span>第 {{ Math.floor(offset / 50) + 1 }} 页 · 每页 50 行</span>
-        <div><ElButton :disabled="offset === 0 || rowsLoading" @click="offset = Math.max(0, offset - 50); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading" @click="offset += 50; refreshRows()">下一页</ElButton></div>
+        <span>第 {{ Math.floor(offset / pageSize) + 1 }} 页 · 每页 {{ pageSize }} 行</span>
+        <div><ElButton :disabled="offset === 0 || rowsLoading" @click="offset = Math.max(0, offset - pageSize); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading" @click="offset += pageSize; refreshRows()">下一页</ElButton></div>
       </footer>
     </section>
 
