@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowDown, ArrowUp, ArrowUpRight, Boxes, Cpu, Gauge, HardDrive, MemoryStick, Server } from '@lucide/vue'
-import { ElTooltip } from 'element-plus'
+import { ArrowDown, ArrowUp, ArrowUpRight, Boxes, Cpu, Gauge, Globe2, HardDrive, MemoryStick, Server } from '@lucide/vue'
 
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import StatusPill from '@/components/StatusPill.vue'
@@ -19,7 +18,12 @@ const storage = computed(() => totalStorage(systemStore.summary))
 const projects = computed(() => systemStore.services)
 const runningProjects = computed(() => projects.value.filter((project) => project.state === 'running').length)
 const timestamps = computed(() => systemStore.resourceHistory.map((sample) => sample.timestamp))
-const publicServices = computed(() => sitesStore.visibleSites)
+const failedIcons = ref(new Set<string>())
+const favoriteSites = computed(() => sitesStore.visibleSites
+  .filter((site) => site.favorite)
+  .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
+  .slice(0, 6))
+const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 const headerStats = computed<WorkspaceStat[]>(() => [
   { label: '运行项目', value: `${runningProjects.value}/${projects.value.length}`, tone: 'success' },
   { label: '运行时间', value: systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' },
@@ -59,6 +63,15 @@ function formatTimestamp(value: string | null) {
   return Number.isNaN(date.valueOf()) ? '刚刚' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
 }
 
+function siteURL(site: (typeof favoriteSites.value)[number]) {
+  if (site.launchUrl) return site.launchUrl
+  return `${systemStore.preferences.siteDefaultProtocol}://${hostName}:${site.primaryPort}`
+}
+
+function markIconFailed(siteId: string) {
+  failedIcons.value = new Set(failedIcons.value).add(siteId)
+}
+
 onMounted(() => {
   void sitesStore.refresh()
 })
@@ -71,6 +84,36 @@ onMounted(() => {
         <StatusPill :label="overviewState.label" :tone="overviewState.status" />
       </template>
     </WorkspaceHeader>
+
+    <section class="favorite-launcher panel" aria-labelledby="favorite-launcher-title">
+      <header class="favorite-launcher__header">
+        <div>
+          <span class="favorite-launcher__eyebrow"><Globe2 :size="16" />快捷入口</span>
+          <h2 id="favorite-launcher-title">收藏站点</h2>
+          <p>直接进入最常使用的 NAS 应用</p>
+        </div>
+        <RouterLink to="/sites">管理站点<ArrowUpRight :size="16" /></RouterLink>
+      </header>
+      <div v-if="favoriteSites.length" class="favorite-grid">
+        <a v-for="site in favoriteSites" :key="site.id" class="favorite-site" :href="siteURL(site)" :target="linkTarget" rel="noreferrer" @click="sitesStore.visit(site.projectId)">
+          <span class="favorite-site__logo">
+            <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site.id)" />
+            <b v-else>{{ site.name.slice(0, 1).toUpperCase() }}</b>
+          </span>
+          <span class="favorite-site__copy">
+            <strong>{{ site.name }}</strong>
+            <small>{{ site.description }}</small>
+          </span>
+          <span :class="['favorite-site__state', { 'favorite-site__state--offline': site.state !== 'running' }]">{{ site.state === 'running' ? '运行中' : '未运行' }}</span>
+          <ArrowUpRight class="favorite-site__arrow" :size="17" />
+        </a>
+      </div>
+      <div v-else class="favorite-empty">
+        <Globe2 :size="26" />
+        <div><strong>还没有收藏站点</strong><span>在站点中心点击星标，入口会固定显示在这里。</span></div>
+        <RouterLink to="/sites">前往站点中心</RouterLink>
+      </div>
+    </section>
 
     <section class="metric-grid" aria-label="核心资源指标">
       <article v-for="metric in metrics" :key="metric.label" class="metric-card panel">
@@ -113,23 +156,6 @@ onMounted(() => {
       </article>
 
       <article class="panel info-panel">
-        <header>
-          <div><h2>常用站点</h2><p>{{ publicServices.length }} 个项目具有公开入口</p></div>
-          <RouterLink to="/sites">站点中心<ArrowUpRight :size="15" /></RouterLink>
-        </header>
-        <ul v-if="publicServices.length" class="service-list">
-          <li v-for="project in publicServices.slice(0, 5)" :key="project.id">
-            <span><Boxes :size="16" /></span>
-            <div><strong>{{ project.name }}</strong><small>{{ project.state === 'running' ? '运行中' : '已停止' }} · {{ project.ports.length }} 个入口</small></div>
-            <ElTooltip v-for="port in project.ports.slice(0, 2)" :key="port" :content="`打开端口 ${port}`">
-              <a :href="`http://${hostName}:${port}`" target="_blank" rel="noreferrer">{{ port }}</a>
-            </ElTooltip>
-          </li>
-        </ul>
-        <p v-else class="empty-state">尚未发现可访问端口。</p>
-      </article>
-
-      <article class="panel info-panel">
         <header><div><h2>存储空间</h2><p>数据卷与挂载点</p></div><HardDrive :size="19" /></header>
         <div class="storage-list">
           <div v-for="disk in systemStore.summary?.storage ?? []" :key="disk.mountpoint" class="storage-row">
@@ -144,6 +170,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.favorite-launcher{display:grid;gap:17px;padding:20px;overflow:hidden;background:radial-gradient(circle at 88% -30%,rgba(52,116,212,.1),transparent 32%),#fff}.favorite-launcher__header{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.favorite-launcher__header h2{margin:4px 0 0;font-size:1.25rem;letter-spacing:-.025em}.favorite-launcher__header p{margin:3px 0 0;color:var(--ncp-text-muted);font-size:.86rem}.favorite-launcher__eyebrow{display:flex;align-items:center;gap:6px;color:var(--ncp-primary-strong);font-size:.8rem;font-weight:730}.favorite-launcher__header>a{display:flex;min-height:38px;align-items:center;gap:5px;padding:0 11px;border-radius:9px;color:var(--ncp-primary-strong);font-size:.84rem;font-weight:700}.favorite-launcher__header>a:hover{background:var(--ncp-primary-soft)}.favorite-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.favorite-site{position:relative;display:grid;min-height:92px;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;border:1px solid var(--ncp-line);border-radius:13px;background:rgba(255,255,255,.88);transition:border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base),transform var(--ncp-duration-fast)}.favorite-site:hover{border-color:rgba(52,116,212,.28);box-shadow:var(--ncp-shadow-hover);transform:translateY(-2px)}.favorite-site__logo{display:grid;width:48px;height:48px;place-items:center;overflow:hidden;border-radius:13px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-family:var(--ncp-font-latin);font-size:1.05rem}.favorite-site__logo img{width:100%;height:100%;object-fit:cover}.favorite-site__copy{display:grid;min-width:0;gap:4px}.favorite-site__copy strong{font-size:.94rem}.favorite-site__copy small{overflow:hidden;color:var(--ncp-text-muted);font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.favorite-site__state{align-self:start;padding:3px 7px;border-radius:7px;background:var(--ncp-success-soft);color:var(--ncp-success);font-size:.72rem;font-weight:700}.favorite-site__state--offline{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.favorite-site__arrow{position:absolute;right:12px;bottom:11px;color:var(--ncp-text-subtle);opacity:0;transform:translate(-3px,3px);transition:opacity var(--ncp-duration-fast),transform var(--ncp-duration-fast)}.favorite-site:hover .favorite-site__arrow{opacity:1;transform:none}.favorite-empty{display:flex;min-height:96px;align-items:center;gap:12px;padding:15px;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-empty>div{display:grid;gap:2px}.favorite-empty strong{color:var(--ncp-text)}.favorite-empty span{font-size:.82rem}.favorite-empty>a{margin-left:auto;padding:9px 12px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.82rem;font-weight:700}
 .metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
 .metric-card { display: grid; min-width: 0; gap: 4px; padding: 16px; }
 .metric-card__head { display: flex; align-items: center; gap: 8px; color: var(--ncp-text-muted); font-size: .68rem; font-weight: 720; }
@@ -161,7 +188,7 @@ onMounted(() => {
 .trend-panel p, .info-panel header p { margin: 3px 0 0; color: var(--ncp-text-subtle); font-size: .63rem; }
 .trend-panel>header>svg, .info-panel>header>svg { color: var(--ncp-primary-strong); }
 .network-legend { display: flex; align-items: center; gap: 4px; color: var(--ncp-text-subtle); font-size: .59rem; }
-.detail-grid { display: grid; grid-template-columns: 1.05fr 1fr 1fr; gap: 12px; }
+.detail-grid { display: grid; grid-template-columns: 1.08fr .92fr; gap: 12px; }
 .info-panel { min-width: 0; padding: 17px; }
 .info-panel header>a { display: flex; min-height: 32px; align-items: center; gap: 3px; color: var(--ncp-primary-strong); font-size: .64rem; font-weight: 730; }
 .host-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 18px; margin: 18px 0 0; }
@@ -183,12 +210,14 @@ onMounted(() => {
 .storage-track span { display: block; height: 100%; border-radius: inherit; background: var(--ncp-primary); }
 .empty-state { margin: 18px 0 0; color: var(--ncp-text-subtle); font-size: .66rem; }
 @media(max-width: 1200px) {
+  .favorite-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .metric-grid { grid-template-columns: repeat(2,1fr); }
   .trend-grid { grid-template-columns: repeat(2,1fr); }
   .trend-panel:last-child { grid-column: 1/-1; }
   .detail-grid { grid-template-columns: repeat(2,1fr); }
 }
 @media(max-width: 720px) {
+  .favorite-launcher{padding:16px}.favorite-launcher__header{align-items:flex-start}.favorite-grid{grid-template-columns:1fr}.favorite-site{min-height:84px}.favorite-empty{align-items:flex-start;flex-direction:column}.favorite-empty>a{margin-left:0}
   .metric-grid, .trend-grid, .detail-grid { grid-template-columns: 1fr; }
   .trend-panel:last-child { grid-column: auto; }
   .metric-card { min-height: 118px; }
