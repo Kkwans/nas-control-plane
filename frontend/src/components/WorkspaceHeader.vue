@@ -45,13 +45,19 @@ defineProps<{
 </template>
 
 <style scoped>
-.workspace-header { overflow: hidden; }
+.workspace-header {
+  overflow: hidden;
+  border-color: rgba(203,214,228,.86);
+  background:
+    radial-gradient(circle at 82% -40%, rgba(52,116,212,.075), transparent 34%),
+    var(--ncp-surface);
+}
 .workspace-header__main {
   display: flex;
-  min-height: 88px;
+  min-height: 92px;
   align-items: center;
   gap: 22px;
-  padding: 16px 18px;
+  padding: 18px 20px;
 }
 .workspace-header__title {
   display: flex;
@@ -62,17 +68,17 @@ defineProps<{
 }
 .workspace-header__icon {
   display: grid;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid rgba(36, 104, 216, .13);
-  border-radius: 13px;
+  border-radius: 14px;
   background: var(--ncp-primary-soft);
   color: var(--ncp-primary-strong);
 }
-h1 { margin: 0; font-size: clamp(1.34rem, 1.8vw, 1.58rem); font-weight: 770; letter-spacing: -.035em; line-height: 1.2; }
-p { margin: 4px 0 0; color: var(--ncp-text-muted); font-size: .86rem; line-height: 1.45; }
+h1 { margin: 0; font-size: clamp(1.45rem, 1.8vw, 1.68rem); font-weight: 760; letter-spacing: -.035em; line-height: 1.18; }
+p { margin: 5px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height: 1.45; }
 .workspace-stats {
   display: flex;
   flex: 0 0 auto;
@@ -84,27 +90,27 @@ p { margin: 4px 0 0; color: var(--ncp-text-muted); font-size: .86rem; line-heigh
 }
 .workspace-stat {
   display: grid;
-  min-width: 92px;
+  min-width: 96px;
   align-content: center;
   gap: 2px;
   padding: 3px 16px;
   border-right: 1px solid var(--ncp-line);
 }
 .workspace-stat:last-child { border-right: 0; }
-.workspace-stat dt { color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 650; white-space: nowrap; }
-.workspace-stat dd { order: -1; margin: 0; font-family: var(--ncp-font-latin); font-size: 1.16rem; font-weight: 760; line-height: 1.2; }
+.workspace-stat dt { color: var(--ncp-text-subtle); font-size: .8rem; font-weight: 650; white-space: nowrap; }
+.workspace-stat dd { order: -1; margin: 0; font-family: var(--ncp-font-latin); font-size: 1.22rem; font-weight: 760; line-height: 1.2; font-variant-numeric:tabular-nums; }
 .workspace-stat--success dd { color: var(--ncp-success); }
 .workspace-stat--warning dd { color: var(--ncp-warning-strong); }
 .workspace-toolbar {
   display: flex;
   min-width: 0;
-  min-height: 56px;
+  min-height: 58px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 7px 12px;
+  padding: 8px 14px;
   border-top: 1px solid var(--ncp-line);
-  background: #fff;
+  background: rgba(248,250,253,.72);
 }
 .workspace-filters,
 .workspace-tools,

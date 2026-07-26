@@ -16,7 +16,7 @@ body {
   font-family: var(--ncp-font-ui);
   font-size: var(--ncp-base-font-size);
   font-synthesis: none;
-  line-height: 1.55;
+  line-height: 1.5;
   text-rendering: optimizeLegibility;
 }
 
@@ -63,7 +63,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .page {
   width: 100%;
   margin: 0 auto;
-  padding: 20px clamp(20px, 2.2vw, 34px) 38px;
+  padding: 22px clamp(20px, 2.2vw, 34px) 40px;
 }
 
 .page-toolbar {
@@ -78,7 +78,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .workspace-page {
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: calc(16px * var(--ncp-density-scale));
   min-height: 0;
 }
 
@@ -144,6 +144,61 @@ button:not(:disabled), a[href] { cursor: pointer; }
   box-shadow: var(--ncp-shadow-panel);
 }
 
+.workspace-page h1,
+.workspace-page h2,
+.workspace-page h3,
+.workspace-page strong {
+  text-wrap: pretty;
+}
+
+.workspace-page :where(p, small, dt, label) {
+  color: var(--ncp-text-muted);
+}
+
+.workspace-page :where(code, time, dd, .tabular-number) {
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-page :where(.el-button, .el-input__wrapper, .el-select__wrapper) {
+  min-height: var(--ncp-control-height);
+  border-radius: 10px;
+}
+
+.workspace-page .el-button {
+  padding-inline: 15px;
+  font-weight: 680;
+}
+
+.workspace-page .el-button--primary:not(.is-plain),
+.workspace-page .el-button--primary:not(.is-plain):focus,
+.workspace-page .el-button--primary:not(.is-plain):hover {
+  border-color: var(--ncp-primary);
+  background: var(--ncp-primary);
+  color: #fff;
+}
+
+.workspace-page .el-button--primary:not(.is-plain):hover {
+  border-color: var(--ncp-primary-strong);
+  background: var(--ncp-primary-strong);
+  box-shadow: 0 8px 20px rgba(52, 116, 212, .18);
+}
+
+.workspace-page .el-button--primary:not(.is-plain):disabled {
+  border-color: #aac4ea;
+  background: #aac4ea;
+  color: rgba(255,255,255,.9);
+}
+
+html[data-density='compact'] {
+  --ncp-density-scale: .86;
+  --ncp-control-height: 38px;
+}
+
+html[data-density='compact'] .workspace-page :where(.resource-row, .project-row, .database-row, .site-row, .log-row) {
+  min-height: 54px;
+  padding-block: 7px;
+}
+
 .panel,
 .workspace-page button,
 .workspace-page a {
@@ -174,7 +229,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .interactive-surface:hover {
   border-color: rgba(36, 104, 216, 0.28);
   box-shadow: var(--ncp-shadow-hover);
-  transform: translateY(-2px);
+  transform: translateY(-1px);
 }
 
 .interactive-surface:active {

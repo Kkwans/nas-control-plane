@@ -203,7 +203,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-shell { display: grid; grid-template-columns: var(--ncp-sidebar-width) minmax(0, 1fr); min-height: 100dvh; }
 .app-shell--collapsed { grid-template-columns: var(--ncp-sidebar-collapsed-width) minmax(0, 1fr); }
-.app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: #fff; }
+.app-sidebar { position: sticky; z-index: 50; top: 0; display: flex; height: 100dvh; flex-direction: column; padding: 18px 14px 14px; border-right: 1px solid var(--ncp-line); background: rgba(255,255,255,.96); box-shadow: 8px 0 30px rgba(53,76,108,.025); }
 .sidebar-brand-row { display: flex; align-items: center; }
 .brand { display: flex; min-width: 0; flex: 1; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px; border-radius: 11px; }
 .brand__text { display: grid; gap: 1px; min-width: 0; }
@@ -213,9 +213,9 @@ onBeforeUnmount(() => {
 .navigation { display: grid; gap: 4px; margin-top: 24px; }
 .navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 750; letter-spacing: .02em; }
 .navigation__label--secondary { margin-top: 18px; }
-.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); font-size: .86rem; font-weight: 680; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
-.navigation__item:hover { border-color: rgba(23,104,229,.08); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
-.navigation__item.router-link-exact-active { border-color: rgba(23,104,229,.12); background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
+.navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: var(--ncp-text-muted); font-size: .88rem; font-weight: 670; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
+.navigation__item:hover { border-color: rgba(52,116,212,.09); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
+.navigation__item.router-link-exact-active { border-color: rgba(52,116,212,.14); background: var(--ncp-primary-soft); box-shadow: inset 3px 0 0 var(--ncp-primary); color: var(--ncp-primary-strong); }
 .navigation__item--planned { cursor: not-allowed; opacity: .55; }
 .navigation__item--planned small { margin-left: auto; font-size: .68rem; }
 .navigation__arrow { margin-left: auto; opacity: 0; transform: translateX(-3px); transition: opacity var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
@@ -247,7 +247,7 @@ onBeforeUnmount(() => {
 .app-shell--collapsed .navigation__item:hover { transform: none; }
 .app-shell--collapsed .sidebar-footer__identity { justify-content: center; }
 .app-stage { min-width: 0; }
-.topbar { position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--ncp-topbar-height); align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(20px, 2.2vw, 34px); border-bottom: 1px solid var(--ncp-line); background: rgba(255,255,255,.9); backdrop-filter: blur(18px) saturate(150%); }
+.topbar { position: sticky; top: 0; z-index: 30; display: flex; min-height: var(--ncp-topbar-height); align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(20px, 2.2vw, 34px); border-bottom: 1px solid rgba(228,234,242,.9); background: rgba(250,252,254,.88); backdrop-filter: blur(18px) saturate(135%); }
 .topbar__leading, .topbar__location, .topbar__actions, .connection-state, .refresh-button { display: flex; align-items: center; }
 .topbar__leading { min-width: 0; gap: 8px; }
 .topbar__location { gap: 8px; color: var(--ncp-text-subtle); font-size: .84rem; }
