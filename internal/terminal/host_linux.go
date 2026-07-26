@@ -16,6 +16,8 @@ import (
 
 type hostStarter struct{}
 
+const ncpTerminalRCFile = "/opt/ncp/etc/terminal.bashrc"
+
 func NewHostStarter() Starter {
 	return hostStarter{}
 }
@@ -26,6 +28,8 @@ func (hostStarter) Start(ctx context.Context, request StartRequest) (Session, er
 	if _, err := os.Stat(shell); err != nil {
 		shell = "/bin/sh"
 		arguments = []string{"-i"}
+	} else if _, err := os.Stat(ncpTerminalRCFile); err == nil {
+		arguments = []string{"--noprofile", "--rcfile", ncpTerminalRCFile, "-i"}
 	}
 	command := exec.CommandContext(ctx, shell, arguments...)
 	command.Dir = "/root"
