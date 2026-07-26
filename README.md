@@ -1,6 +1,6 @@
 # NAS Control Plane
 
-> 当前开发快照：2026-07-26。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
+> 当前开发快照：2026-07-27。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
 
 ## 当前可用能力
 
