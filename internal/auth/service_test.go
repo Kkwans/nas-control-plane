@@ -74,6 +74,95 @@ func TestLoginRejectsWrongCredentialsAndExpiredSessions(t *testing.T) {
 	}
 }
 
+func TestUserManagementLifecycleAndSessionRevocation(t *testing.T) {
+	service := openTestService(t, Options{})
+	ctx := context.Background()
+	root, err := service.Bootstrap(ctx, "root-admin", testPassword(t))
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	operatorPassword := testPassword(t) + "-operator"
+	operator, err := service.CreateUser(ctx, "operator", operatorPassword)
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if operator.Role != RootRole || operator.Disabled {
+		t.Fatalf("operator = %#v", operator)
+	}
+	if _, err := service.CreateUser(ctx, "OPERATOR", operatorPassword); ErrorCode(err) != "AUTH_USERNAME_EXISTS" {
+		t.Fatalf("duplicate CreateUser() error code = %q", ErrorCode(err))
+	}
+	session, err := service.Login(ctx, "operator", operatorPassword)
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	disabled, err := service.SetUserDisabled(ctx, root.ID, operator.ID, true)
+	if err != nil {
+		t.Fatalf("SetUserDisabled() error = %v", err)
+	}
+	if !disabled.Disabled {
+		t.Fatalf("disabled user = %#v", disabled)
+	}
+	if _, err := service.Authenticate(ctx, session.Token); ErrorCode(err) != "AUTH_UNAUTHORIZED" {
+		t.Fatalf("disabled session error code = %q", ErrorCode(err))
+	}
+	if _, err := service.Login(ctx, "operator", operatorPassword); ErrorCode(err) != "AUTH_INVALID_CREDENTIALS" {
+		t.Fatalf("disabled login error code = %q", ErrorCode(err))
+	}
+	if _, err := service.SetUserDisabled(ctx, root.ID, operator.ID, false); err != nil {
+		t.Fatalf("enable user error = %v", err)
+	}
+	nextPassword := operatorPassword + "-next"
+	if err := service.UpdatePassword(ctx, root.ID, operator.ID, "", nextPassword); err != nil {
+		t.Fatalf("admin UpdatePassword() error = %v", err)
+	}
+	if _, err := service.Login(ctx, "operator", operatorPassword); ErrorCode(err) != "AUTH_INVALID_CREDENTIALS" {
+		t.Fatalf("old password error code = %q", ErrorCode(err))
+	}
+	if _, err := service.Login(ctx, "operator", nextPassword); err != nil {
+		t.Fatalf("new password Login() error = %v", err)
+	}
+	if err := service.DeleteUser(ctx, root.ID, operator.ID); err != nil {
+		t.Fatalf("DeleteUser() error = %v", err)
+	}
+	users, err := service.Users(ctx)
+	if err != nil {
+		t.Fatalf("Users() error = %v", err)
+	}
+	if len(users) != 1 || users[0].ID != root.ID {
+		t.Fatalf("users = %#v", users)
+	}
+}
+
+func TestUserManagementProtectsCurrentAndLastEnabledUser(t *testing.T) {
+	service := openTestService(t, Options{})
+	ctx := context.Background()
+	rootPassword := testPassword(t)
+	root, err := service.Bootstrap(ctx, "root-admin", rootPassword)
+	if err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	if _, err := service.SetUserDisabled(ctx, root.ID, root.ID, true); ErrorCode(err) != "AUTH_CURRENT_USER_PROTECTED" {
+		t.Fatalf("disable current error code = %q", ErrorCode(err))
+	}
+	if err := service.DeleteUser(ctx, root.ID, root.ID); ErrorCode(err) != "AUTH_CURRENT_USER_PROTECTED" {
+		t.Fatalf("delete current error code = %q", ErrorCode(err))
+	}
+	session, err := service.Login(ctx, root.Username, rootPassword)
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if err := service.UpdatePassword(ctx, root.ID, root.ID, "wrong-password", rootPassword+"-next"); ErrorCode(err) != "AUTH_CURRENT_PASSWORD_INVALID" {
+		t.Fatalf("wrong current password code = %q", ErrorCode(err))
+	}
+	if err := service.UpdatePassword(ctx, root.ID, root.ID, rootPassword, rootPassword+"-next"); err != nil {
+		t.Fatalf("self UpdatePassword() error = %v", err)
+	}
+	if _, err := service.Authenticate(ctx, session.Token); ErrorCode(err) != "AUTH_UNAUTHORIZED" {
+		t.Fatalf("revoked self session error code = %q", ErrorCode(err))
+	}
+}
+
 func openTestService(t *testing.T, options Options) *Service {
 	t.Helper()
 	service, err := Open(filepath.Join(t.TempDir(), "ncp.sqlite"), options)

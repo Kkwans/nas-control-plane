@@ -18,6 +18,7 @@ import {
   Server,
   Settings,
   TerminalSquare,
+  UserRound,
   X,
 } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
@@ -59,6 +60,7 @@ const primaryNavigation: NavigationItem[] = [
   { label: '日志中心', to: '/logs', icon: FileClock },
   { label: '终端', to: '/terminal', icon: TerminalSquare },
   { label: '系统设置', to: '/settings', icon: Settings },
+  { label: '用户管理', to: '/users', icon: UserRound },
 ]
 const plannedNavigation: NavigationItem[] = []
 

@@ -102,6 +102,16 @@ export interface LogResponse {
   nextCursor: string
 }
 
+export interface ManagedUser {
+  id: number
+  username: string
+  role: 'root'
+  disabled: boolean
+  createdAt: string
+  updatedAt: string
+  lastLoginAt?: string
+}
+
 export function requestPreferences(): Promise<UserPreferences> {
   return request('/api/v1/preferences')
 }
@@ -193,6 +203,32 @@ export function requestLogs(input: {
   limit?: number
 }, signal?: AbortSignal): Promise<LogResponse> {
   return request(`/api/v1/logs?${logParameters(input)}`, { signal })
+}
+
+export function requestUsers(): Promise<ManagedUser[]> {
+  return request('/api/v1/users')
+}
+
+export function createUser(input: { username: string; password: string }): Promise<ManagedUser> {
+  return request('/api/v1/users', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function updateUserStatus(userId: number, disabled: boolean): Promise<ManagedUser> {
+  return request(`/api/v1/users/${userId}/status`, { method: 'PUT', body: JSON.stringify({ disabled }) })
+}
+
+export function updateUserPassword(
+  userId: number,
+  input: { currentPassword?: string; newPassword: string },
+): Promise<void> {
+  return request(`/api/v1/users/${userId}/password`, { method: 'PUT', body: JSON.stringify({
+    currentPassword: input.currentPassword || '',
+    newPassword: input.newPassword,
+  }) })
+}
+
+export function deleteUser(userId: number): Promise<void> {
+  return request(`/api/v1/users/${userId}`, { method: 'DELETE' })
 }
 
 export function followLogs(

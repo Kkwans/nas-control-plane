@@ -75,6 +75,12 @@ const router = createRouter({
       meta: { title: '系统设置' },
     },
     {
+      path: '/users',
+      name: 'users',
+      component: () => import('@/views/UsersView.vue'),
+      meta: { title: '用户管理' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },
