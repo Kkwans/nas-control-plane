@@ -1,59 +1,46 @@
 # NAS Control Plane 阶段进度
 
-更新时间：2026-07-23
+更新时间：2026-07-26
 
 ## 当前结论
 
-NCP 已完成第二轮控制台体验重构并部署。现有链路为“Root Agent → Unix Socket gRPC → Server HTTP API → Vue 控制台”，本轮在真实实时数据之上补齐管理工作区、项目详情、趋势图表和移动端导航。
+NCP 已完成从“技术验证页面”到可持续开发的 NAS Root 管理控制台的主体切换。浏览器只访问 NCP Server；Server 使用 Unix Socket 强类型 RPC 调用以 root 身份运行的 Agent。当前阶段不再使用 OpenSpec 作为默认流程，需求、设计决策和验收证据由执行计划、OpenAPI、README 和本文件维护。
 
-## 本轮完成
+## 本阶段完成
 
-| 模块 | 状态 | 说明 |
+| 模块 | 状态 | 关键结果 |
 | --- | --- | --- |
-| OpenSpec SDD 工作流 | 已完成 | `redesign-console-and-realtime` 已归档为主规格；`enhance-console-experience` 完成 proposal、design、差异规格、19 项任务与校验。 |
-| 控制台信息架构 | 已完成 | 当前可用导航统一为“总览、服务入口、Docker 管理、系统信息”；数据库、监控、日志中心、终端与系统设置明确标记为待接入。 |
-| 中文化与高密度布局 | 已完成 | 移除巨型营销文案和装饰性英文，统一浅色后台设计语言、紧凑间距、表格与网格布局、40 像素操作按钮和中文 Tooltip。 |
-| 实时数据 | 待修复 | 已部署 SSE 端点，但真实登录验收发现首次数据仍可能依赖手动刷新，且样本没有按 5 秒持续增长；下一阶段首先修复。 |
-| Docker 工作区 | 已完成 | 新增项目表格、项目容器展开详情、端口入口、启停/重启操作和日志抽屉。 |
-| 服务入口 | 已完成 | 以紧凑三列网格展示 Compose 项目和公开端口，提供搜索、状态汇总和统一访问入口。 |
-| 系统信息 | 已完成 | 以紧凑表格与信息卡展示系统、Root Agent、Docker Engine 和能力接入状态。 |
-| OpenSpec 体验增强变更 | 已完成 | `enhance-console-experience` 已完成 proposal、design、6 份差异规格与 19 项优先级任务。 |
-| 项目详情 | 已完成 | 服务入口和 Docker 管理共用项目详情抽屉，支持 `project` 查询参数恢复、全部容器、端口和 Docker 操作。 |
-| 首页实时图表 | 已完成 | Pinia 保存最近 60 个真实快照；首页展示 CPU/内存、系统负载和网络吞吐趋势，不使用模拟数据。 |
-| 移动端控制台 | 已完成 | 768px 以下使用汉堡菜单与侧滑导航；Docker 表格转换为项目卡片，详情使用全屏抽屉。 |
-| 第二轮视觉系统 | 已完成 | 统一工作区顶部、状态筛选、44px 触控目标、字体层级、语义颜色、悬停/按压反馈和 reduced-motion。 |
+| Agent / Server 契约 | 已完成 | 增加协议与构建版本，容器控制返回可诊断错误；Agent 与 Server 同提交构建 |
+| 设置与列表偏好 | 已完成 | 自动保存、失败回滚；字号、密度、字体真实生效；列表分页和排序独立持久化 |
+| 站点中心 | 已完成 | Web 内容探测、Favicon、手动 CRUD、图标上传、收藏排序、忽略与恢复 |
+| Docker 项目与容器 | 已完成 | 统一资源表格、容器控制、详情、日志和 Compose 工作台 |
+| Compose | 已完成 | CodeMirror YAML 高亮、Tab 缩进、草稿、校验、部署任务和版本记录 |
+| Docker Hub | 已完成 | 关键字搜索、分页排序、仓库元数据、标签选择和架构信息 |
+| 镜像任务 | 已完成 | SQLite 持久化、最多 3 个并发任务、真实分层进度、速度、历史和重试 |
+| 日志中心 | 已完成 | 真实时间戳与时间范围、稳定事件 ID、增量 SSE、详情抽屉和关键字渲染 |
+| 终端 | 已完成 | Root/容器 PTY、浅色 xterm、条形光标、ANSI 配色和可选 ble.sh |
+| 数据库 | 已完成 | 自动发现、项目分组与归档、数据表信息、数据 CRUD 和 SQL 工作台 |
+| 系统信息 | 已完成 | 设备摘要、硬件系统、控制链路和能力检测四层信息架构 |
+| 用户管理 | 已完成 | 等权 Root 账号新增、启停、删除、改密、会话撤销与最后账号保护 |
 
-## 构建证据
+## 验证状态
 
-按本轮约定不执行测试套件，仅完成交付必需的编译检查：
+分模块已完成的聚焦验证：
 
 ```text
-go build -buildvcs=false ./cmd/ncp-agent ./cmd/ncp-server
-pnpm run build
+go test ./internal/auth ./internal/httpapi
+go test ./internal/docker ./internal/agentsocket ./internal/controlstore ./internal/httpapi
+pnpm run typecheck
 ```
 
-Windows 同步副本的 Vue 类型检查和第二轮生产构建已通过。ECharts 仅随总览路由异步分包加载；生产入口引用 `assets/index-BJ0Edy1A.js`。
+最终统一验证和 NAS 部署尚在进行，完成后补充：
 
-## 当前运行态
+- `go test ./...`
+- Linux ARM64 Agent / Server 构建
+- Vue 类型检查与生产构建
+- systemd、Compose 健康和 API 契约
+- 1440px、1024px、390px 浏览器综合验收
 
-- Root Agent systemd 单元已启用并以 root 身份运行。
-- Compose 项目已注册到 UGREEN Docker 项目列表，项目名为 `nas-control-plane`。
-- 当前运行版本为 `nas-control-plane:2026.7.23-v4`（ARM64）；Server 与 Console 均为 healthy，控制台 `/healthz` 返回 200。
-- `/api/v1/system/events` 已通过 Nginx 到达 Server；未登录请求返回 401，表明实时端点已启用且保持认证保护。
-- UGREEN Docker 项目记录仍为运行状态，Compose 路径和两个容器的关联数量正确。
-- 已部署页面可正常加载新版静态资源；未登录浏览器可到达登录页，受保护页面的最终桌面与手机视觉验收交由已登录用户会话完成。
-- `2026.7.23-v3` 镜像保留，用于必要时回滚。
+## 后续范围
 
-## 后续路线
-
-1. 数据库管理：按 [数据库管理架构与实施规划](specs/database-management-architecture.md) 实现多数据库发现、连接、SQL/Redis 控制台、数据 CRUD、结构管理和审计。
-2. 监控：历史 CPU、内存、磁盘、网络曲线与告警数据。
-3. 日志中心：系统日志、NCP 日志、容器日志统一检索。
-4. 终端：主机和容器终端入口。
-5. 系统设置：刷新频率、服务入口别名与面板配置。
-
-## 工作流调整
-
-- OpenSpec 从默认完整流程调整为按需使用，已有文件保留。
-- 明确修复和局部功能直接实现；中大型功能使用精炼方案和阶段任务。
-- 重大架构、跨进程协议、数据迁移和高风险操作再使用 OpenSpec 或 ADR。
+本阶段不包含 RBAC、私有 Registry 凭据管理、终端多会话管理、日志导出和高级告警。用户账号当前均为等权 Root，这与 NCP 的局域网 Root 控制台定位一致。

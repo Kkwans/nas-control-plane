@@ -108,6 +108,119 @@ paths:
       responses:
         '204':
           description: Session cleared
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      summary: 列出全部等权 Root 账号
+      tags: [users]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 按用户名排序的账号列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagedUser'
+    post:
+      operationId: createUser
+      summary: 创建一个等权 Root 账号
+      tags: [users]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialsRequest'
+      responses:
+        '201':
+          description: 账号已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedUser'
+        '409':
+          description: 用户名已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/users/{userID}/status:
+    put:
+      operationId: updateUserStatus
+      summary: 启用或禁用账号
+      tags: [users]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disabled]
+              properties:
+                disabled: { type: boolean }
+      responses:
+        '200':
+          description: 更新后的账号
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedUser'
+        '409':
+          description: 当前账号或最后可用账号受保护
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/users/{userID}/password:
+    put:
+      operationId: updateUserPassword
+      summary: 修改自己的密码或重置其他账号密码
+      tags: [users]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPassword]
+              properties:
+                currentPassword: { type: string, format: password }
+                newPassword: { type: string, format: password, minLength: 8, maxLength: 256 }
+      responses:
+        '204':
+          description: 密码已更新且目标账号全部会话已撤销
+        '401':
+          description: 当前密码不正确
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/users/{userID}:
+    delete:
+      operationId: deleteUser
+      summary: 删除非当前账号
+      tags: [users]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '204':
+          description: 账号及其全部会话已删除
+        '409':
+          description: 当前账号或最后可用账号受保护
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/preferences:
     get:
       operationId: getUserPreferences
@@ -145,6 +258,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/preferences/lists/{listKey}:
+    get:
+      operationId: getListPreference
+      summary: 读取一个资源列表的分页与排序偏好
+      tags: [settings]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: listKey, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 列表偏好
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPreference'
+    put:
+      operationId: updateListPreference
+      summary: 保存一个资源列表的分页与排序偏好
+      tags: [settings]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: listKey, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListPreference'
+      responses:
+        '200':
+          description: 已保存的列表偏好
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPreference'
   /api/v1/monitoring/samples:
     get:
       operationId: listMetricSamples
@@ -548,6 +696,42 @@ paths:
       responses:
         '200':
           description: text/event-stream progress snapshots
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      summary: 列出持久化后台任务
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: type, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: 最近后台任务
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/JobSnapshot'
+  /api/v1/jobs/{jobID}/retry:
+    post:
+      operationId: retryJob
+      summary: 重试失败或中断的后台任务
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string } }
+      responses:
+        '202':
+          description: 新任务已进入队列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
   /api/v1/services:
     get:
       operationId: listServices
@@ -922,6 +1106,28 @@ components:
         role:
           type: string
           enum: [root]
+    ManagedUser:
+      type: object
+      required: [id, username, role, disabled, createdAt, updatedAt]
+      properties:
+        id: { type: integer, minimum: 1 }
+        username: { type: string }
+        role: { type: string, enum: [root] }
+        disabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastLoginAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+    ListPreference:
+      type: object
+      required: [listKey, pageSize, sortKey, sortDirection]
+      properties:
+        listKey: { type: string }
+        pageSize: { type: integer, minimum: 1, maximum: 200, default: 10 }
+        sortKey: { type: string }
+        sortDirection: { type: string, enum: [asc, desc] }
     AuthStatusResponse:
       type: object
       required: [initialized, authenticated]
@@ -953,11 +1159,14 @@ components:
           examples: [ncp-server]
     AgentStatus:
       type: object
-      required: [protocolVersion, agentEUID, transport]
+      required: [protocolVersion, buildVersion, agentEUID, transport]
       properties:
         protocolVersion:
           type: string
           examples: [p0-v1]
+        buildVersion:
+          type: string
+          examples: [8ddb82a]
         agentEUID:
           type: integer
           minimum: 0
@@ -1096,10 +1305,16 @@ components:
       properties:
         id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [queued, running, completed, failed] }
+        status: { type: string, enum: [queued, running, completed, failed, interrupted] }
         reference: { type: string }
         message: { type: string }
         progress: { type: integer, minimum: 0, maximum: 100 }
+        downloadedBytes: { type: integer, minimum: 0 }
+        totalBytes: { type: integer, minimum: 0 }
+        speedBytes: { type: integer, minimum: 0 }
+        layers:
+          type: object
+          additionalProperties: true
         error: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

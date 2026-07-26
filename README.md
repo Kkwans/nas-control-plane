@@ -1,5 +1,19 @@
 # NAS Control Plane
 
+> 当前开发快照：2026-07-26。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
+
+## 当前可用能力
+
+- 实时总览与历史监控：CPU、内存、负载、存储、网络和 Docker 状态通过 SSE 更新。
+- 站点中心：仅收录经过 Web 探测的入口，支持手动站点、Favicon、图标上传、收藏、隐藏、排序和忽略恢复。
+- Docker：项目、容器、本地镜像、Docker Hub 搜索、标签选择、镜像拉取、Compose 校验/草稿/部署和版本记录。
+- 数据库：自动发现 SQLite、MySQL/MariaDB、PostgreSQL，支持表结构、表数据 CRUD 与 SQL 工作台。
+- 日志中心：系统、Agent 和容器日志查询，真实时间范围、稳定事件时间与增量 SSE 跟随。
+- 终端：宿主机 Root PTY 和容器 Shell，支持 Tab、历史、窗口自适应、浅色 ANSI 配色和可选 ble.sh 高亮。
+- 设置与用户：设置自动保存到 SQLite，字号/密度/字体真实生效；多账号均为等权 Root，支持账号和密码管理。
+
+所有管理页面默认使用中文；Docker、Compose、SQL、SSE 等固定专业术语保留原名。
+
 NAS Control Plane（NCP）是面向绿联 NAS 的本地服务器管理面板。项目参考服务器控制面板的管理思路，通过浏览器统一查看 NAS 实时状态、访问局域网服务、管理 Docker 与数据库，并逐步接入监控、日志和终端等能力。
 
 NCP 采用“非特权 Web 服务 + 原生 Root Agent”的双进程架构。浏览器只访问 `ncp-server`；需要宿主机权限的 Docker、系统指标、数据库发现等操作，由以 root 身份运行的 `ncp-agent` 通过 Unix Socket 提供。
