@@ -536,7 +536,16 @@ func (api *handler) containerAction(response http.ResponseWriter, request *http.
 	defer cancel()
 	result, err := api.agent.ControlContainer(requestContext, api.agentSocketPath, containerRequest)
 	if err != nil {
-		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "容器操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		switch agentsocket.ErrorCode(err) {
+		case "AGENT_PROTOCOL_MISMATCH":
+			api.writeError(response, request, http.StatusConflict, "AGENT_PROTOCOL_MISMATCH", "Root Agent 与 NCP Server 版本不一致，请同步更新后重试。")
+		case "DOCKER_CONTAINER_NOT_FOUND":
+			api.writeError(response, request, http.StatusNotFound, "DOCKER_CONTAINER_NOT_FOUND", "目标容器不存在或已被移除。")
+		case "DOCKER_CONTAINER_ACTION_FAILED", "DOCKER_CONTAINER_INSPECT_FAILED":
+			api.writeError(response, request, http.StatusConflict, agentsocket.ErrorCode(err), "Docker Engine 未能完成容器操作，请刷新状态后重试。")
+		default:
+			api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "容器操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		}
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

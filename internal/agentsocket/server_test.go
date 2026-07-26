@@ -29,8 +29,8 @@ func TestServeAndProbeOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Probe() error = %v", err)
 	}
-	if status.ProtocolVersion != protocolVersion {
-		t.Fatalf("协议版本 = %q，期望 %q", status.ProtocolVersion, protocolVersion)
+	if status.ProtocolVersion != ProtocolVersion {
+		t.Fatalf("协议版本 = %q，期望 %q", status.ProtocolVersion, ProtocolVersion)
 	}
 	if status.AgentEUID != os.Geteuid() {
 		t.Fatalf("Agent EUID = %d，期望 %d", status.AgentEUID, os.Geteuid())
@@ -100,10 +100,10 @@ func TestStatusServiceReturnsOnlyAllowedFields(t *testing.T) {
 		t.Fatalf("GetStatus() error = %v", err)
 	}
 	fields := response.GetFields()
-	if len(fields) != 3 {
+	if len(fields) != 4 {
 		t.Fatalf("状态字段数量 = %d，期望 3", len(fields))
 	}
-	for _, field := range []string{"protocol_version", "agent_euid", "transport"} {
+	for _, field := range []string{"protocol_version", "build_version", "agent_euid", "transport"} {
 		if _, ok := fields[field]; !ok {
 			t.Fatalf("缺少允许字段 %q", field)
 		}

@@ -28,8 +28,12 @@ const (
 	DefaultSocketPath          = "/run/ncp/agent.sock"
 	defaultSocketMode          = 0o660
 	defaultSocketDirectoryMode = 0o750
-	protocolVersion            = "p0-v1"
+	ProtocolVersion            = "p0-v2"
 )
+
+// BuildVersion is injected for release builds through -ldflags. Keeping a
+// readable fallback makes local builds and tests diagnosable as well.
+var BuildVersion = "dev"
 
 type SocketConfig struct {
 	SocketPath        string
@@ -261,7 +265,8 @@ func (statusService) GetStatus(ctx context.Context, _ *emptypb.Empty) (*structpb
 		return nil, err
 	}
 	return structpb.NewStruct(map[string]any{
-		"protocol_version": protocolVersion,
+		"protocol_version": ProtocolVersion,
+		"build_version":    BuildVersion,
 		"agent_euid":       os.Geteuid(),
 		"transport":        "unix",
 	})

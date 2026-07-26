@@ -22,6 +22,7 @@ import (
 
 type AgentStatus struct {
 	ProtocolVersion string `json:"protocolVersion"`
+	BuildVersion    string `json:"buildVersion"`
 	AgentEUID       int    `json:"agentEUID"`
 	Transport       string `json:"transport"`
 }
@@ -108,6 +109,17 @@ func ControlContainer(ctx context.Context, socketPath string, request docker.Con
 	}
 	if err := ctx.Err(); err != nil {
 		return docker.ContainerActionResult{}, contextError(err)
+	}
+	status, err := Probe(ctx, socketPath)
+	if err != nil {
+		return docker.ContainerActionResult{}, err
+	}
+	if status.ProtocolVersion != ProtocolVersion {
+		return docker.ContainerActionResult{}, coded("AGENT_PROTOCOL_MISMATCH", fmt.Errorf(
+			"server protocol %s does not match agent protocol %s",
+			ProtocolVersion,
+			status.ProtocolVersion,
+		))
 	}
 	connection, err := dialSocket(socketPath)
 	if err != nil {
@@ -417,12 +429,16 @@ func dialSocket(socketPath string) (*grpc.ClientConn, error) {
 }
 
 func decodeAgentStatus(response *structpb.Struct) (AgentStatus, error) {
-	if response == nil || len(response.GetFields()) != 3 {
+	if response == nil || len(response.GetFields()) < 4 {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("unexpected status field count"))
 	}
 	protocolVersion, ok := stringField(response, "protocol_version")
 	if !ok || protocolVersion == "" {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("invalid protocol version"))
+	}
+	buildVersion, ok := stringField(response, "build_version")
+	if !ok || buildVersion == "" {
+		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("invalid build version"))
 	}
 	transport, ok := stringField(response, "transport")
 	if !ok || transport != "unix" {
@@ -436,7 +452,12 @@ func decodeAgentStatus(response *structpb.Struct) (AgentStatus, error) {
 	if uid < 0 || uid > math.MaxInt || math.Trunc(uid) != uid {
 		return AgentStatus{}, coded("AGENT_RPC_RESPONSE_INVALID", fmt.Errorf("invalid agent euid %v", uid))
 	}
-	return AgentStatus{ProtocolVersion: protocolVersion, AgentEUID: int(uid), Transport: transport}, nil
+	return AgentStatus{
+		ProtocolVersion: protocolVersion,
+		BuildVersion:    buildVersion,
+		AgentEUID:       int(uid),
+		Transport:       transport,
+	}, nil
 }
 
 func decodeCapabilities(response *structpb.Struct) (system.Capabilities, error) {
@@ -540,6 +561,18 @@ func rpcError(err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) || grpcstatus.Code(err) == codes.DeadlineExceeded {
 		return coded("AGENT_RPC_TIMEOUT", err)
+	}
+	status := grpcstatus.Convert(err)
+	if status.Code() == codes.Unimplemented {
+		return coded("AGENT_PROTOCOL_MISMATCH", err)
+	}
+	switch status.Message() {
+	case "DOCKER_CONTAINER_NOT_FOUND":
+		return coded("DOCKER_CONTAINER_NOT_FOUND", err)
+	case "DOCKER_CONTAINER_ACTION_FAILED":
+		return coded("DOCKER_CONTAINER_ACTION_FAILED", err)
+	case "DOCKER_CONTAINER_INSPECT_FAILED":
+		return coded("DOCKER_CONTAINER_INSPECT_FAILED", err)
 	}
 	return coded("AGENT_RPC_UNAVAILABLE", err)
 }

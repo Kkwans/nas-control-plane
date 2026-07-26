@@ -35,7 +35,15 @@ func (s *dockerControlService) ControlContainer(ctx context.Context, request *st
 	}
 	result, err := s.provider.Control(ctx, decoded)
 	if err != nil {
-		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE")
+		code := docker.ErrorCode(err)
+		switch code {
+		case "DOCKER_CONTAINER_NOT_FOUND":
+			return nil, grpcstatus.Error(codes.NotFound, code)
+		case "DOCKER_CONTAINER_ACTION_FAILED", "DOCKER_CONTAINER_INSPECT_FAILED":
+			return nil, grpcstatus.Error(codes.FailedPrecondition, code)
+		default:
+			return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE")
+		}
 	}
 	return dashboardStruct(result, "AGENT_DOCKER_CONTROL_RESPONSE_INVALID")
 }
