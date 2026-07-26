@@ -30,6 +30,8 @@ func (api *handler) pullDockerImage(response http.ResponseWriter, request *http.
 		return
 	}
 	job := api.jobs.create("docker-image-pull", input.Reference)
+	api.jobs.setExpectedTotal(job.ID, input.ExpectedBytes)
+	job, _ = api.jobs.get(job.ID)
 	go api.runImagePull(job.ID, input)
 	writeJSON(response, http.StatusAccepted, job)
 }
@@ -58,6 +60,7 @@ func (api *handler) runImagePull(jobID string, input docker.ImagePullRequest) {
 			return
 		}
 	}
+	api.jobs.completePull(jobID)
 	api.jobs.update(jobID, "completed", "镜像拉取完成", "", 100)
 }
 

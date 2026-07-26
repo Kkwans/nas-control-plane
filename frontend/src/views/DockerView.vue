@@ -146,7 +146,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           </button>
         </div>
       </template>
-      <template #tools>
+      <template v-if="activeView !== 'images'" #tools>
         <ElInput v-model="query" class="docker-search" clearable :placeholder="searchPlaceholder" aria-label="搜索 Docker 资源">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
@@ -232,7 +232,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 
     <DockerImagePanel
       v-else
-      :query="query"
+      v-model:query="query"
       :containers="inventory?.containers ?? []"
       :page-size="imagePageSize"
     />

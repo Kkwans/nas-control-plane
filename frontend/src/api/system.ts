@@ -390,6 +390,7 @@ export async function requestDockerImages(fetcher: typeof fetch = fetch): Promis
 
 export async function pullDockerImage(
   reference: string,
+  expectedBytes = 0,
   fetcher: typeof fetch = fetch,
 ): Promise<JobSnapshot> {
   return requestJson(
@@ -397,7 +398,7 @@ export async function pullDockerImage(
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reference }),
+      body: JSON.stringify({ reference, expectedBytes }),
     },
     isJobSnapshot,
     fetcher,

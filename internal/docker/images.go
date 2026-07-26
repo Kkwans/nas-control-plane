@@ -35,7 +35,8 @@ type ImageInventory struct {
 }
 
 type ImagePullRequest struct {
-	Reference string `json:"reference"`
+	Reference     string `json:"reference"`
+	ExpectedBytes int64  `json:"expectedBytes,omitempty"`
 }
 
 type ImagePullResult struct {

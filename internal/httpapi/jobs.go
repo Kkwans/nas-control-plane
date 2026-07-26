@@ -105,6 +105,17 @@ func (registry *jobRegistry) updatePullProgress(id string, layer jobLayer) {
 	if layer.ID == "" {
 		layer.ID = "status"
 	}
+	if previous, ok := job.Layers[layer.ID]; ok {
+		if layer.Current <= 0 {
+			layer.Current = previous.Current
+		}
+		if layer.Total <= 0 {
+			layer.Total = previous.Total
+		}
+	}
+	if (layer.Status == "Pull complete" || layer.Status == "Already exists") && layer.Total > 0 {
+		layer.Current = layer.Total
+	}
 	job.Layers[layer.ID] = layer
 	var current, total int64
 	for _, item := range job.Layers {
@@ -112,18 +123,52 @@ func (registry *jobRegistry) updatePullProgress(id string, layer jobLayer) {
 		total += item.Total
 	}
 	previousBytes, previousAt := job.DownloadedBytes, job.UpdatedAt
-	job.DownloadedBytes, job.TotalBytes = current, total
+	job.DownloadedBytes = max(job.DownloadedBytes, current)
+	job.TotalBytes = max(job.TotalBytes, total)
 	if elapsed := time.Since(previousAt).Seconds(); elapsed > 0 {
 		job.SpeedBytes = int64(float64(current-previousBytes) / elapsed)
 	}
-	if total > 0 {
-		job.Progress = min(99, max(1, int(float64(current)/float64(total)*100)))
+	if job.TotalBytes > 0 {
+		job.Progress = min(99, max(1, int(float64(job.DownloadedBytes)/float64(job.TotalBytes)*100)))
 	}
 	job.Message = layer.Status
 	job.UpdatedAt = time.Now().UTC()
 	registry.jobs[id] = job
 	registry.mu.Unlock()
 	registry.persist(job)
+}
+
+func (registry *jobRegistry) setExpectedTotal(id string, total int64) {
+	if total <= 0 {
+		return
+	}
+	registry.mu.Lock()
+	job, exists := registry.jobs[id]
+	if exists {
+		job.TotalBytes = max(job.TotalBytes, total)
+		registry.jobs[id] = job
+	}
+	registry.mu.Unlock()
+	if exists {
+		registry.persist(job)
+	}
+}
+
+func (registry *jobRegistry) completePull(id string) {
+	registry.mu.Lock()
+	job, exists := registry.jobs[id]
+	if exists {
+		if job.TotalBytes > 0 {
+			job.DownloadedBytes = job.TotalBytes
+		}
+		job.SpeedBytes = 0
+		job.Progress = 100
+		registry.jobs[id] = job
+	}
+	registry.mu.Unlock()
+	if exists {
+		registry.persist(job)
+	}
 }
 
 func (registry *jobRegistry) get(id string) (jobSnapshot, bool) {
@@ -194,7 +239,9 @@ func (api *handler) retryJob(response http.ResponseWriter, request *http.Request
 		return
 	}
 	job := api.jobs.create(previous.Type, previous.Reference)
-	go api.runImagePull(job.ID, docker.ImagePullRequest{Reference: previous.Reference})
+	api.jobs.setExpectedTotal(job.ID, previous.TotalBytes)
+	job, _ = api.jobs.get(job.ID)
+	go api.runImagePull(job.ID, docker.ImagePullRequest{Reference: previous.Reference, ExpectedBytes: previous.TotalBytes})
 	writeJSON(response, http.StatusAccepted, job)
 }
 
@@ -216,7 +263,7 @@ func (api *handler) jobEvents(response http.ResponseWriter, request *http.Reques
 	response.Header().Set("Content-Type", "text/event-stream")
 	response.Header().Set("Cache-Control", "no-cache")
 	response.Header().Set("X-Accel-Buffering", "no")
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	var lastUpdated time.Time
 	for {
@@ -230,7 +277,7 @@ func (api *handler) jobEvents(response http.ResponseWriter, request *http.Reques
 			flusher.Flush()
 			lastUpdated = job.UpdatedAt
 		}
-		if job.Status == "completed" || job.Status == "failed" {
+		if job.Status == "completed" || job.Status == "failed" || job.Status == "interrupted" {
 			return
 		}
 		select {
