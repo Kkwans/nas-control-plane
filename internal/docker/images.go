@@ -2,7 +2,10 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -299,16 +302,40 @@ func imageDisplayName(image ImageSummary) string {
 }
 
 type mobyImageGateway struct {
-	client *client.Client
+	client     *client.Client
+	httpClient *http.Client
 }
 
 func (g *mobyImageGateway) ListImages(ctx context.Context) ([]ImageSummary, error) {
-	response, err := g.client.ImageList(ctx, client.ImageListOptions{All: false})
+	httpClient := g.httpClient
+	if httpClient == nil {
+		httpClient = newDockerUnixHTTPClient()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/images/json?all=0", nil)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]ImageSummary, 0, len(response.Items))
-	for _, item := range response.Items {
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker image list returned HTTP %d", response.StatusCode)
+	}
+	var items []struct {
+		ID          string   `json:"Id"`
+		RepoTags    []string `json:"RepoTags"`
+		RepoDigests []string `json:"RepoDigests"`
+		Size        int64    `json:"Size"`
+		Created     int64    `json:"Created"`
+		Containers  int64    `json:"Containers"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&items); err != nil {
+		return nil, err
+	}
+	result := make([]ImageSummary, 0, len(items))
+	for _, item := range items {
 		result = append(result, ImageSummary{
 			ID:          item.ID,
 			RepoTags:    append([]string{}, item.RepoTags...),
@@ -319,6 +346,16 @@ func (g *mobyImageGateway) ListImages(ctx context.Context) ([]ImageSummary, erro
 		})
 	}
 	return result, nil
+}
+
+func newDockerUnixHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+			},
+		},
+	}
 }
 
 func (g *mobyImageGateway) SearchImages(ctx context.Context, query string, limit int) ([]HubRepository, error) {
