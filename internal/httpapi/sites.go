@@ -1,17 +1,43 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
+
+const maxSiteIconBytes = 2 << 20
+
+var siteIconTypes = map[string]string{
+	"image/png":     ".png",
+	"image/jpeg":    ".jpg",
+	"image/webp":    ".webp",
+	"image/svg+xml": ".svg",
+}
+
+type siteProfileStore interface {
+	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
+	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
+	DeleteSiteProfile(context.Context, string) error
+	SetSiteIgnored(context.Context, string, bool) error
+}
 
 type Site struct {
 	ID            string     `json:"id"`
@@ -52,8 +78,110 @@ func (api *handler) sites(response http.ResponseWriter, request *http.Request) {
 	}
 	writeJSON(response, http.StatusOK, SiteListResponse{
 		CollectedAt: inventory.CollectedAt,
-		Sites:       mergeSites(inventory, profiles),
+		Sites:       api.discoveredSites(request.Context(), requestHostName(request), inventory, profiles),
 	})
+}
+
+func requestHostName(request *http.Request) string {
+	host := request.Host
+	if value, _, err := net.SplitHostPort(host); err == nil {
+		return value
+	}
+	return strings.Trim(host, "[]")
+}
+
+func (api *handler) discoveredSites(ctx context.Context, publicHost string, inventory docker.Inventory, profiles []controlstore.SiteProfile) []Site {
+	candidates := mergeSites(inventory, profiles)
+	prober, canProbe := api.agent.(WebProbeAgentClient)
+	if !canProbe {
+		result := candidates[:0]
+		for _, site := range candidates {
+			if hasExplicitSiteLabel(inventory.Containers, site.ProjectID) || site.Source == "manual" {
+				result = append(result, site)
+			}
+		}
+		return result
+	}
+	type probeOutcome struct {
+		index int
+		probe agentsocket.WebProbeResult
+		port  int
+		ok    bool
+	}
+	outcomes := make(chan probeOutcome, len(candidates))
+	limiter := make(chan struct{}, 6)
+	var group sync.WaitGroup
+	for index, site := range candidates {
+		if site.Source == "manual" || hasExplicitSiteLabel(inventory.Containers, site.ProjectID) {
+			outcomes <- probeOutcome{index: index, ok: true}
+			continue
+		}
+		group.Add(1)
+		go func(index int, site Site) {
+			defer group.Done()
+			limiter <- struct{}{}
+			defer func() { <-limiter }()
+			for _, port := range site.Ports {
+				probeContext, cancel := context.WithTimeout(ctx, 4*time.Second)
+				probe, err := prober.ProbeWeb(probeContext, api.agentSocketPath, fmt.Sprintf("http://127.0.0.1:%d/", port))
+				cancel()
+				if err == nil && probe.StatusCode >= 200 && probe.StatusCode < 500 {
+					outcomes <- probeOutcome{index: index, probe: probe, port: port, ok: true}
+					return
+				}
+			}
+			outcomes <- probeOutcome{index: index}
+		}(index, site)
+	}
+	group.Wait()
+	close(outcomes)
+	verified := make(map[int]probeOutcome, len(candidates))
+	for outcome := range outcomes {
+		verified[outcome.index] = outcome
+	}
+	result := make([]Site, 0, len(candidates))
+	for index, site := range candidates {
+		outcome := verified[index]
+		if !outcome.ok {
+			continue
+		}
+		if outcome.port > 0 {
+			site.PrimaryPort = outcome.port
+			if outcome.probe.Title != "" && site.Source == "auto" {
+				site.Name = outcome.probe.Title
+			}
+			site.LaunchURL = publicSiteURL(publicHost, outcome.port, outcome.probe.URL)
+			if site.IconURL == "" {
+				site.IconURL = publicSiteURL(publicHost, outcome.port, outcome.probe.IconURL)
+			}
+		}
+		result = append(result, site)
+	}
+	return result
+}
+
+func hasExplicitSiteLabel(containers []docker.InventoryContainer, projectID string) bool {
+	for _, container := range containers {
+		if container.ProjectID != projectID {
+			continue
+		}
+		for key, value := range container.Labels {
+			if strings.TrimSpace(value) != "" && (strings.HasPrefix(key, "com.ncp.site.") || strings.HasPrefix(key, "io.ncp.site.")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func publicSiteURL(publicHost string, port int, probeURL string) string {
+	parsed, err := url.Parse(probeURL)
+	if err != nil || parsed.Path == "" {
+		parsed = &url.URL{Path: "/"}
+	}
+	parsed.Scheme = "http"
+	parsed.Host = net.JoinHostPort(publicHost, strconv.Itoa(port))
+	return parsed.String()
 }
 
 func (api *handler) updateSite(response http.ResponseWriter, request *http.Request) {
@@ -66,12 +194,231 @@ func (api *handler) updateSite(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	input.ProjectID = siteProjectID(request)
+	if existing, ok := api.siteProfile(request.Context(), input.ProjectID); ok {
+		if existing.Source == "manual" {
+			input.Source = "manual"
+		} else {
+			input.Source = "edited"
+		}
+		input.Ignored = existing.Ignored
+		input.DetectedTitle = existing.DetectedTitle
+		input.AutoIconURL = existing.AutoIconURL
+		input.LocalIconName = existing.LocalIconName
+	}
 	profile, err := api.controlStore.UpsertSiteProfile(request.Context(), input)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "SITE_INPUT_INVALID", "站点资料参数无效。")
 		return
 	}
 	writeJSON(response, http.StatusOK, profile)
+}
+
+func (api *handler) createSite(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
+		return
+	}
+	var input controlstore.SiteProfile
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	input.ProjectID = "manual:" + uuid.NewString()
+	input.Source = "manual"
+	input.Ignored = false
+	profile, err := api.controlStore.UpsertSiteProfile(request.Context(), input)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_INPUT_INVALID", "站点资料参数无效。")
+		return
+	}
+	writeJSON(response, http.StatusCreated, profile)
+}
+
+func (api *handler) deleteSite(response http.ResponseWriter, request *http.Request) {
+	store, ok := api.controlStore.(siteProfileStore)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
+		return
+	}
+	siteID := siteProjectID(request)
+	profile, exists := api.siteProfile(request.Context(), siteID)
+	var err error
+	if exists && profile.Source == "manual" {
+		err = store.DeleteSiteProfile(request.Context(), siteID)
+	} else {
+		err = store.SetSiteIgnored(request.Context(), siteID, true)
+	}
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_DELETE_FAILED", "站点删除失败。")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (api *handler) ignoredSites(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
+		return
+	}
+	profiles, err := api.controlStore.SiteProfiles(request.Context())
+	if err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "SITES_READ_FAILED", "站点资料读取失败。")
+		return
+	}
+	ignored := make([]controlstore.SiteProfile, 0)
+	for _, profile := range profiles {
+		if profile.Ignored {
+			ignored = append(ignored, profile)
+		}
+	}
+	writeJSON(response, http.StatusOK, ignored)
+}
+
+func (api *handler) restoreSite(response http.ResponseWriter, request *http.Request) {
+	store, ok := api.controlStore.(siteProfileStore)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
+		return
+	}
+	siteID := siteProjectID(request)
+	if err := store.SetSiteIgnored(request.Context(), siteID, false); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_RESTORE_FAILED", "站点恢复失败。")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"siteId": siteID, "ignored": false})
+}
+
+func (api *handler) uploadSiteIcon(response http.ResponseWriter, request *http.Request) {
+	if api.siteAssetsDirectory == "" || api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITE_ICON_UNAVAILABLE", "站点图标存储暂不可用。")
+		return
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, maxSiteIconBytes+64*1024)
+	if err := request.ParseMultipartForm(maxSiteIconBytes); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_INVALID", "图标文件无效或超过 2 MB。")
+		return
+	}
+	file, _, err := request.FormFile("icon")
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_REQUIRED", "请选择要上传的图标文件。")
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxSiteIconBytes+1))
+	if err != nil || len(content) == 0 || len(content) > maxSiteIconBytes {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_INVALID", "图标文件无效或超过 2 MB。")
+		return
+	}
+	contentType := http.DetectContentType(content)
+	if len(content) >= 5 && strings.Contains(strings.ToLower(string(content[:min(len(content), 256)])), "<svg") {
+		contentType = "image/svg+xml"
+	}
+	extension, ok := siteIconTypes[contentType]
+	if !ok {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_TYPE_UNSUPPORTED", "仅支持 PNG、JPEG、WebP 和 SVG 图标。")
+		return
+	}
+	siteID := siteProjectID(request)
+	profile, exists := api.siteProfile(request.Context(), siteID)
+	if !exists {
+		api.writeError(response, request, http.StatusNotFound, "SITE_NOT_FOUND", "站点不存在。")
+		return
+	}
+	if err := os.MkdirAll(api.siteAssetsDirectory, 0o750); err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_SAVE_FAILED", "图标保存失败。")
+		return
+	}
+	fileName := uuid.NewString() + extension
+	target := filepath.Join(api.siteAssetsDirectory, fileName)
+	if err := os.WriteFile(target, content, 0o640); err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_SAVE_FAILED", "图标保存失败。")
+		return
+	}
+	previous := profile.LocalIconName
+	profile.LocalIconName = fileName
+	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
+		_ = os.Remove(target)
+		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_SAVE_FAILED", "图标资料保存失败。")
+		return
+	}
+	if previous != "" {
+		_ = removeSiteIconFile(api.siteAssetsDirectory, previous)
+	}
+	writeJSON(response, http.StatusOK, map[string]string{
+		"siteId":  siteID,
+		"iconUrl": "/api/v1/sites/" + url.PathEscape(siteID) + "/icon",
+	})
+}
+
+func (api *handler) siteIcon(response http.ResponseWriter, request *http.Request) {
+	profile, ok := api.siteProfile(request.Context(), siteProjectID(request))
+	if !ok || profile.LocalIconName == "" || api.siteAssetsDirectory == "" {
+		api.writeError(response, request, http.StatusNotFound, "SITE_ICON_NOT_FOUND", "站点图标不存在。")
+		return
+	}
+	target, err := safeSiteIconPath(api.siteAssetsDirectory, profile.LocalIconName)
+	if err != nil {
+		api.writeError(response, request, http.StatusNotFound, "SITE_ICON_NOT_FOUND", "站点图标不存在。")
+		return
+	}
+	response.Header().Set("Cache-Control", "private, max-age=3600")
+	http.ServeFile(response, request, target)
+}
+
+func (api *handler) deleteSiteIcon(response http.ResponseWriter, request *http.Request) {
+	if api.controlStore == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SITE_ICON_UNAVAILABLE", "站点图标存储暂不可用。")
+		return
+	}
+	profile, ok := api.siteProfile(request.Context(), siteProjectID(request))
+	if !ok {
+		api.writeError(response, request, http.StatusNotFound, "SITE_NOT_FOUND", "站点不存在。")
+		return
+	}
+	previous := profile.LocalIconName
+	profile.LocalIconName = ""
+	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
+		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_DELETE_FAILED", "图标删除失败。")
+		return
+	}
+	if previous != "" && api.siteAssetsDirectory != "" {
+		_ = removeSiteIconFile(api.siteAssetsDirectory, previous)
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func safeSiteIconPath(directory, fileName string) (string, error) {
+	if fileName != filepath.Base(fileName) || fileName == "." || fileName == "" {
+		return "", errors.New("site icon filename is invalid")
+	}
+	return filepath.Join(directory, fileName), nil
+}
+
+func removeSiteIconFile(directory, fileName string) error {
+	target, err := safeSiteIconPath(directory, fileName)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func (api *handler) siteProfile(ctx context.Context, siteID string) (controlstore.SiteProfile, bool) {
+	if api.controlStore == nil {
+		return controlstore.SiteProfile{}, false
+	}
+	profiles, err := api.controlStore.SiteProfiles(ctx)
+	if err != nil {
+		return controlstore.SiteProfile{}, false
+	}
+	for _, profile := range profiles {
+		if profile.ProjectID == siteID {
+			return profile, true
+		}
+	}
+	return controlstore.SiteProfile{}, false
 }
 
 func (api *handler) recordSiteVisit(response http.ResponseWriter, request *http.Request) {
@@ -126,7 +473,36 @@ func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile)
 			applySiteProfile(&site, profile, "built-in")
 		}
 		if profile, ok := profileByProject[project.ID]; ok {
+			if profile.Ignored {
+				continue
+			}
 			applySiteProfile(&site, profile, "edited")
+			delete(profileByProject, project.ID)
+		}
+		result = append(result, site)
+	}
+	for _, profile := range profileByProject {
+		if profile.Source != "manual" || profile.Ignored {
+			continue
+		}
+		site := Site{
+			ID:            profile.ProjectID,
+			ProjectID:     profile.ProjectID,
+			Name:          profile.Name,
+			Description:   profile.Description,
+			IconURL:       preferredSiteIcon(profile),
+			Category:      profile.Category,
+			State:         "running",
+			PrimaryPort:   profile.PrimaryPort,
+			LaunchURL:     profile.LaunchURL,
+			Favorite:      profile.Favorite,
+			SortOrder:     profile.SortOrder,
+			LastVisitedAt: profile.LastVisitedAt,
+			Hidden:        profile.Hidden,
+			Source:        "manual",
+		}
+		if profile.PrimaryPort > 0 {
+			site.Ports = []int{profile.PrimaryPort}
 		}
 		result = append(result, site)
 	}
@@ -166,8 +542,8 @@ func applySiteProfile(site *Site, profile controlstore.SiteProfile, source strin
 		site.Description = profile.Description
 		changed = true
 	}
-	if profile.IconURL != "" {
-		site.IconURL = profile.IconURL
+	if iconURL := preferredSiteIcon(profile); iconURL != "" {
+		site.IconURL = iconURL
 		changed = true
 	}
 	if profile.Category != "" {
@@ -189,6 +565,16 @@ func applySiteProfile(site *Site, profile controlstore.SiteProfile, source strin
 	if changed {
 		site.Source = source
 	}
+}
+
+func preferredSiteIcon(profile controlstore.SiteProfile) string {
+	if profile.LocalIconName != "" {
+		return "/api/v1/sites/" + url.PathEscape(profile.ProjectID) + "/icon"
+	}
+	if profile.IconURL != "" {
+		return profile.IconURL
+	}
+	return profile.AutoIconURL
 }
 
 func siteProfileFromLabels(containers []docker.InventoryContainer, projectID string) controlstore.SiteProfile {

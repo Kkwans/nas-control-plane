@@ -101,7 +101,7 @@ func TestStatusServiceReturnsOnlyAllowedFields(t *testing.T) {
 	}
 	fields := response.GetFields()
 	if len(fields) != 4 {
-		t.Fatalf("状态字段数量 = %d，期望 3", len(fields))
+		t.Fatalf("状态字段数量 = %d，期望 4", len(fields))
 	}
 	for _, field := range []string{"protocol_version", "build_version", "agent_euid", "transport"} {
 		if _, ok := fields[field]; !ok {

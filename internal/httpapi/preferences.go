@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/Kkwans/nas-control-plane/internal/auth"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
+	"github.com/go-chi/chi/v5"
 )
 
 const maxControlBodySize = 16 * 1024
@@ -40,6 +42,44 @@ func (api *handler) updatePreferences(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, preferences)
+}
+
+type listPreferenceStore interface {
+	ListPreference(context.Context, int64, string) (controlstore.ListPreference, error)
+	UpdateListPreference(context.Context, int64, controlstore.ListPreference) (controlstore.ListPreference, error)
+}
+
+func (api *handler) listPreference(response http.ResponseWriter, request *http.Request) {
+	store, ok := api.controlStore.(listPreferenceStore)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "LIST_PREFERENCES_UNAVAILABLE", "列表偏好暂不可用。")
+		return
+	}
+	preference, err := store.ListPreference(request.Context(), currentPrincipal(request).ID, chi.URLParam(request, "listKey"))
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "LIST_PREFERENCES_INPUT_INVALID", "列表偏好标识无效。")
+		return
+	}
+	writeJSON(response, http.StatusOK, preference)
+}
+
+func (api *handler) updateListPreference(response http.ResponseWriter, request *http.Request) {
+	store, ok := api.controlStore.(listPreferenceStore)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "LIST_PREFERENCES_UNAVAILABLE", "列表偏好暂不可用。")
+		return
+	}
+	var input controlstore.ListPreference
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	input.ListKey = chi.URLParam(request, "listKey")
+	preference, err := store.UpdateListPreference(request.Context(), currentPrincipal(request).ID, input)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "LIST_PREFERENCES_INPUT_INVALID", "每页数量必须在 1 到 200 之间，排序参数必须有效。")
+		return
+	}
+	writeJSON(response, http.StatusOK, preference)
 }
 
 func (api *handler) databaseProjectPreferences(response http.ResponseWriter, request *http.Request) {

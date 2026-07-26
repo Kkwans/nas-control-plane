@@ -20,10 +20,18 @@ func (api *handler) searchDockerHub(response http.ResponseWriter, request *http.
 	}
 	page := boundedQueryInt(request, "page", 1, 1, 1000)
 	pageSize := boundedQueryInt(request, "pageSize", 20, 1, 50)
+	sortOrder := strings.TrimSpace(request.URL.Query().Get("sort"))
+	if sortOrder == "" {
+		sortOrder = "relevance"
+	}
+	if sortOrder != "relevance" && sortOrder != "stars" && sortOrder != "pulls" && sortOrder != "updated" {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_HUB_QUERY_INVALID", "Docker Hub 排序方式无效。")
+		return
+	}
 	requestContext, cancel := context.WithTimeout(request.Context(), dockerHubRequestTimeout)
 	defer cancel()
 	result, err := api.dockerImages.SearchDockerHub(requestContext, api.agentSocketPath, docker.HubSearchRequest{
-		Query: query, Page: page, PageSize: pageSize,
+		Query: query, Page: page, PageSize: pageSize, Sort: sortOrder,
 	})
 	if err != nil {
 		api.writeError(response, request, http.StatusBadGateway, "DOCKER_HUB_SEARCH_FAILED", "Docker Hub 搜索暂不可用，请检查 Docker Engine 的仓库连接。")

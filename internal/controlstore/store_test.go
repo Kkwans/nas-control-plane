@@ -45,6 +45,75 @@ func TestPreferencesPersistCompleteConsoleExperience(t *testing.T) {
 	}
 }
 
+func TestListPreferencesPersistPerUserAndList(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "list-preferences.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	defaults, err := store.ListPreference(context.Background(), 1, "docker.projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.PageSize != 10 || defaults.SortDirection != "asc" {
+		t.Fatalf("unexpected defaults: %#v", defaults)
+	}
+
+	input := ListPreference{
+		ListKey:       "docker.projects",
+		PageSize:      30,
+		SortKey:       "name",
+		SortDirection: "DESC",
+	}
+	saved, err := store.UpdateListPreference(context.Background(), 1, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.SortDirection != "desc" {
+		t.Fatalf("sort direction was not normalized: %#v", saved)
+	}
+
+	loaded, err := store.ListPreference(context.Background(), 1, input.ListKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != saved {
+		t.Fatalf("loaded preference = %#v, want %#v", loaded, saved)
+	}
+
+	otherList, err := store.ListPreference(context.Background(), 1, "docker.containers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherUser, err := store.ListPreference(context.Background(), 2, input.ListKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otherList.PageSize != 10 || otherUser.PageSize != 10 {
+		t.Fatalf("preferences leaked across scopes: list=%#v user=%#v", otherList, otherUser)
+	}
+}
+
+func TestListPreferenceRejectsInvalidValues(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "invalid-list-preferences.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, preference := range []ListPreference{
+		{ListKey: "Docker Projects", PageSize: 10, SortDirection: "asc"},
+		{ListKey: "docker.projects", PageSize: 0, SortDirection: "asc"},
+		{ListKey: "docker.projects", PageSize: 201, SortDirection: "asc"},
+		{ListKey: "docker.projects", PageSize: 10, SortDirection: "sideways"},
+	} {
+		if _, err := store.UpdateListPreference(context.Background(), 1, preference); err == nil {
+			t.Fatalf("expected validation failure for %#v", preference)
+		}
+	}
+}
+
 func TestMetricSamplesDeduplicateMinuteAndRespectRange(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "metrics.sqlite"))
 	if err != nil {
@@ -180,5 +249,50 @@ func TestComposeDraftPersistsContentAndHash(t *testing.T) {
 	}
 	if loaded.Content != saved.Content || !loaded.UpdatedAt.Equal(saved.UpdatedAt) {
 		t.Fatalf("loaded draft = %#v", loaded)
+	}
+}
+
+func TestJobsPersistProgressAndInterruptRunningTasks(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "ncp.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	createdAt := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return createdAt.Add(time.Minute) }
+	job := JobRecord{
+		ID:              "pull-1",
+		Type:            "docker-image-pull",
+		Status:          "running",
+		Reference:       "alpine:3.22",
+		Message:         "正在下载镜像层",
+		Progress:        42,
+		DownloadedBytes: 420,
+		TotalBytes:      1000,
+		SpeedBytes:      21,
+		LayersJSON:      `[{"id":"layer-a","current":420,"total":1000}]`,
+		CreatedAt:       createdAt,
+		UpdatedAt:       createdAt,
+	}
+	if err := store.UpsertJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkRunningJobsInterrupted(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.Jobs(context.Background(), "docker-image-pull", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("jobs length = %d", len(jobs))
+	}
+	loaded := jobs[0]
+	if loaded.Status != "interrupted" || loaded.Progress != 42 || loaded.DownloadedBytes != 420 || loaded.TotalBytes != 1000 {
+		t.Fatalf("unexpected persisted job: %#v", loaded)
+	}
+	if loaded.CompletedAt.IsZero() {
+		t.Fatalf("interrupted job completion time was not persisted")
 	}
 }

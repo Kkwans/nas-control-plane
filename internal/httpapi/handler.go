@@ -37,6 +37,10 @@ type AgentClient interface {
 	QueryJournal(context.Context, string, journal.Query) (journal.Page, error)
 }
 
+type WebProbeAgentClient interface {
+	ProbeWeb(context.Context, string, string) (agentsocket.WebProbeResult, error)
+}
+
 type DatabaseAgentClient interface {
 	DiscoverDatabases(context.Context, string) (ncpdatabase.Discovery, error)
 	CatalogDatabase(context.Context, string, ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error)
@@ -53,6 +57,10 @@ type DockerImageAgentClient interface {
 	ListDockerHubTags(context.Context, string, docker.HubTagsRequest) (docker.HubTagsResult, error)
 	PullDockerImage(context.Context, string, docker.ImagePullRequest) (docker.ImagePullResult, error)
 	RemoveDockerImage(context.Context, string, docker.ImageRemoveRequest) (docker.ImageRemoveResult, error)
+}
+
+type DockerImageProgressAgentClient interface {
+	PullDockerImageWithProgress(context.Context, string, docker.ImagePullRequest, func(docker.ImagePullProgress)) (docker.ImagePullResult, error)
 }
 
 type ComposeAgentClient interface {
@@ -87,6 +95,7 @@ type Config struct {
 	Auth                Authenticator
 	ControlStore        ControlStore
 	SessionCookieSecure bool
+	SiteAssetsDirectory string
 	Terminal            TerminalClient
 	TerminalPOCEnabled  bool
 	TerminalTimeout     time.Duration
@@ -126,6 +135,7 @@ type handler struct {
 	auth                Authenticator
 	controlStore        ControlStore
 	sessionCookieSecure bool
+	siteAssetsDirectory string
 	terminal            TerminalClient
 	terminalEnabled     bool
 	terminalTimeout     time.Duration
@@ -149,6 +159,10 @@ func (socketAgentClient) CollectSystemSummary(ctx context.Context, socketPath st
 
 func (socketAgentClient) CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
 	return agentsocket.CollectDockerInventory(ctx, socketPath)
+}
+
+func (socketAgentClient) ProbeWeb(ctx context.Context, socketPath string, targetURL string) (agentsocket.WebProbeResult, error) {
+	return agentsocket.ProbeWeb(ctx, socketPath, targetURL)
 }
 
 func (socketAgentClient) ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
@@ -177,6 +191,10 @@ func (socketAgentClient) ListDockerHubTags(ctx context.Context, socketPath strin
 
 func (socketAgentClient) PullDockerImage(ctx context.Context, socketPath string, request docker.ImagePullRequest) (docker.ImagePullResult, error) {
 	return agentsocket.PullDockerImage(ctx, socketPath, request)
+}
+
+func (socketAgentClient) PullDockerImageWithProgress(ctx context.Context, socketPath string, request docker.ImagePullRequest, onProgress func(docker.ImagePullProgress)) (docker.ImagePullResult, error) {
+	return agentsocket.PullDockerImageWithProgress(ctx, socketPath, request, onProgress)
 }
 
 func (socketAgentClient) RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {
@@ -262,11 +280,12 @@ func NewHandler(config Config) http.Handler {
 		auth:                config.Auth,
 		controlStore:        config.ControlStore,
 		sessionCookieSecure: config.SessionCookieSecure,
+		siteAssetsDirectory: config.SiteAssetsDirectory,
 		terminal:            config.Terminal,
 		terminalEnabled:     config.TerminalPOCEnabled,
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
-		jobs:                newJobRegistry(),
+		jobs:                newJobRegistry(config.ControlStore),
 	}
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
@@ -287,6 +306,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/logs/events", api.logEvents)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
+			protected.Get("/preferences/lists/{listKey}", api.listPreference)
+			protected.Put("/preferences/lists/{listKey}", api.updateListPreference)
 			protected.Get("/docker/inventory", api.dockerInventory)
 			protected.Get("/docker/images", api.dockerImageInventory)
 			protected.Get("/docker/hub/search", api.searchDockerHub)
@@ -301,12 +322,21 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/docker/compose/revisions", api.composeRevisions)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
 			protected.Get("/jobs/{jobID}/events", api.jobEvents)
+			protected.Get("/jobs", api.listJobs)
+			protected.Post("/jobs/{jobID}/retry", api.retryJob)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
 			protected.Get("/sites", api.sites)
+			protected.Post("/sites", api.createSite)
 			protected.Put("/sites/{projectID}", api.updateSite)
+			protected.Delete("/sites/{projectID}", api.deleteSite)
 			protected.Post("/sites/{projectID}/visit", api.recordSiteVisit)
+			protected.Post("/sites/{projectID}/icon", api.uploadSiteIcon)
+			protected.Get("/sites/{projectID}/icon", api.siteIcon)
+			protected.Delete("/sites/{projectID}/icon", api.deleteSiteIcon)
+			protected.Get("/sites/ignored", api.ignoredSites)
+			protected.Post("/sites/{projectID}/restore", api.restoreSite)
 			protected.Get("/databases/discovery", api.databaseDiscovery)
 			protected.Get("/databases/project-preferences", api.databaseProjectPreferences)
 			protected.Put("/databases/project-preferences", api.updateDatabaseProjectPreference)

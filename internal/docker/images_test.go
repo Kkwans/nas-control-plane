@@ -61,6 +61,27 @@ func TestImageManagerListNormalizesNilInventory(t *testing.T) {
 	}
 }
 
+func TestSortHubRepositoriesUsesRealMetadata(t *testing.T) {
+	repositories := []HubRepository{
+		{Name: "small", PullCount: 10, StarCount: 100, LastUpdated: "2026-01-01T00:00:00Z"},
+		{Name: "popular", PullCount: 1000, StarCount: 20, LastUpdated: "2025-01-01T00:00:00Z"},
+		{Name: "fresh", PullCount: 100, StarCount: 10, LastUpdated: "2026-07-26T00:00:00Z"},
+	}
+
+	sortHubRepositories(repositories, "pulls")
+	if repositories[0].Name != "popular" {
+		t.Fatalf("pull sort = %#v", repositories)
+	}
+	sortHubRepositories(repositories, "stars")
+	if repositories[0].Name != "small" {
+		t.Fatalf("star sort = %#v", repositories)
+	}
+	sortHubRepositories(repositories, "updated")
+	if repositories[0].Name != "fresh" {
+		t.Fatalf("updated sort = %#v", repositories)
+	}
+}
+
 func containsJSON(payload []byte, fragment string) bool {
 	for index := 0; index+len(fragment) <= len(payload); index++ {
 		if string(payload[index:index+len(fragment)]) == fragment {

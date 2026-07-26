@@ -14,6 +14,7 @@ const (
 	agentDockerImagesSearchImagesFullMethod = "/ncp.agent.v1.AgentDockerImagesService/SearchImages"
 	agentDockerImagesListTagsFullMethod     = "/ncp.agent.v1.AgentDockerImagesService/ListTags"
 	agentDockerImagesPullImageFullMethod    = "/ncp.agent.v1.AgentDockerImagesService/PullImage"
+	agentDockerImagesPullStreamFullMethod   = "/ncp.agent.v1.AgentDockerImagesService/PullImageStream"
 	agentDockerImagesRemoveImageFullMethod  = "/ncp.agent.v1.AgentDockerImagesService/RemoveImage"
 )
 
@@ -22,6 +23,7 @@ type AgentDockerImagesServiceClient interface {
 	SearchImages(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 	ListTags(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 	PullImage(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+	PullImageStream(context.Context, *structpb.Struct, ...grpc.CallOption) (AgentDockerImagesPullStreamClient, error)
 	RemoveImage(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
@@ -65,6 +67,36 @@ func (c *agentDockerImagesServiceClient) PullImage(ctx context.Context, request 
 	return response, nil
 }
 
+type AgentDockerImagesPullStreamClient interface {
+	Recv() (*structpb.Struct, error)
+	grpc.ClientStream
+}
+
+type agentDockerImagesPullStreamClient struct{ grpc.ClientStream }
+
+func (client *agentDockerImagesPullStreamClient) Recv() (*structpb.Struct, error) {
+	message := new(structpb.Struct)
+	if err := client.ClientStream.RecvMsg(message); err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
+func (c *agentDockerImagesServiceClient) PullImageStream(ctx context.Context, request *structpb.Struct, options ...grpc.CallOption) (AgentDockerImagesPullStreamClient, error) {
+	stream, err := c.connection.NewStream(ctx, &agentDockerImagesServiceDescription.Streams[0], agentDockerImagesPullStreamFullMethod, options...)
+	if err != nil {
+		return nil, err
+	}
+	client := &agentDockerImagesPullStreamClient{ClientStream: stream}
+	if err := client.SendMsg(request); err != nil {
+		return nil, err
+	}
+	if err := client.CloseSend(); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
 func (c *agentDockerImagesServiceClient) RemoveImage(ctx context.Context, request *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
 	response := new(structpb.Struct)
 	if err := c.connection.Invoke(ctx, agentDockerImagesRemoveImageFullMethod, request, response, options...); err != nil {
@@ -79,6 +111,26 @@ type AgentDockerImagesServiceServer interface {
 	ListTags(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	PullImage(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RemoveImage(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	PullImageStream(*structpb.Struct, AgentDockerImagesPullStreamServer) error
+}
+
+type AgentDockerImagesPullStreamServer interface {
+	Send(*structpb.Struct) error
+	grpc.ServerStream
+}
+
+type agentDockerImagesPullStreamServer struct{ grpc.ServerStream }
+
+func (server *agentDockerImagesPullStreamServer) Send(message *structpb.Struct) error {
+	return server.ServerStream.SendMsg(message)
+}
+
+func agentDockerImagesPullStreamHandler(server any, stream grpc.ServerStream) error {
+	request := new(structpb.Struct)
+	if err := stream.RecvMsg(request); err != nil {
+		return err
+	}
+	return server.(AgentDockerImagesServiceServer).PullImageStream(request, &agentDockerImagesPullStreamServer{ServerStream: stream})
 }
 
 func RegisterAgentDockerImagesServiceServer(server grpc.ServiceRegistrar, implementation AgentDockerImagesServiceServer) {
@@ -170,4 +222,9 @@ var agentDockerImagesServiceDescription = grpc.ServiceDesc{
 		{MethodName: "PullImage", Handler: agentDockerImagesPullImageHandler},
 		{MethodName: "RemoveImage", Handler: agentDockerImagesRemoveImageHandler},
 	},
+	Streams: []grpc.StreamDesc{{
+		StreamName:    "PullImageStream",
+		Handler:       agentDockerImagesPullStreamHandler,
+		ServerStreams: true,
+	}},
 }

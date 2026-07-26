@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -116,6 +117,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 			AgentSocketPath:     *agentSocketPath,
 			Auth:                authService,
 			ControlStore:        controlStore,
+			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,
 			TerminalPOCEnabled:  *terminalPOC,
 		}),

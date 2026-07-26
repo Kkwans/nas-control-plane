@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -65,6 +66,7 @@ type HubSearchRequest struct {
 	Query    string `json:"query"`
 	Page     int    `json:"page"`
 	PageSize int    `json:"pageSize"`
+	Sort     string `json:"sort"`
 }
 
 type HubSearchResult struct {
@@ -102,11 +104,24 @@ type ImageGateway interface {
 	RemoveImage(context.Context, string) error
 }
 
+type ImagePullProgress struct {
+	LayerID string `json:"layerId"`
+	Status  string `json:"status"`
+	Current int64  `json:"current"`
+	Total   int64  `json:"total"`
+}
+
+type progressImageGateway interface {
+	PullImageReferenceWithProgress(context.Context, string, func(ImagePullProgress)) error
+}
+
 type ImageManager struct {
-	gateway ImageGateway
-	hubHTTP *http.Client
-	now     func() time.Time
-	timeout time.Duration
+	gateway            ImageGateway
+	hubHTTP            *http.Client
+	hubRepositoryMu    sync.Mutex
+	hubRepositoryCache map[string]hubRepositoryCacheEntry
+	now                func() time.Time
+	timeout            time.Duration
 }
 
 func NewImageManager(gateway ImageGateway) *ImageManager {
@@ -114,9 +129,10 @@ func NewImageManager(gateway ImageGateway) *ImageManager {
 		gateway = unavailableImageGateway{}
 	}
 	return &ImageManager{
-		gateway: gateway,
-		now:     time.Now,
-		timeout: imageOperationTimeout,
+		gateway:            gateway,
+		hubRepositoryCache: make(map[string]hubRepositoryCacheEntry),
+		now:                time.Now,
+		timeout:            imageOperationTimeout,
 	}
 }
 
@@ -164,7 +180,10 @@ func (m *ImageManager) List(ctx context.Context) (ImageInventory, error) {
 
 func (m *ImageManager) Search(ctx context.Context, request HubSearchRequest) (HubSearchResult, error) {
 	query := strings.TrimSpace(request.Query)
-	if query == "" || len(query) > 120 || request.Page < 1 || request.PageSize < 1 || request.PageSize > 50 {
+	if request.Sort == "" {
+		request.Sort = "relevance"
+	}
+	if query == "" || len(query) > 120 || request.Page < 1 || request.PageSize < 1 || request.PageSize > 50 || !validHubSearchSort(request.Sort) {
 		return HubSearchResult{}, coded("DOCKER_HUB_QUERY_INVALID", errors.New("image search request is invalid"))
 	}
 	limit := request.Page * request.PageSize
@@ -186,21 +205,61 @@ func (m *ImageManager) Search(ctx context.Context, request HubSearchRequest) (Hu
 	if end > len(results) {
 		end = len(results)
 	}
+	pageResults := append([]HubRepository(nil), results[start:end]...)
+	m.enrichHubRepositories(ctx, pageResults)
+	sortHubRepositories(pageResults, request.Sort)
 	return HubSearchResult{
 		Count: int64(len(results)), Page: request.Page, PageSize: request.PageSize,
-		Results: append([]HubRepository(nil), results[start:end]...),
+		Results: pageResults,
 	}, nil
 }
 
+func validHubSearchSort(value string) bool {
+	switch value {
+	case "relevance", "stars", "pulls", "updated":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortHubRepositories(repositories []HubRepository, order string) {
+	if order == "relevance" {
+		return
+	}
+	sort.SliceStable(repositories, func(left, right int) bool {
+		switch order {
+		case "stars":
+			return repositories[left].StarCount > repositories[right].StarCount
+		case "pulls":
+			return repositories[left].PullCount > repositories[right].PullCount
+		case "updated":
+			return repositories[left].LastUpdated > repositories[right].LastUpdated
+		default:
+			return false
+		}
+	})
+}
+
 func (m *ImageManager) Pull(ctx context.Context, request ImagePullRequest) (ImagePullResult, error) {
+	return m.PullWithProgress(ctx, request, nil)
+}
+
+func (m *ImageManager) PullWithProgress(ctx context.Context, request ImagePullRequest, onProgress func(ImagePullProgress)) (ImagePullResult, error) {
 	reference, err := normalizeImageReference(request.Reference)
 	if err != nil {
 		return ImagePullResult{}, err
 	}
 	operationContext, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
-	if err := m.gateway.PullImageReference(operationContext, reference); err != nil {
-		return ImagePullResult{}, coded("DOCKER_IMAGE_PULL_FAILED", err)
+	var pullError error
+	if gateway, ok := m.gateway.(progressImageGateway); ok && onProgress != nil {
+		pullError = gateway.PullImageReferenceWithProgress(operationContext, reference, onProgress)
+	} else {
+		pullError = m.gateway.PullImageReference(operationContext, reference)
+	}
+	if pullError != nil {
+		return ImagePullResult{}, coded("DOCKER_IMAGE_PULL_FAILED", pullError)
 	}
 	return ImagePullResult{Reference: reference, Completed: true}, nil
 }
@@ -286,6 +345,28 @@ func (g *mobyImageGateway) PullImageReference(ctx context.Context, reference str
 	}
 	defer response.Close()
 	return response.Wait(ctx)
+}
+
+func (g *mobyImageGateway) PullImageReferenceWithProgress(ctx context.Context, reference string, onProgress func(ImagePullProgress)) error {
+	response, err := g.client.ImagePull(ctx, reference, client.ImagePullOptions{})
+	if err != nil {
+		return err
+	}
+	for message, streamError := range response.JSONMessages(ctx) {
+		if streamError != nil {
+			return streamError
+		}
+		if message.Error != nil {
+			return message.Error
+		}
+		progress := ImagePullProgress{LayerID: message.ID, Status: message.Status}
+		if message.Progress != nil {
+			progress.Current = message.Progress.Current
+			progress.Total = message.Progress.Total
+		}
+		onProgress(progress)
+	}
+	return nil
 }
 
 func (g *mobyImageGateway) RemoveImage(ctx context.Context, imageID string) error {

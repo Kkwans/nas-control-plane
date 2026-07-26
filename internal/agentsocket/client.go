@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"time"
 
@@ -101,6 +102,33 @@ func CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inve
 		return docker.Inventory{}, rpcError(err)
 	}
 	return decodeDockerInventory(response)
+}
+
+func ProbeWeb(ctx context.Context, socketPath string, targetURL string) (WebProbeResult, error) {
+	if err := ctx.Err(); err != nil {
+		return WebProbeResult{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return WebProbeResult{}, err
+	}
+	defer connection.Close()
+	request, err := structpb.NewStruct(map[string]any{"url": targetURL})
+	if err != nil {
+		return WebProbeResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentWebProbeServiceClient(connection).Probe(ctx, request)
+	if err != nil {
+		return WebProbeResult{}, rpcError(err)
+	}
+	fields := response.GetFields()
+	return WebProbeResult{
+		URL:         fields["url"].GetStringValue(),
+		Title:       fields["title"].GetStringValue(),
+		IconURL:     fields["iconUrl"].GetStringValue(),
+		ContentType: fields["contentType"].GetStringValue(),
+		StatusCode:  int(fields["statusCode"].GetNumberValue()),
+	}, nil
 }
 
 func ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
@@ -233,7 +261,7 @@ func SearchDockerHub(ctx context.Context, socketPath string, request docker.HubS
 	}
 	defer connection.Close()
 	payload, err := structpb.NewStruct(map[string]any{
-		"query": request.Query, "page": request.Page, "page_size": request.PageSize,
+		"query": request.Query, "page": request.Page, "page_size": request.PageSize, "sort": request.Sort,
 	})
 	if err != nil {
 		return docker.HubSearchResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
@@ -306,6 +334,47 @@ func PullDockerImage(ctx context.Context, socketPath string, request docker.Imag
 		return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull result is incomplete"))
 	}
 	return result, nil
+}
+
+func PullDockerImageWithProgress(ctx context.Context, socketPath string, request docker.ImagePullRequest, onProgress func(docker.ImagePullProgress)) (docker.ImagePullResult, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ImagePullResult{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"reference": request.Reference})
+	if err != nil {
+		return docker.ImagePullResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	stream, err := NewAgentDockerImagesServiceClient(connection).PullImageStream(ctx, payload)
+	if err != nil {
+		return docker.ImagePullResult{}, rpcError(err)
+	}
+	for {
+		message, receiveError := stream.Recv()
+		if errors.Is(receiveError, io.EOF) {
+			break
+		}
+		if receiveError != nil {
+			return docker.ImagePullResult{}, rpcError(receiveError)
+		}
+		fields := message.GetFields()
+		if fields["type"].GetStringValue() == "completed" {
+			return docker.ImagePullResult{
+				Reference: fields["reference"].GetStringValue(),
+				Completed: fields["completed"].GetBoolValue(),
+			}, nil
+		}
+		if onProgress != nil {
+			onProgress(docker.ImagePullProgress{
+				LayerID: fields["layerId"].GetStringValue(),
+				Status:  fields["status"].GetStringValue(),
+				Current: int64(fields["current"].GetNumberValue()),
+				Total:   int64(fields["total"].GetNumberValue()),
+			})
+		}
+	}
+	return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull stream ended without completion"))
 }
 
 func RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {

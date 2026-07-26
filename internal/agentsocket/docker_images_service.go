@@ -19,6 +19,10 @@ type DockerImageProvider interface {
 	Remove(context.Context, docker.ImageRemoveRequest) (docker.ImageRemoveResult, error)
 }
 
+type DockerImageProgressProvider interface {
+	PullWithProgress(context.Context, docker.ImagePullRequest, func(docker.ImagePullProgress)) (docker.ImagePullResult, error)
+}
+
 func (s *dockerImageService) SearchImages(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	if s.provider == nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_DOCKER_IMAGES_UNAVAILABLE")
@@ -31,7 +35,8 @@ func (s *dockerImageService) SearchImages(ctx context.Context, request *structpb
 	if err != nil {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "DOCKER_HUB_QUERY_INVALID")
 	}
-	result, err := s.provider.Search(ctx, docker.HubSearchRequest{Query: query, Page: page, PageSize: pageSize})
+	sortOrder, _ := request.AsMap()["sort"].(string)
+	result, err := s.provider.Search(ctx, docker.HubSearchRequest{Query: query, Page: page, PageSize: pageSize, Sort: sortOrder})
 	if err != nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_HUB_SEARCH_FAILED")
 	}
@@ -98,6 +103,36 @@ func (s *dockerImageService) PullImage(ctx context.Context, request *structpb.St
 		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_IMAGE_PULL_FAILED")
 	}
 	return dashboardStruct(result, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
+}
+
+func (s *dockerImageService) PullImageStream(request *structpb.Struct, stream AgentDockerImagesPullStreamServer) error {
+	provider, ok := s.provider.(DockerImageProgressProvider)
+	if !ok {
+		return grpcstatus.Error(codes.Unimplemented, "DOCKER_IMAGE_PULL_PROGRESS_UNAVAILABLE")
+	}
+	reference, err := requiredString(request, "reference")
+	if err != nil {
+		return grpcstatus.Error(codes.InvalidArgument, "DOCKER_IMAGE_PULL_INVALID")
+	}
+	result, err := provider.PullWithProgress(stream.Context(), docker.ImagePullRequest{Reference: reference}, func(progress docker.ImagePullProgress) {
+		message, conversionError := dashboardStruct(map[string]any{
+			"type": "progress", "layerId": progress.LayerID, "status": progress.Status,
+			"current": progress.Current, "total": progress.Total,
+		}, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
+		if conversionError == nil {
+			_ = stream.Send(message)
+		}
+	})
+	if err != nil {
+		return grpcstatus.Error(codes.Unavailable, "DOCKER_IMAGE_PULL_FAILED")
+	}
+	message, err := dashboardStruct(map[string]any{
+		"type": "completed", "reference": result.Reference, "completed": result.Completed,
+	}, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
+	if err != nil {
+		return grpcstatus.Error(codes.Internal, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
+	}
+	return stream.Send(message)
 }
 
 func (s *dockerImageService) RemoveImage(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {

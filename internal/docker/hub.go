@@ -9,10 +9,28 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const dockerHubAPIBase = "https://hub.docker.com/v2"
+const hubRepositoryCacheTTL = 5 * time.Minute
+
+type hubRepositoryCacheEntry struct {
+	Repository HubRepository
+	ExpiresAt  time.Time
+}
+
+type hubRepositoryWire struct {
+	Name              string `json:"name"`
+	Namespace         string `json:"namespace"`
+	Description       string `json:"description"`
+	StarCount         int64  `json:"star_count"`
+	PullCount         int64  `json:"pull_count"`
+	LastUpdated       string `json:"last_updated"`
+	RepositoryType    string `json:"repository_type"`
+	StatusDescription string `json:"status_description"`
+}
 
 type hubTagsWire struct {
 	Count   int64 `json:"count"`
@@ -91,6 +109,89 @@ func (m *ImageManager) Tags(ctx context.Context, request HubTagsRequest) (HubTag
 		})
 	}
 	return HubTagsResult{Count: payload.Count, Page: request.Page, PageSize: request.PageSize, Results: items}, nil
+}
+
+func (m *ImageManager) enrichHubRepositories(ctx context.Context, repositories []HubRepository) {
+	const concurrency = 6
+	sem := make(chan struct{}, concurrency)
+	var wait sync.WaitGroup
+	for index := range repositories {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			details, err := m.hubRepository(ctx, repositories[index].Namespace, repositories[index].Name)
+			if err != nil {
+				return
+			}
+			details.Official = repositories[index].Official
+			details.Publisher = repositories[index].Publisher
+			if details.Description == "" {
+				details.Description = repositories[index].Description
+			}
+			repositories[index] = details
+		}()
+	}
+	wait.Wait()
+}
+
+func (m *ImageManager) hubRepository(ctx context.Context, namespace, repository string) (HubRepository, error) {
+	cacheKey := namespace + "/" + repository
+	now := m.now().UTC()
+	m.hubRepositoryMu.Lock()
+	cached, exists := m.hubRepositoryCache[cacheKey]
+	m.hubRepositoryMu.Unlock()
+	if exists && cached.ExpiresAt.After(now) {
+		return cached.Repository, nil
+	}
+	endpoint := fmt.Sprintf(
+		"%s/namespaces/%s/repositories/%s",
+		dockerHubAPIBase,
+		url.PathEscape(namespace),
+		url.PathEscape(repository),
+	)
+	outbound, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return HubRepository{}, err
+	}
+	outbound.Header.Set("Accept", "application/json")
+	outbound.Header.Set("User-Agent", "NAS-Control-Plane/1")
+	result, err := m.hubClient().Do(outbound)
+	if err != nil {
+		return HubRepository{}, err
+	}
+	defer result.Body.Close()
+	if result.StatusCode != http.StatusOK {
+		return HubRepository{}, fmt.Errorf("docker hub returned %s", result.Status)
+	}
+	var payload hubRepositoryWire
+	if err := json.NewDecoder(result.Body).Decode(&payload); err != nil {
+		return HubRepository{}, err
+	}
+	details := HubRepository{
+		Name:              payload.Name,
+		Namespace:         payload.Namespace,
+		Description:       strings.TrimSpace(payload.Description),
+		StarCount:         payload.StarCount,
+		PullCount:         payload.PullCount,
+		Publisher:         payload.Namespace,
+		LastUpdated:       payload.LastUpdated,
+		RepositoryType:    payload.RepositoryType,
+		StatusDescription: payload.StatusDescription,
+	}
+	m.hubRepositoryMu.Lock()
+	m.hubRepositoryCache[cacheKey] = hubRepositoryCacheEntry{
+		Repository: details,
+		ExpiresAt:  now.Add(hubRepositoryCacheTTL),
+	}
+	m.hubRepositoryMu.Unlock()
+	return details, nil
 }
 
 func hubHTTPClient(proxyAddress string) (*http.Client, error) {

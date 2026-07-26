@@ -107,6 +107,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))
+	RegisterAgentWebProbeServiceServer(grpcServer, newWebProbeService())
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {

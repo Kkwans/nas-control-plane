@@ -30,17 +30,35 @@ func (api *handler) pullDockerImage(response http.ResponseWriter, request *http.
 		return
 	}
 	job := api.jobs.create("docker-image-pull", input.Reference)
-	go func() {
-		api.jobs.update(job.ID, "running", "正在从镜像仓库拉取", "", 10)
+	go api.runImagePull(job.ID, input)
+	writeJSON(response, http.StatusAccepted, job)
+}
+
+func (api *handler) runImagePull(jobID string, input docker.ImagePullRequest) {
+	api.jobs.pullSlots <- struct{}{}
+	defer func() { <-api.jobs.pullSlots }()
+	api.jobs.update(jobID, "running", "正在连接镜像仓库", "", 1)
+	requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
+	defer cancel()
+	if client, ok := api.dockerImages.(DockerImageProgressAgentClient); ok {
+		_, err := client.PullDockerImageWithProgress(requestContext, api.agentSocketPath, input, func(progress docker.ImagePullProgress) {
+			api.jobs.updatePullProgress(jobID, jobLayer{
+				ID: progress.LayerID, Status: progress.Status, Current: progress.Current, Total: progress.Total,
+			})
+		})
+		if err != nil {
+			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
+			return
+		}
+	} else {
 		requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
 		defer cancel()
 		if _, err := api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input); err != nil {
-			api.jobs.update(job.ID, "failed", "镜像拉取失败", "请检查镜像地址、标签和仓库连接。", 100)
+			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
 			return
 		}
-		api.jobs.update(job.ID, "completed", "镜像拉取完成", "", 100)
-	}()
-	writeJSON(response, http.StatusAccepted, job)
+	}
+	api.jobs.update(jobID, "completed", "镜像拉取完成", "", 100)
 }
 
 func (api *handler) removeDockerImage(response http.ResponseWriter, request *http.Request) {

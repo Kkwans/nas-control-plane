@@ -44,12 +44,27 @@ func DefaultPreferences() Preferences {
 		RefreshIntervalSeconds: DefaultRefreshIntervalSeconds,
 		InterfaceDensity:       "comfortable",
 		BaseFontSize:           15,
-		PageSize:               25,
+		PageSize:               10,
 		SidebarDefault:         "collapsed",
 		LinkOpenMode:           "new-tab",
 		SiteDefaultProtocol:    "http",
 		ChineseFont:            "system",
 		LatinFont:              "system",
+	}
+}
+
+type ListPreference struct {
+	ListKey       string `json:"listKey"`
+	PageSize      int    `json:"pageSize"`
+	SortKey       string `json:"sortKey"`
+	SortDirection string `json:"sortDirection"`
+}
+
+func DefaultListPreference(listKey string) ListPreference {
+	return ListPreference{
+		ListKey:       strings.TrimSpace(listKey),
+		PageSize:      10,
+		SortDirection: "asc",
 	}
 }
 
@@ -70,6 +85,11 @@ type SiteProfile struct {
 	SortOrder     int        `json:"sortOrder"`
 	LastVisitedAt *time.Time `json:"lastVisitedAt"`
 	Hidden        bool       `json:"hidden"`
+	Source        string     `json:"source"`
+	Ignored       bool       `json:"ignored"`
+	DetectedTitle string     `json:"detectedTitle"`
+	AutoIconURL   string     `json:"autoIconUrl"`
+	LocalIconName string     `json:"localIconName"`
 }
 
 type ComposeDraft struct {
@@ -88,6 +108,23 @@ type ComposeRevision struct {
 	ContentHash string    `json:"contentHash"`
 	BackupPath  string    `json:"backupPath"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type JobRecord struct {
+	ID              string    `json:"id"`
+	Type            string    `json:"type"`
+	Status          string    `json:"status"`
+	Reference       string    `json:"reference"`
+	Message         string    `json:"message"`
+	Progress        int       `json:"progress"`
+	Error           string    `json:"error"`
+	DownloadedBytes int64     `json:"downloadedBytes"`
+	TotalBytes      int64     `json:"totalBytes"`
+	SpeedBytes      int64     `json:"speedBytes"`
+	LayersJSON      string    `json:"layersJson"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	CompletedAt     time.Time `json:"completedAt"`
 }
 
 type MetricSample struct {
@@ -223,7 +260,7 @@ func validatePreferences(preferences Preferences) error {
 	if preferences.BaseFontSize < 13 || preferences.BaseFontSize > 18 {
 		return errors.New("base font size is out of range")
 	}
-	if preferences.PageSize != 20 && preferences.PageSize != 25 && preferences.PageSize != 50 && preferences.PageSize != 100 {
+	if preferences.PageSize < 1 || preferences.PageSize > 200 {
 		return errors.New("page size is invalid")
 	}
 	if !oneOf(preferences.InterfaceDensity, "comfortable", "compact") ||
@@ -235,6 +272,73 @@ func validatePreferences(preferences Preferences) error {
 		return errors.New("preference option is invalid")
 	}
 	return nil
+}
+
+func (s *Store) ListPreference(ctx context.Context, userID int64, listKey string) (ListPreference, error) {
+	preference := DefaultListPreference(listKey)
+	if err := validateListPreference(preference); err != nil {
+		return ListPreference{}, err
+	}
+	err := s.database.QueryRowContext(ctx, `
+		SELECT page_size, sort_key, sort_direction
+		FROM list_preferences
+		WHERE user_id = ? AND list_key = ?
+	`, userID, preference.ListKey).Scan(&preference.PageSize, &preference.SortKey, &preference.SortDirection)
+	if errors.Is(err, sql.ErrNoRows) {
+		return preference, nil
+	}
+	return preference, err
+}
+
+func (s *Store) UpdateListPreference(ctx context.Context, userID int64, preference ListPreference) (ListPreference, error) {
+	preference.ListKey = strings.TrimSpace(preference.ListKey)
+	preference.SortKey = strings.TrimSpace(preference.SortKey)
+	preference.SortDirection = strings.ToLower(strings.TrimSpace(preference.SortDirection))
+	if err := validateListPreference(preference); err != nil {
+		return ListPreference{}, err
+	}
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO list_preferences (
+			user_id, list_key, page_size, sort_key, sort_direction, updated_at_unix
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, list_key) DO UPDATE SET
+			page_size = excluded.page_size,
+			sort_key = excluded.sort_key,
+			sort_direction = excluded.sort_direction,
+			updated_at_unix = excluded.updated_at_unix
+	`, userID, preference.ListKey, preference.PageSize, preference.SortKey, preference.SortDirection, s.now().UTC().Unix())
+	if err != nil {
+		return ListPreference{}, err
+	}
+	return preference, nil
+}
+
+func validateListPreference(preference ListPreference) error {
+	if !validPreferenceKey(preference.ListKey) || preference.PageSize < 1 || preference.PageSize > 200 {
+		return errors.New("list preference is invalid")
+	}
+	if preference.SortKey != "" && !validPreferenceKey(preference.SortKey) {
+		return errors.New("list sort key is invalid")
+	}
+	if preference.SortDirection != "asc" && preference.SortDirection != "desc" {
+		return errors.New("list sort direction is invalid")
+	}
+	return nil
+}
+
+func validPreferenceKey(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') ||
+			(index > 0 && (character == '.' || character == '-' || character == '_')) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func oneOf(value string, allowed ...string) bool {
@@ -289,7 +393,8 @@ func (s *Store) SetDatabaseProjectPreference(ctx context.Context, preference Dat
 func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 	rows, err := s.database.QueryContext(ctx, `
 		SELECT project_id, name, description, icon_url, category, primary_port,
-			launch_url, favorite, sort_order, last_visited_at_unix, hidden
+			launch_url, favorite, sort_order, last_visited_at_unix, hidden,
+			source, ignored, detected_title, auto_icon_url, local_icon_name
 		FROM site_profiles
 		ORDER BY updated_at_unix ASC
 	`)
@@ -314,6 +419,11 @@ func (s *Store) SiteProfiles(ctx context.Context) ([]SiteProfile, error) {
 			&profile.SortOrder,
 			&lastVisitedAt,
 			&profile.Hidden,
+			&profile.Source,
+			&profile.Ignored,
+			&profile.DetectedTitle,
+			&profile.AutoIconURL,
+			&profile.LocalIconName,
 		); err != nil {
 			return nil, err
 		}
@@ -336,11 +446,21 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	profile.IconURL = strings.TrimSpace(profile.IconURL)
 	profile.Category = strings.TrimSpace(profile.Category)
 	profile.LaunchURL = strings.TrimSpace(profile.LaunchURL)
+	profile.Source = strings.ToLower(strings.TrimSpace(profile.Source))
+	profile.DetectedTitle = strings.TrimSpace(profile.DetectedTitle)
+	profile.AutoIconURL = strings.TrimSpace(profile.AutoIconURL)
+	profile.LocalIconName = strings.TrimSpace(profile.LocalIconName)
 	if profile.ProjectID == "" || len(profile.ProjectID) > 256 || profile.Name == "" || len(profile.Name) > 120 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
-	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
+	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || len(profile.DetectedTitle) > 200 || len(profile.AutoIconURL) > 2048 || len(profile.LocalIconName) > 160 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
 		return SiteProfile{}, errors.New("site profile is invalid")
+	}
+	if profile.Source == "" {
+		profile.Source = "edited"
+	}
+	if profile.Source != "auto" && profile.Source != "manual" && profile.Source != "edited" {
+		return SiteProfile{}, errors.New("site source is invalid")
 	}
 	if profile.LaunchURL != "" {
 		parsed, err := url.ParseRequestURI(profile.LaunchURL)
@@ -361,9 +481,10 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	_, err := s.database.ExecContext(ctx, `
 		INSERT INTO site_profiles (
 			project_id, name, description, icon_url, category, primary_port,
-			launch_url, favorite, sort_order, last_visited_at_unix, hidden, updated_at_unix
+			launch_url, favorite, sort_order, last_visited_at_unix, hidden,
+			source, ignored, detected_title, auto_icon_url, local_icon_name, updated_at_unix
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project_id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
@@ -374,13 +495,43 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 			favorite = excluded.favorite,
 			sort_order = excluded.sort_order,
 			hidden = excluded.hidden,
+			source = excluded.source,
+			ignored = excluded.ignored,
+			detected_title = excluded.detected_title,
+			auto_icon_url = excluded.auto_icon_url,
+			local_icon_name = excluded.local_icon_name,
 			updated_at_unix = excluded.updated_at_unix
 	`, profile.ProjectID, profile.Name, profile.Description, profile.IconURL, profile.Category, profile.PrimaryPort,
-		profile.LaunchURL, profile.Favorite, profile.SortOrder, lastVisitedAtUnix, profile.Hidden, s.now().UTC().Unix())
+		profile.LaunchURL, profile.Favorite, profile.SortOrder, lastVisitedAtUnix, profile.Hidden,
+		profile.Source, profile.Ignored, profile.DetectedTitle, profile.AutoIconURL, profile.LocalIconName, s.now().UTC().Unix())
 	if err != nil {
 		return SiteProfile{}, err
 	}
 	return profile, nil
+}
+
+func (s *Store) DeleteSiteProfile(ctx context.Context, siteID string) error {
+	siteID = strings.TrimSpace(siteID)
+	if siteID == "" || len(siteID) > 256 {
+		return errors.New("site id is invalid")
+	}
+	_, err := s.database.ExecContext(ctx, `DELETE FROM site_profiles WHERE project_id = ?`, siteID)
+	return err
+}
+
+func (s *Store) SetSiteIgnored(ctx context.Context, siteID string, ignored bool) error {
+	siteID = strings.TrimSpace(siteID)
+	if siteID == "" || len(siteID) > 256 {
+		return errors.New("site id is invalid")
+	}
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO site_profiles (project_id, name, source, ignored, updated_at_unix)
+		VALUES (?, '', 'auto', ?, ?)
+		ON CONFLICT(project_id) DO UPDATE SET
+			ignored = excluded.ignored,
+			updated_at_unix = excluded.updated_at_unix
+	`, siteID, ignored, s.now().UTC().Unix())
+	return err
 }
 
 func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Time, error) {
@@ -397,6 +548,82 @@ func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Tim
 			updated_at_unix = excluded.updated_at_unix
 	`, projectID, visitedAt.Unix(), visitedAt.Unix())
 	return visitedAt, err
+}
+
+func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
+	completedAt := int64(0)
+	if !job.CompletedAt.IsZero() {
+		completedAt = job.CompletedAt.UTC().Unix()
+	}
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO jobs (
+			id, type, status, reference, message, error, progress,
+			downloaded_bytes, total_bytes, speed_bytes, layers_json,
+			created_at_unix, updated_at_unix, completed_at_unix
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			status = excluded.status,
+			message = excluded.message,
+			error = excluded.error,
+			progress = excluded.progress,
+			downloaded_bytes = excluded.downloaded_bytes,
+			total_bytes = excluded.total_bytes,
+			speed_bytes = excluded.speed_bytes,
+			layers_json = excluded.layers_json,
+			updated_at_unix = excluded.updated_at_unix,
+			completed_at_unix = excluded.completed_at_unix
+	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
+		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
+		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt)
+	return err
+}
+
+func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, error) {
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.database.QueryContext(ctx, `
+		SELECT id, type, status, reference, message, error, progress,
+			downloaded_bytes, total_bytes, speed_bytes, layers_json,
+			created_at_unix, updated_at_unix, completed_at_unix
+		FROM jobs
+		WHERE (? = '' OR type = ?)
+		ORDER BY created_at_unix DESC
+		LIMIT ?
+	`, kind, kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]JobRecord, 0)
+	for rows.Next() {
+		var job JobRecord
+		var createdAt, updatedAt, completedAt int64
+		if err := rows.Scan(
+			&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error, &job.Progress,
+			&job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
+			&createdAt, &updatedAt, &completedAt,
+		); err != nil {
+			return nil, err
+		}
+		job.CreatedAt = time.Unix(createdAt, 0).UTC()
+		job.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		if completedAt > 0 {
+			job.CompletedAt = time.Unix(completedAt, 0).UTC()
+		}
+		result = append(result, job)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) MarkRunningJobsInterrupted(ctx context.Context) error {
+	now := s.now().UTC().Unix()
+	_, err := s.database.ExecContext(ctx, `
+		UPDATE jobs
+		SET status = 'interrupted', message = '服务重启，任务已中断', updated_at_unix = ?, completed_at_unix = ?
+		WHERE status IN ('queued', 'running')
+	`, now, now)
+	return err
 }
 
 func (s *Store) ComposeDraft(ctx context.Context, projectID, configPath string) (ComposeDraft, error) {
@@ -500,6 +727,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			archived INTEGER NOT NULL DEFAULT 0,
 			updated_at_unix INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS list_preferences (
+			user_id INTEGER NOT NULL,
+			list_key TEXT NOT NULL,
+			page_size INTEGER NOT NULL DEFAULT 10,
+			sort_key TEXT NOT NULL DEFAULT '',
+			sort_direction TEXT NOT NULL DEFAULT 'asc',
+			updated_at_unix INTEGER NOT NULL,
+			PRIMARY KEY (user_id, list_key)
+		)`,
 		`CREATE TABLE IF NOT EXISTS site_profiles (
 			project_id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -538,6 +774,23 @@ func (s *Store) migrate(ctx context.Context) error {
 			network_receive_bytes INTEGER NOT NULL,
 			network_transmit_bytes INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS jobs (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			reference TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			progress INTEGER NOT NULL DEFAULT 0,
+			downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+			total_bytes INTEGER NOT NULL DEFAULT 0,
+			speed_bytes INTEGER NOT NULL DEFAULT 0,
+			layers_json TEXT NOT NULL DEFAULT '[]',
+			created_at_unix INTEGER NOT NULL,
+			updated_at_unix INTEGER NOT NULL,
+			completed_at_unix INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS jobs_type_created ON jobs(type, created_at_unix DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {
@@ -552,6 +805,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		{name: "favorite", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "sort_order", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_visited_at_unix", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "source", definition: "TEXT NOT NULL DEFAULT 'edited'"},
+		{name: "ignored", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "detected_title", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "auto_icon_url", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "local_icon_name", definition: "TEXT NOT NULL DEFAULT ''"},
 	}
 	preferenceColumns := []struct {
 		name       string
