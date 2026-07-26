@@ -8,9 +8,11 @@ import { NcpApiError, requestContainerAction, requestContainerLogs, type Contain
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
 import ComposeEditorDrawer from '@/components/ComposeEditorDrawer.vue'
+import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { useListPreference } from '@/composables/useListPreference'
 import { projectStateTone } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 
@@ -34,6 +36,9 @@ const logContainerName = ref('')
 const logs = ref<ContainerLogsResult | null>(null)
 const composeEditorOpen = ref(false)
 const projectPage = ref(1)
+const { pageSize: projectPageSize } = useListPreference('docker.projects')
+const { pageSize: containerPageSize } = useListPreference('docker.containers')
+const { pageSize: imagePageSize } = useListPreference('docker.images.local')
 
 const allProjects = computed(() => systemStore.services)
 const projects = computed(() => {
@@ -43,11 +48,10 @@ const projects = computed(() => {
     return matchesState && (!term || project.name.toLowerCase().includes(term) || project.workingDirectory.toLowerCase().includes(term))
   })
 })
-const pageSize = computed(() => systemStore.preferences.pageSize)
-const projectPageCount = computed(() => Math.max(1, Math.ceil(projects.value.length / pageSize.value)))
+const projectPageCount = computed(() => Math.max(1, Math.ceil(projects.value.length / projectPageSize.value)))
 const pagedProjects = computed(() => {
-  const start = (projectPage.value - 1) * pageSize.value
-  return projects.value.slice(start, start + pageSize.value)
+  const start = (projectPage.value - 1) * projectPageSize.value
+  return projects.value.slice(start, start + projectPageSize.value)
 })
 const inventory = computed(() => systemStore.inventory)
 const selectedProject = computed(() => allProjects.value.find((project) => project.id === route.query.project) ?? null)
@@ -115,7 +119,7 @@ async function openLogs(container: { id: string; name: string }) {
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
 })
-watch([query, stateFilter, pageSize], () => { projectPage.value = 1 })
+watch([query, stateFilter, projectPageSize], () => { projectPage.value = 1 })
 watch(projectPageCount, (count) => {
   if (projectPage.value > count) projectPage.value = count
 })
@@ -179,8 +183,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <span class="row-detail">详情<ChevronRight :size="17" /></span>
       </div>
       <div v-if="!projects.length" class="table-empty">没有匹配的 Docker 项目。</div>
-      <footer v-else-if="projectPageCount > 1" class="resource-pagination">
-        <span>共 {{ projects.length }} 个项目 · 每页 {{ pageSize }} 项</span>
+      <footer v-else class="resource-pagination">
+        <ListPageSizeControl list-key="docker.projects" />
         <div>
           <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
           <strong>{{ projectPage }} / {{ projectPageCount }}</strong>
@@ -206,8 +210,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <button type="button" @click="updateSelectedProject(project.id)">查看项目详情<ChevronRight :size="17" /></button>
       </article>
       <p v-if="!projects.length" class="table-empty panel">没有匹配的 Docker 项目。</p>
-      <footer v-else-if="projectPageCount > 1" class="resource-pagination panel">
-        <span>{{ projectPage }} / {{ projectPageCount }}</span>
+      <footer v-else class="resource-pagination panel">
+        <ListPageSizeControl list-key="docker.projects" />
         <div>
           <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
           <button type="button" :disabled="projectPage >= projectPageCount" @click="projectPage += 1">下一页</button>
@@ -221,7 +225,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       :query="query"
       :state-filter="containerStateFilter"
       :action-pending="actionPending"
-      :page-size="pageSize"
+      :page-size="containerPageSize"
       @action="performAction"
       @logs="openLogs"
     />
@@ -230,7 +234,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       v-else
       :query="query"
       :containers="inventory?.containers ?? []"
-      :page-size="pageSize"
+      :page-size="imagePageSize"
     />
 
     <ProjectDetailDrawer
@@ -270,7 +274,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .docker-table__head, .project-row { display: grid; grid-template-columns: minmax(210px,1.3fr) 108px 74px 180px minmax(170px,1fr) 78px; align-items: center; gap: 12px; }
 .docker-table__head { min-height: 46px; padding: 0 18px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; }
 .project-row { width: 100%; min-height: 70px; padding: 0 18px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); font-size: .86rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
-.project-row:hover { position: relative; z-index: 1; background: var(--ncp-surface-hover); box-shadow: inset 3px 0 0 var(--ncp-primary); }
+.project-row:hover { position: relative; z-index: 1; background: var(--ncp-surface-hover); }
+.docker-table__head>span:nth-child(2),.docker-table__head>span:nth-child(3),.docker-table__head>span:nth-child(4),.docker-table__head>span:nth-child(6),.project-row>:nth-child(2),.project-row>:nth-child(3),.project-row>:nth-child(4),.project-row>:nth-child(6){justify-self:center;text-align:center}
 .project-row:focus-visible{position:relative;z-index:2;outline-offset:-3px}
 .project-name { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .project-name>span { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }

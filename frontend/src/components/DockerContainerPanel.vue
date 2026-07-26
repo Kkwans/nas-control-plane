@@ -4,6 +4,7 @@ import { FileText, Play, RotateCcw, Square, Box } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
 import type { ContainerAction, DockerInventory } from '@/api/system'
+import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import StatusPill from '@/components/StatusPill.vue'
 
 type DockerContainer = DockerInventory['containers'][number]
@@ -108,8 +109,8 @@ function pending(containerId: string, action: ContainerAction) {
       </div>
     </div>
     <div v-if="!filteredContainers.length" class="table-empty">没有匹配的 Docker 容器。</div>
-    <footer v-else-if="pageCount > 1" class="container-pagination">
-      <span>共 {{ filteredContainers.length }} 个容器 · 每页 {{ pageSize }} 项</span>
+    <footer v-else class="container-pagination">
+      <ListPageSizeControl list-key="docker.containers" />
       <div>
         <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
         <strong>{{ page }} / {{ pageCount }}</strong>
@@ -140,8 +141,8 @@ function pending(containerId: string, action: ContainerAction) {
       </div>
     </article>
     <p v-if="!filteredContainers.length" class="table-empty panel">没有匹配的 Docker 容器。</p>
-    <footer v-else-if="pageCount > 1" class="container-pagination panel">
-      <span>{{ page }} / {{ pageCount }}</span>
+    <footer v-else class="container-pagination panel">
+      <ListPageSizeControl list-key="docker.containers" />
       <div>
         <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
         <button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
@@ -156,13 +157,14 @@ function pending(containerId: string, action: ContainerAction) {
 .container-table__head { min-height:42px; padding:0 16px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.75rem; font-weight:730; }
 .container-row { min-height:72px; padding:0 16px; border-top:1px solid var(--ncp-line); background:#fff; color:var(--ncp-text-muted); font-size:.76rem; transition:background-color var(--ncp-duration-fast); }
 .container-row:hover { background:var(--ncp-surface-hover); }
+.container-table__head>span:nth-child(2),.container-table__head>span:nth-child(5),.container-table__head>span:nth-child(6),.container-row>:nth-child(2),.container-row>:nth-child(5),.container-row>:nth-child(6){justify-self:center;text-align:center}
 .container-name { display:flex; min-width:0; align-items:center; gap:9px; }
 .container-name>span { display:grid; width:36px; height:36px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
 .container-name>div { display:grid; min-width:0; gap:1px; }
 .container-name strong,.cell-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .container-name strong { color:var(--ncp-text); font-size:.82rem; }
 .container-name small,.status-detail { color:var(--ncp-text-subtle); font-size:.62rem; }
-.container-row>div:nth-child(2) { display:grid; justify-items:start; gap:4px; }
+.container-row>div:nth-child(2) { display:grid; justify-items:center; gap:4px; }
 .mono { font-family:'JetBrains Mono Variable',monospace; font-size:.65rem; }
 .port-list { display:flex; align-items:center; gap:5px; }
 .port-list span { padding:4px 6px; border-radius:6px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); font-family:'JetBrains Mono Variable',monospace; font-size:.59rem; }

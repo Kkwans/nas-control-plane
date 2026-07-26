@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { EditorView, basicSetup } from 'codemirror'
+import { indentWithTab } from '@codemirror/commands'
+import { yaml } from '@codemirror/lang-yaml'
+import { keymap } from '@codemirror/view'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{ modelValue: string }>()
@@ -14,6 +17,8 @@ onMounted(() => {
     doc: props.modelValue,
     extensions: [
       basicSetup,
+      yaml(),
+      keymap.of([indentWithTab]),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
@@ -28,6 +33,11 @@ onMounted(() => {
         '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#f2f6ff' },
         '.cm-selectionBackground, ::selection': { backgroundColor: '#dce9ff !important' },
         '.cm-cursor': { borderLeftColor: '#2468d8' },
+        '.tok-keyword, .tok-bool, .tok-null': { color: '#7a4cc2' },
+        '.tok-string': { color: '#26785f' },
+        '.tok-number': { color: '#b2691d' },
+        '.tok-comment': { color: '#8795a8', fontStyle: 'italic' },
+        '.tok-propertyName, .tok-labelName': { color: '#245fa9' },
       }),
     ],
   })
@@ -44,5 +54,5 @@ onBeforeUnmount(() => editor?.destroy())
 <template><div ref="host" class="plain-code-editor" /></template>
 
 <style scoped>
-.plain-code-editor{height:100%;min-height:420px;overflow:hidden}.plain-code-editor :deep(.cm-editor){height:100%}
+.plain-code-editor{height:100%;min-height:0;overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px}.plain-code-editor :deep(.cm-editor){height:100%}
 </style>

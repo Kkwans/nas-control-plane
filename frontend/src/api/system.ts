@@ -169,13 +169,18 @@ interface DockerImageWireInventory {
 export interface JobSnapshot {
   id: string
   type: string
-  status: 'queued' | 'running' | 'completed' | 'failed'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
   reference?: string
   message: string
   progress: number
   error?: string
   createdAt: string
   updatedAt: string
+  completedAt?: string
+  downloadedBytes: number
+  totalBytes: number
+  speedBytes: number
+  layers: Record<string, { id: string; status: string; current: number; total: number }>
 }
 
 export interface DockerImageRemoveResult {
@@ -408,7 +413,7 @@ export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void)
         const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
         if (!isJobSnapshot(payload)) throw new Error('任务进度格式无效')
         onProgress(payload)
-        if (payload.status === 'completed' || payload.status === 'failed') {
+        if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'interrupted') {
           source.close()
           resolve(payload)
         }
@@ -422,6 +427,29 @@ export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void)
       reject(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
     }
   })
+}
+
+export async function requestJobs(type = '', fetcher: typeof fetch = fetch): Promise<JobSnapshot[]> {
+  const parameters = new URLSearchParams()
+  if (type) parameters.set('type', type)
+  const payload = await requestJson(
+    `/api/v1/jobs${parameters.size ? `?${parameters}` : ''}`,
+    {},
+    (value): value is { jobs: JobSnapshot[] } => isRecord(value) && Array.isArray(value.jobs) && value.jobs.every(isJobSnapshot),
+    fetcher,
+    'JOB_LIST_RESPONSE_INVALID',
+  )
+  return payload.jobs
+}
+
+export async function retryJob(jobId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
+  return requestJson(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST' },
+    isJobSnapshot,
+    fetcher,
+    'JOB_RETRY_RESPONSE_INVALID',
+  )
 }
 
 export async function removeDockerImage(
@@ -445,9 +473,10 @@ export async function searchDockerHub(
   query: string,
   page = 1,
   pageSize = 20,
+  sort = 'relevance',
   fetcher: typeof fetch = fetch,
 ): Promise<DockerHubSearchResult> {
-  const parameters = new URLSearchParams({ query, page: String(page), pageSize: String(pageSize) })
+  const parameters = new URLSearchParams({ query, page: String(page), pageSize: String(pageSize), sort })
   return requestJson(
     `/api/v1/docker/hub/search?${parameters}`,
     {},
@@ -700,11 +729,15 @@ function isJobSnapshot(value: unknown): value is JobSnapshot {
   return isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.type === 'string' &&
-    (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed') &&
+    (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed' || value.status === 'interrupted') &&
     typeof value.message === 'string' &&
     typeof value.progress === 'number' &&
     typeof value.createdAt === 'string' &&
-    typeof value.updatedAt === 'string'
+    typeof value.updatedAt === 'string' &&
+    typeof value.downloadedBytes === 'number' &&
+    typeof value.totalBytes === 'number' &&
+    typeof value.speedBytes === 'number' &&
+    isRecord(value.layers)
 }
 
 function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveResult {
