@@ -134,6 +134,17 @@ p { margin: 5px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   background: #fff;
   font-weight: 680;
 }
+.workspace-header__actions :deep(.el-button--primary),
+.workspace-toolbar :deep(.el-button--primary) {
+  border-color: var(--ncp-primary);
+  background: var(--ncp-primary);
+  color: #fff;
+}
+.workspace-header__actions :deep(.el-button--primary:hover),
+.workspace-toolbar :deep(.el-button--primary:hover) {
+  border-color: var(--ncp-primary-strong);
+  background: var(--ncp-primary-strong);
+}
 .workspace-toolbar :deep(.el-input__wrapper) {
   min-height: var(--ncp-control-height);
   border-radius: 10px;

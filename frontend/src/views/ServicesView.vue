@@ -249,10 +249,10 @@ function markIconFailed(site: Site) {
             <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
             <div class="row-actions">
               <ElTooltip :content="site.favorite ? '取消收藏' : '加入收藏'" placement="top">
-                <button :class="{ active: site.favorite }" type="button" @click="toggleFavorite(site)"><Star :size="16" :fill="site.favorite ? 'currentColor' : 'none'" /></button>
+                <button :class="{ active: site.favorite }" type="button" :aria-label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)"><Star :size="16" :fill="site.favorite ? 'currentColor' : 'none'" /></button>
               </ElTooltip>
               <ElTooltip content="编辑站点资料" placement="top">
-                <button type="button" @click="openEditor(site)"><Pencil :size="16" /></button>
+                <button type="button" :aria-label="`编辑 ${site.name}`" @click="openEditor(site)"><Pencil :size="16" /></button>
               </ElTooltip>
               <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
             </div>
