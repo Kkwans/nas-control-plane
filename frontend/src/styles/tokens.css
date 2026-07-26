@@ -52,6 +52,9 @@
   --ncp-duration-slow: 420ms;
   --ncp-touch-target: 44px;
   --ncp-control-height: 42px;
+  --ncp-resource-row-height: 66px;
+  --ncp-toolbar-height: 58px;
+  --ncp-section-gap: 16px;
   --ncp-base-font-size: 15px;
   --ncp-density-scale: 1;
   --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
@@ -72,4 +75,12 @@
   --el-border-color: var(--ncp-line);
   --el-border-radius-base: var(--ncp-radius-sm);
   --el-fill-color-blank: var(--ncp-surface);
+}
+
+html[data-density='compact'] {
+  --ncp-density-scale: .86;
+  --ncp-control-height: 38px;
+  --ncp-resource-row-height: 54px;
+  --ncp-toolbar-height: 50px;
+  --ncp-section-gap: 12px;
 }

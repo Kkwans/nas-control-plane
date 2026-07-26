@@ -6,10 +6,13 @@ import {
   Globe2,
   Image,
   Pencil,
+  Plus,
   RefreshCw,
   Search,
   Settings2,
   Star,
+  Trash2,
+  Upload,
 } from '@lucide/vue'
 import {
   ElButton,
@@ -19,6 +22,7 @@ import {
   ElInput,
   ElInputNumber,
   ElMessage,
+  ElMessageBox,
   ElOption,
   ElSelect,
   ElSwitch,
@@ -31,7 +35,7 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import { useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
 
-type SiteFilter = 'running' | 'all' | 'hidden'
+type SiteFilter = 'running' | 'all' | 'hidden' | 'ignored'
 
 const sitesStore = useSitesStore()
 const systemStore = useSystemStore()
@@ -45,12 +49,14 @@ const saving = ref(false)
 const failedIcons = ref(new Set<string>())
 const favoritePending = ref<string | null>(null)
 const draft = ref<SiteProfileInput>(emptyProfile())
+const iconInput = ref<HTMLInputElement | null>(null)
 
 const sites = computed(() => sitesStore.sites)
 const categoryOptions = computed(() => ['全部分类', ...new Set(sites.value.map((site) => site.category).filter(Boolean))])
 const filteredSites = computed(() => {
   const term = query.value.trim().toLowerCase()
   return sites.value.filter((site) => {
+    if (siteFilter.value === 'ignored') return false
     const matchesFilter = siteFilter.value === 'hidden'
       ? site.hidden
       : !site.hidden && (siteFilter.value === 'all' || site.state === 'running')
@@ -135,6 +141,7 @@ function siteHue(site: Site) {
 }
 
 function sourceLabel(site: Site) {
+  if (site.source === 'manual') return '手动添加'
   if (site.source === 'edited') return '自定义资料'
   if (site.source === 'built-in') return '内置项目资料'
   if (site.source === 'labels') return '项目标签'
@@ -158,17 +165,62 @@ function openEditor(site: Site) {
   editOpen.value = true
 }
 
+function openCreator() {
+  selectedSite.value = null
+  draft.value = emptyProfile()
+  editOpen.value = true
+}
+
 async function saveSite() {
-  if (!selectedSite.value) return
   saving.value = true
   try {
-    await sitesStore.save(selectedSite.value.projectId, draft.value)
+    if (selectedSite.value) await sitesStore.save(selectedSite.value.projectId, draft.value)
+    else await sitesStore.create(draft.value)
     editOpen.value = false
-    ElMessage.success('站点资料已保存')
+    ElMessage.success(selectedSite.value ? '站点资料已保存' : '站点已添加')
   } catch {
     ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
   } finally {
     saving.value = false
+  }
+}
+
+async function removeSite(site: Site) {
+  try {
+    await ElMessageBox.confirm(
+      site.source === 'manual'
+        ? `确定删除手动站点“${site.name}”吗？`
+        : `确定忽略自动识别的“${site.name}”吗？之后可在已忽略站点中恢复。`,
+      site.source === 'manual' ? '删除站点' : '忽略站点',
+      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
+    )
+    await sitesStore.remove(site.id)
+    ElMessage.success(site.source === 'manual' ? '站点已删除' : '站点已忽略')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('站点删除失败')
+  }
+}
+
+async function restoreIgnoredSite(siteId: string) {
+  try {
+    await sitesStore.restore(siteId)
+    ElMessage.success('站点已恢复，将在下次识别时重新出现')
+  } catch {
+    ElMessage.error('站点恢复失败')
+  }
+}
+
+async function uploadIcon(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file || !selectedSite.value) return
+  try {
+    await sitesStore.uploadIcon(selectedSite.value.id, file)
+    failedIcons.value.delete(selectedSite.value.id)
+    ElMessage.success('站点图标已上传')
+  } catch {
+    ElMessage.error('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件')
+  } finally {
+    if (iconInput.value) iconInput.value.value = ''
   }
 }
 
@@ -193,11 +245,12 @@ function markIconFailed(site: Site) {
   <div class="page workspace-page sites-page">
     <WorkspaceHeader title="站点中心" description="快速启动 NAS 上的 Web 应用，并维护入口资料" :icon="Globe2" :stats="stats">
       <template #actions>
+        <ElButton type="primary" @click="openCreator"><Plus :size="16" />添加站点</ElButton>
         <ElButton :loading="sitesStore.loading" @click="sitesStore.refresh"><RefreshCw :size="16" />重新识别</ElButton>
       </template>
       <template #filters>
         <div class="state-filter" aria-label="站点状态筛选">
-          <button v-for="item in [{ value: 'running', label: '运行中' }, { value: 'all', label: '全部站点' }, { value: 'hidden', label: '已隐藏' }]" :key="item.value" type="button" :class="{ active: siteFilter === item.value }" @click="siteFilter = item.value as SiteFilter">
+          <button v-for="item in [{ value: 'running', label: '运行中' }, { value: 'all', label: '全部站点' }, { value: 'hidden', label: '已隐藏' }, { value: 'ignored', label: '已忽略' }]" :key="item.value" type="button" :class="{ active: siteFilter === item.value }" @click="siteFilter = item.value as SiteFilter">
             {{ item.label }}
           </button>
         </div>
@@ -254,6 +307,9 @@ function markIconFailed(site: Site) {
               <ElTooltip content="编辑站点资料" placement="top">
                 <button type="button" :aria-label="`编辑 ${site.name}`" @click="openEditor(site)"><Pencil :size="16" /></button>
               </ElTooltip>
+              <ElTooltip :content="site.source === 'manual' ? '删除站点' : '忽略自动站点'" placement="top">
+                <button class="danger" type="button" :aria-label="`删除 ${site.name}`" @click="removeSite(site)"><Trash2 :size="16" /></button>
+              </ElTooltip>
               <a class="row-open" :class="{ disabled: site.state !== 'running' }" :href="site.state === 'running' ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
             </div>
           </article>
@@ -261,15 +317,23 @@ function markIconFailed(site: Site) {
       </div>
     </section>
 
-    <section v-if="!sitesStore.loading && !groupedSites.length" class="empty-sites panel">
+    <section v-if="siteFilter === 'ignored' && sitesStore.ignoredSites.length" class="directory-panel panel ignored-sites">
+      <article v-for="site in sitesStore.ignoredSites" :key="site.projectId" class="site-row">
+        <div class="site-identity"><div class="site-logo"><EyeOff :size="19" /></div><div><strong>{{ site.name || site.projectId }}</strong><p>{{ site.description || '自动识别站点已被忽略' }}</p></div></div>
+        <span class="site-source">已忽略</span>
+        <div class="row-actions"><ElButton @click="restoreIgnoredSite(site.projectId)">恢复识别</ElButton></div>
+      </article>
+    </section>
+
+    <section v-if="!sitesStore.loading && !groupedSites.length && (siteFilter !== 'ignored' || !sitesStore.ignoredSites.length)" class="empty-sites panel">
       <Globe2 :size="28" />
       <div>
-        <h2>{{ siteFilter === 'hidden' ? '没有隐藏的站点' : '没有匹配的站点' }}</h2>
+        <h2>{{ siteFilter === 'hidden' ? '没有隐藏的站点' : siteFilter === 'ignored' ? '没有已忽略站点' : '没有匹配的站点' }}</h2>
         <p>可调整筛选条件，或重新识别具有 Web 入口的 Docker 项目。</p>
       </div>
     </section>
 
-    <ElDrawer v-model="editOpen" class="site-editor" title="编辑站点资料" size="min(540px, 100%)" append-to-body>
+    <ElDrawer v-model="editOpen" class="site-editor" :title="selectedSite ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
@@ -293,13 +357,19 @@ function markIconFailed(site: Site) {
         <ElFormItem>
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
+          <div v-if="selectedSite" class="icon-upload">
+            <input ref="iconInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
+            <ElButton @click="iconInput?.click()"><Upload :size="15" />上传本地图标</ElButton>
+            <span>本地图标优先于 URL 和自动识别 favicon</span>
+          </div>
         </ElFormItem>
         <div class="editor-grid">
-          <ElFormItem label="主入口端口">
+          <ElFormItem v-if="selectedSite?.ports.length" label="主入口端口">
             <ElSelect v-model="draft.primaryPort">
               <ElOption v-for="port in selectedSite?.ports ?? []" :key="port" :label="String(port)" :value="port" />
             </ElSelect>
           </ElFormItem>
+          <ElFormItem v-else label="主入口端口"><ElInputNumber v-model="draft.primaryPort" :min="0" :max="65535" controls-position="right" /></ElFormItem>
           <ElFormItem label="目录排序">
             <ElInputNumber v-model="draft.sortOrder" :min="-100000" :max="100000" :step="10" controls-position="right" />
           </ElFormItem>
@@ -311,7 +381,7 @@ function markIconFailed(site: Site) {
       </ElForm>
       <template #footer>
         <ElButton @click="editOpen = false">取消</ElButton>
-        <ElButton type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />保存站点资料</ElButton>
+        <ElButton type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ selectedSite ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
     </ElDrawer>
   </div>
@@ -326,7 +396,10 @@ function markIconFailed(site: Site) {
 .launch-card--skeleton{grid-template-columns:52px 1fr;min-height:140px}.launch-card--skeleton>i{width:52px;height:52px}.launch-card--skeleton>div{display:grid;align-content:start;gap:12px}.launch-card--skeleton>div i:first-child{width:55%;height:15px}.launch-card--skeleton>div i:last-child{width:88%;height:42px}
 .directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 160px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;align-items:center;gap:3px;padding:0 10px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}
+.ignored-sites .site-row{grid-template-columns:minmax(280px,1fr) 100px 140px}
+.row-actions button.danger:hover{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
 .empty-sites{display:flex;min-height:220px;align-items:center;justify-content:center;gap:14px;color:var(--ncp-text-subtle)}.empty-sites h2{margin:0;color:var(--ncp-text);font-size:.95rem}.empty-sites p{margin:4px 0 0;font-size:.8rem}.editor-context{display:flex;align-items:center;gap:11px;margin:-5px 0 18px;padding:12px;border-radius:11px;background:var(--ncp-surface-quiet)}.editor-context>div:last-child{display:grid;min-width:0;gap:2px}.editor-context strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.editor-context span{color:var(--ncp-text-subtle);font-size:.74rem}.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.editor-grid :deep(.el-select),.editor-grid :deep(.el-input-number){width:100%}.field-label,.switch-grid label,.switch-grid span{display:flex;align-items:center;gap:6px}.switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.switch-grid label{min-height:48px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.switch-grid span{color:var(--ncp-text-muted);font-size:.8rem}
+.icon-upload{display:flex;align-items:center;gap:8px;margin-top:8px}.icon-upload input{display:none}.icon-upload span{color:var(--ncp-text-subtle);font-size:.72rem}
 @media(max-width:1480px){.launch-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:1280px){.launch-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.site-row{grid-template-columns:minmax(230px,1.5fr) 98px 165px 92px 145px}.site-source{display:none}}
 @media(max-width:900px){.site-search{width:100%}.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(220px,1.4fr) 94px 1fr 145px}.site-source,.site-visited{display:none}}

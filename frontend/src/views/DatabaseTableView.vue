@@ -43,9 +43,10 @@ import {
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
 import SqlEditor from '@/components/SqlEditor.vue'
+import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
-import { useSystemStore } from '@/stores/system'
+import { useListPreference } from '@/composables/useListPreference'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
@@ -53,8 +54,7 @@ type RowDialogMode = 'insert' | 'edit'
 const route = useRoute()
 const router = useRouter()
 const databaseStore = useDatabaseStore()
-const systemStore = useSystemStore()
-const pageSize = computed(() => systemStore.preferences.pageSize)
+const { pageSize } = useListPreference('database.table.rows')
 const sourceId = computed(() => String(route.params.sourceId ?? ''))
 const tableName = computed(() => String(route.params.table ?? ''))
 const schema = computed(() => String(route.query.schema ?? ''))
@@ -314,7 +314,7 @@ function formatBytes(value?: number) {
         </ElTable>
       </div>
       <footer class="data-pagination">
-        <span>第 {{ Math.floor(offset / pageSize) + 1 }} 页 · 每页 {{ pageSize }} 行</span>
+        <ListPageSizeControl list-key="database.table.rows" />
         <div><ElButton :disabled="offset === 0 || rowsLoading" @click="offset = Math.max(0, offset - pageSize); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading" @click="offset += pageSize; refreshRows()">下一页</ElButton></div>
       </footer>
     </section>

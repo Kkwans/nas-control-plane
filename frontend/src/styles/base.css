@@ -14,7 +14,7 @@ body {
   background: var(--ncp-canvas);
   color: var(--ncp-text);
   font-family: var(--ncp-font-ui);
-  font-size: var(--ncp-base-font-size);
+  font-size: 1rem;
   font-synthesis: none;
   line-height: 1.5;
   text-rendering: optimizeLegibility;
@@ -78,7 +78,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 .workspace-page {
   display: grid;
   align-content: start;
-  gap: calc(16px * var(--ncp-density-scale));
+  gap: var(--ncp-section-gap);
   min-height: 0;
 }
 
@@ -189,13 +189,8 @@ button:not(:disabled), a[href] { cursor: pointer; }
   color: rgba(255,255,255,.9);
 }
 
-html[data-density='compact'] {
-  --ncp-density-scale: .86;
-  --ncp-control-height: 38px;
-}
-
 html[data-density='compact'] .workspace-page :where(.resource-row, .project-row, .database-row, .site-row, .log-row) {
-  min-height: 54px;
+  min-height: var(--ncp-resource-row-height);
   padding-block: 7px;
 }
 
@@ -286,7 +281,7 @@ html[data-density='compact'] .workspace-page :where(.resource-row, .project-row,
 }
 
 @media (max-width: 720px) {
-  body { font-size: 16px; }
+  body { font-size: 1rem; }
   .page { padding: 16px 14px calc(28px + env(safe-area-inset-bottom)); }
   .page-toolbar { min-height: 52px; }
   .page-header { display: block; }

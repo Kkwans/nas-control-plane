@@ -4,12 +4,19 @@ export interface UserPreferences {
   refreshIntervalSeconds: number
   interfaceDensity: 'comfortable' | 'compact'
   baseFontSize: number
-  pageSize: 20 | 25 | 50 | 100
+  pageSize: number
   sidebarDefault: 'collapsed' | 'expanded'
   linkOpenMode: 'new-tab' | 'same-tab'
   siteDefaultProtocol: 'http' | 'https'
   chineseFont: 'system' | 'noto-sans-sc'
   latinFont: 'system' | 'manrope'
+}
+
+export interface ListPreference {
+  listKey: string
+  pageSize: number
+  sortKey: string
+  sortDirection: 'asc' | 'desc'
 }
 
 export interface DatabaseProjectPreference {
@@ -32,7 +39,7 @@ export interface Site {
   sortOrder: number
   lastVisitedAt: string | null
   hidden: boolean
-  source: 'auto' | 'labels' | 'built-in' | 'edited'
+  source: 'auto' | 'labels' | 'built-in' | 'edited' | 'manual'
 }
 
 export interface SiteListResponse {
@@ -103,6 +110,17 @@ export function updatePreferences(input: UserPreferences): Promise<UserPreferenc
   return request('/api/v1/preferences', { method: 'PUT', body: JSON.stringify(input) })
 }
 
+export function requestListPreference(listKey: string): Promise<ListPreference> {
+  return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`)
+}
+
+export function updateListPreference(listKey: string, input: Omit<ListPreference, 'listKey'>): Promise<ListPreference> {
+  return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ listKey, ...input }),
+  })
+}
+
 export function requestDatabaseProjectPreferences(): Promise<DatabaseProjectPreference[]> {
   return request('/api/v1/databases/project-preferences')
 }
@@ -117,6 +135,32 @@ export function requestSites(): Promise<SiteListResponse> {
 
 export function updateSite(projectId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
   return request(`/api/v1/sites/${encodeURIComponent(projectId)}`, { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export function createSite(input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
+  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function deleteSite(siteId: string): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE' })
+}
+
+export function requestIgnoredSites(): Promise<Array<SiteProfileInput & { projectId: string }>> {
+  return request('/api/v1/sites/ignored')
+}
+
+export function restoreSite(siteId: string): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/restore`, { method: 'POST' })
+}
+
+export function uploadSiteIcon(siteId: string, icon: File): Promise<{ siteId: string; iconUrl: string }> {
+  const body = new FormData()
+  body.append('icon', icon)
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, { method: 'POST', body })
+}
+
+export function deleteSiteIcon(siteId: string): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, { method: 'DELETE' })
 }
 
 export function recordSiteVisit(projectId: string): Promise<{ projectId: string; lastVisitedAt: string }> {
@@ -202,12 +246,13 @@ function logParameters(input: {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isFormData = init.body instanceof FormData
   const response = await fetch(path, {
     ...init,
     credentials: 'same-origin',
     headers: {
       Accept: 'application/json',
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },
   })
@@ -220,6 +265,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       throw new NcpApiError('CONTROL_REQUEST_FAILED', '控制面请求失败。')
     }
   }
+  if (response.status === 204) return undefined as T
   try {
     return await response.json() as T
   } catch {

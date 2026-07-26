@@ -1,7 +1,14 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import { requestPreferences, updatePreferences, type UserPreferences } from '@/api/control'
+import {
+  requestListPreference,
+  requestPreferences,
+  updateListPreference,
+  updatePreferences,
+  type ListPreference,
+  type UserPreferences,
+} from '@/api/control'
 import {
   NcpApiError,
   requestCapabilities,
@@ -51,13 +58,15 @@ export const useSystemStore = defineStore('system', () => {
     refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
     interfaceDensity: 'comfortable',
     baseFontSize: 15,
-    pageSize: 25,
+    pageSize: 10,
     sidebarDefault: 'collapsed',
     linkOpenMode: 'new-tab',
     siteDefaultProtocol: 'http',
     chineseFont: 'system',
     latinFont: 'system',
   })
+  const listPreferences = ref<Record<string, ListPreference>>({})
+  const listPreferenceRequests = new Map<string, Promise<ListPreference>>()
 
   let eventSource: EventSource | null = null
   let refreshPromise: Promise<void> | null = null
@@ -107,6 +116,40 @@ export const useSystemStore = defineStore('system', () => {
       stopRealtime()
       startRealtime(scopes)
     }
+    return saved
+  }
+
+  function listPreference(listKey: string): ListPreference {
+    return listPreferences.value[listKey] ?? {
+      listKey,
+      pageSize: 10,
+      sortKey: '',
+      sortDirection: 'asc',
+    }
+  }
+
+  async function ensureListPreference(listKey: string) {
+    if (listPreferences.value[listKey]) return listPreferences.value[listKey]
+    const pending = listPreferenceRequests.get(listKey)
+    if (pending) return pending
+    const request = requestListPreference(listKey)
+      .then((loaded) => {
+        listPreferences.value = { ...listPreferences.value, [listKey]: loaded }
+        return loaded
+      })
+      .finally(() => listPreferenceRequests.delete(listKey))
+    listPreferenceRequests.set(listKey, request)
+    return request
+  }
+
+  async function setListPreference(listKey: string, input: Partial<Omit<ListPreference, 'listKey'>>) {
+    const current = listPreference(listKey)
+    const saved = await updateListPreference(listKey, {
+      pageSize: input.pageSize ?? current.pageSize,
+      sortKey: input.sortKey ?? current.sortKey,
+      sortDirection: input.sortDirection ?? current.sortDirection,
+    })
+    listPreferences.value = { ...listPreferences.value, [listKey]: saved }
     return saved
   }
 
@@ -233,12 +276,16 @@ export const useSystemStore = defineStore('system', () => {
     refreshIntervalSeconds,
     realtimeScopes,
     preferences,
+    listPreferences,
     deviceName,
     lastUpdated,
     refresh,
     loadPreferences,
     setRefreshInterval,
     setPreferences,
+    listPreference,
+    ensureListPreference,
+    setListPreference,
     previewPreferences,
     startRealtime,
     stopRealtime,
@@ -248,6 +295,7 @@ export const useSystemStore = defineStore('system', () => {
 
 function applyExperiencePreferences(preferences: UserPreferences) {
   const root = document.documentElement
+  root.style.fontSize = `${preferences.baseFontSize}px`
   root.style.setProperty('--ncp-base-font-size', `${preferences.baseFontSize}px`)
   root.style.setProperty('--ncp-density-scale', preferences.interfaceDensity === 'compact' ? '0.88' : '1')
   root.style.setProperty(

@@ -99,9 +99,6 @@ onBeforeUnmount(() => {
         <label class="setting-row"><span><strong>基础字号</strong><small>全站正文与控件字体基准</small></span>
           <ElSelect v-model="draft.baseFontSize"><ElOption v-for="size in [13,14,15,16,17,18]" :key="size" :label="`${size} px`" :value="size" /></ElSelect>
         </label>
-        <label class="setting-row"><span><strong>每页数量</strong><small>资源表格的默认分页数量</small></span>
-          <ElSelect v-model="draft.pageSize"><ElOption v-for="size in [20,25,50,100]" :key="size" :label="`${size} 条`" :value="size" /></ElSelect>
-        </label>
       </article>
 
       <article class="settings-section panel">

@@ -4,11 +4,14 @@ import { CirclePause, FileClock, Play, RefreshCw, Search } from '@lucide/vue'
 import { ElButton, ElInput, ElOption, ElSelect, ElSwitch } from 'element-plus'
 
 import { followLogs, requestLogs, type LogEntry } from '@/api/control'
+import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSystemStore } from '@/stores/system'
+import { useListPreference } from '@/composables/useListPreference'
 
 type LogSource = 'system' | 'agent' | 'container'
 const systemStore = useSystemStore()
+const { pageSize } = useListPreference('logs.events')
 const source = ref<LogSource>('system')
 const containerId = ref('')
 const level = ref('all')
@@ -37,7 +40,7 @@ async function load(silent = false) {
   try {
     const result = await requestLogs({
       source: source.value, containerId: containerId.value, level: level.value,
-      query: query.value, hours: hours.value, limit: systemStore.preferences.pageSize,
+      query: query.value, hours: hours.value, limit: pageSize.value,
     })
     entries.value = result.entries
   } catch {
@@ -53,7 +56,7 @@ function syncFollowStream() {
   if (!following.value || (source.value === 'container' && !containerId.value)) return
   logSource = followLogs({
     source: source.value, containerId: containerId.value, level: level.value,
-    query: query.value, hours: hours.value, limit: systemStore.preferences.pageSize,
+    query: query.value, hours: hours.value, limit: pageSize.value,
   }, systemStore.refreshIntervalSeconds, (result) => {
     entries.value = result.entries
     error.value = ''
@@ -101,6 +104,7 @@ function levelLabel(value: LogEntry['level']) {
         <ElSelect v-model="hours" aria-label="时间范围"><ElOption label="最近 1 小时" :value="1" /><ElOption label="最近 6 小时" :value="6" /><ElOption label="最近 24 小时" :value="24" /><ElOption label="最近 7 天" :value="168" /></ElSelect>
       </div>
       <div class="log-tools">
+        <ListPageSizeControl list-key="logs.events" />
         <ElInput v-model="query" clearable placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
         <label class="follow-switch"><component :is="following ? Play : CirclePause" :size="16" /><span>实时跟随</span><ElSwitch v-model="following" /></label>
       </div>
