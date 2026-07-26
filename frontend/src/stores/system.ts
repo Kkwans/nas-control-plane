@@ -107,6 +107,11 @@ export const useSystemStore = defineStore('system', () => {
       stopRealtime()
       startRealtime(scopes)
     }
+    return saved
+  }
+
+  function previewPreferences(input: UserPreferences) {
+    applyExperiencePreferences(input)
   }
 
   async function runRefresh(options: RefreshOptions) {
@@ -234,6 +239,7 @@ export const useSystemStore = defineStore('system', () => {
     loadPreferences,
     setRefreshInterval,
     setPreferences,
+    previewPreferences,
     startRealtime,
     stopRealtime,
     clear,
@@ -257,6 +263,7 @@ function applyExperiencePreferences(preferences: UserPreferences) {
       : "'Segoe UI Variable', 'Microsoft YaHei UI', sans-serif",
   )
   root.dataset.density = preferences.interfaceDensity
+  if (preferences.chineseFont === 'noto-sans-sc') void import('@fontsource-variable/noto-sans-sc/wght.css')
   if (preferences.latinFont === 'manrope') void import('@fontsource-variable/manrope/wght.css')
 }
 
