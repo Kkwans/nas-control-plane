@@ -453,6 +453,11 @@ export async function retryJob(jobId: string, fetcher: typeof fetch = fetch): Pr
   )
 }
 
+export async function deleteJob(jobId: string, fetcher: typeof fetch = fetch): Promise<void> {
+  const response = await fetcher(`/api/v1/jobs/${encodeURIComponent(jobId)}`, requestOptions({ method: 'DELETE' }))
+  if (!response.ok) throw await responseError(response)
+}
+
 export async function removeDockerImage(
   imageId: string,
   fetcher: typeof fetch = fetch,

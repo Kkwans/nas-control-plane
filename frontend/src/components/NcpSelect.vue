@@ -46,4 +46,5 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 .ncp-select :deep(.el-select__wrapper:hover){box-shadow:0 0 0 1px var(--ncp-line-strong) inset}
 .ncp-select :deep(.el-select__wrapper.is-focused){box-shadow:0 0 0 2px rgba(52,116,212,.2),0 0 0 1px var(--ncp-primary) inset}
 .ncp-select :deep(.el-select__selected-item){color:var(--ncp-text-muted);font-size:.8rem;font-weight:650}
+.ncp-select :deep(.el-select__input),.ncp-select :deep(.el-select__input:focus){outline:0!important;box-shadow:none!important}
 </style>
