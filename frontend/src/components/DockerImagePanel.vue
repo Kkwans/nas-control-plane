@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, ArrowUpDown, BadgeCheck, Box, ChevronLeft, ChevronRight, Download, Eye, HardDrive, Image as ImageIcon, RefreshCw, RotateCcw, Search, Star, Trash2 } from '@lucide/vue'
+import { ArrowDown, ArrowUp, ArrowUpDown, BadgeCheck, Box, ChevronLeft, ChevronRight, Download, Eye, HardDrive, Image as ImageIcon, RefreshCw, RotateCcw, Search, Square, Star, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import {
   NcpApiError,
+  cancelJob,
   deleteJob,
   followJob,
   pullDockerImage,
@@ -63,7 +64,8 @@ const downloadStatusOptions: NcpSelectOption[] = [
   { label: '排队中', value: 'queued' },
   { label: '下载中', value: 'running' },
   { label: '已完成', value: 'completed' },
-  { label: '镜像已删除', value: 'deleted' },
+  { label: '已停止', value: 'cancelled' },
+  { label: '已删除', value: 'deleted' },
   { label: '失败', value: 'failed' },
   { label: '已中断', value: 'interrupted' },
 ]
@@ -75,7 +77,8 @@ const filteredImages = computed(() => {
   const matching = term
     ? images.value.filter((image) => [image.id, ...image.repoTags, ...image.repoDigests].some((value) => value.toLowerCase().includes(term)))
     : images.value
-  const key = localPreference.value.sortKey || 'name'
+  const key = localPreference.value.sortKey
+  if (!key) return matching
   const direction = localPreference.value.sortDirection === 'desc' ? -1 : 1
   return [...matching].sort((left, right) => {
     if (key === 'size') return (left.sizeBytes - right.sizeBytes) * direction
@@ -114,14 +117,21 @@ watch(() => [props.query, props.pageSize], () => { localPage.value = 1 })
 watch(localPageCount, (count) => {
   if (localPage.value > count) localPage.value = count
 })
-watch([downloadStatus, downloadPageSize], () => { downloadPage.value = 1 })
+watch([downloadStatus, downloadPageSize, downloadQuery], () => { downloadPage.value = 1 })
 watch(downloadPageCount, (count) => {
   if (downloadPage.value > count) downloadPage.value = count
 })
 
 async function toggleLocalSort(key: 'name' | 'size' | 'created') {
-  const direction = localPreference.value.sortKey === key && localPreference.value.sortDirection === 'asc' ? 'desc' : 'asc'
-  await setLocalSort(key, direction)
+  if (localPreference.value.sortKey !== key) {
+    await setLocalSort(key, 'asc')
+    return
+  }
+  if (localPreference.value.sortDirection === 'asc') {
+    await setLocalSort(key, 'desc')
+    return
+  }
+  await setLocalSort('', 'asc')
 }
 
 async function refresh() {
@@ -226,6 +236,15 @@ async function retryDownload(job: JobSnapshot) {
   }
 }
 
+async function stopDownload(job: JobSnapshot) {
+  try {
+    await cancelJob(job.id)
+    ElMessage.success('已发送停止下载请求')
+  } catch (caught) {
+    ElMessage.error(caught instanceof NcpApiError ? caught.message : '停止下载失败。')
+  }
+}
+
 async function confirmDeleteJob(job: JobSnapshot) {
   try {
     await ElMessageBox.confirm(`仅删除“${job.reference || '未命名镜像'}”的下载记录，不会删除本地镜像。`, '删除下载记录', {
@@ -270,11 +289,13 @@ function localImageForJob(job: JobSnapshot) {
   return images.value.find((image) => image.repoTags.some((tag) => tag === reference || tag.replace(/^docker\.io\//, '') === reference))
 }
 function downloadState(job: JobSnapshot) {
-  return job.status === 'completed' && !localImageForJob(job) ? 'deleted' : job.status
+  if (job.artifactState === 'deleted') return 'deleted'
+  if (job.status === 'completed' && job.artifactState !== 'present' && !localImageForJob(job)) return 'deleted'
+  return job.status
 }
 function downloadStateLabel(job: JobSnapshot) {
   const state = downloadState(job)
-  return state === 'queued' ? '排队中' : state === 'running' ? '下载中' : state === 'completed' ? '已完成' : state === 'deleted' ? '镜像已删除' : state === 'interrupted' ? '已中断' : '失败'
+  return state === 'queued' ? '排队中' : state === 'running' ? '下载中' : state === 'completed' ? '已完成' : state === 'deleted' ? '已删除' : state === 'cancelled' ? '已停止' : state === 'interrupted' ? '已中断' : '失败'
 }
 function effectiveTotal(job: JobSnapshot) {
   return job.totalBytes || localImageForJob(job)?.sizeBytes || 0
@@ -432,13 +453,13 @@ onMounted(() => {
             <div><dt>仓库状态</dt><dd>{{ selectedRepository.statusDescription || '可用' }}</dd></div>
             <div><dt>最近更新</dt><dd>{{ dateLabel(selectedRepository.lastUpdated) }}</dd></div>
           </dl>
-          <div class="tag-title"><div><strong>选择版本</strong><span>{{ tags.length }} 个最近更新的标签</span></div><code>{{ pullReference }}</code></div>
+          <div class="tag-title"><div><strong>选择版本</strong><span>{{ tags.length }} 个最近更新的标签</span></div></div>
           <div v-if="tagsLoading" class="tag-picker-loading ncp-skeleton"></div>
           <div v-else class="tag-picker">
             <label><span>镜像标签</span><NcpSelect v-model="selectedTag" :options="tagOptions()" accessible-label="镜像标签" filterable /></label>
             <dl v-if="selectedTagDetails">
               <div><dt>标签</dt><dd>{{ selectedTagDetails.name }}</dd></div>
-              <div><dt>完整引用</dt><dd>{{ pullReference }}</dd></div>
+              <div><dt>拉取命令</dt><dd><code>docker pull {{ pullReference }}</code></dd></div>
               <div><dt>镜像大小</dt><dd>{{ formatBytes(selectedTagDetails.fullSize) }}</dd></div>
               <div><dt>兼容架构</dt><dd>{{ selectedTagDetails.architectures.join('、') || '未知' }}</dd></div>
               <div><dt>最近更新</dt><dd>{{ dateLabel(selectedTagDetails.lastUpdated) }}</dd></div>
@@ -461,9 +482,9 @@ onMounted(() => {
         <span>{{ job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
         <time>{{ dateLabel(job.updatedAt) }}</time>
         <div class="job-actions">
-          <button v-if="job.status === 'failed' || job.status === 'interrupted'" type="button" title="重试下载" @click="retryDownload(job)"><RotateCcw :size="15" /><span>重试</span></button>
-          <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /><span>查看</span></button>
-          <span v-else-if="job.status === 'queued' || job.status === 'running'" class="job-live">实时更新</span>
+          <button v-if="job.status === 'queued' || job.status === 'running'" type="button" title="停止下载" @click="stopDownload(job)"><Square :size="14" /></button>
+          <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" title="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /></button>
+          <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /></button>
           <button v-if="job.status !== 'queued' && job.status !== 'running'" class="job-delete" type="button" title="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /></button>
         </div>
       </article>
@@ -491,6 +512,21 @@ onMounted(() => {
 .hub-workspace{height:clamp(340px,calc(100dvh - 380px),650px);min-height:0;overflow:hidden}.repository-list{height:100%;max-height:none;border-radius:14px;background:#fff}.repository-list>button{margin:4px 6px 0;border:1px solid transparent;border-radius:10px;background:#fff}.repository-list>button:hover{border-color:var(--ncp-line);background:var(--ncp-surface-hover)}.repository-list>button.active{border-color:rgba(52,116,212,.34);background:linear-gradient(90deg,rgba(234,242,253,.9),rgba(248,250,253,.9));box-shadow:0 5px 16px rgba(42,83,140,.08)}.repo-icon img{width:24px;height:24px;object-fit:contain}.repo-icon b{font-size:.9rem}
 .repository-detail{height:100%;min-height:0}.repository-detail>p{min-height:0;margin:10px 0;line-height:1.5}.repository-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:0 0 10px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.repository-facts>div{display:grid;min-width:0;gap:3px;padding:8px 10px}.repository-facts>div:nth-child(n+4){border-top:1px solid var(--ncp-line)}.repository-facts>div:not(:nth-child(3n+1)){border-left:1px solid var(--ncp-line)}.repository-facts dt{color:var(--ncp-text-subtle);font-size:.68rem}.repository-facts dd{overflow:hidden;margin:0;color:var(--ncp-text);font-size:.76rem;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.tag-picker{min-height:0;gap:10px;margin-top:10px}.tag-picker :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:repeat(2,minmax(0,1fr));background:#fff}.tag-picker dl>div{padding:9px 11px}.tag-picker dl>div+div{border-left:0}.tag-picker dl>div:nth-child(even){border-left:1px solid var(--ncp-line)}.tag-picker dl>div:nth-child(n+3){border-top:1px solid var(--ncp-line)}.tag-picker dd{white-space:normal;overflow-wrap:anywhere}.repository-detail>footer .primary-button{flex:0 0 auto}
 .download-head>:nth-child(n+2),.download-row>:nth-child(n+2){justify-self:center;text-align:center}.download-row .job-state{justify-self:center}.job-live{color:var(--ncp-success-strong);font-size:.72rem;font-weight:680}
+.resource-head button.active{background:transparent;color:var(--ncp-primary-strong);font-weight:800}
+.hub-search{width:min(680px,48vw)}
+.repository-list>button{min-height:76px;margin:0 6px}
+.repository-detail{overflow:hidden}
+.tag-picker{overflow:auto;padding-right:2px}
+.tag-picker dl{grid-template-columns:1fr}
+.tag-picker dl>div+div,.tag-picker dl>div:nth-child(n+3){border-top:1px solid var(--ncp-line)}
+.tag-picker dl>div:nth-child(even){border-left:0}
+.repository-detail>footer{position:static;bottom:auto}
+.download-head,.download-row{grid-template-columns:minmax(240px,1.25fr) 112px minmax(190px,260px) 100px 120px 112px}
+.job-state--queued{border-color:#cbd5e1;background:#eef2f7;color:#52657d}
+.job-state--cancelled{border-color:#ead1a7;background:#fff4e3;color:#9a5b13}
+.job-state--deleted{border-color:#d5dce6;background:#edf1f5;color:#5f6f83}
+.job-state--failed{border-color:rgba(201,83,97,.28);background:#fcecef;color:#a83d4b}
+.job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 78px;gap:8px}.hub-workspace{grid-template-columns:minmax(300px,.8fr) minmax(430px,1.2fr)}}
 @media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.hub-search{width:100%}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-grid{grid-template-columns:1fr}}
 </style>

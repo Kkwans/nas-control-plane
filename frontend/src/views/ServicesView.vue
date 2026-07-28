@@ -288,10 +288,6 @@ function markIconFailed(site: Site) {
 <template>
   <div class="page workspace-page sites-page">
     <WorkspaceHeader title="站点中心" description="快速启动 NAS 上的 Web 应用，并维护入口资料" :icon="Globe2" :stats="stats">
-      <template #actions>
-        <ElButton type="primary" @click="openCreator"><Plus :size="16" />添加站点</ElButton>
-        <ElButton :loading="sitesStore.loading" @click="sitesStore.refresh"><RefreshCw :size="16" />重新识别</ElButton>
-      </template>
       <template #filters>
         <div class="state-filter" aria-label="站点状态筛选">
           <button v-for="item in [{ value: 'running', label: '运行中' }, { value: 'all', label: '全部站点' }, { value: 'hidden', label: '已隐藏' }, { value: 'ignored', label: '已忽略' }]" :key="item.value" type="button" :class="{ active: siteFilter === item.value }" @click="siteFilter = item.value as SiteFilter">
@@ -323,6 +319,10 @@ function markIconFailed(site: Site) {
     <section v-else-if="groupedSites.length" class="directory-section" aria-labelledby="directory-title">
       <div class="section-heading">
         <div><h2 id="directory-title">站点目录</h2><p>按用途分类，快速查看状态和全部入口</p></div>
+        <div class="section-actions">
+          <ElButton type="primary" @click="openCreator"><Plus :size="16" />添加站点</ElButton>
+          <ElButton :loading="sitesStore.loading" @click="sitesStore.refresh"><RefreshCw :size="16" />重新识别</ElButton>
+        </div>
       </div>
       <div class="directory-panel panel">
         <section v-for="group in groupedSites" :key="group.category" class="site-group">
@@ -461,4 +461,9 @@ function markIconFailed(site: Site) {
 @media(max-width:1280px){.launch-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.site-row{grid-template-columns:minmax(230px,1.5fr) 98px 165px 92px 145px}.site-source{display:none}}
 @media(max-width:900px){.site-search{width:100%}.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(220px,1.4fr) 94px 1fr 145px}.site-source,.site-visited{display:none}}
 @media(max-width:680px){.category-filter{width:100%}.state-filter{width:100%}.state-filter button{flex:1;padding-inline:7px}.launch-grid{grid-template-columns:1fr}.launch-card{min-height:196px}.directory-panel{border:0;background:transparent;box-shadow:none}.site-group>header{border:1px solid var(--ncp-line);border-radius:10px}.site-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:9px;padding:14px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff}.site-identity{grid-column:1/-1}.site-ports{grid-column:1}.site-row>.status-pill{grid-column:2;grid-row:2}.row-actions{grid-column:1/-1}.row-actions .row-open{flex:1;justify-content:center}.editor-grid,.switch-grid{grid-template-columns:1fr}.empty-sites{padding:28px 18px;text-align:center;flex-direction:column}}
+.section-actions{display:flex;align-items:center;gap:8px}
+.section-actions :deep(.el-button){min-height:40px}
+.site-row{grid-template-columns:minmax(280px,1.8fr) 92px 170px 104px 100px 190px}
+.site-row>.status-pill{justify-self:center}
+@media(max-width:680px){.section-heading{align-items:flex-start;flex-direction:column}.section-actions{width:100%}.section-actions :deep(.el-button){flex:1}}
 </style>

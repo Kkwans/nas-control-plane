@@ -10,6 +10,8 @@ import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 const range = ref<TimeRange>('6h')
+const customFrom = ref('')
+const customTo = ref('')
 const systemStore = useSystemStore()
 const samples = ref<MetricSample[]>([])
 const loading = ref(false)
@@ -34,11 +36,33 @@ const networkRates = computed(() => samples.value.map((item, index) => {
 async function load() {
   loading.value = true
   error.value = ''
-  try { samples.value = await requestMetricSamples(range.value) }
+  try {
+    const preciseRange = customFrom.value && customTo.value
+      ? { from: new Date(customFrom.value).toISOString(), to: new Date(customTo.value).toISOString() }
+      : range.value
+    samples.value = await requestMetricSamples(preciseRange)
+  }
   catch { error.value = '监控历史加载失败，请稍后重试。' }
   finally { loading.value = false }
 }
-watch(range, () => void load())
+function selectQuickRange(value: TimeRange) {
+  range.value = value
+  customFrom.value = ''
+  customTo.value = ''
+  void load()
+}
+
+function applyCustomRange() {
+  if (!customFrom.value || !customTo.value) return
+  const from = new Date(customFrom.value)
+  const to = new Date(customTo.value)
+  const now = new Date()
+  if (from >= to || to > now || to.valueOf() - from.valueOf() > 7 * 24 * 60 * 60 * 1000) {
+    error.value = '请选择不超过 7 天、且结束时间不晚于当前时间的范围。'
+    return
+  }
+  void load()
+}
 watch(() => systemStore.summary?.collectedAt, (next, previous) => {
   if (next && previous && next !== previous) void load()
 })
@@ -48,7 +72,15 @@ onMounted(() => void load())
 <template>
   <div class="page workspace-page">
     <WorkspaceHeader title="系统监控" description="查看 CPU、内存、负载、磁盘与网络的历史运行趋势" :icon="Gauge" :stats="stats">
-      <template #filters><ElSegmented v-model="range" :options="[{label:'1 小时',value:'1h'},{label:'6 小时',value:'6h'},{label:'24 小时',value:'24h'},{label:'7 天',value:'7d'}]" /></template>
+      <template #filters><ElSegmented :model-value="range" :options="[{label:'1 小时',value:'1h'},{label:'6 小时',value:'6h'},{label:'24 小时',value:'24h'},{label:'7 天',value:'7d'}]" @change="selectQuickRange($event as TimeRange)" /></template>
+      <template #tools>
+        <div class="precise-range">
+          <label><span>开始</span><input v-model="customFrom" type="datetime-local" :max="customTo || undefined" /></label>
+          <span>至</span>
+          <label><span>结束</span><input v-model="customTo" type="datetime-local" :min="customFrom || undefined" @change="applyCustomRange" /></label>
+          <ElButton :disabled="!customFrom || !customTo" @click="applyCustomRange">应用</ElButton>
+        </div>
+      </template>
       <template #actions><ElButton :loading="loading" @click="load"><RefreshCw :size="16" />刷新</ElButton></template>
     </WorkspaceHeader>
     <div v-if="error" class="monitor-error">{{ error }}</div>
@@ -75,6 +107,12 @@ onMounted(() => void load())
 .chart-card small { color:var(--ncp-text-muted); font-size:.82rem; }
 .chart-card>.ncp-skeleton { display:block; width:100%; height:18px; margin:10px 0; }
 .monitor-error { margin-bottom:14px; padding:12px 14px; border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.86rem; }
+.precise-range { display:flex; align-items:center; gap:8px; }
+.precise-range>span { color:var(--ncp-text-subtle); font-size:.76rem; }
+.precise-range label { display:flex; min-height:40px; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--ncp-line); border-radius:10px; background:#fff; }
+.precise-range label>span { color:var(--ncp-text-subtle); font-size:.72rem; font-weight:700; }
+.precise-range input { width:150px; border:0; outline:0; background:transparent; color:var(--ncp-text); font-family:var(--ncp-font-mono); font-size:.75rem; }
 @media(max-width:920px) { .monitor-grid { grid-template-columns:1fr; } }
+@media(max-width:760px) { .precise-range { width:100%; flex-wrap:wrap; }.precise-range label { flex:1; }.precise-range input { width:100%; } }
 @media(max-width:640px) { .chart-card { padding:16px; } }
 </style>
