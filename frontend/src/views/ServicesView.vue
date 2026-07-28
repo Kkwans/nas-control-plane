@@ -55,6 +55,8 @@ const iconInput = ref<HTMLInputElement | null>(null)
 const siteForm = ref<FormInstance>()
 const pendingIcon = ref<File | null>(null)
 const pendingIconPreview = ref('')
+const maxSiteIconBytes = 2 * 1024 * 1024
+const supportedSiteIconTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'])
 const formRules: FormRules<SiteProfileInput> = {
   name: [{ required: true, message: '请输入站点名称', trigger: 'blur' }],
 }
@@ -234,6 +236,11 @@ async function restoreIgnoredSite(siteId: string) {
 async function uploadIcon(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
+  if (!supportedSiteIconTypes.has(file.type) || file.size > maxSiteIconBytes) {
+    ElMessage.error('请选择 2 MB 以内的 PNG、JPEG、WebP 或 SVG 图标')
+    if (iconInput.value) iconInput.value.value = ''
+    return
+  }
   if (!selectedSite.value) {
     pendingIcon.value = file
     if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
@@ -322,7 +329,7 @@ function markIconFailed(site: Site) {
           <header><h3>{{ group.category }}</h3><span>{{ group.items.length }}</span></header>
           <article v-for="site in group.items" :key="site.id" class="site-row">
             <div class="site-identity">
-              <div class="site-logo" :style="siteHue(site)">
+              <div class="site-logo" :class="{ 'site-logo--image': site.iconUrl && !failedIcons.has(site.id) }" :style="siteHue(site)">
                 <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site)" />
                 <span v-else>{{ site.name.slice(0, 1).toUpperCase() }}</span>
               </div>
@@ -372,7 +379,7 @@ function markIconFailed(site: Site) {
 
     <ElDrawer v-model="editOpen" class="site-editor" :title="selectedSite ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
       <div v-if="selectedSite" class="editor-context">
-        <div class="site-logo" :style="siteHue(selectedSite)">
+        <div class="site-logo" :class="{ 'site-logo--image': draft.iconUrl && !failedIcons.has(selectedSite.id) }" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
           <span v-else>{{ draft.name.slice(0, 1).toUpperCase() }}</span>
         </div>
@@ -442,7 +449,7 @@ function markIconFailed(site: Site) {
 .site-error{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.site-error button{min-height:34px;padding:0 11px;border-radius:8px;background:#fff;color:inherit;font-weight:700}
 .section-heading{display:flex;align-items:end;justify-content:space-between;margin:2px 2px 9px}.section-heading h2{margin:0;font-size:1rem;letter-spacing:-.02em}.section-heading p{margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.78rem}
 .launch-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.launch-card{position:relative;display:grid;min-height:210px;grid-template-rows:auto 1fr auto;gap:14px;padding:16px;overflow:hidden;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base)}.launch-card::before{position:absolute;inset:0 0 auto;height:3px;background:hsl(var(--site-hue) 70% 52%);content:''}.launch-card:hover{border-color:hsl(var(--site-hue) 60% 78%);box-shadow:var(--ncp-shadow-hover);transform:translateY(-3px)}.launch-card__top,.launch-card footer{display:flex;align-items:center;justify-content:space-between}.favorite-button{display:grid;width:38px;height:38px;place-items:center;border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-button:hover,.favorite-button.active,.row-actions button.active{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.launch-card__content>span{color:hsl(var(--site-hue) 55% 42%);font-size:.76rem;font-weight:720}.launch-card h3{margin:5px 0 6px;font-size:1.02rem}.launch-card p{display:-webkit-box;margin:0;overflow:hidden;color:var(--ncp-text-muted);font-size:.82rem;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:2}.launch-card footer>span{display:flex;align-items:center;gap:5px;color:var(--ncp-text-subtle);font-size:.74rem}.launch-card footer>a{display:flex;min-height:38px;align-items:center;gap:4px;padding:0 12px;border-radius:9px;background:var(--ncp-primary);box-shadow:0 5px 14px rgba(23,104,229,.16);color:#fff;font-size:.8rem;font-weight:720}.launch-card footer>a:hover{background:var(--ncp-primary-strong);box-shadow:0 8px 18px rgba(23,104,229,.2);transform:translateY(-1px)}
-.site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:cover}
+.site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--image{border-color:transparent;background:transparent}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:contain}
 .launch-card--skeleton{grid-template-columns:52px 1fr;min-height:140px}.launch-card--skeleton>i{width:52px;height:52px}.launch-card--skeleton>div{display:grid;align-content:start;gap:12px}.launch-card--skeleton>div i:first-child{width:55%;height:15px}.launch-card--skeleton>div i:last-child{width:88%;height:42px}
 .directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}

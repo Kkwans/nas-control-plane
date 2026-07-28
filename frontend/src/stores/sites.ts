@@ -46,7 +46,16 @@ export const useSitesStore = defineStore('sites', () => {
 
   async function create(input: SiteProfileInput, icon?: File | null) {
     const result = await createSite(input)
-    if (icon) await uploadSiteIcon(result.projectId, icon)
+    try {
+      if (icon) await uploadSiteIcon(result.projectId, icon)
+    } catch (error) {
+      // Creating a site and uploading its icon are exposed as two HTTP calls.
+      // Roll the first call back so a failed icon upload cannot leave a
+      // successfully-created record that the user then submits again.
+      await deleteSite(result.projectId).catch(() => undefined)
+      await refresh()
+      throw error
+    }
     await refresh()
     return result
   }
