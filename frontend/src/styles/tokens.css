@@ -26,6 +26,22 @@
   --ncp-danger: #c95361;
   --ncp-danger-strong: #ad3e4c;
   --ncp-danger-soft: #fbecef;
+  --ncp-neutral: #68798e;
+  --ncp-neutral-soft: #eef2f6;
+  --ncp-object-project: #23866f;
+  --ncp-object-project-soft: #e9f6f2;
+  --ncp-object-system: #a86b1f;
+  --ncp-object-system-soft: #fbf2e6;
+  --ncp-object-site: #2f7f8e;
+  --ncp-object-site-soft: #e8f4f6;
+  --ncp-object-docker: #3474d4;
+  --ncp-object-docker-soft: #eaf2fd;
+  --ncp-engine-sqlite: #7654c7;
+  --ncp-engine-sqlite-soft: #f0ebfb;
+  --ncp-engine-mysql: #b56d17;
+  --ncp-engine-mysql-soft: #fbf0df;
+  --ncp-engine-postgres: #3576b9;
+  --ncp-engine-postgres-soft: #e9f2fb;
   --ncp-shadow-panel: 0 1px 2px rgba(35, 60, 96, 0.025), 0 8px 24px rgba(44, 70, 105, 0.045);
   --ncp-shadow-hover: 0 16px 34px rgba(45, 79, 124, 0.105);
   --ncp-shadow-float: 0 26px 70px rgba(33, 55, 88, 0.17);
@@ -59,6 +75,7 @@
   --ncp-density-scale: 1;
   --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
   --ncp-font-latin: 'Manrope Variable', 'Segoe UI Variable', sans-serif;
+  --ncp-font-body: 'Manrope Variable', 'Segoe UI Variable', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
   --ncp-font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', monospace;
   --ncp-sidebar-width: 232px;
   --ncp-sidebar-collapsed-width: 68px;
@@ -78,9 +95,9 @@
 }
 
 html[data-density='compact'] {
-  --ncp-density-scale: .86;
-  --ncp-control-height: 38px;
-  --ncp-resource-row-height: 54px;
-  --ncp-toolbar-height: 50px;
-  --ncp-section-gap: 12px;
+  --ncp-density-scale: .8;
+  --ncp-control-height: 36px;
+  --ncp-resource-row-height: 50px;
+  --ncp-toolbar-height: 46px;
+  --ncp-section-gap: 10px;
 }

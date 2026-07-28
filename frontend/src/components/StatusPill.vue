@@ -21,6 +21,10 @@ const toneClass = computed(() => `status-pill--${props.tone}`)
 <style scoped>
 .status-pill {
   display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  flex: 0 0 auto;
+  justify-self: center;
   align-items: center;
   gap: 7px;
   min-height: 27px;
@@ -42,9 +46,9 @@ const toneClass = computed(() => `status-pill--${props.tone}`)
 }
 
 .status-pill--healthy {
-  border-color: rgba(26, 139, 109, 0.18);
-  background: rgba(26, 139, 109, 0.09);
-  color: #17795f;
+  border-color: color-mix(in srgb, var(--ncp-success) 22%, transparent);
+  background: var(--ncp-success-soft);
+  color: var(--ncp-success);
 }
 
 .status-pill--degraded,

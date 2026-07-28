@@ -311,9 +311,10 @@ function applyExperiencePreferences(preferences: UserPreferences) {
   }
   root.style.fontSize = `${preferences.baseFontSize}px`
   root.style.setProperty('--ncp-base-font-size', `${preferences.baseFontSize}px`)
-  root.style.setProperty('--ncp-density-scale', preferences.interfaceDensity === 'compact' ? '0.88' : '1')
+  root.style.setProperty('--ncp-density-scale', preferences.interfaceDensity === 'compact' ? '0.8' : '1')
   root.style.setProperty('--ncp-font-ui', chineseFonts[preferences.chineseFont])
   root.style.setProperty('--ncp-font-latin', latinFonts[preferences.latinFont])
+  root.style.setProperty('--ncp-font-body', `${latinFonts[preferences.latinFont]}, ${chineseFonts[preferences.chineseFont]}`)
   root.dataset.density = preferences.interfaceDensity
   if (preferences.chineseFont === 'noto-sans-sc') void import('@fontsource-variable/noto-sans-sc/wght.css')
   if (preferences.latinFont === 'manrope') void import('@fontsource-variable/manrope/wght.css')

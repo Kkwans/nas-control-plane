@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, CircleAlert, ExternalLink, Gauge, LayoutPanelLeft, LoaderCircle, RotateCcw, Settings2, TextCursorInput, Waves } from '@lucide/vue'
 import { ElButton, ElOption, ElSelect } from 'element-plus'
 
@@ -17,11 +17,33 @@ let saving = false
 let pending = false
 let suppressDraftWatch = false
 
+const chineseDeviceCandidates = [
+  { value: 'microsoft-yahei', label: '微软雅黑 UI', family: 'Microsoft YaHei UI' },
+  { value: 'source-han-sans-sc', label: '思源黑体 SC', family: 'Source Han Sans SC' },
+  { value: 'misans', label: 'MiSans', family: 'MiSans' },
+  { value: 'harmonyos-sans-sc', label: 'HarmonyOS Sans SC', family: 'HarmonyOS Sans SC' },
+] as const
+const availableChineseDeviceFonts = ref<(typeof chineseDeviceCandidates)[number][]>([])
+
 const intervals = [
   { value: 2, label: '2 秒（高频）' }, { value: 5, label: '5 秒（推荐）' },
   { value: 10, label: '10 秒' }, { value: 30, label: '30 秒' },
   { value: 60, label: '1 分钟' }, { value: 300, label: '5 分钟' },
 ]
+
+function browserHasFont(family: string) {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  if (!context) return false
+  const sample = 'mmmmmmmmmmWWWWWWWWWW汉字字体0123456789'
+  const measure = (font: string) => {
+    context.font = `72px ${font}`
+    return context.measureText(sample).width
+  }
+  const mono = measure('monospace')
+  const sans = measure('sans-serif')
+  return measure(`"${family}", monospace`) !== mono || measure(`"${family}", sans-serif`) !== sans
+}
 
 watch(draft, (value) => {
   if (suppressDraftWatch) return
@@ -62,6 +84,14 @@ function retrySave() {
   pending = true
   void flushSave()
 }
+
+onMounted(() => {
+  availableChineseDeviceFonts.value = chineseDeviceCandidates.filter((item) => browserHasFont(item.family))
+  const selectedDeviceFont = chineseDeviceCandidates.find((item) => item.value === draft.value.chineseFont)
+  if (selectedDeviceFont && !availableChineseDeviceFonts.value.some((item) => item.value === selectedDeviceFont.value)) {
+    draft.value.chineseFont = 'system'
+  }
+})
 
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
@@ -118,12 +148,9 @@ onBeforeUnmount(() => {
         <header><span><TextCursorInput :size="20" /></span><div><h2>字体</h2><p>中文与西文分别选择；未启用的 Web 字体不会进入首次加载。</p></div></header>
         <label class="setting-row"><span><strong>中文字体</strong><small>系统 UI 字体通常拥有最佳本地渲染</small></span>
           <ElSelect v-model="draft.chineseFont">
-            <ElOption label="系统中文 UI（推荐）" value="system" />
-            <ElOption label="Noto Sans SC（内置）" value="noto-sans-sc" />
-            <ElOption label="微软雅黑 UI" value="microsoft-yahei" />
-            <ElOption label="思源黑体 SC（本机）" value="source-han-sans-sc" />
-            <ElOption label="MiSans（本机）" value="misans" />
-            <ElOption label="HarmonyOS Sans SC（本机）" value="harmonyos-sans-sc" />
+            <ElOption label="当前浏览器设备字体（推荐）" value="system" />
+            <ElOption label="Noto Sans SC（随 NCP 提供）" value="noto-sans-sc" />
+            <ElOption v-for="item in availableChineseDeviceFonts" :key="item.value" :label="`${item.label}（当前设备可用）`" :value="item.value" />
           </ElSelect>
         </label>
         <label class="setting-row"><span><strong>西文字体</strong><small>影响数字、英文标题与拉丁字符</small></span>

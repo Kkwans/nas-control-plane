@@ -13,7 +13,7 @@ body {
   overflow-x: hidden;
   background: var(--ncp-canvas);
   color: var(--ncp-text);
-  font-family: var(--ncp-font-ui);
+  font-family: var(--ncp-font-body);
   font-size: 1rem;
   font-synthesis: none;
   line-height: 1.5;
@@ -68,7 +68,7 @@ button:not(:disabled), a[href] { cursor: pointer; }
 
 .page-toolbar {
   display: flex;
-  min-height: 58px;
+  min-height: var(--ncp-toolbar-height);
   align-items: center;
   justify-content: space-between;
   gap: 20px;
@@ -191,7 +191,15 @@ button:not(:disabled), a[href] { cursor: pointer; }
 
 html[data-density='compact'] .workspace-page :where(.resource-row, .project-row, .database-row, .site-row, .log-row) {
   min-height: var(--ncp-resource-row-height);
-  padding-block: 7px;
+  padding-block: 5px;
+}
+
+html[data-density='compact'] .workspace-page {
+  gap: var(--ncp-section-gap);
+}
+
+html[data-density='compact'] .workspace-page :where(.panel, .workspace-header, .resource-panel) {
+  --panel-padding: 14px;
 }
 
 .panel,
