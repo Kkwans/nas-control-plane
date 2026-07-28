@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,12 +16,13 @@ import (
 )
 
 type logEntry struct {
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
-	Source    string    `json:"source"`
-	Unit      string    `json:"unit"`
-	Level     string    `json:"level"`
-	Message   string    `json:"message"`
+	ID         string    `json:"id"`
+	Timestamp  time.Time `json:"timestamp"`
+	Source     string    `json:"source"`
+	Unit       string    `json:"unit"`
+	Level      string    `json:"level"`
+	Message    string    `json:"message"`
+	RawMessage string    `json:"rawMessage,omitempty"`
 }
 
 type logResponse struct {
@@ -161,9 +163,10 @@ func (api *handler) readJournalLogs(ctx context.Context, source string, limit in
 	}
 	entries := make([]logEntry, 0, len(page.Entries))
 	for _, item := range page.Entries {
+		message, rawMessage := normalizeLogMessage(item.Message)
 		entries = append(entries, logEntry{
 			ID: item.Cursor, Timestamp: item.Timestamp, Source: source, Unit: firstNonEmpty(item.Unit, item.Identifier),
-			Level: journalLevel(item.Priority), Message: item.Message,
+			Level: journalLevel(item.Priority), Message: message, RawMessage: rawMessage,
 		})
 	}
 	return logResponse{CollectedAt: time.Now().UTC(), Entries: entries, NextCursor: page.NextCursor}, nil
@@ -187,9 +190,10 @@ func (api *handler) readContainerLogCenter(ctx context.Context, limit int, conta
 			level = "error"
 		}
 		identifier := fmt.Sprintf("%x", sha256.Sum256([]byte(containerID+"\x00"+item.Stream+"\x00"+item.Timestamp.Format(time.RFC3339Nano)+"\x00"+item.Message)))
+		message, rawMessage := normalizeLogMessage(item.Message)
 		entries = append(entries, logEntry{
 			ID: identifier[:20], Timestamp: item.Timestamp, Source: "container",
-			Unit: containerID, Level: level, Message: item.Message,
+			Unit: containerID, Level: level, Message: message, RawMessage: rawMessage,
 		})
 	}
 	return logResponse{CollectedAt: result.CollectedAt, Entries: entries, NextCursor: ""}, nil
@@ -203,12 +207,22 @@ func filterLogEntries(entries []logEntry, level, keyword string) []logEntry {
 		if level != "" && level != "all" && entry.Level != level {
 			continue
 		}
-		if keyword != "" && !strings.Contains(strings.ToLower(entry.Message+" "+entry.Unit), keyword) {
+		if keyword != "" && !strings.Contains(strings.ToLower(entry.Message+" "+entry.RawMessage+" "+entry.Unit), keyword) {
 			continue
 		}
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+var structuredLogPrefix = regexp.MustCompile(`(?i)^(TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\s+(\d{4}-\d{2}-\d{2}(?:T|\s)\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)\s+`)
+
+func normalizeLogMessage(message string) (string, string) {
+	cleaned := structuredLogPrefix.ReplaceAllString(message, "")
+	if cleaned == message {
+		return message, ""
+	}
+	return cleaned, message
 }
 
 func journalLevel(priority int) string {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -37,11 +38,18 @@ func (api *handler) pullDockerImage(response http.ResponseWriter, request *http.
 }
 
 func (api *handler) runImagePull(jobID string, input docker.ImagePullRequest) {
-	api.jobs.pullSlots <- struct{}{}
-	defer func() { <-api.jobs.pullSlots }()
-	api.jobs.update(jobID, "running", "正在连接镜像仓库", "", 1)
 	requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
+	api.jobs.setCancel(jobID, cancel)
+	defer api.jobs.clearCancel(jobID)
 	defer cancel()
+	select {
+	case api.jobs.pullSlots <- struct{}{}:
+		defer func() { <-api.jobs.pullSlots }()
+	case <-requestContext.Done():
+		api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
+		return
+	}
+	api.jobs.update(jobID, "running", "正在连接镜像仓库", "", 1)
 	if client, ok := api.dockerImages.(DockerImageProgressAgentClient); ok {
 		_, err := client.PullDockerImageWithProgress(requestContext, api.agentSocketPath, input, func(progress docker.ImagePullProgress) {
 			api.jobs.updatePullProgress(jobID, jobLayer{
@@ -49,13 +57,19 @@ func (api *handler) runImagePull(jobID string, input docker.ImagePullRequest) {
 			})
 		})
 		if err != nil {
+			if errors.Is(requestContext.Err(), context.Canceled) {
+				api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
+				return
+			}
 			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
 			return
 		}
 	} else {
-		requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
-		defer cancel()
 		if _, err := api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input); err != nil {
+			if errors.Is(requestContext.Err(), context.Canceled) {
+				api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
+				return
+			}
 			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
 			return
 		}

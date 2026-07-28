@@ -9,6 +9,10 @@ import (
 
 type unsupportedHostStarter struct{}
 
+func HostEnhancement() string {
+	return "unsupported"
+}
+
 func NewHostStarter() Starter {
 	return unsupportedHostStarter{}
 }

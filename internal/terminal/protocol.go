@@ -21,4 +21,5 @@ type Message struct {
 	Cols        uint16
 	Data        []byte
 	SessionID   string
+	Enhancement string
 }

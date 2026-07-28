@@ -26,6 +26,9 @@ func terminalMessageToStruct(message terminal.Message) (*structpb.Struct, error)
 			return nil, errors.New("terminal session id is required")
 		}
 		fields["sessionId"] = message.SessionID
+		if message.Type == terminal.MessageStarted && message.Enhancement != "" {
+			fields["enhancement"] = message.Enhancement
+		}
 	case terminal.MessageInput, terminal.MessageOutput:
 		if len(message.Data) == 0 || len(message.Data) > maxTerminalMessageBytes {
 			return nil, errors.New("terminal data size is invalid")
@@ -102,6 +105,9 @@ func terminalMessageFromStruct(input *structpb.Struct) (terminal.Message, error)
 			return terminal.Message{}, errors.New("terminal session id is required")
 		}
 		message.SessionID = sessionID
+		if enhancement, ok := fields["enhancement"].(string); ok {
+			message.Enhancement = enhancement
+		}
 	case terminal.MessageClose:
 	default:
 		return terminal.Message{}, errors.New("terminal message type is invalid")
@@ -124,6 +130,9 @@ func terminalFieldsFor(messageType terminal.MessageType) map[string]struct{} {
 		fields["cols"] = struct{}{}
 	case terminal.MessageStarted, terminal.MessageClosed:
 		fields["sessionId"] = struct{}{}
+		if messageType == terminal.MessageStarted {
+			fields["enhancement"] = struct{}{}
+		}
 	}
 	return fields
 }

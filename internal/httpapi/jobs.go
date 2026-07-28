@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ type jobSnapshot struct {
 	TotalBytes      int64               `json:"totalBytes"`
 	SpeedBytes      int64               `json:"speedBytes"`
 	Layers          map[string]jobLayer `json:"layers"`
+	ArtifactState   string              `json:"artifactState"`
 }
 
 type jobLayer struct {
@@ -50,12 +52,17 @@ type jobPersistence interface {
 type jobRegistry struct {
 	mu        sync.RWMutex
 	jobs      map[string]jobSnapshot
+	cancels   map[string]context.CancelFunc
 	store     jobPersistence
 	pullSlots chan struct{}
 }
 
 func newJobRegistry(store any) *jobRegistry {
-	registry := &jobRegistry{jobs: make(map[string]jobSnapshot), pullSlots: make(chan struct{}, 3)}
+	registry := &jobRegistry{
+		jobs:      make(map[string]jobSnapshot),
+		cancels:   make(map[string]context.CancelFunc),
+		pullSlots: make(chan struct{}, 3),
+	}
 	if persistence, ok := store.(jobPersistence); ok {
 		registry.store = persistence
 		_ = persistence.MarkRunningJobsInterrupted(context.Background())
@@ -86,12 +93,57 @@ func (registry *jobRegistry) update(id, status, message, errorMessage string, pr
 		return
 	}
 	job.Status, job.Message, job.Error, job.Progress, job.UpdatedAt = status, message, errorMessage, progress, time.Now().UTC()
-	if status == "completed" || status == "failed" || status == "interrupted" {
+	if status == "completed" && job.Type == "docker-image-pull" {
+		job.ArtifactState = "present"
+	}
+	if status == "completed" || status == "failed" || status == "interrupted" || status == "cancelled" {
 		completedAt := job.UpdatedAt
 		job.CompletedAt = &completedAt
 	}
 	registry.jobs[id] = job
 	go registry.persist(job)
+}
+
+func (registry *jobRegistry) setCancel(id string, cancel context.CancelFunc) {
+	registry.mu.Lock()
+	registry.cancels[id] = cancel
+	registry.mu.Unlock()
+}
+
+func (registry *jobRegistry) clearCancel(id string) {
+	registry.mu.Lock()
+	delete(registry.cancels, id)
+	registry.mu.Unlock()
+}
+
+func (registry *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
+	registry.mu.Lock()
+	job, exists := registry.jobs[id]
+	if !exists {
+		registry.mu.Unlock()
+		return jobSnapshot{}, false, nil
+	}
+	if job.Status != "queued" && job.Status != "running" {
+		registry.mu.Unlock()
+		return job, true, errors.New("job is not cancellable")
+	}
+	cancel := registry.cancels[id]
+	if cancel != nil {
+		now := time.Now().UTC()
+		job.Status = "cancelled"
+		job.Message = "下载已停止"
+		job.SpeedBytes = 0
+		job.UpdatedAt = now
+		job.CompletedAt = &now
+		registry.jobs[id] = job
+	}
+	registry.mu.Unlock()
+	if cancel == nil {
+		return job, true, errors.New("job cancel function unavailable")
+	}
+	cancel()
+	registry.persist(job)
+	return job, true, nil
 }
 
 func (registry *jobRegistry) updatePullProgress(id string, layer jobLayer) {
@@ -251,7 +303,59 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 }
 
 func (api *handler) listJobs(response http.ResponseWriter, request *http.Request) {
-	writeJSON(response, http.StatusOK, map[string]any{"jobs": api.jobs.list(request.URL.Query().Get("type"))})
+	jobs := api.jobs.list(request.URL.Query().Get("type"))
+	if request.URL.Query().Get("type") == "" || request.URL.Query().Get("type") == "docker-image-pull" {
+		jobs = api.resolveDockerArtifactStates(request.Context(), jobs)
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func (api *handler) resolveDockerArtifactStates(ctx context.Context, jobs []jobSnapshot) []jobSnapshot {
+	hasCompletedPull := false
+	for _, job := range jobs {
+		if job.Type == "docker-image-pull" && job.Status == "completed" {
+			hasCompletedPull = true
+			break
+		}
+	}
+	if !hasCompletedPull {
+		return jobs
+	}
+
+	lookupContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	inventory, err := api.dockerImages.ListDockerImages(lookupContext, api.agentSocketPath)
+	if err != nil {
+		for index := range jobs {
+			if jobs[index].Type == "docker-image-pull" && jobs[index].Status == "completed" {
+				jobs[index].ArtifactState = "unknown"
+			}
+		}
+		return jobs
+	}
+
+	references := make(map[string]struct{})
+	for _, image := range inventory.Images {
+		for _, reference := range append(image.RepoTags, image.RepoDigests...) {
+			normalized := strings.TrimPrefix(strings.TrimSpace(reference), "docker.io/")
+			if normalized != "" {
+				references[normalized] = struct{}{}
+			}
+		}
+	}
+	for index := range jobs {
+		job := &jobs[index]
+		if job.Type != "docker-image-pull" || job.Status != "completed" {
+			continue
+		}
+		reference := strings.TrimPrefix(strings.TrimSpace(job.Reference), "docker.io/")
+		if _, present := references[reference]; present {
+			job.ArtifactState = "present"
+		} else {
+			job.ArtifactState = "deleted"
+		}
+	}
+	return jobs
 }
 
 func (api *handler) deleteJob(response http.ResponseWriter, request *http.Request) {
@@ -277,7 +381,8 @@ func (api *handler) retryJob(response http.ResponseWriter, request *http.Request
 		api.writeError(response, request, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在。")
 		return
 	}
-	if previous.Type != "docker-image-pull" || (previous.Status != "failed" && previous.Status != "interrupted") {
+	if previous.Type != "docker-image-pull" ||
+		(previous.Status != "failed" && previous.Status != "interrupted" && previous.Status != "cancelled" && previous.Status != "completed") {
 		api.writeError(response, request, http.StatusConflict, "JOB_RETRY_UNAVAILABLE", "当前任务不能重试。")
 		return
 	}
@@ -285,6 +390,19 @@ func (api *handler) retryJob(response http.ResponseWriter, request *http.Request
 	api.jobs.setExpectedTotal(job.ID, previous.TotalBytes)
 	job, _ = api.jobs.get(job.ID)
 	go api.runImagePull(job.ID, docker.ImagePullRequest{Reference: previous.Reference, ExpectedBytes: previous.TotalBytes})
+	writeJSON(response, http.StatusAccepted, job)
+}
+
+func (api *handler) cancelJob(response http.ResponseWriter, request *http.Request) {
+	job, exists, err := api.jobs.cancel(chi.URLParam(request, "jobID"))
+	if !exists {
+		api.writeError(response, request, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在。")
+		return
+	}
+	if err != nil {
+		api.writeError(response, request, http.StatusConflict, "JOB_CANCEL_UNAVAILABLE", "当前任务不能停止。")
+		return
+	}
 	writeJSON(response, http.StatusAccepted, job)
 }
 
@@ -320,7 +438,7 @@ func (api *handler) jobEvents(response http.ResponseWriter, request *http.Reques
 			flusher.Flush()
 			lastUpdated = job.UpdatedAt
 		}
-		if job.Status == "completed" || job.Status == "failed" || job.Status == "interrupted" {
+		if job.Status == "completed" || job.Status == "failed" || job.Status == "interrupted" || job.Status == "cancelled" {
 			return
 		}
 		select {

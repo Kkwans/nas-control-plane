@@ -169,7 +169,8 @@ interface DockerImageWireInventory {
 export interface JobSnapshot {
   id: string
   type: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
+  artifactState?: 'present' | 'deleted' | 'unknown'
   reference?: string
   message: string
   progress: number
@@ -414,7 +415,7 @@ export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void)
         const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
         if (!isJobSnapshot(payload)) throw new Error('任务进度格式无效')
         onProgress(payload)
-        if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'interrupted') {
+        if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'interrupted' || payload.status === 'cancelled') {
           source.close()
           resolve(payload)
         }
@@ -450,6 +451,16 @@ export async function retryJob(jobId: string, fetcher: typeof fetch = fetch): Pr
     isJobSnapshot,
     fetcher,
     'JOB_RETRY_RESPONSE_INVALID',
+  )
+}
+
+export async function cancelJob(jobId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
+  return requestJson(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: 'POST' },
+    isJobSnapshot,
+    fetcher,
+    'JOB_CANCEL_RESPONSE_INVALID',
   )
 }
 
@@ -735,7 +746,8 @@ function isJobSnapshot(value: unknown): value is JobSnapshot {
   return isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.type === 'string' &&
-    (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed' || value.status === 'interrupted') &&
+    (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed' || value.status === 'interrupted' || value.status === 'cancelled') &&
+    (value.artifactState === undefined || value.artifactState === 'present' || value.artifactState === 'deleted' || value.artifactState === 'unknown') &&
     typeof value.message === 'string' &&
     typeof value.progress === 'number' &&
     typeof value.createdAt === 'string' &&

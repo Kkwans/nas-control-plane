@@ -17,6 +17,16 @@ import (
 type hostStarter struct{}
 
 const ncpTerminalRCFile = "/opt/ncp/etc/terminal.bashrc"
+const ncpBleSHFile = "/opt/ncp/share/blesh/ble.sh"
+
+func HostEnhancement() string {
+	if _, err := os.Stat(ncpTerminalRCFile); err == nil {
+		if _, err := os.Stat(ncpBleSHFile); err == nil {
+			return "blesh"
+		}
+	}
+	return "native"
+}
 
 func NewHostStarter() Starter {
 	return hostStarter{}

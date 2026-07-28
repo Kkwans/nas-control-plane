@@ -331,6 +331,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Get("/jobs", api.listJobs)
 			protected.Post("/jobs/{jobID}/retry", api.retryJob)
+			protected.Post("/jobs/{jobID}/cancel", api.cancelJob)
 			protected.Delete("/jobs/{jobID}", api.deleteJob)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
@@ -423,19 +424,40 @@ func (api *handler) monitoringSamples(response http.ResponseWriter, request *htt
 		api.writeError(response, request, http.StatusServiceUnavailable, "MONITORING_STORE_UNAVAILABLE", "监控历史暂不可用。")
 		return
 	}
+	query := request.URL.Query()
 	ranges := map[string]time.Duration{
 		"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
 	}
-	duration, ok := ranges[request.URL.Query().Get("range")]
-	if !ok {
-		duration = 6 * time.Hour
+	now := time.Now().UTC()
+	from := now.Add(-6 * time.Hour)
+	to := now
+	if query.Has("from") || query.Has("to") {
+		if !query.Has("from") || !query.Has("to") {
+			api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "精确时间范围必须同时提供开始和结束时间。")
+			return
+		}
+		parsedFrom, fromErr := time.Parse(time.RFC3339, query.Get("from"))
+		parsedTo, toErr := time.Parse(time.RFC3339, query.Get("to"))
+		if fromErr != nil || toErr != nil || !parsedFrom.Before(parsedTo) || parsedTo.After(now.Add(time.Minute)) || parsedTo.Sub(parsedFrom) > 7*24*time.Hour {
+			api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间不能晚于当前时间。")
+			return
+		}
+		from, to = parsedFrom.UTC(), parsedTo.UTC()
+	} else if duration, ok := ranges[query.Get("range")]; ok {
+		from = now.Add(-duration)
 	}
-	samples, err := api.controlStore.MetricSamples(request.Context(), time.Now().UTC().Add(-duration))
+	samples, err := api.controlStore.MetricSamples(request.Context(), from)
 	if err != nil {
 		api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
 		return
 	}
-	writeJSON(response, http.StatusOK, samples)
+	filtered := samples[:0]
+	for _, sample := range samples {
+		if !sample.CollectedAt.After(to) {
+			filtered = append(filtered, sample)
+		}
+	}
+	writeJSON(response, http.StatusOK, filtered)
 }
 
 func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {

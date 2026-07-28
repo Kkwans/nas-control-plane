@@ -39,7 +39,11 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	}
 	defer func() { _ = s.manager.Close(opened.ID) }()
 
-	started, err := terminalMessageToStruct(terminal.Message{Type: terminal.MessageStarted, SessionID: opened.ID})
+	enhancement := "native"
+	if start.Target == terminal.TargetHost {
+		enhancement = terminal.HostEnhancement()
+	}
+	started, err := terminalMessageToStruct(terminal.Message{Type: terminal.MessageStarted, SessionID: opened.ID, Enhancement: enhancement})
 	if err != nil {
 		return grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
 	}

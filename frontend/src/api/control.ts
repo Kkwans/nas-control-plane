@@ -94,6 +94,7 @@ export interface LogEntry {
   unit: string
   level: 'error' | 'warning' | 'info' | 'debug'
   message: string
+  rawMessage?: string
 }
 
 export interface LogResponse {
@@ -208,8 +209,11 @@ export function requestComposeRevisions(projectId: string): Promise<ComposeRevis
   return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
 }
 
-export function requestMetricSamples(range: '1h' | '6h' | '24h' | '7d'): Promise<MetricSample[]> {
-  return request(`/api/v1/monitoring/samples?${new URLSearchParams({ range })}`)
+export function requestMetricSamples(input: '1h' | '6h' | '24h' | '7d' | { from: string; to: string }): Promise<MetricSample[]> {
+  const parameters = typeof input === 'string'
+    ? new URLSearchParams({ range: input })
+    : new URLSearchParams({ from: input.from, to: input.to })
+  return request(`/api/v1/monitoring/samples?${parameters}`)
 }
 
 export function requestLogs(input: {

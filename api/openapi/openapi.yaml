@@ -332,6 +332,8 @@ paths:
       security: [{RootSession: []}]
       parameters:
         - { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 6h } }
+        - { name: from, in: query, description: 精确范围起点；必须与 to 成对提供，优先于 range, schema: { type: string, format: date-time } }
+        - { name: to, in: query, description: 精确范围终点；不得晚于当前时间，最长跨度 7 天, schema: { type: string, format: date-time } }
       responses:
         '200':
           description: Metric samples ordered by collection time
@@ -771,6 +773,21 @@ paths:
       responses:
         '202':
           description: 新任务已进入队列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+  /api/v1/jobs/{jobID}/cancel:
+    post:
+      operationId: cancelJob
+      summary: 停止排队或正在执行的镜像拉取任务
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string } }
+      responses:
+        '202':
+          description: 任务已停止
           content:
             application/json:
               schema:
@@ -1357,7 +1374,8 @@ components:
       properties:
         id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [queued, running, completed, failed, interrupted] }
+        status: { type: string, enum: [queued, running, completed, failed, interrupted, cancelled] }
+        artifactState: { type: string, enum: [present, deleted, unknown] }
         reference: { type: string }
         message: { type: string }
         progress: { type: integer, minimum: 0, maximum: 100 }
@@ -1728,6 +1746,7 @@ components:
         unit: { type: string }
         level: { type: string, enum: [error, warning, info, debug] }
         message: { type: string }
+        rawMessage: { type: string, description: 未清理级别和时间前缀的原始日志 }
   securitySchemes:
     RootSession:
       type: apiKey

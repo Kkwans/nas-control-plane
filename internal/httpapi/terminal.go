@@ -75,7 +75,7 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
 	}
-	if err := writeTerminalControl(sessionContext, connection, terminalControl{Type: "started", SessionID: started.SessionID}); err != nil {
+	if err := writeTerminalControl(sessionContext, connection, terminalControl{Type: "started", SessionID: started.SessionID, Enhancement: started.Enhancement}); err != nil {
 		return
 	}
 
@@ -198,10 +198,11 @@ func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream
 }
 
 type terminalControl struct {
-	Type      string `json:"type"`
-	Rows      int    `json:"rows,omitempty"`
-	Cols      int    `json:"cols,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	Type        string `json:"type"`
+	Rows        int    `json:"rows,omitempty"`
+	Cols        int    `json:"cols,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
+	Enhancement string `json:"enhancement,omitempty"`
 }
 
 func decodeTerminalControl(data []byte) (terminalControl, error) {

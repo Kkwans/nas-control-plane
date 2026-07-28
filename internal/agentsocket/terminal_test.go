@@ -107,6 +107,23 @@ func TestTerminalPOCServiceRejectsCommandBearingStartMessage(t *testing.T) {
 	}
 }
 
+func TestTerminalStartedMessagePreservesEnhancement(t *testing.T) {
+	t.Parallel()
+
+	encoded := mustTerminalStruct(t, terminal.Message{
+		Type:        terminal.MessageStarted,
+		SessionID:   "terminal-session",
+		Enhancement: "blesh",
+	})
+	decoded, err := terminalMessageFromStruct(encoded)
+	if err != nil {
+		t.Fatalf("decode started message: %v", err)
+	}
+	if decoded.Enhancement != "blesh" {
+		t.Fatalf("enhancement = %q, want blesh", decoded.Enhancement)
+	}
+}
+
 func newTerminalPOCTestConnection(t *testing.T, manager *terminal.Manager) *grpc.ClientConn {
 	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
