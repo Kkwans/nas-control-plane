@@ -1,6 +1,6 @@
 # NAS Control Plane 阶段进度
 
-更新时间：2026-07-28
+更新时间：2026-07-29
 
 ## 当前结论
 
@@ -22,14 +22,18 @@ NCP 已完成从“技术验证页面”到可持续开发的 NAS Root 管理控
 | 数据库 | 已完成 | 自动发现、项目分组与归档、数据表信息、数据 CRUD 和 SQL 工作台 |
 | 系统信息 | 已完成 | 设备摘要、硬件系统、控制链路和能力检测四层信息架构 |
 | 用户管理 | 已完成 | 等权 Root 账号新增、启停、删除、改密、可配置密码规则、会话撤销与最后账号保护 |
+| 全局视觉语义 | 已完成 | 统一品牌、状态、项目、系统与数据库引擎颜色 Token；状态胶囊、排序表头、图标和密度复用同一规范 |
+| 镜像任务取消 | 已完成 | 支持真实取消、重新下载、记录删除与本地制品存在状态；无运行任务时不进行高频进度刷新 |
+| 精确监控范围 | 已完成 | 支持快捷范围和 RFC3339 `from/to` 精确范围，最长 7 天并校验未来时间 |
+| 日志语义清洗 | 已完成 | 严格拆分级别与时间前缀，保留原始日志；普通数字不再误判为 HTTP 状态码 |
+| 终端增强状态 | 已完成 | Agent 回报 ble.sh 或原生 Bash 回退，前端展示真实能力并统一连接前后工作区高度 |
 
 ## 验证状态
 
 分模块已完成的聚焦验证：
 
 ```text
-go test ./internal/auth ./internal/httpapi
-go test ./internal/docker ./internal/agentsocket ./internal/controlstore ./internal/httpapi
+go test ./internal/httpapi ./internal/agentsocket ./internal/terminal
 pnpm run typecheck
 ```
 

@@ -1,15 +1,15 @@
 # NAS Control Plane
 
-> 当前开发快照：2026-07-27。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
+> 当前开发快照：2026-07-29。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
 
 ## 当前可用能力
 
-- 实时总览与历史监控：CPU、内存、负载、存储、网络和 Docker 状态通过 SSE 更新。
+- 实时总览与历史监控：CPU、内存、负载、存储、网络和 Docker 状态通过 SSE 更新，支持快捷范围与精确起止时间。
 - 站点中心：仅收录经过 Web 探测的入口，支持手动站点、Favicon、图标上传、收藏、隐藏、排序和忽略恢复。
-- Docker：项目、容器、本地镜像、Docker Hub 搜索、标签选择、镜像拉取、Compose 校验/草稿/部署和版本记录。
+- Docker：项目、容器、本地镜像、Docker Hub 搜索、标签选择、可取消与重试的持久化镜像拉取任务、Compose 校验/草稿/部署和版本记录。
 - 数据库：自动发现 SQLite、MySQL/MariaDB、PostgreSQL，支持表结构、表数据 CRUD 与 SQL 工作台。
-- 日志中心：系统、Agent 和容器日志查询，真实时间范围、稳定事件时间与增量 SSE 跟随。
-- 终端：宿主机 Root PTY 和容器 Shell，支持 Tab、历史、窗口自适应、浅色 ANSI 配色和可选 ble.sh 高亮。
+- 日志中心：系统、Agent 和容器日志查询，真实时间范围、纳秒级原始时间、语义高亮与增量 SSE 跟随。
+- 终端：宿主机 Root PTY 和容器 Shell，支持 Tab、历史、窗口自适应、浅色 ANSI 配色和带能力回报的 ble.sh 高亮。
 - 设置与用户：设置自动保存到 SQLite，字号/密度/字体真实生效；多账号均为等权 Root，支持账号和密码管理。
 
 所有管理页面默认使用中文；Docker、Compose、SQL、SSE 等固定专业术语保留原名。
