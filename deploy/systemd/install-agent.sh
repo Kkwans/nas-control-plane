@@ -20,7 +20,10 @@ if [ ! -r /opt/ncp/share/blesh/ble.sh ]; then
   else
     wget --quiet "$blesh_url" --output-document="$temporary_directory/$blesh_archive"
   fi
-  tar -xJf "$temporary_directory/$blesh_archive" -C /opt/ncp/share/blesh
+  tar -xJf "$temporary_directory/$blesh_archive" \
+    -C /opt/ncp/share/blesh \
+    --strip-components=1
+  test -r /opt/ncp/share/blesh/ble.sh
   chown -R root:root /opt/ncp/share/blesh
 fi
 
