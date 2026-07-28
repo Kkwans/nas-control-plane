@@ -8,8 +8,8 @@ export interface UserPreferences {
   sidebarDefault: 'collapsed' | 'expanded'
   linkOpenMode: 'new-tab' | 'same-tab'
   siteDefaultProtocol: 'http' | 'https'
-  chineseFont: 'system' | 'noto-sans-sc'
-  latinFont: 'system' | 'manrope'
+  chineseFont: 'system' | 'noto-sans-sc' | 'microsoft-yahei' | 'source-han-sans-sc' | 'misans' | 'harmonyos-sans-sc'
+  latinFont: 'system' | 'manrope' | 'inter' | 'ibm-plex-sans'
 }
 
 export interface ListPreference {
@@ -110,6 +110,14 @@ export interface ManagedUser {
   createdAt: string
   updatedAt: string
   lastLoginAt?: string
+}
+
+export interface PasswordPolicy {
+  minLength: number
+  requireUppercase: boolean
+  requireLowercase: boolean
+  requireDigit: boolean
+  requireSpecial: boolean
 }
 
 export function requestPreferences(): Promise<UserPreferences> {
@@ -217,6 +225,14 @@ export function requestLogs(input: {
 
 export function requestUsers(): Promise<ManagedUser[]> {
   return request('/api/v1/users')
+}
+
+export function requestPasswordPolicy(): Promise<PasswordPolicy> {
+  return request('/api/v1/users/password-policy')
+}
+
+export function updatePasswordPolicy(input: PasswordPolicy): Promise<PasswordPolicy> {
+  return request('/api/v1/users/password-policy', { method: 'PUT', body: JSON.stringify(input) })
 }
 
 export function createUser(input: { username: string; password: string }): Promise<ManagedUser> {

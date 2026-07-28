@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"sync"
@@ -42,6 +43,7 @@ type jobLayer struct {
 type jobPersistence interface {
 	UpsertJob(context.Context, controlstore.JobRecord) error
 	Jobs(context.Context, string, int) ([]controlstore.JobRecord, error)
+	DeleteJob(context.Context, string) error
 	MarkRunningJobsInterrupted(context.Context) error
 }
 
@@ -191,6 +193,30 @@ func (registry *jobRegistry) list(kind string) []jobSnapshot {
 	return result
 }
 
+func (registry *jobRegistry) delete(id string) (jobSnapshot, bool, error) {
+	registry.mu.Lock()
+	job, exists := registry.jobs[id]
+	if !exists {
+		registry.mu.Unlock()
+		return jobSnapshot{}, false, nil
+	}
+	if job.Status == "queued" || job.Status == "running" {
+		registry.mu.Unlock()
+		return job, true, errors.New("active job cannot be deleted")
+	}
+	delete(registry.jobs, id)
+	registry.mu.Unlock()
+	if registry.store != nil {
+		if err := registry.store.DeleteJob(context.Background(), id); err != nil {
+			registry.mu.Lock()
+			registry.jobs[id] = job
+			registry.mu.Unlock()
+			return job, true, err
+		}
+	}
+	return job, true, nil
+}
+
 func (registry *jobRegistry) persist(job jobSnapshot) {
 	if registry.store == nil {
 		return
@@ -226,6 +252,23 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 
 func (api *handler) listJobs(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"jobs": api.jobs.list(request.URL.Query().Get("type"))})
+}
+
+func (api *handler) deleteJob(response http.ResponseWriter, request *http.Request) {
+	_, exists, err := api.jobs.delete(chi.URLParam(request, "jobID"))
+	if !exists {
+		api.writeError(response, request, http.StatusNotFound, "JOB_NOT_FOUND", "任务不存在或已被删除。")
+		return
+	}
+	if err != nil {
+		if err.Error() == "active job cannot be deleted" {
+			api.writeError(response, request, http.StatusConflict, "JOB_DELETE_UNAVAILABLE", "进行中的任务不能删除。")
+			return
+		}
+		api.writeError(response, request, http.StatusInternalServerError, "JOB_DELETE_FAILED", "任务记录删除失败。")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (api *handler) retryJob(response http.ResponseWriter, request *http.Request) {

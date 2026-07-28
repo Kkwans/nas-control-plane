@@ -54,6 +54,18 @@ type User struct {
 	LastLoginAt *time.Time `json:"lastLoginAt,omitempty"`
 }
 
+type PasswordPolicy struct {
+	MinLength        int  `json:"minLength"`
+	RequireUppercase bool `json:"requireUppercase"`
+	RequireLowercase bool `json:"requireLowercase"`
+	RequireDigit     bool `json:"requireDigit"`
+	RequireSpecial   bool `json:"requireSpecial"`
+}
+
+func DefaultPasswordPolicy() PasswordPolicy {
+	return PasswordPolicy{MinLength: 6}
+}
+
 type Session struct {
 	Token     string    `json:"-"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -114,10 +126,10 @@ func (s *Service) Bootstrap(ctx context.Context, username, password string) (Pri
 	if err != nil {
 		return Principal{}, err
 	}
-	if err := validatePassword(password); err != nil {
+	if err := s.validatePassword(ctx, password); err != nil {
 		return Principal{}, err
 	}
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	passwordHash, err := bcrypt.GenerateFromPassword(passwordMaterial(password), bcrypt.DefaultCost)
 	if err != nil {
 		return Principal{}, coded("AUTH_PASSWORD_HASH_FAILED", err)
 	}
@@ -167,7 +179,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (Session
 	if err != nil {
 		return Session{}, coded("AUTH_DATABASE_QUERY_FAILED", err)
 	}
-	if disabled || bcrypt.CompareHashAndPassword(passwordHash, []byte(password)) != nil {
+	if disabled || comparePassword(passwordHash, password) != nil {
 		return Session{}, invalidCredentials()
 	}
 	if _, err := s.database.ExecContext(ctx, `UPDATE users SET last_login_at_unix = ?, updated_at_unix = MAX(updated_at_unix, ?) WHERE id = ?`, s.now().UTC().Unix(), s.now().UTC().Unix(), principal.ID); err != nil {
@@ -252,10 +264,10 @@ func (s *Service) CreateUser(ctx context.Context, username, password string) (Us
 	if err != nil {
 		return User{}, err
 	}
-	if err := validatePassword(password); err != nil {
+	if err := s.validatePassword(ctx, password); err != nil {
 		return User{}, err
 	}
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	passwordHash, err := bcrypt.GenerateFromPassword(passwordMaterial(password), bcrypt.DefaultCost)
 	if err != nil {
 		return User{}, coded("AUTH_PASSWORD_HASH_FAILED", err)
 	}
@@ -359,7 +371,7 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 	if actorID <= 0 || targetID <= 0 {
 		return coded("AUTH_INPUT_INVALID", errors.New("user id is invalid"))
 	}
-	if err := validatePassword(newPassword); err != nil {
+	if err := s.validatePassword(ctx, newPassword); err != nil {
 		return err
 	}
 	var passwordHash []byte
@@ -368,10 +380,10 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 	} else if err != nil {
 		return coded("AUTH_DATABASE_QUERY_FAILED", err)
 	}
-	if actorID == targetID && bcrypt.CompareHashAndPassword(passwordHash, []byte(currentPassword)) != nil {
+	if actorID == targetID && comparePassword(passwordHash, currentPassword) != nil {
 		return coded("AUTH_CURRENT_PASSWORD_INVALID", errors.New("current password is invalid"))
 	}
-	nextHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	nextHash, err := bcrypt.GenerateFromPassword(passwordMaterial(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return coded("AUTH_PASSWORD_HASH_FAILED", err)
 	}
@@ -390,6 +402,47 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
 	return nil
+}
+
+func (s *Service) PasswordPolicy(ctx context.Context) (PasswordPolicy, error) {
+	policy := DefaultPasswordPolicy()
+	err := s.database.QueryRowContext(ctx, `
+		SELECT min_length, require_uppercase, require_lowercase, require_digit, require_special
+		FROM password_policy
+		WHERE id = 1
+	`).Scan(
+		&policy.MinLength, &policy.RequireUppercase, &policy.RequireLowercase,
+		&policy.RequireDigit, &policy.RequireSpecial,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return policy, nil
+	}
+	if err != nil {
+		return PasswordPolicy{}, coded("AUTH_DATABASE_QUERY_FAILED", err)
+	}
+	return policy, nil
+}
+
+func (s *Service) UpdatePasswordPolicy(ctx context.Context, policy PasswordPolicy) (PasswordPolicy, error) {
+	if err := validatePasswordPolicy(policy); err != nil {
+		return PasswordPolicy{}, err
+	}
+	_, err := s.database.ExecContext(ctx, `
+		INSERT INTO password_policy (
+			id, min_length, require_uppercase, require_lowercase, require_digit, require_special, updated_at_unix
+		) VALUES (1, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			min_length = excluded.min_length,
+			require_uppercase = excluded.require_uppercase,
+			require_lowercase = excluded.require_lowercase,
+			require_digit = excluded.require_digit,
+			require_special = excluded.require_special,
+			updated_at_unix = excluded.updated_at_unix
+	`, policy.MinLength, policy.RequireUppercase, policy.RequireLowercase, policy.RequireDigit, policy.RequireSpecial, s.now().UTC().Unix())
+	if err != nil {
+		return PasswordPolicy{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+	}
+	return policy, nil
 }
 
 func (s *Service) userByID(ctx context.Context, id int64) (User, error) {
@@ -453,6 +506,15 @@ func (s *Service) migrate(ctx context.Context) error {
 			created_at_unix INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions (expires_at_unix)`,
+		`CREATE TABLE IF NOT EXISTS password_policy (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			min_length INTEGER NOT NULL DEFAULT 6,
+			require_uppercase INTEGER NOT NULL DEFAULT 0,
+			require_lowercase INTEGER NOT NULL DEFAULT 0,
+			require_digit INTEGER NOT NULL DEFAULT 0,
+			require_special INTEGER NOT NULL DEFAULT 0,
+			updated_at_unix INTEGER NOT NULL DEFAULT 0
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {
@@ -461,8 +523,8 @@ func (s *Service) migrate(ctx context.Context) error {
 	}
 	for name, definition := range map[string]string{
 		"disabled":           "INTEGER NOT NULL DEFAULT 0",
-		"updated_at_unix":     "INTEGER NOT NULL DEFAULT 0",
-		"last_login_at_unix":  "INTEGER NOT NULL DEFAULT 0",
+		"updated_at_unix":    "INTEGER NOT NULL DEFAULT 0",
+		"last_login_at_unix": "INTEGER NOT NULL DEFAULT 0",
 	} {
 		if err := s.ensureUserColumn(ctx, name, definition); err != nil {
 			return err
@@ -540,12 +602,55 @@ func normalizeUsername(value string) (string, error) {
 	return value, nil
 }
 
-func validatePassword(value string) error {
+func (s *Service) validatePassword(ctx context.Context, value string) error {
+	policy, err := s.PasswordPolicy(ctx)
+	if err != nil {
+		return err
+	}
 	length := utf8.RuneCountInString(value)
-	if length < 8 || length > 256 {
+	if length < policy.MinLength || length > 256 {
 		return coded("AUTH_INPUT_INVALID", errors.New("password is invalid"))
 	}
+	var hasUppercase, hasLowercase, hasDigit, hasSpecial bool
+	for _, character := range value {
+		switch {
+		case unicode.IsUpper(character):
+			hasUppercase = true
+		case unicode.IsLower(character):
+			hasLowercase = true
+		case unicode.IsDigit(character):
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+	if policy.RequireUppercase && !hasUppercase ||
+		policy.RequireLowercase && !hasLowercase ||
+		policy.RequireDigit && !hasDigit ||
+		policy.RequireSpecial && !hasSpecial {
+		return coded("AUTH_INPUT_INVALID", errors.New("password does not satisfy policy"))
+	}
 	return nil
+}
+
+func validatePasswordPolicy(policy PasswordPolicy) error {
+	if policy.MinLength < 1 || policy.MinLength > 128 {
+		return coded("AUTH_INPUT_INVALID", errors.New("password policy is invalid"))
+	}
+	return nil
+}
+
+func passwordMaterial(value string) []byte {
+	raw := []byte(value)
+	if len(raw) <= 72 {
+		return raw
+	}
+	sum := sha256.Sum256(raw)
+	return []byte(base64.RawStdEncoding.EncodeToString(sum[:]))
+}
+
+func comparePassword(hash []byte, value string) error {
+	return bcrypt.CompareHashAndPassword(hash, passwordMaterial(value))
 }
 
 func newToken(reader io.Reader) (string, error) {

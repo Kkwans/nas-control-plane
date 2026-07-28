@@ -14,10 +14,45 @@ import (
 
 type userManager interface {
 	Users(context.Context) ([]auth.User, error)
+	PasswordPolicy(context.Context) (auth.PasswordPolicy, error)
+	UpdatePasswordPolicy(context.Context, auth.PasswordPolicy) (auth.PasswordPolicy, error)
 	CreateUser(context.Context, string, string) (auth.User, error)
 	SetUserDisabled(context.Context, int64, int64, bool) (auth.User, error)
 	DeleteUser(context.Context, int64, int64) error
 	UpdatePassword(context.Context, int64, int64, string, string) error
+}
+
+func (api *handler) passwordPolicy(response http.ResponseWriter, request *http.Request) {
+	manager, ok := api.auth.(userManager)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "USER_MANAGEMENT_UNAVAILABLE", "用户管理服务暂不可用。")
+		return
+	}
+	policy, err := manager.PasswordPolicy(request.Context())
+	if err != nil {
+		api.writeUserError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, policy)
+}
+
+func (api *handler) updatePasswordPolicy(response http.ResponseWriter, request *http.Request) {
+	manager, ok := api.auth.(userManager)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "USER_MANAGEMENT_UNAVAILABLE", "用户管理服务暂不可用。")
+		return
+	}
+	var input auth.PasswordPolicy
+	if err := decodeUserRequest(request, &input); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "密码规则参数无效。")
+		return
+	}
+	policy, err := manager.UpdatePasswordPolicy(request.Context(), input)
+	if err != nil {
+		api.writeUserError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, policy)
 }
 
 type createUserRequest struct {
@@ -139,7 +174,7 @@ func (api *handler) userOperationContext(response http.ResponseWriter, request *
 func (api *handler) writeUserError(response http.ResponseWriter, request *http.Request, err error) {
 	switch auth.ErrorCode(err) {
 	case "AUTH_INPUT_INVALID":
-		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名需保持简洁，密码长度需为 8–256 个字符。")
+		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码不符合当前密码规则。")
 	case "AUTH_USERNAME_EXISTS":
 		api.writeError(response, request, http.StatusConflict, "AUTH_USERNAME_EXISTS", "该用户名已存在。")
 	case "AUTH_USER_NOT_FOUND":

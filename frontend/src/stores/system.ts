@@ -295,24 +295,30 @@ export const useSystemStore = defineStore('system', () => {
 
 function applyExperiencePreferences(preferences: UserPreferences) {
   const root = document.documentElement
+  const chineseFonts: Record<UserPreferences['chineseFont'], string> = {
+    system: "'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI Variable', sans-serif",
+    'noto-sans-sc': "'Noto Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif",
+    'microsoft-yahei': "'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif",
+    'source-han-sans-sc': "'Source Han Sans SC', 'Noto Sans CJK SC', 'Microsoft YaHei UI', sans-serif",
+    misans: "'MiSans', 'Microsoft YaHei UI', sans-serif",
+    'harmonyos-sans-sc': "'HarmonyOS Sans SC', 'Microsoft YaHei UI', sans-serif",
+  }
+  const latinFonts: Record<UserPreferences['latinFont'], string> = {
+    system: "'Segoe UI Variable', 'Microsoft YaHei UI', sans-serif",
+    manrope: "'Manrope Variable', 'Segoe UI Variable', sans-serif",
+    inter: "'Inter Variable', 'Segoe UI Variable', sans-serif",
+    'ibm-plex-sans': "'IBM Plex Sans Variable', 'Segoe UI Variable', sans-serif",
+  }
   root.style.fontSize = `${preferences.baseFontSize}px`
   root.style.setProperty('--ncp-base-font-size', `${preferences.baseFontSize}px`)
   root.style.setProperty('--ncp-density-scale', preferences.interfaceDensity === 'compact' ? '0.88' : '1')
-  root.style.setProperty(
-    '--ncp-font-ui',
-    preferences.chineseFont === 'noto-sans-sc'
-      ? "'Noto Sans SC', 'Microsoft YaHei UI', 'PingFang SC', sans-serif"
-      : "'Microsoft YaHei UI', 'PingFang SC', 'Segoe UI Variable', sans-serif",
-  )
-  root.style.setProperty(
-    '--ncp-font-latin',
-    preferences.latinFont === 'manrope'
-      ? "'Manrope Variable', 'Segoe UI Variable', sans-serif"
-      : "'Segoe UI Variable', 'Microsoft YaHei UI', sans-serif",
-  )
+  root.style.setProperty('--ncp-font-ui', chineseFonts[preferences.chineseFont])
+  root.style.setProperty('--ncp-font-latin', latinFonts[preferences.latinFont])
   root.dataset.density = preferences.interfaceDensity
   if (preferences.chineseFont === 'noto-sans-sc') void import('@fontsource-variable/noto-sans-sc/wght.css')
   if (preferences.latinFont === 'manrope') void import('@fontsource-variable/manrope/wght.css')
+  if (preferences.latinFont === 'inter') void import('@fontsource-variable/inter/wght.css')
+  if (preferences.latinFont === 'ibm-plex-sans') void import('@fontsource-variable/ibm-plex-sans/wght.css')
 }
 
 function errorCodeFor(error: unknown): string {

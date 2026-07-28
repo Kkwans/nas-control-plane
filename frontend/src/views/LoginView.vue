@@ -93,10 +93,10 @@ async function submit() {
               v-model="password"
               type="password"
               autocomplete="current-password"
-              minlength="8"
+              :minlength="isSetup ? 6 : 1"
               maxlength="256"
               required
-              placeholder="至少 8 个字符"
+              :placeholder="isSetup ? '至少 6 个字符' : '输入登录密码'"
             />
           </label>
           <label v-if="isSetup">
@@ -105,7 +105,7 @@ async function submit() {
               v-model="confirmation"
               type="password"
               autocomplete="new-password"
-              minlength="8"
+              minlength="6"
               maxlength="256"
               required
               placeholder="再次输入密码"

@@ -267,8 +267,8 @@ func validatePreferences(preferences Preferences) error {
 		!oneOf(preferences.SidebarDefault, "collapsed", "expanded") ||
 		!oneOf(preferences.LinkOpenMode, "new-tab", "same-tab") ||
 		!oneOf(preferences.SiteDefaultProtocol, "http", "https") ||
-		!oneOf(preferences.ChineseFont, "system", "noto-sans-sc") ||
-		!oneOf(preferences.LatinFont, "system", "manrope") {
+		!oneOf(preferences.ChineseFont, "system", "noto-sans-sc", "microsoft-yahei", "source-han-sans-sc", "misans", "harmonyos-sans-sc") ||
+		!oneOf(preferences.LatinFont, "system", "manrope", "inter", "ibm-plex-sans") {
 		return errors.New("preference option is invalid")
 	}
 	return nil
@@ -614,6 +614,15 @@ func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, 
 		result = append(result, job)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) DeleteJob(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("job id is required")
+	}
+	_, err := s.database.ExecContext(ctx, `DELETE FROM jobs WHERE id = ?`, id)
+	return err
 }
 
 func (s *Store) MarkRunningJobsInterrupted(ctx context.Context) error {

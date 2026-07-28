@@ -163,6 +163,43 @@ func TestUserManagementProtectsCurrentAndLastEnabledUser(t *testing.T) {
 	}
 }
 
+func TestPasswordPolicyDefaultsToSixCharactersAndPersistsRules(t *testing.T) {
+	service := openTestService(t, Options{})
+	ctx := context.Background()
+
+	defaultPolicy, err := service.PasswordPolicy(ctx)
+	if err != nil {
+		t.Fatalf("PasswordPolicy() error = %v", err)
+	}
+	if defaultPolicy.MinLength != 6 || defaultPolicy.RequireUppercase || defaultPolicy.RequireLowercase ||
+		defaultPolicy.RequireDigit || defaultPolicy.RequireSpecial {
+		t.Fatalf("default password policy = %#v", defaultPolicy)
+	}
+	root, err := service.Bootstrap(ctx, "root-admin", "123123")
+	if err != nil {
+		t.Fatalf("Bootstrap() with six numeric characters error = %v", err)
+	}
+	policy := PasswordPolicy{
+		MinLength:        8,
+		RequireUppercase: true,
+		RequireLowercase: true,
+		RequireDigit:     true,
+		RequireSpecial:   true,
+	}
+	if _, err := service.UpdatePasswordPolicy(ctx, policy); err != nil {
+		t.Fatalf("UpdatePasswordPolicy() error = %v", err)
+	}
+	if _, err := service.CreateUser(ctx, "weak-user", "12345678"); ErrorCode(err) != "AUTH_INPUT_INVALID" {
+		t.Fatalf("weak CreateUser() error code = %q", ErrorCode(err))
+	}
+	if _, err := service.CreateUser(ctx, "strong-user", "Ncp-1234"); err != nil {
+		t.Fatalf("strong CreateUser() error = %v", err)
+	}
+	if err := service.UpdatePassword(ctx, root.ID, root.ID, "123123", "Ncp-5678"); err != nil {
+		t.Fatalf("UpdatePassword() with policy error = %v", err)
+	}
+}
+
 func openTestService(t *testing.T, options Options) *Service {
 	t.Helper()
 	service, err := Open(filepath.Join(t.TempDir(), "ncp.sqlite"), options)

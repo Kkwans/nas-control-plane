@@ -201,21 +201,14 @@ cd ..
 make build-linux-arm64
 ```
 
-### 2. 安装 Root Agent
+### 2. 安装 Root Agent 与终端高亮
+
+推荐使用仓库内的幂等安装脚本。它会同步安装 Agent、systemd 单元、NCP 专用 Bash 配置，并从 ble.sh 官方固定版本 `v0.4.0-devel3` 安装交互式命令高亮；不会修改 `/root/.bashrc`。
 
 ```bash
-sudo install -d -o root -g root -m 0755 /opt/ncp/bin
-sudo install -o root -g root -m 0755 \
-  bin/ncp-agent-linux-arm64 \
-  /opt/ncp/bin/ncp-agent
-
-sudo install -o root -g root -m 0644 \
-  deploy/systemd/ncp-agent.service \
-  /etc/systemd/system/ncp-agent.service
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now ncp-agent.service
-sudo systemctl --no-pager --full status ncp-agent.service
+sudo sh deploy/systemd/install-agent.sh \
+  /volume2/Project/nas-control-plane \
+  /volume2/Project/nas-control-plane/bin/ncp-agent-linux-arm64
 ```
 
 Agent 启动后应创建：
@@ -309,21 +302,14 @@ pnpm run build
 cd ..
 make build-linux-arm64
 
-# 2. 备份并更新 Agent
+# 2. 备份并更新 Agent、终端 rcfile 与 ble.sh
 sudo cp -a \
   /etc/systemd/system/ncp-agent.service \
   /etc/systemd/system/ncp-agent.service.bak
 
-sudo install -o root -g root -m 0755 \
-  bin/ncp-agent-linux-arm64 \
-  /opt/ncp/bin/ncp-agent
-
-sudo install -o root -g root -m 0644 \
-  deploy/systemd/ncp-agent.service \
-  /etc/systemd/system/ncp-agent.service
-
-sudo systemctl daemon-reload
-sudo systemctl restart ncp-agent.service
+sudo sh deploy/systemd/install-agent.sh \
+  /volume2/Project/nas-control-plane \
+  /volume2/Project/nas-control-plane/bin/ncp-agent-linux-arm64
 
 # 3. 构建新版本 Server 镜像
 cd deploy/console

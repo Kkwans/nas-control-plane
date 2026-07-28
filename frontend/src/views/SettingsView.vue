@@ -117,10 +117,22 @@ onBeforeUnmount(() => {
       <article class="settings-section panel">
         <header><span><TextCursorInput :size="20" /></span><div><h2>字体</h2><p>中文与西文分别选择；未启用的 Web 字体不会进入首次加载。</p></div></header>
         <label class="setting-row"><span><strong>中文字体</strong><small>系统 UI 字体通常拥有最佳本地渲染</small></span>
-          <ElSelect v-model="draft.chineseFont"><ElOption label="系统中文 UI" value="system" /><ElOption label="Noto Sans SC（本机优先）" value="noto-sans-sc" /></ElSelect>
+          <ElSelect v-model="draft.chineseFont">
+            <ElOption label="系统中文 UI（推荐）" value="system" />
+            <ElOption label="Noto Sans SC（内置）" value="noto-sans-sc" />
+            <ElOption label="微软雅黑 UI" value="microsoft-yahei" />
+            <ElOption label="思源黑体 SC（本机）" value="source-han-sans-sc" />
+            <ElOption label="MiSans（本机）" value="misans" />
+            <ElOption label="HarmonyOS Sans SC（本机）" value="harmonyos-sans-sc" />
+          </ElSelect>
         </label>
         <label class="setting-row"><span><strong>西文字体</strong><small>影响数字、英文标题与拉丁字符</small></span>
-          <ElSelect v-model="draft.latinFont"><ElOption label="系统 UI" value="system" /><ElOption label="Manrope" value="manrope" /></ElSelect>
+          <ElSelect v-model="draft.latinFont">
+            <ElOption label="系统 UI" value="system" />
+            <ElOption label="Manrope（内置）" value="manrope" />
+            <ElOption label="Inter（内置）" value="inter" />
+            <ElOption label="IBM Plex Sans（内置）" value="ibm-plex-sans" />
+          </ElSelect>
         </label>
       </article>
     </section>

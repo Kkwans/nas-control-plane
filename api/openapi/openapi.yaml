@@ -177,6 +177,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/users/password-policy:
+    get:
+      operationId: getPasswordPolicy
+      summary: 读取当前密码长度与字符类型规则
+      tags: [users]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 当前密码规则
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordPolicy'
+    put:
+      operationId: updatePasswordPolicy
+      summary: 更新新密码和新账号使用的密码规则
+      tags: [users]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordPolicy'
+      responses:
+        '200':
+          description: 已保存的密码规则
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordPolicy'
   /api/v1/users/{userID}/password:
     put:
       operationId: updateUserPassword
@@ -194,7 +225,7 @@ paths:
               required: [newPassword]
               properties:
                 currentPassword: { type: string, format: password }
-                newPassword: { type: string, format: password, minLength: 8, maxLength: 256 }
+                newPassword: { type: string, format: password, minLength: 1, maxLength: 256 }
       responses:
         '204':
           description: 密码已更新且目标账号全部会话已撤销
@@ -685,6 +716,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+    delete:
+      operationId: deleteJob
+      summary: 删除已结束的后台任务记录
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string } }
+      responses:
+        '204':
+          description: 任务记录已删除
+        '409':
+          description: 排队中或运行中的任务不能删除
   /api/v1/jobs/{jobID}/events:
     get:
       operationId: followJob
@@ -985,10 +1028,10 @@ components:
           enum: [http, https]
         chineseFont:
           type: string
-          enum: [system, noto-sans-sc]
+          enum: [system, noto-sans-sc, microsoft-yahei, source-han-sans-sc, misans, harmonyos-sans-sc]
         latinFont:
           type: string
-          enum: [system, manrope]
+          enum: [system, manrope, inter, ibm-plex-sans]
     DatabaseProjectPreference:
       type: object
       required: [projectKey, archived]
@@ -1095,8 +1138,17 @@ components:
         password:
           type: string
           format: password
-          minLength: 8
+          minLength: 1
           maxLength: 256
+    PasswordPolicy:
+      type: object
+      required: [minLength, requireUppercase, requireLowercase, requireDigit, requireSpecial]
+      properties:
+        minLength: { type: integer, minimum: 1, maximum: 128, default: 6 }
+        requireUppercase: { type: boolean, default: false }
+        requireLowercase: { type: boolean, default: false }
+        requireDigit: { type: boolean, default: false }
+        requireSpecial: { type: boolean, default: false }
     Principal:
       type: object
       required: [id, username, role]
