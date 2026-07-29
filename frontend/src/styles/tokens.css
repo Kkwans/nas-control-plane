@@ -16,18 +16,31 @@
   --ncp-primary-strong: #2865bd;
   --ncp-primary-soft: #eaf2fd;
   --ncp-primary-hover: #dceafd;
-  --ncp-success: #23866f;
-  --ncp-success-soft: #e9f6f2;
-  --ncp-info: #4b7fbd;
-  --ncp-info-soft: #edf4fc;
-  --ncp-warning: #b87622;
-  --ncp-warning-strong: #9a6018;
-  --ncp-warning-soft: #fbf2e6;
-  --ncp-danger: #c95361;
-  --ncp-danger-strong: #ad3e4c;
-  --ncp-danger-soft: #fbecef;
-  --ncp-neutral: #68798e;
-  --ncp-neutral-soft: #eef2f6;
+  --ncp-focus-ring: rgba(52, 116, 212, 0.2);
+  --ncp-control-surface: #ffffff;
+  --ncp-control-hover: #f8fafd;
+  --ncp-control-active: #eef4fc;
+  --ncp-table-head: #f5f8fc;
+  --ncp-table-row-hover: #f7faff;
+
+  /* 状态色只表达运行状态和反馈，不用于资源类型。 */
+  --ncp-success: #1f806a;
+  --ncp-success-strong: #176b59;
+  --ncp-success-soft: #e4f4ef;
+  --ncp-info: #3f76b5;
+  --ncp-info-strong: #315f94;
+  --ncp-info-soft: #e8f1fb;
+  --ncp-warning: #b36e18;
+  --ncp-warning-strong: #8f5512;
+  --ncp-warning-soft: #faedda;
+  --ncp-danger: #c64a59;
+  --ncp-danger-strong: #a73846;
+  --ncp-danger-soft: #f9e7ea;
+  --ncp-neutral: #64758a;
+  --ncp-neutral-strong: #4d5d70;
+  --ncp-neutral-soft: #e9eef4;
+
+  /* 对象色只表达资源类型，不能替代状态色。 */
   --ncp-object-project: #23866f;
   --ncp-object-project-soft: #e9f6f2;
   --ncp-object-system: #a86b1f;
@@ -36,12 +49,16 @@
   --ncp-object-site-soft: #e8f4f6;
   --ncp-object-docker: #3474d4;
   --ncp-object-docker-soft: #eaf2fd;
+  --ncp-object-network: #237f8c;
+  --ncp-object-network-soft: #e3f3f5;
+  --ncp-object-storage: #7654c7;
+  --ncp-object-storage-soft: #f0ebfb;
   --ncp-engine-sqlite: #7654c7;
   --ncp-engine-sqlite-soft: #f0ebfb;
   --ncp-engine-mysql: #b56d17;
   --ncp-engine-mysql-soft: #fbf0df;
-  --ncp-engine-postgres: #3576b9;
-  --ncp-engine-postgres-soft: #e9f2fb;
+  --ncp-engine-postgres: #4667b7;
+  --ncp-engine-postgres-soft: #eaf0fb;
   --ncp-shadow-panel: 0 1px 2px rgba(35, 60, 96, 0.025), 0 8px 24px rgba(44, 70, 105, 0.045);
   --ncp-shadow-hover: 0 16px 34px rgba(45, 79, 124, 0.105);
   --ncp-shadow-float: 0 26px 70px rgba(33, 55, 88, 0.17);

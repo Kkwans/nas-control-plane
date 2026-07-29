@@ -47,7 +47,7 @@ defineProps<{
 <style scoped>
 .workspace-header {
   overflow: hidden;
-  border-color: rgba(203,214,228,.86);
+  border-color: var(--ncp-line-strong);
   background:
     radial-gradient(circle at 82% -40%, rgba(52,116,212,.075), transparent 34%),
     var(--ncp-surface);
@@ -72,7 +72,7 @@ defineProps<{
   height: 48px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(36, 104, 216, .13);
+  border: 1px solid color-mix(in srgb, var(--ncp-primary) 16%, transparent);
   border-radius: 14px;
   background: var(--ncp-primary-soft);
   color: var(--ncp-primary-strong);
@@ -110,7 +110,7 @@ p { margin: 5px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   gap: 16px;
   padding: 8px 14px;
   border-top: 1px solid var(--ncp-line);
-  background: rgba(248,250,253,.72);
+  background: var(--ncp-surface-quiet);
 }
 .workspace-filters,
 .workspace-tools,
@@ -131,7 +131,7 @@ p { margin: 5px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
   margin: 0;
   padding-inline: 14px;
   border-radius: 10px;
-  background: #fff;
+  background: var(--ncp-control-surface);
   font-weight: 680;
 }
 .workspace-header__actions :deep(.el-button--primary),
@@ -148,7 +148,7 @@ p { margin: 5px 0 0; color: var(--ncp-text-muted); font-size: .9rem; line-height
 .workspace-toolbar :deep(.el-input__wrapper) {
   min-height: var(--ncp-control-height);
   border-radius: 10px;
-  background: #fff;
+  background: var(--ncp-control-surface);
   box-shadow: 0 0 0 1px var(--ncp-line) inset;
 }
 .workspace-toolbar :deep(.source-filter),

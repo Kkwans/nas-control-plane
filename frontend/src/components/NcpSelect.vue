@@ -13,9 +13,13 @@ withDefaults(defineProps<{
   accessibleLabel: string
   placeholder?: string
   filterable?: boolean
+  clearable?: boolean
+  popperClass?: string
 }>(), {
   placeholder: '请选择',
   filterable: false,
+  clearable: false,
+  popperClass: '',
 })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
@@ -27,6 +31,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
     :model-value="modelValue"
     :placeholder="placeholder"
     :filterable="filterable"
+    :clearable="clearable"
+    :popper-class="['ncp-select-popper', popperClass].filter(Boolean).join(' ')"
     :aria-label="accessibleLabel"
     @update:model-value="emit('update:modelValue', String($event))"
   >
@@ -41,10 +47,16 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 </template>
 
 <style scoped>
-.ncp-select{min-width:140px}
-.ncp-select :deep(.el-select__wrapper){min-height:40px;border-radius:9px;background:#fff;box-shadow:0 0 0 1px var(--ncp-line) inset;transition:box-shadow var(--ncp-duration-fast),background-color var(--ncp-duration-fast)}
-.ncp-select :deep(.el-select__wrapper:hover){box-shadow:0 0 0 1px var(--ncp-line-strong) inset}
-.ncp-select :deep(.el-select__wrapper.is-focused){box-shadow:0 0 0 2px rgba(52,116,212,.2),0 0 0 1px var(--ncp-primary) inset}
-.ncp-select :deep(.el-select__selected-item){color:var(--ncp-text-muted);font-size:.8rem;font-weight:650}
+.ncp-select { min-width: 140px; }
+.ncp-select :deep(.el-select__wrapper) {
+  min-height: var(--ncp-control-height);
+  border-radius: 10px;
+  background: var(--ncp-control-surface);
+  box-shadow: 0 0 0 1px var(--ncp-line) inset;
+  transition: box-shadow var(--ncp-duration-fast), background-color var(--ncp-duration-fast);
+}
+.ncp-select :deep(.el-select__wrapper:hover) { background: var(--ncp-control-hover); box-shadow: 0 0 0 1px var(--ncp-line-strong) inset; }
+.ncp-select :deep(.el-select__wrapper.is-focused) { background: var(--ncp-control-surface); box-shadow: 0 0 0 2px var(--ncp-focus-ring), 0 0 0 1px var(--ncp-primary) inset; }
+.ncp-select :deep(.el-select__selected-item) { color: var(--ncp-text-muted); font-size: .84rem; font-weight: 650; }
 .ncp-select :deep(.el-select__input),.ncp-select :deep(.el-select__input:focus){outline:0!important;box-shadow:none!important}
 </style>

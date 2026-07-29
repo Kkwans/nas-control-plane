@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-type StatusTone = 'healthy' | 'degraded' | 'attention' | 'pending'
+export type StatusTone = 'healthy' | 'info' | 'degraded' | 'attention' | 'pending' | 'neutral'
 
 const props = defineProps<{
   label: string
@@ -32,9 +32,9 @@ const toneClass = computed(() => `status-pill--${props.tone}`)
   border: 1px solid transparent;
   border-radius: var(--ncp-radius-pill);
   font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
-  font-size: 0.67rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: 0.74rem;
+  font-weight: 720;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
@@ -48,19 +48,37 @@ const toneClass = computed(() => `status-pill--${props.tone}`)
 .status-pill--healthy {
   border-color: color-mix(in srgb, var(--ncp-success) 22%, transparent);
   background: var(--ncp-success-soft);
-  color: var(--ncp-success);
+  color: var(--ncp-success-strong);
+}
+
+.status-pill--info {
+  border-color: color-mix(in srgb, var(--ncp-info) 24%, transparent);
+  background: var(--ncp-info-soft);
+  color: var(--ncp-info-strong);
 }
 
 .status-pill--degraded,
 .status-pill--pending {
-  border-color: rgba(210, 138, 27, 0.2);
+  border-color: color-mix(in srgb, var(--ncp-warning) 24%, transparent);
   background: var(--ncp-warning-soft);
   color: var(--ncp-warning-strong);
 }
 
 .status-pill--attention {
-  border-color: rgba(212, 81, 93, 0.2);
+  border-color: color-mix(in srgb, var(--ncp-danger) 24%, transparent);
   background: var(--ncp-danger-soft);
   color: var(--ncp-danger-strong);
+}
+
+.status-pill--neutral {
+  border-color: color-mix(in srgb, var(--ncp-neutral) 22%, transparent);
+  background: var(--ncp-neutral-soft);
+  color: var(--ncp-neutral-strong);
+}
+
+:global(html[data-density='compact']) .status-pill {
+  min-height: 24px;
+  padding-inline: 8px;
+  font-size: .71rem;
 }
 </style>

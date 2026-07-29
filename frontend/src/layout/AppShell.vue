@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
             <ChevronRight class="navigation__arrow" :size="15" aria-hidden="true" />
           </RouterLink>
         </ElTooltip>
-        <p class="navigation__label navigation__label--secondary">后续模块</p>
+        <p v-if="plannedNavigation.length" class="navigation__label navigation__label--secondary">后续模块</p>
         <ElTooltip v-for="item in plannedNavigation" :key="item.label" content="功能待接入" placement="right">
           <button class="navigation__item navigation__item--planned" type="button" disabled>
             <component :is="item.icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
@@ -216,11 +216,11 @@ onBeforeUnmount(() => {
 .navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 750; letter-spacing: .02em; }
 .navigation__label--secondary { margin-top: 18px; }
 .navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: var(--ncp-text-muted); font-size: .88rem; font-weight: 670; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
-.navigation__item:hover { border-color: rgba(52,116,212,.09); background: var(--ncp-surface-quiet); color: var(--ncp-text); transform: translateX(2px); }
+.navigation__item:hover { border-color: color-mix(in srgb, var(--ncp-primary) 11%, transparent); background: var(--ncp-surface-quiet); color: var(--ncp-text); }
 .navigation__item.router-link-exact-active {
-  border-color: rgba(52,116,212,.18);
+  border-color: color-mix(in srgb, var(--ncp-primary) 20%, transparent);
   background: var(--ncp-primary-soft);
-  box-shadow: 0 5px 14px rgba(52,116,212,.09);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--ncp-primary) 10%, transparent);
   color: var(--ncp-primary-strong);
 }
 .navigation__item--planned { cursor: not-allowed; opacity: .55; }
