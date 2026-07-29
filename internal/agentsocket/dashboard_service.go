@@ -14,11 +14,13 @@ import (
 
 type DashboardProvider interface {
 	CollectSystemSummary(context.Context) (system.Summary, error)
+	CollectSystemDetails(context.Context) (system.Details, error)
 	CollectDockerInventory(context.Context) (docker.Inventory, error)
 }
 
 type dashboardProvider struct {
 	systemSummary   *system.SummaryCollector
+	systemDetails   *system.DetailsCollector
 	dockerInventory *docker.InventoryCollector
 }
 
@@ -29,12 +31,17 @@ func newLiveDashboardProvider() (DashboardProvider, error) {
 	}
 	return &dashboardProvider{
 		systemSummary:   system.NewLiveSummaryCollector(),
+		systemDetails:   system.NewDetailsCollector(),
 		dockerInventory: dockerInventory,
 	}, nil
 }
 
 func (p *dashboardProvider) CollectSystemSummary(ctx context.Context) (system.Summary, error) {
 	return p.systemSummary.Collect(ctx)
+}
+
+func (p *dashboardProvider) CollectSystemDetails(ctx context.Context) (system.Details, error) {
+	return p.systemDetails.Collect(ctx)
 }
 
 func (p *dashboardProvider) CollectDockerInventory(ctx context.Context) (docker.Inventory, error) {
@@ -61,6 +68,25 @@ func (s *dashboardService) GetSystemSummary(ctx context.Context, _ *emptypb.Empt
 		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_SYSTEM_SUMMARY_UNAVAILABLE")
 	}
 	return dashboardStruct(summary, "AGENT_SYSTEM_SUMMARY_RESPONSE_INVALID")
+}
+
+func (s *dashboardService) GetSystemDetails(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	if s.provider == nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_SYSTEM_DETAILS_UNAVAILABLE")
+	}
+	details, err := s.provider.CollectSystemDetails(ctx)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_SYSTEM_DETAILS_UNAVAILABLE")
+	}
+	for index := range details.Control.Nodes {
+		if details.Control.Nodes[index].ID == "agent" {
+			details.Control.Nodes[index].Version = BuildVersion
+		}
+	}
+	return dashboardStruct(details, "AGENT_SYSTEM_DETAILS_RESPONSE_INVALID")
 }
 
 func (s *dashboardService) GetDockerInventory(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {

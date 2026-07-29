@@ -67,6 +67,123 @@ export interface SystemSummary {
   }>
 }
 
+export interface SystemDetails {
+  collectedAt: string
+  warnings: string[]
+  device: {
+    hostname: string
+    model: string
+    operatingSystem: string
+    kernelVersion: string
+    architecture: string
+    uptimeSeconds: number
+    cgroupVersion: string
+  }
+  hardware: {
+    cpu: {
+      model: string
+      physicalCores: number
+      logicalCores: number
+      frequencyMHz: number
+      temperatureCelsius: number
+    }
+    memory: {
+      totalBytes: number
+      availableBytes: number
+    }
+    sensors: Array<{
+      name: string
+      temperatureCelsius: number
+    }>
+  }
+  network: {
+    interfaces: Array<{
+      name: string
+      hardwareAddress: string
+      mtu: number
+      state: string
+      speedMbps: number
+      duplex: string
+      addresses: Array<{
+        address: string
+        prefixLength: number
+        family: string
+      }>
+    }>
+    gateway: string
+    routes: Array<{
+      destination: string
+      gateway: string
+      interface: string
+      metric: number
+    }>
+    dnsServers: string[]
+    listeningPorts: Array<{
+      protocol: string
+      address: string
+      port: number
+      pid: number
+    }>
+  }
+  storage: {
+    mounts: Array<{
+      path: string
+      device: string
+      filesystem: string
+      totalBytes: number
+      usedBytes: number
+      availableBytes: number
+      usedPercent: number
+    }>
+    disks: Array<{
+      name: string
+      model: string
+      sizeBytes: number
+      rotational: boolean
+      health: string
+      temperatureCelsius: number
+    }>
+    raid: Array<{
+      name: string
+      level: string
+      state: string
+      devices: string[]
+    }>
+  }
+  proxy: {
+    mihomo: {
+      detected: boolean
+      state: string
+      detail: string
+    }
+    system: Array<{
+      source: string
+      method: string
+      evidence: string
+      address: string
+      detail: string
+    }>
+    associations: Array<{
+      subject: string
+      kind: string
+      method: string
+      evidence: string
+      endpoint: string
+      detail: string
+    }>
+  }
+  control: {
+    nodes: Array<{
+      id: string
+      name: string
+      detail: string
+      status: string
+      version: string
+      lastSeen: string
+    }>
+  }
+}
+
 export interface DockerProject {
   id: string
   name: string
@@ -320,6 +437,10 @@ export async function requestCapabilities(fetcher: typeof fetch = fetch): Promis
 
 export async function requestSystemSummary(fetcher: typeof fetch = fetch): Promise<SystemSummary> {
   return requestJson('/api/v1/system/summary', {}, isSystemSummary, fetcher, 'SYSTEM_SUMMARY_RESPONSE_INVALID')
+}
+
+export async function requestSystemDetails(fetcher: typeof fetch = fetch): Promise<SystemDetails> {
+  return requestJson('/api/v1/system/details', {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
 }
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {
@@ -718,6 +839,37 @@ function isSystemCapabilities(value: unknown): value is SystemCapabilities {
 
 function isSystemSummary(value: unknown): value is SystemSummary {
   return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.host) && isRecord(value.cpu) && isRecord(value.memory) && Array.isArray(value.storage) && Array.isArray(value.network) && Array.isArray(value.warnings)
+}
+
+function isSystemDetails(value: unknown): value is SystemDetails {
+  if (
+    !isRecord(value) ||
+    typeof value.collectedAt !== 'string' ||
+    !Array.isArray(value.warnings) ||
+    !isRecord(value.device) ||
+    !isRecord(value.hardware) ||
+    !isRecord(value.network) ||
+    !isRecord(value.storage) ||
+    !isRecord(value.proxy) ||
+    !isRecord(value.control)
+  ) return false
+
+  return (
+    isRecord(value.hardware.cpu) &&
+    isRecord(value.hardware.memory) &&
+    Array.isArray(value.hardware.sensors) &&
+    Array.isArray(value.network.interfaces) &&
+    Array.isArray(value.network.routes) &&
+    Array.isArray(value.network.dnsServers) &&
+    Array.isArray(value.network.listeningPorts) &&
+    Array.isArray(value.storage.mounts) &&
+    Array.isArray(value.storage.disks) &&
+    Array.isArray(value.storage.raid) &&
+    isRecord(value.proxy.mihomo) &&
+    Array.isArray(value.proxy.system) &&
+    Array.isArray(value.proxy.associations) &&
+    Array.isArray(value.control.nodes)
+  )
 }
 
 function isDockerInventory(value: unknown): value is DockerInventory {

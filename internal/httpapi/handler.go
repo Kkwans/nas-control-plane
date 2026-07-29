@@ -31,6 +31,7 @@ type AgentClient interface {
 	Probe(context.Context, string) (agentsocket.AgentStatus, error)
 	CollectCapabilities(context.Context, string) (system.Capabilities, error)
 	CollectSystemSummary(context.Context, string) (system.Summary, error)
+	CollectSystemDetails(context.Context, string) (system.Details, error)
 	CollectDockerInventory(context.Context, string) (docker.Inventory, error)
 	ControlContainer(context.Context, string, docker.ContainerActionRequest) (docker.ContainerActionResult, error)
 	ReadContainerLogs(context.Context, string, docker.ContainerLogsRequest) (docker.ContainerLogsResult, error)
@@ -155,6 +156,10 @@ func (socketAgentClient) CollectCapabilities(ctx context.Context, socketPath str
 
 func (socketAgentClient) CollectSystemSummary(ctx context.Context, socketPath string) (system.Summary, error) {
 	return agentsocket.CollectSystemSummary(ctx, socketPath)
+}
+
+func (socketAgentClient) CollectSystemDetails(ctx context.Context, socketPath string) (system.Details, error) {
+	return agentsocket.CollectSystemDetails(ctx, socketPath)
 }
 
 func (socketAgentClient) CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
@@ -300,6 +305,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/system/capabilities", api.capabilities)
 			protected.Get("/system/agent-status", api.agentStatus)
 			protected.Get("/system/summary", api.systemSummary)
+			protected.Get("/system/details", api.systemDetails)
 			protected.Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
 			protected.Get("/logs", api.logs)
@@ -417,6 +423,44 @@ func (api *handler) systemSummary(response http.ResponseWriter, request *http.Re
 	}
 	api.recordMetricSample(request.Context(), summary)
 	writeJSON(response, http.StatusOK, summary)
+}
+
+func (api *handler) systemDetails(response http.ResponseWriter, request *http.Request) {
+	details, err := api.collectSystemDetails(request.Context())
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_DETAILS_UNAVAILABLE", "系统详细信息暂不可用，请确认 Root Agent 已启动。")
+		return
+	}
+
+	now := time.Now().UTC()
+	details.Control.Nodes = append([]system.ControlNode{
+		{
+			ID:       "web",
+			Name:     "Web 控制台",
+			Detail:   "浏览器中的 Root 管理会话",
+			Status:   "ready",
+			Version:  agentsocket.BuildVersion,
+			LastSeen: now,
+		},
+		{
+			ID:       "server",
+			Name:     "NCP Server",
+			Detail:   "HTTP API、SQLite 与任务调度",
+			Status:   "ready",
+			Version:  agentsocket.BuildVersion,
+			LastSeen: now,
+		},
+		{
+			ID:       "socket",
+			Name:     "Unix Socket",
+			Detail:   "本机强类型 RPC 通道",
+			Status:   "ready",
+			Version:  agentsocket.ProtocolVersion,
+			LastSeen: now,
+		},
+	}, details.Control.Nodes...)
+
+	writeJSON(response, http.StatusOK, details)
 }
 
 func (api *handler) monitoringSamples(response http.ResponseWriter, request *http.Request) {
@@ -652,6 +696,16 @@ func (api *handler) collectSystemSummary(ctx context.Context) (system.Summary, e
 	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
 	defer cancel()
 	return api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
+}
+
+func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, error) {
+	timeout := api.agentTimeout
+	if timeout < 10*time.Second {
+		timeout = 10 * time.Second
+	}
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return api.agent.CollectSystemDetails(requestContext, api.agentSocketPath)
 }
 
 func (api *handler) collectDockerInventoryContext(ctx context.Context) (docker.Inventory, error) {

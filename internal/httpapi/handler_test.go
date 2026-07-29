@@ -95,6 +95,49 @@ func TestCapabilitiesReturnsStableErrorWhenAgentIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestSystemDetailsAddsControlPlaneNodes(t *testing.T) {
+	agent := &fakeAgentClient{details: system.Details{
+		CollectedAt: time.Now().UTC(),
+		Warnings:    []string{},
+		Device:      system.DeviceDetails{Hostname: "DH4300Plus"},
+		Control: system.ControlDetails{Nodes: []system.ControlNode{
+			{ID: "agent", Name: "Root Agent", Status: "ready", Version: "agent-test"},
+		}},
+	}}
+	handler := NewHandler(Config{
+		Agent:           agent,
+		AgentSocketPath: "/run/ncp/test.sock",
+		AgentTimeout:    time.Second,
+		RequestID:       func() string { return "req-details" },
+	})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/details", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !agent.deadlineObserved {
+		t.Fatal("系统详情 Agent 调用必须带有超时 Deadline")
+	}
+	var body system.Details
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Device.Hostname != "DH4300Plus" {
+		t.Fatalf("hostname = %q", body.Device.Hostname)
+	}
+	if len(body.Control.Nodes) != 4 {
+		t.Fatalf("control nodes = %#v", body.Control.Nodes)
+	}
+	wantIDs := []string{"web", "server", "socket", "agent"}
+	for index, want := range wantIDs {
+		if body.Control.Nodes[index].ID != want {
+			t.Fatalf("control node %d = %q, want %q", index, body.Control.Nodes[index].ID, want)
+		}
+	}
+}
+
 func TestAgentStatusIsReadOnlyAgentProbe(t *testing.T) {
 	handler := NewHandler(Config{
 		Agent: &fakeAgentClient{status: agentsocket.AgentStatus{
@@ -253,6 +296,8 @@ type fakeAgentClient struct {
 	capabilitiesErr  error
 	summary          system.Summary
 	summaryErr       error
+	details          system.Details
+	detailsErr       error
 	inventory        docker.Inventory
 	inventoryErr     error
 	actionResult     docker.ContainerActionResult
@@ -283,6 +328,12 @@ func (f *fakeAgentClient) CollectSystemSummary(ctx context.Context, socketPath s
 	f.socketPath = socketPath
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.summary, f.summaryErr
+}
+
+func (f *fakeAgentClient) CollectSystemDetails(ctx context.Context, socketPath string) (system.Details, error) {
+	f.socketPath = socketPath
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.details, f.detailsErr
 }
 
 func (f *fakeAgentClient) CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {

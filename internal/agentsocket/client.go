@@ -87,6 +87,23 @@ func CollectSystemSummary(ctx context.Context, socketPath string) (system.Summar
 	return decodeSystemSummary(response)
 }
 
+func CollectSystemDetails(ctx context.Context, socketPath string) (system.Details, error) {
+	if err := ctx.Err(); err != nil {
+		return system.Details{}, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return system.Details{}, err
+	}
+	defer connection.Close()
+
+	response, err := NewAgentDashboardServiceClient(connection).GetSystemDetails(ctx, &emptypb.Empty{})
+	if err != nil {
+		return system.Details{}, rpcError(err)
+	}
+	return decodeSystemDetails(response)
+}
+
 func CollectDockerInventory(ctx context.Context, socketPath string) (docker.Inventory, error) {
 	if err := ctx.Err(); err != nil {
 		return docker.Inventory{}, contextError(err)
@@ -558,6 +575,53 @@ func decodeSystemSummary(response *structpb.Struct) (system.Summary, error) {
 		return system.Summary{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("summary collection time is required"))
 	}
 	return summary, nil
+}
+
+func decodeSystemDetails(response *structpb.Struct) (system.Details, error) {
+	var details system.Details
+	if err := decodeDashboardResponse(response, &details); err != nil {
+		return system.Details{}, err
+	}
+	if details.CollectedAt.IsZero() {
+		return system.Details{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("details collection time is required"))
+	}
+	if details.Warnings == nil {
+		details.Warnings = make([]string, 0)
+	}
+	if details.Hardware.Sensors == nil {
+		details.Hardware.Sensors = make([]system.TemperatureProbe, 0)
+	}
+	if details.Network.Interfaces == nil {
+		details.Network.Interfaces = make([]system.NetworkInterface, 0)
+	}
+	if details.Network.Routes == nil {
+		details.Network.Routes = make([]system.NetworkRoute, 0)
+	}
+	if details.Network.DNSServers == nil {
+		details.Network.DNSServers = make([]string, 0)
+	}
+	if details.Network.ListeningPorts == nil {
+		details.Network.ListeningPorts = make([]system.ListeningPort, 0)
+	}
+	if details.Storage.Mounts == nil {
+		details.Storage.Mounts = make([]system.MountDetails, 0)
+	}
+	if details.Storage.Disks == nil {
+		details.Storage.Disks = make([]system.PhysicalDiskDetails, 0)
+	}
+	if details.Storage.RAID == nil {
+		details.Storage.RAID = make([]system.RAIDDetails, 0)
+	}
+	if details.Proxy.System == nil {
+		details.Proxy.System = make([]system.ProxyEvidence, 0)
+	}
+	if details.Proxy.Associations == nil {
+		details.Proxy.Associations = make([]system.ProxyAssociation, 0)
+	}
+	if details.Control.Nodes == nil {
+		details.Control.Nodes = make([]system.ControlNode, 0)
+	}
+	return details, nil
 }
 
 func decodeDockerInventory(response *structpb.Struct) (docker.Inventory, error) {

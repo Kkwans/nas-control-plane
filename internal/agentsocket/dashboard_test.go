@@ -25,6 +25,13 @@ func TestAgentDashboardServiceReturnsHostAndDockerDataOverGRPC(t *testing.T) {
 			CollectedAt: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
 			Host:        system.HostSnapshot{Hostname: "DH4300-PLUS"},
 		},
+		details: system.Details{
+			CollectedAt: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
+			Device:      system.DeviceDetails{Hostname: "DH4300-PLUS", Architecture: "arm64"},
+			Control: system.ControlDetails{Nodes: []system.ControlNode{{
+				ID: "agent", Name: "Root Agent", Status: "ready",
+			}}},
+		},
 		inventory: docker.Inventory{
 			CollectedAt: time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC),
 			Engine:      docker.EngineInfo{ContainersRunning: 3},
@@ -53,6 +60,17 @@ func TestAgentDashboardServiceReturnsHostAndDockerDataOverGRPC(t *testing.T) {
 	if summary.GetFields()["host"].GetStructValue().GetFields()["hostname"].GetStringValue() != "DH4300-PLUS" {
 		t.Fatalf("hostname = %#v", summary.AsMap())
 	}
+	details, err := client.GetSystemDetails(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("GetSystemDetails() error = %v", err)
+	}
+	if details.GetFields()["device"].GetStructValue().GetFields()["architecture"].GetStringValue() != "arm64" {
+		t.Fatalf("details = %#v", details.AsMap())
+	}
+	nodes := details.GetFields()["control"].GetStructValue().GetFields()["nodes"].GetListValue().GetValues()
+	if len(nodes) != 1 || nodes[0].GetStructValue().GetFields()["version"].GetStringValue() != BuildVersion {
+		t.Fatalf("control nodes = %#v", details.AsMap())
+	}
 	inventory, err := client.GetDockerInventory(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		t.Fatalf("GetDockerInventory() error = %v", err)
@@ -73,12 +91,18 @@ func TestAgentDashboardServiceUsesStableUnavailableCode(t *testing.T) {
 type fakeDashboardProvider struct {
 	summary      system.Summary
 	summaryErr   error
+	details      system.Details
+	detailsErr   error
 	inventory    docker.Inventory
 	inventoryErr error
 }
 
 func (f fakeDashboardProvider) CollectSystemSummary(context.Context) (system.Summary, error) {
 	return f.summary, f.summaryErr
+}
+
+func (f fakeDashboardProvider) CollectSystemDetails(context.Context) (system.Details, error) {
+	return f.details, f.detailsErr
 }
 
 func (f fakeDashboardProvider) CollectDockerInventory(context.Context) (docker.Inventory, error) {
