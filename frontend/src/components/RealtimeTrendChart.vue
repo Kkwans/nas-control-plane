@@ -28,13 +28,24 @@ const props = withDefaults(defineProps<{
 const enoughData = computed(() => props.timestamps.length >= 2)
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-function formatTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(date)
+function formatAxisLabels(values: string[]) {
+  const dates = values.map((value) => new Date(value))
+  const spansDays = dates.some((date, index) => {
+    const previous = dates[index - 1]
+    return Boolean(previous && date.toDateString() !== previous.toDateString())
+  })
+  return dates.map((date, index) => {
+    if (Number.isNaN(date.valueOf())) return values[index] ?? ''
+    const time = new Intl.DateTimeFormat('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: spansDays ? undefined : '2-digit',
+    }).format(date)
+    if (!spansDays) return time
+    const previous = dates[index - 1]
+    const isBoundary = !previous || date.toDateString() !== previous.toDateString()
+    return isBoundary ? `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${time}` : time
+  })
 }
 
 function formatValue(value: number) {
@@ -72,7 +83,7 @@ const option = computed<EChartsOption>(() => ({
   xAxis: {
     type: 'category',
     boundaryGap: false,
-    data: props.timestamps.map(formatTime),
+    data: formatAxisLabels(props.timestamps),
     axisLine: { lineStyle: { color: '#dce4ee' } },
     axisTick: { show: false },
     axisLabel: { color: '#7b8aa1', fontSize: 10, interval: Math.max(Math.floor(props.timestamps.length / 5) - 1, 0) },

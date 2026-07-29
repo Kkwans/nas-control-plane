@@ -56,7 +56,7 @@ const primaryNavigation: NavigationItem[] = [
   { label: 'Docker 管理', to: '/docker', icon: Container },
   { label: '数据库', to: '/databases', icon: Database },
   { label: '系统信息', to: '/system', icon: Info },
-  { label: '监控', to: '/monitoring', icon: Gauge },
+  { label: '系统监控', to: '/monitoring', icon: Gauge },
   { label: '日志中心', to: '/logs', icon: FileClock },
   { label: '终端', to: '/terminal', icon: TerminalSquare },
   { label: '系统设置', to: '/settings', icon: Settings },
@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
           <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${realtimeState}`">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
-          <ElTooltip v-if="liveDataActive && route.path !== '/monitoring'" content="立即刷新数据" placement="bottom">
+          <ElTooltip v-if="liveDataActive" content="立即刷新数据" placement="bottom">
             <button class="refresh-button" type="button" :disabled="isRefreshing" aria-label="立即刷新数据" @click="emit('refresh')">
               <RefreshCw :class="{ spin: isRefreshing }" :size="18" aria-hidden="true" /><span>刷新</span>
             </button>

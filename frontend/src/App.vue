@@ -63,6 +63,7 @@ function startAuthenticatedSession() {
 
 async function handleRefresh() {
   await systemStore.refresh()
+  window.dispatchEvent(new CustomEvent('ncp:manual-refresh'))
   if (systemStore.errorCode === 'AUTH_UNAUTHORIZED') {
     await authStore.refresh()
   }
