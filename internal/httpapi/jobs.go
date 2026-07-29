@@ -42,6 +42,12 @@ type jobLayer struct {
 	Total   int64  `json:"total"`
 }
 
+const (
+	jobArtifactPresent = "present"
+	jobArtifactDeleted = "deleted"
+	jobArtifactUnknown = "unknown"
+)
+
 type jobPersistence interface {
 	UpsertJob(context.Context, controlstore.JobRecord) error
 	Jobs(context.Context, string, int) ([]controlstore.JobRecord, error)
@@ -77,7 +83,7 @@ func newJobRegistry(store any) *jobRegistry {
 
 func (registry *jobRegistry) create(kind, reference string) jobSnapshot {
 	now := time.Now().UTC()
-	job := jobSnapshot{ID: newJobID(), Type: kind, Status: "queued", Reference: reference, Message: "任务已进入队列", Progress: 0, CreatedAt: now, UpdatedAt: now, Layers: make(map[string]jobLayer)}
+	job := jobSnapshot{ID: newJobID(), Type: kind, Status: "queued", Reference: reference, Message: "任务已进入队列", Progress: 0, CreatedAt: now, UpdatedAt: now, Layers: make(map[string]jobLayer), ArtifactState: jobArtifactUnknown}
 	registry.mu.Lock()
 	registry.jobs[job.ID] = job
 	registry.mu.Unlock()
@@ -94,7 +100,7 @@ func (registry *jobRegistry) update(id, status, message, errorMessage string, pr
 	}
 	job.Status, job.Message, job.Error, job.Progress, job.UpdatedAt = status, message, errorMessage, progress, time.Now().UTC()
 	if status == "completed" && job.Type == "docker-image-pull" {
-		job.ArtifactState = "present"
+		job.ArtifactState = jobArtifactPresent
 	}
 	if status == "completed" || status == "failed" || status == "interrupted" || status == "cancelled" {
 		completedAt := job.UpdatedAt
@@ -229,7 +235,7 @@ func (registry *jobRegistry) get(id string) (jobSnapshot, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 	job, exists := registry.jobs[id]
-	return job, exists
+	return normalizeJobSnapshot(job), exists
 }
 
 func (registry *jobRegistry) list(kind string) []jobSnapshot {
@@ -238,7 +244,7 @@ func (registry *jobRegistry) list(kind string) []jobSnapshot {
 	result := make([]jobSnapshot, 0, len(registry.jobs))
 	for _, job := range registry.jobs {
 		if kind == "" || job.Type == kind {
-			result = append(result, job)
+			result = append(result, normalizeJobSnapshot(job))
 		}
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].CreatedAt.After(result[right].CreatedAt) })
@@ -294,10 +300,23 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 		Message: record.Message, Progress: record.Progress, Error: record.Error,
 		DownloadedBytes: record.DownloadedBytes, TotalBytes: record.TotalBytes, SpeedBytes: record.SpeedBytes,
 		Layers: layers, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		ArtifactState: jobArtifactUnknown,
 	}
 	if !record.CompletedAt.IsZero() {
 		completedAt := record.CompletedAt
 		job.CompletedAt = &completedAt
+	}
+	return job
+}
+
+func normalizeJobSnapshot(job jobSnapshot) jobSnapshot {
+	switch job.ArtifactState {
+	case jobArtifactPresent, jobArtifactDeleted, jobArtifactUnknown:
+	default:
+		job.ArtifactState = jobArtifactUnknown
+	}
+	if job.Layers == nil {
+		job.Layers = make(map[string]jobLayer)
 	}
 	return job
 }
@@ -328,7 +347,7 @@ func (api *handler) resolveDockerArtifactStates(ctx context.Context, jobs []jobS
 	if err != nil {
 		for index := range jobs {
 			if jobs[index].Type == "docker-image-pull" && jobs[index].Status == "completed" {
-				jobs[index].ArtifactState = "unknown"
+				jobs[index].ArtifactState = jobArtifactUnknown
 			}
 		}
 		return jobs
@@ -350,9 +369,9 @@ func (api *handler) resolveDockerArtifactStates(ctx context.Context, jobs []jobS
 		}
 		reference := strings.TrimPrefix(strings.TrimSpace(job.Reference), "docker.io/")
 		if _, present := references[reference]; present {
-			job.ArtifactState = "present"
+			job.ArtifactState = jobArtifactPresent
 		} else {
-			job.ArtifactState = "deleted"
+			job.ArtifactState = jobArtifactDeleted
 		}
 	}
 	return jobs

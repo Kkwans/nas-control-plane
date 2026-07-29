@@ -170,7 +170,7 @@ export interface JobSnapshot {
   id: string
   type: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
-  artifactState?: 'present' | 'deleted' | 'unknown'
+  artifactState: 'present' | 'deleted' | 'unknown'
   reference?: string
   message: string
   progress: number
@@ -182,6 +182,11 @@ export interface JobSnapshot {
   totalBytes: number
   speedBytes: number
   layers: Record<string, { id: string; status: string; current: number; total: number }>
+}
+
+export interface JobListResult {
+  jobs: JobSnapshot[]
+  invalidCount: number
 }
 
 export interface DockerImageRemoveResult {
@@ -394,14 +399,13 @@ export async function pullDockerImage(
   expectedBytes = 0,
   fetcher: typeof fetch = fetch,
 ): Promise<JobSnapshot> {
-  return requestJson(
+  return requestJobSnapshot(
     '/api/v1/docker/images/pull',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reference, expectedBytes }),
     },
-    isJobSnapshot,
     fetcher,
     'DOCKER_IMAGE_PULL_RESPONSE_INVALID',
   )
@@ -413,11 +417,12 @@ export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void)
     source.addEventListener('progress', (event) => {
       try {
         const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
-        if (!isJobSnapshot(payload)) throw new Error('任务进度格式无效')
-        onProgress(payload)
-        if (payload.status === 'completed' || payload.status === 'failed' || payload.status === 'interrupted' || payload.status === 'cancelled') {
+        const job = parseJobSnapshot(payload)
+        if (!job) throw new Error('任务进度格式无效')
+        onProgress(job)
+        if (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') {
           source.close()
-          resolve(payload)
+          resolve(job)
         }
       } catch (error) {
         source.close()
@@ -431,34 +436,42 @@ export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void)
   })
 }
 
-export async function requestJobs(type = '', fetcher: typeof fetch = fetch): Promise<JobSnapshot[]> {
+export async function requestJobs(type = '', fetcher: typeof fetch = fetch): Promise<JobListResult> {
   const parameters = new URLSearchParams()
   if (type) parameters.set('type', type)
   const payload = await requestJson(
     `/api/v1/jobs${parameters.size ? `?${parameters}` : ''}`,
     {},
-    (value): value is { jobs: JobSnapshot[] } => isRecord(value) && Array.isArray(value.jobs) && value.jobs.every(isJobSnapshot),
+    (value): value is { jobs: unknown[] } => isRecord(value) && Array.isArray(value.jobs),
     fetcher,
     'JOB_LIST_RESPONSE_INVALID',
   )
-  return payload.jobs
+  const jobs: JobSnapshot[] = []
+  let invalidCount = 0
+  for (const value of payload.jobs) {
+    const job = parseJobSnapshot(value)
+    if (job) jobs.push(job)
+    else invalidCount += 1
+  }
+  if (invalidCount > 0) {
+    console.warn(`[NCP] 已忽略 ${invalidCount} 条无法解析的任务记录。`)
+  }
+  return { jobs, invalidCount }
 }
 
 export async function retryJob(jobId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
-  return requestJson(
+  return requestJobSnapshot(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/retry`,
     { method: 'POST' },
-    isJobSnapshot,
     fetcher,
     'JOB_RETRY_RESPONSE_INVALID',
   )
 }
 
 export async function cancelJob(jobId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
-  return requestJson(
+  return requestJobSnapshot(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`,
     { method: 'POST' },
-    isJobSnapshot,
     fetcher,
     'JOB_CANCEL_RESPONSE_INVALID',
   )
@@ -563,10 +576,9 @@ export async function deployComposeConfig(
   input: ComposeDeployInput,
   fetcher: typeof fetch = fetch,
 ): Promise<JobSnapshot> {
-  return requestJson(
+  return requestJobSnapshot(
     '/api/v1/docker/compose/deploy',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
-    isJobSnapshot,
     fetcher,
     'COMPOSE_DEPLOY_RESPONSE_INVALID',
   )
@@ -611,6 +623,20 @@ async function requestJson<T>(
     throw new NcpApiError(invalidCode, 'NCP 服务返回了无法识别的数据。')
   }
   return payload
+}
+
+async function requestJobSnapshot(
+  path: string,
+  init: RequestInit,
+  fetcher: typeof fetch,
+  invalidCode: string,
+): Promise<JobSnapshot> {
+  const payload = await requestJson(path, init, isRecord, fetcher, invalidCode)
+  const job = parseJobSnapshot(payload)
+  if (!job) {
+    throw new NcpApiError(invalidCode, 'NCP 服务返回了无法识别的数据。')
+  }
+  return job
 }
 
 function requestOptions(init: RequestInit): RequestInit {
@@ -742,12 +768,11 @@ function isDockerImageWireInventory(value: unknown): value is DockerImageWireInv
   )
 }
 
-function isJobSnapshot(value: unknown): value is JobSnapshot {
-  return isRecord(value) &&
+function parseJobSnapshot(value: unknown): JobSnapshot | null {
+  if (!(isRecord(value) &&
     typeof value.id === 'string' &&
     typeof value.type === 'string' &&
     (value.status === 'queued' || value.status === 'running' || value.status === 'completed' || value.status === 'failed' || value.status === 'interrupted' || value.status === 'cancelled') &&
-    (value.artifactState === undefined || value.artifactState === 'present' || value.artifactState === 'deleted' || value.artifactState === 'unknown') &&
     typeof value.message === 'string' &&
     typeof value.progress === 'number' &&
     typeof value.createdAt === 'string' &&
@@ -755,7 +780,14 @@ function isJobSnapshot(value: unknown): value is JobSnapshot {
     typeof value.downloadedBytes === 'number' &&
     typeof value.totalBytes === 'number' &&
     typeof value.speedBytes === 'number' &&
-    isRecord(value.layers)
+    isRecord(value.layers))) {
+    return null
+  }
+  const artifactState =
+    value.artifactState === 'present' || value.artifactState === 'deleted' || value.artifactState === 'unknown'
+      ? value.artifactState
+      : 'unknown'
+  return { ...value, artifactState } as unknown as JobSnapshot
 }
 
 function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveResult {

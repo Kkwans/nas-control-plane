@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { loginRoot, requestCapabilities, requestContainerAction, requestContainerLogs, requestDockerImages, requestSystemSummary } from './system'
+import {
+  loginRoot,
+  pullDockerImage,
+  requestCapabilities,
+  requestContainerAction,
+  requestContainerLogs,
+  requestDockerImages,
+  requestJobs,
+  requestSystemSummary,
+} from './system'
 
 describe('NCP API client', () => {
   it('requests protected system data with same-origin credentials', async () => {
@@ -121,5 +130,69 @@ describe('NCP API client', () => {
     await expect(requestDockerImages(fetcher)).resolves.toMatchObject({
       images: [{ repoTags: [], repoDigests: [] }],
     })
+  })
+
+  it('normalizes an empty artifact state returned while Agent and Server roll forward', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 'job-new',
+          type: 'docker-image-pull',
+          status: 'queued',
+          reference: 'redis:latest',
+          message: '任务已进入队列',
+          progress: 0,
+          createdAt: '2026-07-29T15:04:03Z',
+          updatedAt: '2026-07-29T15:04:03Z',
+          downloadedBytes: 0,
+          totalBytes: 1024,
+          speedBytes: 0,
+          layers: {},
+          artifactState: '',
+        }),
+        { status: 202, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(pullDockerImage('redis:latest', 1024, fetcher)).resolves.toMatchObject({
+      id: 'job-new',
+      artifactState: 'unknown',
+    })
+  })
+
+  it('keeps valid download jobs when one historical row is malformed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          jobs: [
+            {
+              id: 'job-valid',
+              type: 'docker-image-pull',
+              status: 'completed',
+              reference: 'redis:latest',
+              message: '镜像拉取完成',
+              progress: 100,
+              createdAt: '2026-07-29T15:04:03Z',
+              updatedAt: '2026-07-29T15:05:03Z',
+              downloadedBytes: 1024,
+              totalBytes: 1024,
+              speedBytes: 0,
+              layers: {},
+              artifactState: '',
+            },
+            { id: 'job-dirty', status: 'completed' },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(requestJobs('docker-image-pull', fetcher)).resolves.toMatchObject({
+      jobs: [{ id: 'job-valid', artifactState: 'unknown' }],
+      invalidCount: 1,
+    })
+    expect(warn).toHaveBeenCalledOnce()
+    warn.mockRestore()
   })
 })

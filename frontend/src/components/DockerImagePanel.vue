@@ -49,6 +49,7 @@ const selectedTag = ref('latest')
 const submittingReference = ref('')
 const localPage = ref(1)
 const downloadJobs = ref<JobSnapshot[]>([])
+const invalidDownloadJobCount = ref(0)
 const downloadStatus = ref('all')
 const downloadQuery = ref('')
 const downloadPage = ref(1)
@@ -217,12 +218,15 @@ function upsertDownloadJob(job: JobSnapshot) {
 
 async function loadDownloadJobs() {
   try {
-    downloadJobs.value = await requestJobs('docker-image-pull')
+    const result = await requestJobs('docker-image-pull')
+    downloadJobs.value = result.jobs
+    invalidDownloadJobCount.value = result.invalidCount
     for (const job of downloadJobs.value.filter((item) => item.status === 'queued' || item.status === 'running')) {
       void followJob(job.id, upsertDownloadJob).catch(() => undefined)
     }
   } catch {
     downloadJobs.value = []
+    invalidDownloadJobCount.value = 0
   }
 }
 
@@ -473,7 +477,15 @@ onMounted(() => {
     </div>
 
     <section v-else class="download-workspace panel">
-      <header><div><strong>镜像下载任务</strong><span>最多同时拉取 3 个镜像，任务进度与历史记录由服务端持久化。</span></div></header>
+      <header>
+        <div>
+          <strong>镜像下载任务</strong>
+          <span>最多同时拉取 3 个镜像，任务进度与历史记录由服务端持久化。</span>
+        </div>
+        <span v-if="invalidDownloadJobCount" class="task-parse-warning">
+          已忽略 {{ invalidDownloadJobCount }} 条格式异常的历史记录
+        </span>
+      </header>
       <div class="download-head"><span>镜像</span><span>状态</span><span>进度</span><span>速度</span><span>更新时间</span><span>操作</span></div>
       <article v-for="job in pagedDownloadJobs" :key="job.id" class="download-row">
         <div><strong>{{ job.reference }}</strong><small>{{ job.message }}</small></div>
