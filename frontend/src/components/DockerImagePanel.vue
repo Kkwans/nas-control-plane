@@ -25,10 +25,12 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatBytes } from '@/domain/overview'
+import { useSystemStore } from '@/stores/system'
 
 const props = defineProps<{ query: string; containers: DockerInventory['containers']; pageSize: number }>()
 const emit = defineEmits<{ 'update:query': [value: string] }>()
 type ImageMode = 'local' | 'hub' | 'downloads'
+const systemStore = useSystemStore()
 
 const mode = ref<ImageMode>('local')
 const images = ref<DockerImageSummary[]>([])
@@ -99,7 +101,13 @@ const pullReference = computed(() => {
   return `${prefix}${selectedRepository.value.name}:${selectedTag.value || 'latest'}`
 })
 const selectedTagDetails = computed(() => tags.value.find((tag) => tag.name === selectedTag.value) ?? null)
-const recommendedTag = computed(() => tags.value.find((tag) => tag.name !== 'latest' && tag.architectures.some((architecture) => architecture.includes('arm64')))?.name ?? tags.value.find((tag) => tag.name === 'latest')?.name ?? '')
+const hostArchitecture = computed(() => normalizeArchitecture(
+  systemStore.summary?.host.architecture || systemStore.capabilities?.architecture || '',
+))
+const recommendedTag = computed(() => tags.value.find((tag) => tag.name !== 'latest' && tagSupportsHost(tag))?.name
+  ?? tags.value.find((tag) => tag.name === 'latest' && tagSupportsHost(tag))?.name
+  ?? tags.value[0]?.name
+  ?? '')
 const activePullCount = computed(() => downloadJobs.value.filter((job) => job.status === 'queued' || job.status === 'running').length)
 const filteredDownloadJobs = computed(() => {
   const term = downloadQuery.value.trim().toLowerCase()
@@ -133,6 +141,24 @@ async function toggleLocalSort(key: 'name' | 'size' | 'created') {
     return
   }
   await setLocalSort('', 'asc')
+}
+
+function normalizeArchitecture(value: string) {
+  const normalized = value.trim().toLowerCase().replaceAll('_', '-')
+  if (normalized.includes('aarch64') || normalized.includes('arm64')) return 'arm64'
+  if (normalized.includes('x86-64') || normalized.includes('amd64')) return 'amd64'
+  if (normalized.includes('armv7l') || normalized.includes('arm/v7')) return 'arm/v7'
+  return normalized.replace(/^linux\//, '')
+}
+
+function tagSupportsHost(tag: DockerHubTag) {
+  if (!hostArchitecture.value) return false
+  return tag.architectures.some((architecture) => normalizeArchitecture(architecture) === hostArchitecture.value)
+}
+
+function hostCompatibilityLabel(tag: DockerHubTag) {
+  if (!hostArchitecture.value) return '无法识别本机架构'
+  return tagSupportsHost(tag) ? `支持本机 ${hostArchitecture.value}` : `不支持本机 ${hostArchitecture.value}`
 }
 
 async function refresh() {
@@ -457,17 +483,25 @@ onMounted(() => {
             <div><dt>仓库状态</dt><dd>{{ selectedRepository.statusDescription || '可用' }}</dd></div>
             <div><dt>最近更新</dt><dd>{{ dateLabel(selectedRepository.lastUpdated) }}</dd></div>
           </dl>
-          <div class="tag-title"><div><strong>选择版本</strong><span>{{ tags.length }} 个最近更新的标签</span></div></div>
+          <div class="tag-title">
+            <div><strong>选择版本</strong><span>{{ tags.length }} 个最近更新的标签</span></div>
+            <NcpSelect v-if="!tagsLoading" v-model="selectedTag" :options="tagOptions()" accessible-label="镜像标签" filterable />
+          </div>
           <div v-if="tagsLoading" class="tag-picker-loading ncp-skeleton"></div>
           <div v-else class="tag-picker">
-            <label><span>镜像标签</span><NcpSelect v-model="selectedTag" :options="tagOptions()" accessible-label="镜像标签" filterable /></label>
             <dl v-if="selectedTagDetails">
-              <div><dt>标签</dt><dd>{{ selectedTagDetails.name }}</dd></div>
-              <div><dt>拉取命令</dt><dd><code>docker pull {{ pullReference }}</code></dd></div>
+              <div v-if="selectedTagDetails.publishedAt">
+                <dt>
+                  <ElTooltip content="Docker Hub 标签的发布时间或最近更新时间，不代表镜像内部构建时间。" placement="top">
+                    <span>版本发布时间</span>
+                  </ElTooltip>
+                </dt>
+                <dd>{{ dateLabel(selectedTagDetails.publishedAt) }}</dd>
+              </div>
+              <div v-else><dt>拉取命令</dt><dd><code>docker pull {{ pullReference }}</code></dd></div>
               <div><dt>镜像大小</dt><dd>{{ formatBytes(selectedTagDetails.fullSize) }}</dd></div>
               <div><dt>兼容架构</dt><dd>{{ selectedTagDetails.architectures.join('、') || '未知' }}</dd></div>
-              <div><dt>最近更新</dt><dd>{{ dateLabel(selectedTagDetails.lastUpdated) }}</dd></div>
-              <div><dt>NAS 兼容性</dt><dd>{{ selectedTagDetails.architectures.some((item) => item.includes('arm64')) ? '支持 ARM64' : '未检测到 ARM64' }}</dd></div>
+              <div><dt>本机兼容性</dt><dd>{{ hostCompatibilityLabel(selectedTagDetails) }}</dd></div>
             </dl>
           </div>
           <footer><span>任务将进入后台下载队列，最多并行拉取 3 个镜像</span><button class="primary-button" type="button" :disabled="submittingReference === pullReference || !selectedTag" @click="submitPull"><Download :size="17" />{{ submittingReference === pullReference ? '正在提交' : '加入下载队列' }}</button></footer>
@@ -528,10 +562,8 @@ onMounted(() => {
 .hub-search{width:min(680px,48vw)}
 .repository-list>button{min-height:76px;margin:0 6px}
 .repository-detail{overflow:hidden}
+.tag-title :deep(.ncp-select){width:min(310px,48%)}
 .tag-picker{overflow:auto;padding-right:2px}
-.tag-picker dl{grid-template-columns:1fr}
-.tag-picker dl>div+div,.tag-picker dl>div:nth-child(n+3){border-top:1px solid var(--ncp-line)}
-.tag-picker dl>div:nth-child(even){border-left:0}
 .repository-detail>footer{position:static;bottom:auto}
 .download-head,.download-row{grid-template-columns:minmax(240px,1.25fr) 112px minmax(190px,260px) 100px 120px 112px}
 .job-state--queued{border-color:#cbd5e1;background:#eef2f7;color:#52657d}
@@ -540,5 +572,5 @@ onMounted(() => {
 .job-state--failed{border-color:rgba(201,83,97,.28);background:#fcecef;color:#a83d4b}
 .job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 78px;gap:8px}.hub-workspace{grid-template-columns:minmax(300px,.8fr) minmax(430px,1.2fr)}}
-@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.hub-search{width:100%}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.hub-search{width:100%}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
 </style>

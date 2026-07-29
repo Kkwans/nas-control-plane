@@ -7,6 +7,7 @@ import {
   requestContainerAction,
   requestContainerLogs,
   requestDockerImages,
+  requestDockerHubTags,
   requestJobs,
   requestSystemSummary,
 } from './system'
@@ -33,6 +34,38 @@ describe('NCP API client', () => {
       '/api/v1/system/capabilities',
       expect.objectContaining({ credentials: 'same-origin' }),
     )
+  })
+
+  it('normalizes Docker Hub tag publication time across rolling upgrades', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        count: 1,
+        page: 1,
+        pageSize: 25,
+        results: [{
+          name: 'latest',
+          lastUpdated: '2026-07-29T10:00:00Z',
+          fullSize: 1024,
+          architectures: ['linux/arm64'],
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        count: 1,
+        page: 1,
+        pageSize: 25,
+        results: [{
+          name: '8-alpine',
+          publishedAt: '2026-07-30T10:00:00Z',
+          lastUpdated: '2026-07-30T10:00:00Z',
+          fullSize: 2048,
+          architectures: ['linux/amd64'],
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(requestDockerHubTags('library', 'redis', 1, 25, fetcher))
+      .resolves.toMatchObject({ results: [{ publishedAt: '2026-07-29T10:00:00Z' }] })
+    await expect(requestDockerHubTags('library', 'redis', 1, 25, fetcher))
+      .resolves.toMatchObject({ results: [{ publishedAt: '2026-07-30T10:00:00Z' }] })
   })
 
   it('sends Root credentials only in the login request body and accepts an HttpOnly-cookie session response', async () => {

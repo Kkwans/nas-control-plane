@@ -32,18 +32,22 @@ type hubRepositoryWire struct {
 	StatusDescription string `json:"status_description"`
 }
 
+type hubTagImageWire struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Variant      string `json:"variant"`
+}
+
+type hubTagWire struct {
+	Name        string            `json:"name"`
+	LastUpdated string            `json:"last_updated"`
+	FullSize    int64             `json:"full_size"`
+	Images      []hubTagImageWire `json:"images"`
+}
+
 type hubTagsWire struct {
-	Count   int64 `json:"count"`
-	Results []struct {
-		Name        string `json:"name"`
-		LastUpdated string `json:"last_updated"`
-		FullSize    int64  `json:"full_size"`
-		Images      []struct {
-			Architecture string `json:"architecture"`
-			OS           string `json:"os"`
-			Variant      string `json:"variant"`
-		} `json:"images"`
-	} `json:"results"`
+	Count   int64        `json:"count"`
+	Results []hubTagWire `json:"results"`
 }
 
 func NewLiveImageManagerWithProxy(proxyAddress string) (*ImageManager, error) {
@@ -90,25 +94,33 @@ func (m *ImageManager) Tags(ctx context.Context, request HubTagsRequest) (HubTag
 	}
 	items := make([]HubTag, 0, len(payload.Results))
 	for _, item := range payload.Results {
-		seen := make(map[string]struct{})
-		architectures := make([]string, 0, len(item.Images))
-		for _, image := range item.Images {
-			architecture := strings.Trim(strings.Join([]string{image.OS, image.Architecture, image.Variant}, "/"), "/")
-			if architecture == "" {
-				continue
-			}
-			if _, exists := seen[architecture]; exists {
-				continue
-			}
-			seen[architecture] = struct{}{}
-			architectures = append(architectures, architecture)
-		}
-		sort.Strings(architectures)
-		items = append(items, HubTag{
-			Name: item.Name, LastUpdated: item.LastUpdated, FullSize: item.FullSize, Architectures: architectures,
-		})
+		items = append(items, mapHubTag(item))
 	}
 	return HubTagsResult{Count: payload.Count, Page: request.Page, PageSize: request.PageSize, Results: items}, nil
+}
+
+func mapHubTag(item hubTagWire) HubTag {
+	seen := make(map[string]struct{})
+	architectures := make([]string, 0, len(item.Images))
+	for _, image := range item.Images {
+		architecture := strings.Trim(strings.Join([]string{image.OS, image.Architecture, image.Variant}, "/"), "/")
+		if architecture == "" {
+			continue
+		}
+		if _, exists := seen[architecture]; exists {
+			continue
+		}
+		seen[architecture] = struct{}{}
+		architectures = append(architectures, architecture)
+	}
+	sort.Strings(architectures)
+	return HubTag{
+		Name:          item.Name,
+		PublishedAt:   item.LastUpdated,
+		LastUpdated:   item.LastUpdated,
+		FullSize:      item.FullSize,
+		Architectures: architectures,
+	}
 }
 
 func (m *ImageManager) enrichHubRepositories(ctx context.Context, repositories []HubRepository) {

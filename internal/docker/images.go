@@ -89,6 +89,7 @@ type HubTagsRequest struct {
 
 type HubTag struct {
 	Name          string   `json:"name"`
+	PublishedAt   string   `json:"publishedAt"`
 	LastUpdated   string   `json:"lastUpdated"`
 	FullSize      int64    `json:"fullSize"`
 	Architectures []string `json:"architectures"`

@@ -1522,10 +1522,16 @@ components:
             $ref: '#/components/schemas/DockerHubTag'
     DockerHubTag:
       type: object
-      required: [name, lastUpdated, fullSize, architectures]
+      required: [name, publishedAt, lastUpdated, fullSize, architectures]
       properties:
         name: { type: string }
-        lastUpdated: { type: string }
+        publishedAt:
+          type: string
+          description: Docker Hub 标签的发布时间或最近更新时间，不代表镜像内部构建时间。
+        lastUpdated:
+          type: string
+          deprecated: true
+          description: 兼容旧客户端；请改用 publishedAt。
         fullSize: { type: integer, minimum: 0 }
         architectures:
           type: array

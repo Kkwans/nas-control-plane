@@ -216,6 +216,7 @@ export interface DockerHubSearchResult {
 
 export interface DockerHubTag {
   name: string
+  publishedAt: string
   lastUpdated: string
   fullSize: number
   architectures: string[]
@@ -226,6 +227,14 @@ export interface DockerHubTagsResult {
   page: number
   pageSize: number
   results: DockerHubTag[]
+}
+
+interface DockerHubTagWire extends Omit<DockerHubTag, 'publishedAt'> {
+  publishedAt?: string
+}
+
+interface DockerHubTagsWireResult extends Omit<DockerHubTagsResult, 'results'> {
+  results: DockerHubTagWire[]
 }
 
 export interface ComposeFileSnapshot {
@@ -524,13 +533,20 @@ export async function requestDockerHubTags(
   fetcher: typeof fetch = fetch,
 ): Promise<DockerHubTagsResult> {
   const parameters = new URLSearchParams({ namespace, repository, page: String(page), pageSize: String(pageSize) })
-  return requestJson(
+  const payload = await requestJson(
     `/api/v1/docker/hub/tags?${parameters}`,
     {},
-    isDockerHubTagsResult,
+    isDockerHubTagsWireResult,
     fetcher,
     'DOCKER_HUB_TAGS_RESPONSE_INVALID',
   )
+  return {
+    ...payload,
+    results: payload.results.map((tag) => ({
+      ...tag,
+      publishedAt: tag.publishedAt?.trim() || tag.lastUpdated,
+    })),
+  }
 }
 
 export async function readComposeConfig(
@@ -813,22 +829,23 @@ function isDockerHubSearchResult(value: unknown): value is DockerHubSearchResult
     value.results.every(isDockerHubRepository)
 }
 
-function isDockerHubTag(value: unknown): value is DockerHubTag {
+function isDockerHubTagWire(value: unknown): value is DockerHubTagWire {
   return isRecord(value) &&
     typeof value.name === 'string' &&
+    (value.publishedAt === undefined || typeof value.publishedAt === 'string') &&
     typeof value.lastUpdated === 'string' &&
     typeof value.fullSize === 'number' &&
     Array.isArray(value.architectures) &&
     value.architectures.every((item) => typeof item === 'string')
 }
 
-function isDockerHubTagsResult(value: unknown): value is DockerHubTagsResult {
+function isDockerHubTagsWireResult(value: unknown): value is DockerHubTagsWireResult {
   return isRecord(value) &&
     typeof value.count === 'number' &&
     typeof value.page === 'number' &&
     typeof value.pageSize === 'number' &&
     Array.isArray(value.results) &&
-    value.results.every(isDockerHubTag)
+    value.results.every(isDockerHubTagWire)
 }
 
 function isComposeProjectConfig(value: unknown): value is ComposeProjectConfig {
