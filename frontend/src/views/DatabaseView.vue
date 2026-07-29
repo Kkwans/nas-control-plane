@@ -79,6 +79,16 @@ function driverIcon(driver: DatabaseDriver) {
   return driver === 'sqlite' ? HardDrive : driver === 'postgresql' ? Server : Database
 }
 
+function databaseDisplayName(source: DatabaseSource, projectName: string) {
+  const sourceName = source.name.trim()
+  const normalizedProjectName = projectName.trim()
+  if (!sourceName || !normalizedProjectName) return sourceName
+
+  const escapedProjectName = normalizedProjectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const prefixPattern = new RegExp(`^${escapedProjectName}\\s*(?:[·•:：/\\\\-]+)\\s*(.+)$`, 'i')
+  return sourceName.match(prefixPattern)?.[1]?.trim() || sourceName
+}
+
 async function refreshDiscovery() {
   errorMessage.value = ''
   try {
@@ -166,7 +176,7 @@ onMounted(() => {
                 <component :is="driverIcon(source.driver)" :size="19" />
               </span>
               <div>
-                <strong>{{ source.name }}</strong>
+                  <strong>{{ databaseDisplayName(source, group.name) }}</strong>
                 <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
               </div>
             </div>

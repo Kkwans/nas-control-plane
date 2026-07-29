@@ -299,7 +299,7 @@ function formatBytes(value?: number) {
         </div>
         <ElTable v-else v-loading="rowsLoading" :data="tableRows?.rows ?? []" height="100%" border stripe highlight-current-row @sort-change="onSortChange">
           <ElTableColumn type="index" label="#" width="56" fixed="left" align="center" />
-          <ElTableColumn v-for="column in columns" :key="column.name" :prop="column.name" :min-width="column.primaryKey ? 120 : Math.min(360, Math.max(160, column.name.length * 12 + 72))" sortable="custom" show-overflow-tooltip>
+          <ElTableColumn v-for="column in columns" :key="column.name" :prop="column.name" :min-width="column.primaryKey ? 120 : Math.min(360, Math.max(160, column.name.length * 12 + 72))" sortable="custom" :sort-orders="['ascending', 'descending', null]" show-overflow-tooltip>
             <template #header><span class="column-heading"><KeyRound v-if="column.primaryKey" :size="12" />{{ column.name }}</span></template>
             <template #default="{ row }"><span v-if="row[column.name] === null" class="null-value">NULL</span><span v-else class="cell-value">{{ displayValue(column.name, row[column.name]) }}</span></template>
           </ElTableColumn>
