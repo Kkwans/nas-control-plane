@@ -109,6 +109,7 @@ async function syncRouteData() {
       :realtime-state="systemStore.realtimeState"
       :refresh-interval-seconds="systemStore.refreshIntervalSeconds"
       :sidebar-default="systemStore.preferences.sidebarDefault"
+      :navigation-order="systemStore.preferences.navigationOrder"
       :user-name="authStore.user?.username ?? 'root'"
       :is-refreshing="systemStore.isRefreshing"
       :live-data-active="systemStore.realtimeScopes.length > 0"

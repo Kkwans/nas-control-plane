@@ -3,6 +3,7 @@ package controlstore
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -18,7 +19,7 @@ func TestPreferencesPersistCompleteConsoleExperience(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults != DefaultPreferences() {
+	if !reflect.DeepEqual(defaults, DefaultPreferences()) {
 		t.Fatalf("defaults = %#v", defaults)
 	}
 
@@ -32,16 +33,22 @@ func TestPreferencesPersistCompleteConsoleExperience(t *testing.T) {
 		SiteDefaultProtocol:    "https",
 		ChineseFont:            "noto-sans-sc",
 		LatinFont:              "manrope",
+		NavigationOrder:        []string{"terminal", "overview", "terminal", "unknown", "sites"},
 	}
-	if _, err := store.UpdatePreferences(context.Background(), 1, input); err != nil {
+	saved, err := store.UpdatePreferences(context.Background(), 1, input)
+	if err != nil {
 		t.Fatal(err)
+	}
+	wantOrder := []string{"terminal", "overview", "sites", "docker", "databases", "logs", "monitoring", "system", "users", "settings"}
+	if !reflect.DeepEqual(saved.NavigationOrder, wantOrder) {
+		t.Fatalf("navigation order = %#v, want %#v", saved.NavigationOrder, wantOrder)
 	}
 	loaded, err := store.Preferences(context.Background(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != input {
-		t.Fatalf("loaded = %#v", loaded)
+	if !reflect.DeepEqual(loaded, saved) {
+		t.Fatalf("loaded = %#v, want %#v", loaded, saved)
 	}
 }
 

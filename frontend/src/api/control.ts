@@ -10,6 +10,7 @@ export interface UserPreferences {
   siteDefaultProtocol: 'http' | 'https'
   chineseFont: 'system' | 'noto-sans-sc' | 'microsoft-yahei' | 'source-han-sans-sc' | 'misans' | 'harmonyos-sans-sc'
   latinFont: 'system' | 'manrope' | 'inter' | 'ibm-plex-sans'
+  navigationOrder: string[]
 }
 
 export interface ListPreference {

@@ -27,10 +27,10 @@ import NcpLogo from '@/components/NcpLogo.vue'
 import type { RealtimeState, SystemConnectionState } from '@/stores/system'
 
 interface NavigationItem {
+  id: string
   label: string
   icon: Component
-  to?: string
-  planned?: boolean
+  to: string
 }
 
 const route = useRoute()
@@ -41,6 +41,7 @@ const props = defineProps({
   realtimeState: { type: String as PropType<RealtimeState>, required: true },
   refreshIntervalSeconds: { type: Number, required: true },
   sidebarDefault: { type: String as PropType<'collapsed' | 'expanded'>, default: 'collapsed' },
+  navigationOrder: { type: Array as PropType<string[]>, default: () => [] },
   userName: { type: String, required: true },
   isRefreshing: { type: Boolean, default: false },
   liveDataActive: { type: Boolean, default: false },
@@ -51,18 +52,29 @@ const sidebarCollapsed = ref(props.sidebarDefault === 'collapsed')
 const menuButton = ref<HTMLButtonElement | null>(null)
 
 const primaryNavigation: NavigationItem[] = [
-  { label: '总览', to: '/', icon: LayoutDashboard },
-  { label: '站点中心', to: '/sites', icon: Boxes },
-  { label: 'Docker 管理', to: '/docker', icon: Container },
-  { label: '数据库', to: '/databases', icon: Database },
-  { label: '系统信息', to: '/system', icon: Info },
-  { label: '系统监控', to: '/monitoring', icon: Gauge },
-  { label: '日志中心', to: '/logs', icon: FileClock },
-  { label: '终端', to: '/terminal', icon: TerminalSquare },
-  { label: '系统设置', to: '/settings', icon: Settings },
-  { label: '用户管理', to: '/users', icon: UserRound },
+  { id: 'overview', label: '总览', to: '/', icon: LayoutDashboard },
+  { id: 'sites', label: '站点管理', to: '/sites', icon: Boxes },
+  { id: 'docker', label: 'Docker', to: '/docker', icon: Container },
+  { id: 'databases', label: '数据库', to: '/databases', icon: Database },
+  { id: 'logs', label: '日志中心', to: '/logs', icon: FileClock },
+  { id: 'monitoring', label: '系统监控', to: '/monitoring', icon: Gauge },
+  { id: 'system', label: '系统信息', to: '/system', icon: Info },
+  { id: 'users', label: '用户管理', to: '/users', icon: UserRound },
+  { id: 'terminal', label: '终端', to: '/terminal', icon: TerminalSquare },
+  { id: 'settings', label: '设置', to: '/settings', icon: Settings },
 ]
-const plannedNavigation: NavigationItem[] = []
+const navigationByID = new Map(primaryNavigation.map((item) => [item.id, item]))
+const orderedNavigation = computed(() => {
+  const result: NavigationItem[] = []
+  const seen = new Set<string>()
+  for (const id of [...props.navigationOrder, ...primaryNavigation.map((item) => item.id)]) {
+    const item = navigationByID.get(id)
+    if (!item || seen.has(id)) continue
+    seen.add(id)
+    result.push(item)
+  }
+  return result
+})
 
 const routeTitle = computed(() => String(route.meta.title ?? 'NAS 管理面板'))
 const breadcrumbs = computed(() => {
@@ -127,19 +139,12 @@ onBeforeUnmount(() => {
 
       <nav class="navigation" aria-label="控制台页面">
         <p class="navigation__label">管理</p>
-        <ElTooltip v-for="item in primaryNavigation" :key="item.label" :disabled="!sidebarCollapsed" :content="item.label" placement="right">
-          <RouterLink :to="item.to!" class="navigation__item" :aria-label="item.label">
+        <ElTooltip v-for="item in orderedNavigation" :key="item.id" :disabled="!sidebarCollapsed" :content="item.label" placement="right">
+          <RouterLink :to="item.to" class="navigation__item" :aria-label="item.label">
             <component :is="item.icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
             <span>{{ item.label }}</span>
             <ChevronRight class="navigation__arrow" :size="15" aria-hidden="true" />
           </RouterLink>
-        </ElTooltip>
-        <p v-if="plannedNavigation.length" class="navigation__label navigation__label--secondary">后续模块</p>
-        <ElTooltip v-for="item in plannedNavigation" :key="item.label" content="功能待接入" placement="right">
-          <button class="navigation__item navigation__item--planned" type="button" disabled>
-            <component :is="item.icon" :size="20" :stroke-width="1.8" aria-hidden="true" />
-            <span>{{ item.label }}</span><small>待接入</small>
-          </button>
         </ElTooltip>
       </nav>
 
@@ -214,7 +219,6 @@ onBeforeUnmount(() => {
 .sidebar-close, .menu-button { display: none; width: var(--ncp-touch-target); height: var(--ncp-touch-target); place-items: center; border-radius: 10px; background: transparent; color: var(--ncp-text-muted); }
 .navigation { display: grid; gap: 4px; margin-top: 24px; }
 .navigation__label { margin: 0 10px 7px; color: var(--ncp-text-subtle); font-size: .78rem; font-weight: 750; letter-spacing: .02em; }
-.navigation__label--secondary { margin-top: 18px; }
 .navigation__item { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 11px; padding: 0 11px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: var(--ncp-text-muted); font-size: .88rem; font-weight: 670; text-align: left; transition: color var(--ncp-duration-fast), background-color var(--ncp-duration-fast), border-color var(--ncp-duration-fast), transform var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
 .navigation__item:hover { border-color: color-mix(in srgb, var(--ncp-primary) 11%, transparent); background: var(--ncp-surface-quiet); color: var(--ncp-text); }
 .navigation__item.router-link-exact-active {
@@ -223,8 +227,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 5px 14px color-mix(in srgb, var(--ncp-primary) 10%, transparent);
   color: var(--ncp-primary-strong);
 }
-.navigation__item--planned { cursor: not-allowed; opacity: .55; }
-.navigation__item--planned small { margin-left: auto; font-size: .68rem; }
 .navigation__arrow { margin-left: auto; opacity: 0; transform: translateX(-3px); transition: opacity var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .navigation__item:hover .navigation__arrow, .navigation__item.router-link-exact-active .navigation__arrow { opacity: 1; transform: translateX(0); }
 .sidebar-footer { display: grid; gap: 10px; margin-top: auto; padding: 14px 6px 2px; border-top: 1px solid var(--ncp-line); }

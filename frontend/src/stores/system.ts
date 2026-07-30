@@ -64,6 +64,7 @@ export const useSystemStore = defineStore('system', () => {
     siteDefaultProtocol: 'http',
     chineseFont: 'system',
     latinFont: 'system',
+    navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'],
   })
   const listPreferences = ref<Record<string, ListPreference>>({})
   const listPreferenceRequests = new Map<string, Promise<ListPreference>>()

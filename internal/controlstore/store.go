@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -22,21 +23,48 @@ const (
 	MaxRefreshIntervalSeconds     = 300
 )
 
+var defaultNavigationOrder = []string{
+	"overview",
+	"sites",
+	"docker",
+	"databases",
+	"logs",
+	"monitoring",
+	"system",
+	"users",
+	"terminal",
+	"settings",
+}
+
+var validNavigationIDs = map[string]struct{}{
+	"overview":   {},
+	"sites":      {},
+	"docker":     {},
+	"databases":  {},
+	"logs":       {},
+	"monitoring": {},
+	"system":     {},
+	"users":      {},
+	"terminal":   {},
+	"settings":   {},
+}
+
 type Store struct {
 	database *sql.DB
 	now      func() time.Time
 }
 
 type Preferences struct {
-	RefreshIntervalSeconds int    `json:"refreshIntervalSeconds"`
-	InterfaceDensity       string `json:"interfaceDensity"`
-	BaseFontSize           int    `json:"baseFontSize"`
-	PageSize               int    `json:"pageSize"`
-	SidebarDefault         string `json:"sidebarDefault"`
-	LinkOpenMode           string `json:"linkOpenMode"`
-	SiteDefaultProtocol    string `json:"siteDefaultProtocol"`
-	ChineseFont            string `json:"chineseFont"`
-	LatinFont              string `json:"latinFont"`
+	RefreshIntervalSeconds int      `json:"refreshIntervalSeconds"`
+	InterfaceDensity       string   `json:"interfaceDensity"`
+	BaseFontSize           int      `json:"baseFontSize"`
+	PageSize               int      `json:"pageSize"`
+	SidebarDefault         string   `json:"sidebarDefault"`
+	LinkOpenMode           string   `json:"linkOpenMode"`
+	SiteDefaultProtocol    string   `json:"siteDefaultProtocol"`
+	ChineseFont            string   `json:"chineseFont"`
+	LatinFont              string   `json:"latinFont"`
+	NavigationOrder        []string `json:"navigationOrder"`
 }
 
 func DefaultPreferences() Preferences {
@@ -50,7 +78,46 @@ func DefaultPreferences() Preferences {
 		SiteDefaultProtocol:    "http",
 		ChineseFont:            "system",
 		LatinFont:              "system",
+		NavigationOrder:        defaultNavigationOrderCopy(),
 	}
+}
+
+func defaultNavigationOrderCopy() []string {
+	return append([]string(nil), defaultNavigationOrder...)
+}
+
+func normalizeNavigationOrder(value []string) []string {
+	result := make([]string, 0, len(defaultNavigationOrder))
+	seen := make(map[string]struct{}, len(defaultNavigationOrder))
+	candidates := append(append([]string(nil), value...), defaultNavigationOrder...)
+	for _, candidate := range candidates {
+		id := strings.TrimSpace(candidate)
+		if _, valid := validNavigationIDs[id]; !valid {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func encodeNavigationOrder(value []string) string {
+	encoded, err := json.Marshal(normalizeNavigationOrder(value))
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func decodeNavigationOrder(value string) []string {
+	var result []string
+	if err := json.Unmarshal([]byte(value), &result); err != nil {
+		return defaultNavigationOrderCopy()
+	}
+	return normalizeNavigationOrder(result)
 }
 
 type ListPreference struct {
@@ -166,31 +233,38 @@ func (s *Store) Close() error {
 
 func (s *Store) Preferences(ctx context.Context, userID int64) (Preferences, error) {
 	var result Preferences
+	var navigationOrder string
 	err := s.database.QueryRowContext(ctx, `
 		SELECT refresh_interval_seconds, interface_density, base_font_size, page_size,
-			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font
+			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font, navigation_order
 		FROM user_preferences
 		WHERE user_id = ?
 	`, userID).Scan(
 		&result.RefreshIntervalSeconds, &result.InterfaceDensity, &result.BaseFontSize, &result.PageSize,
 		&result.SidebarDefault, &result.LinkOpenMode, &result.SiteDefaultProtocol, &result.ChineseFont, &result.LatinFont,
+		&navigationOrder,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DefaultPreferences(), nil
 	}
-	return result, err
+	if err != nil {
+		return Preferences{}, err
+	}
+	result.NavigationOrder = decodeNavigationOrder(navigationOrder)
+	return result, nil
 }
 
 func (s *Store) UpdatePreferences(ctx context.Context, userID int64, preferences Preferences) (Preferences, error) {
+	preferences.NavigationOrder = normalizeNavigationOrder(preferences.NavigationOrder)
 	if err := validatePreferences(preferences); err != nil {
 		return Preferences{}, err
 	}
 	_, err := s.database.ExecContext(ctx, `
 		INSERT INTO user_preferences (
 			user_id, refresh_interval_seconds, interface_density, base_font_size, page_size,
-			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font, updated_at_unix
+			sidebar_default, link_open_mode, site_default_protocol, chinese_font, latin_font, navigation_order, updated_at_unix
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			refresh_interval_seconds = excluded.refresh_interval_seconds,
 			interface_density = excluded.interface_density,
@@ -201,10 +275,11 @@ func (s *Store) UpdatePreferences(ctx context.Context, userID int64, preferences
 			site_default_protocol = excluded.site_default_protocol,
 			chinese_font = excluded.chinese_font,
 			latin_font = excluded.latin_font,
+			navigation_order = excluded.navigation_order,
 			updated_at_unix = excluded.updated_at_unix
 	`, userID, preferences.RefreshIntervalSeconds, preferences.InterfaceDensity, preferences.BaseFontSize, preferences.PageSize,
 		preferences.SidebarDefault, preferences.LinkOpenMode, preferences.SiteDefaultProtocol, preferences.ChineseFont,
-		preferences.LatinFont, s.now().UTC().Unix())
+		preferences.LatinFont, encodeNavigationOrder(preferences.NavigationOrder), s.now().UTC().Unix())
 	if err != nil {
 		return Preferences{}, err
 	}
@@ -832,6 +907,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{name: "site_default_protocol", definition: "TEXT NOT NULL DEFAULT 'http'"},
 		{name: "chinese_font", definition: "TEXT NOT NULL DEFAULT 'system'"},
 		{name: "latin_font", definition: "TEXT NOT NULL DEFAULT 'system'"},
+		{name: "navigation_order", definition: `TEXT NOT NULL DEFAULT '["overview","sites","docker","databases","logs","monitoring","system","users","terminal","settings"]'`},
 	}
 	for _, column := range preferenceColumns {
 		if err := s.ensureColumn(ctx, "user_preferences", column.name, column.definition); err != nil {
