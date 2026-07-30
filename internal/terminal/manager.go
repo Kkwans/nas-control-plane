@@ -33,8 +33,23 @@ type StartRequest struct {
 }
 
 type SessionInfo struct {
-	ID     string
-	Target Target
+	ID          string
+	Target      Target
+	Shell       string
+	Enhancement string
+	Reason      string
+	Rows        uint16
+	Cols        uint16
+}
+
+type SessionMetadata struct {
+	Shell       string
+	Enhancement string
+	Reason      string
+}
+
+type SessionMetadataProvider interface {
+	Metadata() SessionMetadata
 }
 
 // Session 表示已创建的受控终端会话。
@@ -101,8 +116,22 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 
 	m.nextID++
 	info := SessionInfo{
-		ID:     fmt.Sprintf("term-p0-%d", m.nextID),
-		Target: request.Target,
+		ID:          fmt.Sprintf("term-p0-%d", m.nextID),
+		Target:      request.Target,
+		Shell:       "shell",
+		Enhancement: "native",
+		Rows:        request.Rows,
+		Cols:        request.Cols,
+	}
+	if metadataProvider, ok := session.(SessionMetadataProvider); ok {
+		metadata := metadataProvider.Metadata()
+		if metadata.Shell != "" {
+			info.Shell = metadata.Shell
+		}
+		if metadata.Enhancement != "" {
+			info.Enhancement = metadata.Enhancement
+		}
+		info.Reason = metadata.Reason
 	}
 	m.sessions[info.ID] = session
 	return info, nil

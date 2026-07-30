@@ -70,14 +70,42 @@ func TestManagerWritesAndResizesTrackedSession(t *testing.T) {
 	}
 }
 
+func TestManagerReturnsActualDimensionsAndSessionMetadata(t *testing.T) {
+	session := &fakeSession{
+		metadata: SessionMetadata{
+			Shell:       "bash",
+			Enhancement: "blesh",
+			Reason:      "ready",
+		},
+	}
+	starter := &fakeStarter{session: session}
+	manager := NewManager(starter, &fakeStarter{}, 1)
+
+	opened, err := manager.Open(context.Background(), StartRequest{Target: TargetHost, Rows: 42, Cols: 132})
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if opened.Rows != 42 || opened.Cols != 132 {
+		t.Fatalf("opened dimensions = %dx%d", opened.Rows, opened.Cols)
+	}
+	if opened.Shell != "bash" || opened.Enhancement != "blesh" || opened.Reason != "ready" {
+		t.Fatalf("opened metadata = %#v", opened)
+	}
+	if starter.request.Rows != 42 || starter.request.Cols != 132 {
+		t.Fatalf("starter request = %#v", starter.request)
+	}
+}
+
 type fakeStarter struct {
 	session Session
 	starts  int
 	err     error
+	request StartRequest
 }
 
-func (f *fakeStarter) Start(context.Context, StartRequest) (Session, error) {
+func (f *fakeStarter) Start(_ context.Context, request StartRequest) (Session, error) {
 	f.starts++
+	f.request = request
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -88,10 +116,15 @@ func (f *fakeStarter) Start(context.Context, StartRequest) (Session, error) {
 }
 
 type fakeSession struct {
-	written []byte
-	rows    uint16
-	cols    uint16
-	closed  bool
+	written  []byte
+	rows     uint16
+	cols     uint16
+	closed   bool
+	metadata SessionMetadata
+}
+
+func (f *fakeSession) Metadata() SessionMetadata {
+	return f.metadata
 }
 
 func (f *fakeSession) Read(context.Context, []byte) (int, error) {

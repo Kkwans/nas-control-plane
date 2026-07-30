@@ -26,7 +26,7 @@ func TestTerminalWebSocketProxiesInputResizeAndTermination(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/terminal?target=host"
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/terminal?target=host&rows=42&cols=132"
 	connection, _, err := websocket.Dial(ctx, endpoint, nil)
 	if err != nil {
 		t.Fatalf("dial terminal websocket: %v", err)
@@ -37,8 +37,16 @@ func TestTerminalWebSocketProxiesInputResizeAndTermination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read started message: %v", err)
 	}
-	if messageType != websocket.MessageText || !strings.Contains(string(started), `"type":"started"`) {
+	if messageType != websocket.MessageText ||
+		!strings.Contains(string(started), `"type":"started"`) ||
+		!strings.Contains(string(started), `"shell":"bash"`) ||
+		!strings.Contains(string(started), `"enhancement":"blesh"`) ||
+		!strings.Contains(string(started), `"rows":42`) ||
+		!strings.Contains(string(started), `"cols":132`) {
 		t.Fatalf("started message = %q", started)
+	}
+	if !stream.hasStart(42, 132) {
+		t.Fatal("initial terminal dimensions were not proxied")
 	}
 
 	if err := connection.Write(ctx, websocket.MessageBinary, []byte("printf ready\\n")); err != nil {
@@ -110,7 +118,14 @@ func (f *fakeTerminalStream) Send(message terminal.Message) error {
 
 	switch message.Type {
 	case terminal.MessageStart:
-		f.received <- terminal.Message{Type: terminal.MessageStarted, SessionID: "term-test"}
+		f.received <- terminal.Message{
+			Type:        terminal.MessageStarted,
+			SessionID:   "term-test",
+			Shell:       "bash",
+			Enhancement: "blesh",
+			Rows:        message.Rows,
+			Cols:        message.Cols,
+		}
 	case terminal.MessageInput:
 		f.received <- terminal.Message{Type: terminal.MessageOutput, Data: []byte("NCP_P0_TERMINAL_READY\\n")}
 	}
@@ -131,6 +146,17 @@ func (f *fakeTerminalStream) Close() error {
 		close(f.received)
 	})
 	return nil
+}
+
+func (f *fakeTerminalStream) hasStart(rows, cols uint16) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, message := range f.sent {
+		if message.Type == terminal.MessageStart && message.Rows == rows && message.Cols == cols {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeTerminalStream) hasMessage(messageType terminal.MessageType, data []byte) bool {

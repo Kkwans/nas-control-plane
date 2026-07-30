@@ -81,6 +81,13 @@ func TestProtectedContainerExecOptionsAreInteractiveButNotPrivileged(t *testing.
 	if !strings.Contains(options.Cmd[2], "exec bash") || len(options.Env) < 3 {
 		t.Fatalf("interactive shell bootstrap = %#v, env = %#v", options.Cmd, options.Env)
 	}
+	environment := strings.Join(options.Env, "\n")
+	if !strings.Contains(environment, "TERM=xterm-256color") || !strings.Contains(environment, "COLORTERM=truecolor") {
+		t.Fatalf("terminal environment = %#v", options.Env)
+	}
+	if !strings.Contains(options.Cmd[2], "C.UTF-8") || !strings.Contains(options.Cmd[2], "ls --color=auto") {
+		t.Fatalf("locale and color bootstrap = %q", options.Cmd[2])
+	}
 }
 
 type fakeContainerGateway struct {

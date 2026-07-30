@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
@@ -12,9 +13,9 @@ import (
 )
 
 const (
-	initialTerminalRows = 24
-	initialTerminalCols = 80
-	maxWebSocketInput   = 32 * 1024
+	maxWebSocketInput      = 32 * 1024
+	defaultTerminalRows    = 24
+	defaultTerminalColumns = 80
 )
 
 type TerminalClient interface {
@@ -34,7 +35,7 @@ func (socketTerminalClient) Open(ctx context.Context, socketPath string) (Termin
 }
 
 func (api *handler) terminalWebSocket(response http.ResponseWriter, request *http.Request) {
-	target, containerID, err := websocketTarget(request)
+	target, containerID, rows, cols, err := websocketTarget(request)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "TERMINAL_TARGET_REJECTED", "终端目标不在当前验证范围内。")
 		return
@@ -64,8 +65,8 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		Type:        terminal.MessageStart,
 		Target:      target,
 		ContainerID: containerID,
-		Rows:        initialTerminalRows,
-		Cols:        initialTerminalCols,
+		Rows:        rows,
+		Cols:        cols,
 	}); err != nil {
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
@@ -75,7 +76,15 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
 	}
-	if err := writeTerminalControl(sessionContext, connection, terminalControl{Type: "started", SessionID: started.SessionID, Enhancement: started.Enhancement}); err != nil {
+	if err := writeTerminalControl(sessionContext, connection, terminalControl{
+		Type:        "started",
+		SessionID:   started.SessionID,
+		Shell:       started.Shell,
+		Enhancement: started.Enhancement,
+		Reason:      started.Reason,
+		Rows:        int(started.Rows),
+		Cols:        int(started.Cols),
+	}); err != nil {
 		return
 	}
 
@@ -106,19 +115,43 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 	}
 }
 
-func websocketTarget(request *http.Request) (terminal.Target, string, error) {
+func websocketTarget(request *http.Request) (terminal.Target, string, uint16, uint16, error) {
+	rows, cols, err := terminalDimensionsFromQuery(request)
+	if err != nil {
+		return "", "", 0, 0, err
+	}
 	switch request.URL.Query().Get("target") {
 	case string(terminal.TargetHost):
-		return terminal.TargetHost, "", nil
+		return terminal.TargetHost, "", rows, cols, nil
 	case string(terminal.TargetContainer):
 		containerID := request.URL.Query().Get("containerId")
 		if containerID == "" {
-			return "", "", errors.New("container id is required")
+			return "", "", 0, 0, errors.New("container id is required")
 		}
-		return terminal.TargetContainer, containerID, nil
+		return terminal.TargetContainer, containerID, rows, cols, nil
 	default:
-		return "", "", errors.New("terminal target is invalid")
+		return "", "", 0, 0, errors.New("terminal target is invalid")
 	}
+}
+
+func terminalDimensionsFromQuery(request *http.Request) (uint16, uint16, error) {
+	rowsValue := request.URL.Query().Get("rows")
+	colsValue := request.URL.Query().Get("cols")
+	if rowsValue == "" && colsValue == "" {
+		return defaultTerminalRows, defaultTerminalColumns, nil
+	}
+	if rowsValue == "" || colsValue == "" {
+		return 0, 0, errors.New("terminal rows and columns must be provided together")
+	}
+	rows, err := strconv.Atoi(rowsValue)
+	if err != nil {
+		return 0, 0, errors.New("terminal rows are invalid")
+	}
+	cols, err := strconv.Atoi(colsValue)
+	if err != nil {
+		return 0, 0, errors.New("terminal columns are invalid")
+	}
+	return terminalDimensions(rows, cols)
 }
 
 type terminalInput struct {
@@ -202,7 +235,9 @@ type terminalControl struct {
 	Rows        int    `json:"rows,omitempty"`
 	Cols        int    `json:"cols,omitempty"`
 	SessionID   string `json:"sessionId,omitempty"`
+	Shell       string `json:"shell,omitempty"`
 	Enhancement string `json:"enhancement,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 func decodeTerminalControl(data []byte) (terminalControl, error) {

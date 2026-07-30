@@ -20,11 +20,14 @@ type ContainerInfo struct {
 }
 
 type ContainerAttachment struct {
-	ExecID     string
-	Reader     io.Reader
-	Writer     io.Writer
-	Close      func() error
-	CloseWrite func() error
+	ExecID      string
+	Reader      io.Reader
+	Writer      io.Writer
+	Close       func() error
+	CloseWrite  func() error
+	Shell       string
+	Enhancement string
+	Reason      string
 }
 
 type ContainerGateway interface {
@@ -79,6 +82,14 @@ type containerSession struct {
 	attachment ContainerAttachment
 	close      sync.Once
 	closeErr   error
+}
+
+func (s *containerSession) Metadata() SessionMetadata {
+	return SessionMetadata{
+		Shell:       s.attachment.Shell,
+		Enhancement: s.attachment.Enhancement,
+		Reason:      s.attachment.Reason,
+	}
 }
 
 const containerTerminationTimeout = 2 * time.Second

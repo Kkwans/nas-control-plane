@@ -1,4 +1,4 @@
-# NCP 专用 Root 终端配置。仅由 NCP PTY 加载，不修改 /root/.bashrc。
+# NCP dedicated Root terminal profile. Loaded only by the NCP PTY.
 export HISTFILE=/root/.ncp_bash_history
 export HISTCONTROL=ignoredups:erasedups
 export HISTSIZE=2000
@@ -16,7 +16,7 @@ alias diff='diff --color=auto'
 
 PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]# '
 
-# ble.sh 提供交互式语法高亮、历史搜索与补全。部署包未安装时安全回退原生 Bash。
+# ble.sh provides interactive syntax highlighting, history search and completion.
 if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
   source /opt/ncp/share/blesh/ble.sh --attach=none
   ble-face -s command_builtin fg=25,bold
@@ -30,4 +30,11 @@ if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
   ble-face -s filename_executable fg=28
   ble-face -s varname_array fg=97
   ble-attach
+fi
+
+# Signal readiness after the interactive editor has attached. The descriptor is
+# private to the Agent and never becomes part of terminal input or output.
+if [[ ${NCP_TERMINAL_READY_FD:-} == 3 ]]; then
+  printf 'ready\n' >&3 || true
+  exec 3>&-
 fi

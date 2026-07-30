@@ -26,8 +26,12 @@ func terminalMessageToStruct(message terminal.Message) (*structpb.Struct, error)
 			return nil, errors.New("terminal session id is required")
 		}
 		fields["sessionId"] = message.SessionID
-		if message.Type == terminal.MessageStarted && message.Enhancement != "" {
+		if message.Type == terminal.MessageStarted {
+			fields["shell"] = message.Shell
 			fields["enhancement"] = message.Enhancement
+			fields["reason"] = message.Reason
+			fields["rows"] = message.Rows
+			fields["cols"] = message.Cols
 		}
 	case terminal.MessageInput, terminal.MessageOutput:
 		if len(message.Data) == 0 || len(message.Data) > maxTerminalMessageBytes {
@@ -105,8 +109,20 @@ func terminalMessageFromStruct(input *structpb.Struct) (terminal.Message, error)
 			return terminal.Message{}, errors.New("terminal session id is required")
 		}
 		message.SessionID = sessionID
-		if enhancement, ok := fields["enhancement"].(string); ok {
-			message.Enhancement = enhancement
+		if message.Type == terminal.MessageStarted {
+			message.Shell, _ = fields["shell"].(string)
+			message.Enhancement, _ = fields["enhancement"].(string)
+			message.Reason, _ = fields["reason"].(string)
+			rows, err := terminalNumberField(fields, "rows")
+			if err != nil {
+				return terminal.Message{}, err
+			}
+			cols, err := terminalNumberField(fields, "cols")
+			if err != nil {
+				return terminal.Message{}, err
+			}
+			message.Rows = rows
+			message.Cols = cols
 		}
 	case terminal.MessageClose:
 	default:
@@ -131,7 +147,11 @@ func terminalFieldsFor(messageType terminal.MessageType) map[string]struct{} {
 	case terminal.MessageStarted, terminal.MessageClosed:
 		fields["sessionId"] = struct{}{}
 		if messageType == terminal.MessageStarted {
+			fields["shell"] = struct{}{}
 			fields["enhancement"] = struct{}{}
+			fields["reason"] = struct{}{}
+			fields["rows"] = struct{}{}
+			fields["cols"] = struct{}{}
 		}
 	}
 	return fields

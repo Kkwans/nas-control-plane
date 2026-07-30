@@ -15,14 +15,24 @@ const target = ref<Target>('host')
 const containerId = ref('')
 const state = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle')
 const shellEnhancement = ref<'blesh' | 'native' | 'unsupported'>('native')
+const shellReason = ref('')
 const terminalElement = ref<HTMLElement | null>(null)
 let socket: WebSocket | null = null
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let resizeObserver: ResizeObserver | null = null
+let resizeTimer: number | undefined
+let terminalReady = false
 
 const containers = computed(() => (systemStore.inventory?.containers ?? []).filter((item) => item.state === 'running'))
 const canConnect = computed(() => target.value === 'host' || Boolean(containerId.value))
+const enhancementHint = computed(() => {
+  if (state.value !== 'connected') return '支持 Tab 补全、方向键历史、Ctrl+C 与窗口自适应；离开页面自动回收 PTY。'
+  if (shellReason.value) return shellReason.value
+  if (shellEnhancement.value === 'blesh') return '命令高亮已启用 · ble.sh'
+  if (shellEnhancement.value === 'unsupported') return '当前 Shell 不支持命令高亮，已回退原生交互'
+  return '原生 Shell 模式'
+})
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '会话状态', value: state.value === 'connected' ? '已连接' : state.value === 'connecting' ? '连接中' : '未连接', tone: state.value === 'connected' ? 'success' : undefined },
   { label: '终端目标', value: target.value === 'host' ? 'NAS 主机' : 'Docker 容器' },
@@ -60,21 +70,36 @@ async function connect() {
   terminal.loadAddon(fitAddon)
   terminal.open(element)
   fitAddon.fit()
+  terminalReady = false
   terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const params = new URLSearchParams({ target: target.value })
+  const params = new URLSearchParams({
+    target: target.value,
+    rows: String(terminal.rows),
+    cols: String(terminal.cols),
+  })
   if (target.value === 'container') params.set('containerId', containerId.value)
   socket = new WebSocket(`${protocol}//${location.host}/ws/terminal?${params}`)
   socket.binaryType = 'arraybuffer'
   socket.onmessage = (event) => {
     if (typeof event.data === 'string') {
-      const control = JSON.parse(event.data) as { type: string; enhancement?: 'blesh' | 'native' | 'unsupported' }
+      const control = JSON.parse(event.data) as {
+        type: string
+        enhancement?: 'blesh' | 'native' | 'unsupported'
+        reason?: string
+        rows?: number
+        cols?: number
+      }
       if (control.type === 'started') {
+        terminalReady = true
         state.value = 'connected'
         shellEnhancement.value = control.enhancement ?? 'native'
-        resize()
+        shellReason.value = control.reason ?? ''
+        scheduleResize()
+        terminal?.focus()
       } else if (control.type === 'closed') {
+        terminalReady = false
         state.value = 'closed'
         terminal?.writeln('\r\n\x1b[38;5;214m会话已关闭\x1b[0m')
       }
@@ -83,25 +108,42 @@ async function connect() {
     terminal?.write(new Uint8Array(event.data as ArrayBuffer))
   }
   socket.onerror = () => {
+    terminalReady = false
     state.value = 'error'
     terminal?.writeln('\r\n\x1b[31m终端连接失败，请确认 Agent 终端服务已启用。\x1b[0m')
   }
-  socket.onclose = () => { if (state.value === 'connected') state.value = 'closed' }
+  socket.onclose = () => {
+    terminalReady = false
+    if (state.value === 'connected') state.value = 'closed'
+  }
   terminal.onData((data) => {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(data))
+    if (terminalReady && socket?.readyState === WebSocket.OPEN) socket.send(new TextEncoder().encode(data))
   })
   terminal.onResize(({ rows, cols }) => {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', rows, cols }))
+    if (terminalReady && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', rows, cols }))
   })
-  resizeObserver = new ResizeObserver(resize)
+  resizeObserver = new ResizeObserver(scheduleResize)
   resizeObserver.observe(element)
+  window.addEventListener('resize', scheduleResize)
+  window.visualViewport?.addEventListener('resize', scheduleResize)
 }
 
 function resize() {
   try { fitAddon?.fit() } catch { /* 容器尚未完成布局时等待下一次观察。 */ }
 }
 
+function scheduleResize() {
+  window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(resize, 80)
+}
+
 function close() {
+  terminalReady = false
+  shellReason.value = ''
+  window.clearTimeout(resizeTimer)
+  resizeTimer = undefined
+  window.removeEventListener('resize', scheduleResize)
+  window.visualViewport?.removeEventListener('resize', scheduleResize)
   resizeObserver?.disconnect()
   resizeObserver = null
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'close' }))
@@ -133,7 +175,7 @@ onBeforeUnmount(close)
       <ElSelect v-if="target === 'container'" v-model="containerId" filterable :disabled="state === 'connected'" placeholder="搜索并选择运行中的容器">
         <ElOption v-for="item in containers" :key="item.id" :label="`${item.name} · ${item.image}`" :value="item.id" />
       </ElSelect>
-      <span class="terminal-hint">{{ target === 'host' && state === 'connected' ? (shellEnhancement === 'blesh' ? '命令高亮已启用 · ble.sh' : '原生 Bash 回退') : '支持 Tab 补全、方向键历史、Ctrl+C 与窗口自适应；离开页面自动回收 PTY。' }}</span>
+      <span class="terminal-hint">{{ enhancementHint }}</span>
     </section>
 
     <section :class="['terminal-frame', 'panel', { 'terminal-frame--idle': state === 'idle' || state === 'closed' }]">
@@ -148,5 +190,5 @@ onBeforeUnmount(close)
 .terminal-toolbar{display:flex;min-height:68px;align-items:center;gap:12px;padding:11px 14px}.target-tabs{display:flex;gap:4px;padding:4px;border:1px solid var(--ncp-line);border-radius:12px;background:var(--ncp-surface-quiet)}.target-tabs button{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 14px;border-radius:9px;color:var(--ncp-text-muted)}.target-tabs button.active{background:#fff;box-shadow:0 4px 14px rgba(35,60,96,.09);color:var(--ncp-primary-strong)}.target-tabs span{display:grid;text-align:left}.target-tabs strong{font-size:.82rem}.target-tabs small{font-size:.72rem}.terminal-toolbar :deep(.el-select){width:min(380px,32vw)}.terminal-toolbar :deep(.el-select__wrapper){min-height:42px;border-radius:10px}.terminal-hint{margin-left:auto;color:var(--ncp-text-subtle);font-size:.8rem}.terminal-frame{position:relative;min-height:calc(100dvh - 286px);overflow:hidden;border-color:#d8e1ed;background:#fbfcfe;box-shadow:0 14px 36px rgba(41,68,105,.075);transition:min-height var(--ncp-duration-base) var(--ncp-ease-out)}.terminal-frame--idle{min-height:340px}.terminal-frame>header{display:flex;height:48px;align-items:center;gap:8px;padding:0 16px;border-bottom:1px solid #dce4ee;background:linear-gradient(180deg,#f8fafc,#f1f5fa);color:#24344d}.terminal-frame>header strong{font-family:var(--ncp-font-mono);font-size:.82rem}.terminal-frame>header small{margin-left:auto;color:#77869b;font-family:var(--ncp-font-mono);font-size:.74rem}.connection-dot{width:8px;height:8px;border-radius:50%;background:#8996a8}.connection-dot--connected{background:#23866f;box-shadow:0 0 0 4px var(--ncp-success-soft)}.connection-dot--connecting{background:var(--ncp-warning)}.connection-dot--error{background:var(--ncp-danger)}.terminal-canvas{position:absolute;inset:60px 13px 13px}.terminal-canvas :deep(.xterm){height:100%;padding:7px}.terminal-placeholder{position:absolute;z-index:2;inset:48px 0 0;display:grid;place-items:center;align-content:center;gap:9px;padding:24px;background:radial-gradient(circle at 50% 15%,rgba(52,116,212,.06),transparent 38%),#fbfcfe;color:#77869b}.terminal-placeholder>svg{padding:11px;border-radius:13px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);box-sizing:content-box}.terminal-placeholder strong{color:#24344d;font-size:1rem}.terminal-placeholder span{font-size:.82rem}.terminal-placeholder :deep(.el-button){margin-top:8px}@media(max-width:760px){.terminal-toolbar{align-items:stretch;flex-direction:column}.target-tabs button{flex:1}.target-tabs{display:flex}.terminal-toolbar :deep(.el-select){width:100%}.terminal-hint{margin-left:0}.terminal-frame{min-height:calc(100dvh - 330px)}.terminal-frame--idle{min-height:310px}}
 .terminal-toolbar :deep(.el-select__input),.terminal-toolbar :deep(.el-select__input-wrapper){border:0!important;outline:0!important;box-shadow:none!important}.terminal-frame{border:1px solid var(--ncp-line);background:#fbfcfe}.terminal-canvas{inset:49px 0 0;padding:12px;background:#fbfcfe}.terminal-canvas :deep(.xterm){height:100%;padding:0;background:#fbfcfe}.terminal-canvas :deep(.xterm-viewport),.terminal-canvas :deep(.xterm-screen),.terminal-canvas :deep(.xterm-screen canvas){background-color:#fbfcfe!important}.terminal-canvas :deep(.xterm-viewport){scrollbar-color:#c7d3e1 transparent}.terminal-canvas :deep(.xterm-helper-textarea){outline:0}.terminal-frame>header{background:#f6f8fb}
 .terminal-page :deep(.el-button--danger.is-plain:hover),.terminal-page :deep(.el-button--danger.is-plain:focus-visible){border-color:rgba(201,83,97,.34);background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
-.terminal-frame,.terminal-frame--idle{height:clamp(500px,calc(100dvh - 390px),640px);min-height:500px}.terminal-canvas{min-height:0}@media(max-width:760px){.terminal-frame,.terminal-frame--idle{height:calc(100dvh - 330px);min-height:420px}}
+.terminal-frame,.terminal-frame--idle{height:clamp(550px,calc(100dvh - 350px),700px);min-height:550px}.terminal-canvas{min-height:0}.terminal-canvas :deep(.xterm-viewport){scrollbar-width:none!important;-ms-overflow-style:none}.terminal-canvas :deep(.xterm-viewport::-webkit-scrollbar){display:none}@media(max-width:760px){.terminal-frame,.terminal-frame--idle{height:calc(100dvh - 300px);min-height:460px}}
 </style>

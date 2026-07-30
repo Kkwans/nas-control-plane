@@ -107,20 +107,24 @@ func TestTerminalPOCServiceRejectsCommandBearingStartMessage(t *testing.T) {
 	}
 }
 
-func TestTerminalStartedMessagePreservesEnhancement(t *testing.T) {
+func TestTerminalStartedMessagePreservesSessionMetadata(t *testing.T) {
 	t.Parallel()
 
 	encoded := mustTerminalStruct(t, terminal.Message{
 		Type:        terminal.MessageStarted,
 		SessionID:   "terminal-session",
+		Shell:       "bash",
 		Enhancement: "blesh",
+		Reason:      "ready",
+		Rows:        42,
+		Cols:        132,
 	})
 	decoded, err := terminalMessageFromStruct(encoded)
 	if err != nil {
 		t.Fatalf("decode started message: %v", err)
 	}
-	if decoded.Enhancement != "blesh" {
-		t.Fatalf("enhancement = %q, want blesh", decoded.Enhancement)
+	if decoded.Shell != "bash" || decoded.Enhancement != "blesh" || decoded.Reason != "ready" || decoded.Rows != 42 || decoded.Cols != 132 {
+		t.Fatalf("started metadata = %#v", decoded)
 	}
 }
 
