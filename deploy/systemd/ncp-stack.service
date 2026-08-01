@@ -1,0 +1,19 @@
+[Unit]
+Description=NAS Control Plane Compose Stack
+Documentation=https://github.com/Kkwans/nas-control-plane
+Wants=ncp-agent.service
+After=local-fs.target docker.service ncp-agent.service
+ConditionPathExists=/volume2/Project/nas-control-plane/deploy/console/docker-compose.yml
+
+[Service]
+Type=oneshot
+WorkingDirectory=/volume2/Project/nas-control-plane/deploy/console
+# Docker and the Agent may become ready at different times during boot.  Keep
+# the readiness window finite; this unit is not a timer or a polling daemon.
+ExecStartPre=/bin/sh -c 'attempt=1; while [ "$attempt" -le 15 ]; do if /usr/bin/env docker info >/dev/null 2>&1 && /bin/systemctl is-active --quiet ncp-agent.service; then exit 0; fi; attempt=$((attempt + 1)); /bin/sleep 2; done; echo "Docker Engine or ncp-agent.service did not become ready" >&2; exit 1'
+ExecStart=/usr/bin/env docker compose up -d
+TimeoutStartSec=90s
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

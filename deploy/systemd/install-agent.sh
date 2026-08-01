@@ -11,6 +11,7 @@ install -d -o root -g root -m 0755 /opt/ncp/bin /opt/ncp/etc /opt/ncp/share/bles
 install -o root -g root -m 0755 "$agent_binary" /opt/ncp/bin/ncp-agent
 install -o root -g root -m 0644 "$project_root/deploy/systemd/terminal.bashrc" /opt/ncp/etc/terminal.bashrc
 install -o root -g root -m 0644 "$project_root/deploy/systemd/ncp-agent.service" /etc/systemd/system/ncp-agent.service
+install -o root -g root -m 0644 "$project_root/deploy/systemd/ncp-stack.service" /etc/systemd/system/ncp-stack.service
 
 if [ ! -r /opt/ncp/share/blesh/ble.sh ]; then
   temporary_directory=$(mktemp -d)
@@ -29,5 +30,6 @@ fi
 
 systemctl daemon-reload
 systemctl enable ncp-agent.service
+systemctl enable ncp-stack.service
 systemctl restart ncp-agent.service
 systemctl --no-pager --full status ncp-agent.service

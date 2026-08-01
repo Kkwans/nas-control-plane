@@ -273,6 +273,19 @@ docker compose up -d
 docker compose ps
 ```
 
+安装脚本会同时安装并启用 `ncp-stack.service`，用于开机阶段的一次性恢复。该单元在
+`local-fs.target`、Docker Engine 与 `ncp-agent.service` 之后运行，最多等待 15 次、每次 2 秒；
+就绪后执行一次 `docker compose up -d`，随后结束并保持完成状态。
+
+运行时约定如下：
+
+- `ncp-agent.service` 使用 `Restart=on-failure`，异常退出后由 systemd 自动重启。
+- Compose 服务使用 `restart: unless-stopped`，Docker 重启后按 Docker 的重启策略恢复。
+- `ncp-stack.service` 只在开机阶段执行一次，不创建 `ncp-stack-reconcile.service`，不创建定时器，
+  也不运行两分钟一次或其他持续轮询任务。
+- 需要手动恢复时执行 `sudo systemctl start ncp-stack.service`，然后用
+  `systemctl status ncp-stack.service` 与 `docker compose ps` 查看结果。
+
 Compose 项目名称固定为：
 
 ```text
