@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Activity, Cpu, Gauge, HardDrive, MemoryStick } from '@lucide/vue'
+import { Activity, Cpu, Gauge, HardDrive, MemoryStick, Thermometer } from '@lucide/vue'
 import { ElSegmented } from 'element-plus'
 
 import { requestMetricSamples, type MetricSample } from '@/api/control'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart from '@/components/RealtimeTrendChart.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { formatLocalTimestamp } from '@/lib/datetime'
 import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -25,6 +26,11 @@ const samples = ref<MetricSample[]>([])
 const loading = ref(false)
 const error = ref('')
 const latest = computed(() => samples.value.at(-1))
+const temperatureSensors = computed(() => (systemStore.summary?.sensors ?? []).map((sensor, index) => ({
+  ...sensor,
+  label: temperatureLabel(sensor.name, index),
+  tone: temperatureTone(sensor.temperatureCelsius),
+})))
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '采样数量', value: samples.value.length },
   { label: 'CPU', value: latest.value ? `${latest.value.cpuPercent.toFixed(1)}%` : '—' },
@@ -105,6 +111,31 @@ function summaryToSample(): MetricSample | null {
   }
 }
 
+function temperatureLabel(name: string, index: number) {
+  const normalized = name.trim().toLowerCase()
+  const labels: Record<string, string> = {
+    'soc-thermal': 'SoC 系统芯片',
+    'bigcore0-thermal': '大核心 0',
+    'bigcore1-thermal': '大核心 1',
+    'littlecore-thermal': '小核心',
+    'center-thermal': '中心区域',
+    'gpu-thermal': 'GPU 图形处理器',
+    'npu-thermal': 'NPU AI 加速器',
+  }
+  if (labels[normalized]) return labels[normalized]
+  if (normalized.includes('cpu') || normalized.includes('core')) return `处理器核心 ${index + 1}`
+  if (normalized.includes('gpu')) return 'GPU 图形处理器'
+  if (normalized.includes('npu')) return 'NPU AI 加速器'
+  return `温度传感器 ${index + 1}`
+}
+
+function temperatureTone(value: number) {
+  if (!Number.isFinite(value)) return 'unknown'
+  if (value >= 80) return 'danger'
+  if (value >= 65) return 'warning'
+  return 'normal'
+}
+
 function mergeRealtimeSample() {
   const sample = summaryToSample()
   if (!sample) return
@@ -160,6 +191,22 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
       </template>
     </WorkspaceHeader>
     <div v-if="error" class="monitor-error">{{ error }}</div>
+    <section class="temperature-panel panel">
+      <header class="temperature-panel__header">
+        <div class="temperature-panel__title">
+          <span class="temperature-panel__icon"><Thermometer :size="18" /></span>
+          <div><strong>温度监控</strong><small>随实时快照更新 · {{ systemStore.summary?.collectedAt ? formatLocalTimestamp(systemStore.summary.collectedAt) : '等待数据' }}</small></div>
+        </div>
+        <span class="temperature-panel__status"><i></i>实时</span>
+      </header>
+      <div v-if="temperatureSensors.length" class="temperature-grid">
+        <article v-for="sensor in temperatureSensors" :key="sensor.name" :class="['temperature-card', `temperature-card--${sensor.tone}`]">
+          <span>{{ sensor.label }}</span>
+          <strong>{{ Number.isFinite(sensor.temperatureCelsius) ? `${sensor.temperatureCelsius.toFixed(1)} °C` : '不可用' }}</strong>
+        </article>
+      </div>
+      <div v-else class="temperature-empty">当前没有读取到可用的温度传感器。温度模块会在宿主机暴露传感器后自动出现。</div>
+    </section>
     <section v-if="loading && !samples.length" class="monitor-grid">
       <article v-for="item in 4" :key="item" class="chart-card panel"><i v-for="line in 8" :key="line" class="ncp-skeleton"></i></article>
     </section>
@@ -174,6 +221,24 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 
 <style scoped>
 .monitor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.temperature-panel { overflow:hidden; }
+.temperature-panel__header { display:flex; min-height:64px; align-items:center; justify-content:space-between; gap:16px; padding:13px 18px; border-bottom:1px solid var(--ncp-line); background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet)); }
+.temperature-panel__title { display:flex; min-width:0; align-items:center; gap:10px; }
+.temperature-panel__icon { display:grid; width:36px; height:36px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-warning-soft); color:var(--ncp-warning-strong); }
+.temperature-panel__title div { display:grid; min-width:0; gap:2px; }
+.temperature-panel__title strong { font-size:.96rem; }
+.temperature-panel__title small { overflow:hidden; color:var(--ncp-text-subtle); font-size:.75rem; text-overflow:ellipsis; white-space:nowrap; }
+.temperature-panel__status { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border:1px solid var(--ncp-success-border); border-radius:999px; background:var(--ncp-success-soft); color:var(--ncp-success-strong); font-size:.72rem; font-weight:750; }
+.temperature-panel__status i { width:6px; height:6px; border-radius:50%; background:currentColor; }
+.temperature-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; padding:14px 18px 18px; }
+.temperature-card { display:grid; min-width:0; gap:6px; padding:12px 13px; border:1px solid var(--ncp-line); border-radius:11px; background:var(--ncp-surface-quiet); }
+.temperature-card span { overflow:hidden; color:var(--ncp-text-muted); font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.temperature-card strong { color:var(--ncp-text); font-family:var(--ncp-font-latin); font-size:1.05rem; }
+.temperature-card--warning { border-color:rgba(179,110,24,.24); background:var(--ncp-warning-soft); }
+.temperature-card--warning strong { color:var(--ncp-warning-strong); }
+.temperature-card--danger { border-color:rgba(198,74,89,.24); background:var(--ncp-danger-soft); }
+.temperature-card--danger strong { color:var(--ncp-danger-strong); }
+.temperature-empty { padding:17px 18px 19px; color:var(--ncp-text-subtle); font-size:.8rem; }
 .chart-card { min-width:0; padding:20px; transition:border-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .chart-card:hover { border-color:rgba(52,116,212,.22); box-shadow:0 15px 34px rgba(44,66,94,.08); transform:translateY(-1px); }
 .chart-card>header { display:flex; align-items:center; gap:11px; margin-bottom:12px; color:var(--ncp-primary-strong); }
@@ -184,5 +249,11 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 .chart-card>.ncp-skeleton { display:block; width:100%; height:18px; margin:10px 0; }
 .monitor-error { margin-bottom:14px; padding:12px 14px; border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.86rem; }
 @media(max-width:920px) { .monitor-grid { grid-template-columns:1fr; } }
-@media(max-width:640px) { .chart-card { padding:16px; } }
+@media(max-width:920px) { .temperature-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:640px) {
+  .temperature-panel__header { align-items:flex-start; flex-direction:column; gap:10px; padding:13px 15px; }
+  .temperature-panel__status { align-self:flex-start; }
+  .temperature-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:12px 15px 15px; }
+  .chart-card { padding:16px; }
+}
 </style>

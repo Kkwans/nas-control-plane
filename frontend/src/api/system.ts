@@ -50,6 +50,10 @@ export interface SystemSummary {
     usedBytes: number
     availableBytes: number
   }
+  sensors?: Array<{
+    name: string
+    temperatureCelsius: number
+  }>
   storage: Array<{
     mountpoint: string
     totalBytes: number

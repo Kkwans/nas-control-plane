@@ -16,6 +16,7 @@
   --ncp-primary-strong: #2865bd;
   --ncp-primary-soft: #eaf2fd;
   --ncp-primary-hover: #dceafd;
+  --ncp-primary-border: rgba(52, 116, 212, .22);
   --ncp-focus-ring: rgba(52, 116, 212, 0.2);
   --ncp-control-surface: #ffffff;
   --ncp-control-hover: #f8fafd;
@@ -27,18 +28,21 @@
   --ncp-success: #1f806a;
   --ncp-success-strong: #176b59;
   --ncp-success-soft: #e4f4ef;
+  --ncp-success-border: rgba(31, 128, 106, .2);
   --ncp-info: #3f76b5;
   --ncp-info-strong: #315f94;
   --ncp-info-soft: #e8f1fb;
   --ncp-warning: #b36e18;
   --ncp-warning-strong: #8f5512;
   --ncp-warning-soft: #faedda;
+  --ncp-warning-border: rgba(179, 110, 24, .22);
   --ncp-danger: #c64a59;
   --ncp-danger-strong: #a73846;
   --ncp-danger-soft: #f9e7ea;
   --ncp-neutral: #64758a;
   --ncp-neutral-strong: #4d5d70;
   --ncp-neutral-soft: #e9eef4;
+  --ncp-neutral-border: rgba(100, 117, 138, .2);
 
   /* 对象色只表达资源类型，不能替代状态色。 */
   --ncp-object-project: #23866f;
@@ -59,6 +63,12 @@
   --ncp-engine-mysql-soft: #fbf0df;
   --ncp-engine-postgres: #4667b7;
   --ncp-engine-postgres-soft: #eaf0fb;
+  --ncp-object-sqlite: #7654c7;
+  --ncp-object-sqlite-soft: #f0ebfb;
+  --ncp-object-mysql: #b56d17;
+  --ncp-object-mysql-soft: #fbf0df;
+  --ncp-object-postgresql: #4667b7;
+  --ncp-object-postgresql-soft: #eaf0fb;
   --ncp-shadow-panel: 0 1px 2px rgba(35, 60, 96, 0.025), 0 8px 24px rgba(44, 70, 105, 0.045);
   --ncp-shadow-hover: 0 16px 34px rgba(45, 79, 124, 0.105);
   --ncp-shadow-float: 0 26px 70px rgba(33, 55, 88, 0.17);

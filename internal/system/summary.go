@@ -20,13 +20,14 @@ const cpuSampleInterval = 200 * time.Millisecond
 // Summary 是首页和系统详情页共用的实时宿主机快照。
 // 指标采集委托给 gopsutil，避免在业务层重复实现 Linux /proc、statfs 与网卡计数器解析。
 type Summary struct {
-	CollectedAt time.Time        `json:"collectedAt"`
-	Host        HostSnapshot     `json:"host"`
-	CPU         CPUStats         `json:"cpu"`
-	Memory      MemoryStats      `json:"memory"`
-	Storage     []DiskStats      `json:"storage"`
-	Network     []NetworkStats   `json:"network"`
-	Warnings    []SummaryWarning `json:"warnings"`
+	CollectedAt time.Time          `json:"collectedAt"`
+	Host        HostSnapshot       `json:"host"`
+	CPU         CPUStats           `json:"cpu"`
+	Memory      MemoryStats        `json:"memory"`
+	Sensors     []TemperatureProbe `json:"sensors"`
+	Storage     []DiskStats        `json:"storage"`
+	Network     []NetworkStats     `json:"network"`
+	Warnings    []SummaryWarning   `json:"warnings"`
 }
 
 type HostSnapshot struct {
@@ -78,6 +79,10 @@ type SummarySource interface {
 	Network(context.Context) ([]NetworkStats, error)
 }
 
+type temperatureSummarySource interface {
+	Temperatures(context.Context) ([]TemperatureProbe, error)
+}
+
 type SummaryCollector struct {
 	source SummarySource
 	now    func() time.Time
@@ -101,6 +106,7 @@ func (c *SummaryCollector) Collect(ctx context.Context) (Summary, error) {
 
 	summary := Summary{
 		CollectedAt: c.now().UTC(),
+		Sensors:     make([]TemperatureProbe, 0),
 		Storage:     make([]DiskStats, 0),
 		Network:     make([]NetworkStats, 0),
 		Warnings:    make([]SummaryWarning, 0),
@@ -141,6 +147,13 @@ func (c *SummaryCollector) Collect(ctx context.Context) (Summary, error) {
 		addSummaryWarning(&summary, "SYSTEM_SUMMARY_SOURCE_UNAVAILABLE", "network")
 	} else {
 		summary.Network = value
+	}
+	if source, ok := c.source.(temperatureSummarySource); ok {
+		if value, err := source.Temperatures(ctx); err == nil {
+			summary.Sensors = value
+		} else {
+			addSummaryWarning(&summary, "SYSTEM_SUMMARY_SOURCE_UNAVAILABLE", "temperature")
+		}
 	}
 	return summary, nil
 }
@@ -233,6 +246,10 @@ func (gopsutilSummarySource) Network(ctx context.Context) ([]NetworkStats, error
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })
 	return result, nil
+}
+
+func (gopsutilSummarySource) Temperatures(context.Context) ([]TemperatureProbe, error) {
+	return collectTemperatures(), nil
 }
 
 func persistentMountpoint(mountpoint string) bool {

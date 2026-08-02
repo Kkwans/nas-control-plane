@@ -57,6 +57,21 @@ func TestSummaryCollectorBuildsLiveHostSnapshot(t *testing.T) {
 	}
 }
 
+func TestSummaryCollectorIncludesTemperatureSensorsWhenSourceSupportsThem(t *testing.T) {
+	collector := NewSummaryCollector(fakeTemperatureSummarySource{
+		fakeSummarySource: fakeSummarySource{network: []NetworkStats{}},
+		sensors:           []TemperatureProbe{{Name: "soc-thermal", TemperatureCelsius: 38.8}},
+	})
+
+	summary, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(summary.Sensors) != 1 || summary.Sensors[0].Name != "soc-thermal" || summary.Sensors[0].TemperatureCelsius != 38.8 {
+		t.Fatalf("sensors = %#v", summary.Sensors)
+	}
+}
+
 func TestSummaryCollectorReturnsPartialDataWithStableWarnings(t *testing.T) {
 	collector := NewSummaryCollector(fakeSummarySource{
 		host:     HostSnapshot{Hostname: "DH4300-PLUS"},
@@ -104,6 +119,11 @@ type fakeSummarySource struct {
 	networkErr error
 }
 
+type fakeTemperatureSummarySource struct {
+	fakeSummarySource
+	sensors []TemperatureProbe
+}
+
 func (f fakeSummarySource) Host(context.Context) (HostSnapshot, error) { return f.host, f.hostErr }
 func (f fakeSummarySource) CPU(context.Context) (CPUStats, error)      { return f.cpu, f.cpuErr }
 func (f fakeSummarySource) Memory(context.Context) (MemoryStats, error) {
@@ -112,6 +132,10 @@ func (f fakeSummarySource) Memory(context.Context) (MemoryStats, error) {
 func (f fakeSummarySource) Storage(context.Context) ([]DiskStats, error) { return f.disks, f.disksErr }
 func (f fakeSummarySource) Network(context.Context) ([]NetworkStats, error) {
 	return f.network, f.networkErr
+}
+
+func (f fakeTemperatureSummarySource) Temperatures(context.Context) ([]TemperatureProbe, error) {
+	return f.sensors, nil
 }
 
 func hasSummaryWarning(warnings []SummaryWarning, code, source string) bool {
