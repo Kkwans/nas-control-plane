@@ -466,4 +466,5 @@ function markIconFailed(site: Site) {
 .site-row{grid-template-columns:minmax(280px,1.8fr) 92px 170px 104px 100px 190px}
 .site-row>.status-pill{justify-self:center}
 @media(max-width:680px){.section-heading{align-items:flex-start;flex-direction:column}.section-actions{width:100%}.section-actions :deep(.el-button){flex:1}}
+@media(max-width:680px){.site-row{grid-template-columns:minmax(0,1fr) auto}.site-row>.status-pill{justify-self:end}.row-actions{min-width:0}.row-actions .row-open{min-width:0}}
 </style>
