@@ -18,6 +18,30 @@ func TestNormalizeLogMessage(t *testing.T) {
 			wantRaw:     "INFO 2026-07-28 18:28:15.234596 entry_serv/grpcServ/server.go:60 [100.924µs]\t/desktop",
 		},
 		{
+			name:        "rfc3339 prefix",
+			input:       "2026-08-01T11:24:34.846634623Z [diagnostic] heartbeat",
+			wantMessage: "[diagnostic] heartbeat",
+			wantRaw:     "2026-08-01T11:24:34.846634623Z [diagnostic] heartbeat",
+		},
+		{
+			name:        "time only prefix",
+			input:       "19:24:34 [diagnostic] heartbeat",
+			wantMessage: "[diagnostic] heartbeat",
+			wantRaw:     "19:24:34 [diagnostic] heartbeat",
+		},
+		{
+			name:        "level and time only prefix",
+			input:       "WARN 19:24:34.123 warning body\nnext line",
+			wantMessage: "warning body\nnext line",
+			wantRaw:     "WARN 19:24:34.123 warning body\nnext line",
+		},
+		{
+			name:        "body timestamp remains",
+			input:       "request completed at 19:24:34 with code 200",
+			wantMessage: "request completed at 19:24:34 with code 200",
+			wantRaw:     "",
+		},
+		{
 			name:        "ordinary numbers remain untouched",
 			input:       `172.27.0.1 requested http://192.168.5.110 with Firefox/154.0`,
 			wantMessage: `172.27.0.1 requested http://192.168.5.110 with Firefox/154.0`,

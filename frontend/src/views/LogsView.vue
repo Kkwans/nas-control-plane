@@ -8,6 +8,7 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
+import { formatLocalTimestamp } from '@/lib/datetime'
 
 type LogSource = 'system' | 'agent' | 'container'
 const systemStore = useSystemStore()
@@ -126,15 +127,6 @@ function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
 }
 
-function timestampLabel(value: string) {
-  const timestamp = new Date(value)
-  return Number.isNaN(timestamp.valueOf()) || timestamp.valueOf() <= 0 ? '时间未知' : timestamp.toLocaleString('zh-CN', { hour12: false })
-}
-
-function preciseTimestampLabel(value: string) {
-  return value.replace('T', ' ').replace(/Z$/, '').replace(/([+-]\d{2}):?(\d{2})$/, ' $1:$2')
-}
-
 function logTokens(message: string) {
   const pattern = /(HTTP\/\d(?:\.\d)?\s+[1-5]\d{2}|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|\b(?:error|warn(?:ing)?|fatal|panic|exception|timeout|success|ready)\b|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|(?:\/[\w.%~-]+)+|[A-Za-z_][\w.-]*(?==)|[{}[\],:])/gi
   return message.split(pattern).filter(Boolean).map((text) => {
@@ -183,7 +175,7 @@ function logTokens(message: string) {
         <div v-for="row in 12" :key="row" class="log-row log-row--skeleton"><i v-for="cell in 4" :key="cell" class="ncp-skeleton"></i></div>
       </template>
       <div v-for="entry in pagedEntries" v-else :key="entry.id" class="log-row">
-        <time>{{ timestampLabel(entry.timestamp) }}</time>
+        <time>{{ formatLocalTimestamp(entry.timestamp) }}</time>
         <span :class="['level-badge', `level-badge--${entry.level}`]">{{ levelLabel(entry.level) }}</span>
         <p class="log-message" :title="entry.message"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></p>
         <button class="log-detail-button" type="button" title="查看日志详情" @click="selectedEntry = entry"><Eye :size="16" /></button>
@@ -197,7 +189,7 @@ function logTokens(message: string) {
     <ElDialog :model-value="Boolean(selectedEntry)" title="日志详情" width="min(920px, 92vw)" align-center destroy-on-close @close="selectedEntry = null">
       <div class="log-detail-dialog">
         <dl v-if="selectedEntry" class="log-detail-meta">
-          <div><dt>时间</dt><dd>{{ preciseTimestampLabel(selectedEntry.timestamp) }}</dd></div>
+          <div><dt>时间</dt><dd>{{ formatLocalTimestamp(selectedEntry.timestamp, { fractional: true }) }}</dd></div>
           <div><dt>级别</dt><dd><span :class="['level-badge', `level-badge--${selectedEntry.level}`]">{{ levelLabel(selectedEntry.level) }}</span></dd></div>
           <div><dt>来源</dt><dd>{{ selectedEntry.source }}</dd></div>
           <div><dt>服务 / 容器</dt><dd>{{ selectedEntry.unit }}</dd></div>
