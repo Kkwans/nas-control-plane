@@ -37,8 +37,10 @@ if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
   ble-face -s filename_executable fg=28
   ble-face -s varname_array fg=97
 
-  # ble.sh 的默认多行提示使用 RET/C-m/C-j 缩写；NCP 终端直接显示用户
-  # 可按下的按键名称，避免把 C 误解为普通字符。
+  ble-attach
+  # ble.sh 的 emacs keymap 在 ble-attach 时才声明多行选项；必须在
+  # attach 之后覆盖默认英文提示，否则 bleopt 会报 option not found，
+  # 并且后续 keymap 初始化还会覆盖自定义函数。
   bleopt keymap_emacs_mode_string_multiline=$'\e[1m多行粘贴模式\e[m'
   function ble/prompt/backslash:keymap:emacs/mode-indicator {
     ble/prompt/unit/add-hash '$_ble_edit_str'
@@ -55,7 +57,6 @@ if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
     fi
     [[ ! $str ]] || ble/prompt/print "$str"
   }
-  ble-attach
 else
   # 没有 ble.sh 时仍显式打开 Bash 的 bracketed paste，避免浏览器粘贴
   # 的 ESC[200~/ESC[201~ 标记被当成普通字符显示。
