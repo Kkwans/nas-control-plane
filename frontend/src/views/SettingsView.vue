@@ -30,6 +30,7 @@ const persisted = ref<UserPreferences>(clonePreferences(systemStore.preferences)
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const changed = computed(() => JSON.stringify(draft.value) !== JSON.stringify(persisted.value))
 const draggingNavigationID = ref<string | null>(null)
+const dragOverNavigationID = ref<string | null>(null)
 const normalizedNavigationOrder = computed(() => {
   const result: string[] = []
   const seen = new Set<string>()
@@ -130,13 +131,19 @@ function moveNavigation(id: string, offset: number) {
   updateNavigationOrder(order)
 }
 
-function startNavigationDrag(id: string) {
+function startNavigationDrag(id: string, event: DragEvent) {
   draggingNavigationID.value = id
+  dragOverNavigationID.value = null
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', id)
+  }
 }
 
 function dropNavigation(targetID: string) {
   const sourceID = draggingNavigationID.value
   draggingNavigationID.value = null
+  dragOverNavigationID.value = null
   if (!sourceID || sourceID === targetID) return
   const order = [...normalizedNavigationOrder.value]
   const sourceIndex = order.indexOf(sourceID)
@@ -145,6 +152,11 @@ function dropNavigation(targetID: string) {
   order.splice(sourceIndex, 1)
   order.splice(targetIndex, 0, sourceID)
   updateNavigationOrder(order)
+}
+
+function endNavigationDrag() {
+  draggingNavigationID.value = null
+  dragOverNavigationID.value = null
 }
 
 function restoreNavigationOrder() {
@@ -239,18 +251,19 @@ onBeforeUnmount(() => {
           <li
             v-for="(id, index) in normalizedNavigationOrder"
             :key="id"
-            :class="{ 'navigation-order__item--dragging': draggingNavigationID === id }"
+            :class="{ 'navigation-order__item--dragging': draggingNavigationID === id, 'navigation-order__item--drop-target': dragOverNavigationID === id && draggingNavigationID !== id }"
             draggable="true"
-            @dragstart="startNavigationDrag(id)"
-            @dragend="draggingNavigationID = null"
-            @dragover.prevent
+            @dragstart="startNavigationDrag(id, $event)"
+            @dragend="endNavigationDrag"
+            @dragenter.prevent="dragOverNavigationID = id"
+            @dragover.prevent="dragOverNavigationID = id"
             @drop.prevent="dropNavigation(id)"
           >
-            <GripVertical :size="18" aria-hidden="true" />
+            <button class="navigation-order__handle" type="button" draggable="false" :aria-label="`拖动${navigationLabels[id]}调整顺序`" title="拖动调整顺序"><GripVertical :size="18" aria-hidden="true" /></button>
             <span><strong>{{ index + 1 }}. {{ navigationLabels[id] }}</strong><small>{{ id }}</small></span>
-            <div>
-              <ElButton circle plain :disabled="index === 0" aria-label="上移" @click="moveNavigation(id, -1)"><ArrowUp :size="15" /></ElButton>
-              <ElButton circle plain :disabled="index === normalizedNavigationOrder.length - 1" aria-label="下移" @click="moveNavigation(id, 1)"><ArrowDown :size="15" /></ElButton>
+            <div class="navigation-order__actions">
+              <ElButton class="navigation-order__move" plain :disabled="index === 0" aria-label="上移" title="上移" @click="moveNavigation(id, -1)"><ArrowUp :size="15" /></ElButton>
+              <ElButton class="navigation-order__move" plain :disabled="index === normalizedNavigationOrder.length - 1" aria-label="下移" title="下移" @click="moveNavigation(id, 1)"><ArrowDown :size="15" /></ElButton>
             </div>
           </li>
         </ol>
@@ -262,5 +275,5 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.settings-section{overflow:hidden}.settings-section--wide{grid-column:1/-1}.settings-section>header{display:flex;align-items:flex-start;gap:12px;padding:20px;border-bottom:1px solid var(--ncp-line);background:linear-gradient(135deg,#fff 58%,var(--ncp-surface-quiet))}.settings-section>header>span{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.settings-section h2{margin:0;font-size:1rem}.settings-section p{margin:4px 0 0;color:var(--ncp-text-subtle);font-size:.86rem}.settings-section__action{margin-left:auto}.setting-row{display:flex;min-height:76px;align-items:center;justify-content:space-between;gap:22px;padding:14px 20px;border-bottom:1px solid var(--ncp-line)}.setting-row:last-child{border-bottom:0}.setting-row>span{display:grid;gap:3px}.setting-row strong{font-size:.9rem}.setting-row small{color:var(--ncp-text-subtle);font-size:.8rem}.setting-row :deep(.el-select){width:200px}.setting-row :deep(.el-select__wrapper){min-height:42px;border-radius:10px}.navigation-order{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:16px 20px 20px;list-style:none}.navigation-order li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:11px;min-height:58px;padding:9px 10px 9px 14px;border:1px solid var(--ncp-line);border-radius:11px;background:#fff;color:var(--ncp-text-muted);cursor:grab;transition:border-color var(--ncp-duration-fast),background-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast),opacity var(--ncp-duration-fast)}.navigation-order li:hover{border-color:color-mix(in srgb,var(--ncp-primary) 24%,var(--ncp-line));background:var(--ncp-primary-soft);box-shadow:var(--ncp-shadow-xs)}.navigation-order li:active{cursor:grabbing}.navigation-order__item--dragging{opacity:.45}.navigation-order li>span{display:grid;gap:2px}.navigation-order li strong{font-size:.86rem}.navigation-order li small{color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.72rem}.navigation-order li>div{display:flex;gap:6px}.navigation-order :deep(.el-button){width:32px;height:32px;margin:0}.save-state{display:flex;min-height:38px;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.82rem;font-weight:650}.save-state--saved{border-color:rgba(35,134,111,.18);background:var(--ncp-success-soft);color:var(--ncp-success)}.save-state--error{border-color:rgba(201,83,97,.2);background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.save-state button{display:flex;align-items:center;gap:4px;margin-left:4px;padding:4px 6px;border-radius:6px;background:rgba(255,255,255,.72);color:inherit;font-size:.76rem}.save-state__spinner{animation:spin .8s linear infinite}.settings-note{display:flex;align-items:center;gap:8px;margin-top:2px;padding:13px 16px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff;color:var(--ncp-text-muted);font-size:.82rem}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:980px){.settings-grid{grid-template-columns:1fr}.navigation-order{grid-template-columns:1fr}}@media(max-width:560px){.setting-row{align-items:stretch;flex-direction:column;gap:10px}.setting-row :deep(.el-select){width:100%}.settings-section>header{flex-wrap:wrap}.settings-section__action{margin-left:54px}.navigation-order{padding-inline:14px}}
+.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.settings-section{overflow:hidden}.settings-section--wide{grid-column:1/-1}.settings-section>header{display:flex;align-items:flex-start;gap:12px;padding:20px;border-bottom:1px solid var(--ncp-line);background:linear-gradient(135deg,#fff 58%,var(--ncp-surface-quiet))}.settings-section>header>span{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.settings-section h2{margin:0;font-size:1rem}.settings-section p{margin:4px 0 0;color:var(--ncp-text-subtle);font-size:.86rem}.settings-section__action{margin-left:auto}.setting-row{display:flex;min-height:76px;align-items:center;justify-content:space-between;gap:22px;padding:14px 20px;border-bottom:1px solid var(--ncp-line)}.setting-row:last-child{border-bottom:0}.setting-row>span{display:grid;gap:3px}.setting-row strong{font-size:.9rem}.setting-row small{color:var(--ncp-text-subtle);font-size:.8rem}.setting-row :deep(.el-select){width:200px}.setting-row :deep(.el-select__wrapper){min-height:42px;border-radius:10px}.navigation-order{display:grid;grid-template-columns:1fr;gap:8px;margin:0;padding:16px 20px 20px;list-style:none;background:var(--ncp-surface-quiet)}.navigation-order li{display:grid;grid-template-columns:46px minmax(0,1fr) auto;align-items:center;gap:11px;min-height:68px;padding:10px 12px 10px 9px;border:1px solid var(--ncp-line-strong);border-radius:11px;background:var(--ncp-surface);color:var(--ncp-text-muted);cursor:grab;transition:border-color var(--ncp-duration-fast),background-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-fast),opacity var(--ncp-duration-fast)}.navigation-order li:hover{border-color:var(--ncp-primary-border);background:var(--ncp-primary-soft);box-shadow:0 5px 15px rgba(45,79,124,.08)}.navigation-order li:focus-within{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-focus-ring)}.navigation-order li:active{cursor:grabbing}.navigation-order li.navigation-order__item--dragging{opacity:.45;transform:scale(.995)}.navigation-order li.navigation-order__item--drop-target{border-color:var(--ncp-primary);box-shadow:inset 0 3px 0 var(--ncp-primary),0 5px 15px rgba(45,79,124,.08)}.navigation-order__handle{display:grid;width:42px;height:42px;place-items:center;border:1px dashed var(--ncp-line-strong);border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle);cursor:grab}.navigation-order__handle:hover{border-color:var(--ncp-primary);background:var(--ncp-primary-hover);color:var(--ncp-primary-strong)}.navigation-order__handle:active{cursor:grabbing}.navigation-order li>span{display:grid;gap:3px}.navigation-order li strong{font-size:.9rem}.navigation-order li small{color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.72rem}.navigation-order__actions{display:flex;align-items:center;gap:6px}.navigation-order__move{display:grid!important;width:38px!important;height:38px!important;min-height:38px!important;margin:0!important;padding:0!important;place-items:center;border:1px solid var(--ncp-line)!important;border-radius:9px!important;background:var(--ncp-surface)!important;color:var(--ncp-text-muted)!important}.navigation-order__move:hover:not(:disabled){border-color:var(--ncp-primary)!important;background:var(--ncp-primary-soft)!important;color:var(--ncp-primary-strong)!important}.navigation-order__move:disabled{background:var(--ncp-surface-quiet)!important;color:var(--ncp-line-strong)!important}.save-state{display:flex;min-height:38px;align-items:center;gap:7px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.82rem;font-weight:650}.save-state--saved{border-color:rgba(35,134,111,.18);background:var(--ncp-success-soft);color:var(--ncp-success)}.save-state--error{border-color:rgba(201,83,97,.2);background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.save-state button{display:flex;align-items:center;gap:4px;margin-left:4px;padding:4px 6px;border-radius:6px;background:rgba(255,255,255,.72);color:inherit;font-size:.76rem}.save-state__spinner{animation:spin .8s linear infinite}.settings-note{display:flex;align-items:center;gap:8px;margin-top:2px;padding:13px 16px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff;color:var(--ncp-text-muted);font-size:.82rem}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:980px){.settings-grid{grid-template-columns:1fr}}@media(max-width:560px){.setting-row{align-items:stretch;flex-direction:column;gap:10px}.setting-row :deep(.el-select){width:100%}.settings-section>header{flex-wrap:wrap}.settings-section__action{margin-left:54px}.navigation-order{padding:13px 14px 16px}.navigation-order li{grid-template-columns:44px minmax(0,1fr) auto;min-height:72px;padding-right:8px}.navigation-order__handle{width:40px;height:46px}.navigation-order__actions{gap:4px}.navigation-order__move{width:36px!important;height:36px!important;min-height:36px!important}}
 </style>
