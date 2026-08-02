@@ -98,6 +98,10 @@ func protectedContainerExecOptions(rows, cols uint16) client.ExecCreateOptions {
 			"LANG=C",
 			"LC_ALL=C",
 			"CLICOLOR=1",
+			"SYSTEMD_COLORS=1",
+			"SYSTEMD_PAGER=cat",
+			"GIT_PAGER=cat",
+			"LESS=-R",
 			"LS_COLORS=di=38;5;25:ln=38;5;30:ex=38;5;28:*.tar=38;5;130:*.gz=38;5;130:*.zip=38;5;130",
 			"HISTFILE=/tmp/.ncp_shell_history",
 			"HISTCONTROL=ignoredups",
@@ -105,7 +109,7 @@ func protectedContainerExecOptions(rows, cols uint16) client.ExecCreateOptions {
 		},
 		Cmd: []string{
 			"/bin/sh", "-lc",
-			`if command -v locale >/dev/null 2>&1 && locale -a 2>/dev/null | grep -Eiq '^C([.-])?UTF-?8$'; then export LANG=C.UTF-8 LC_ALL=C.UTF-8; else export LANG=C LC_ALL=C; fi; alias ls='ls --color=auto' 2>/dev/null || true; alias grep='grep --color=auto' 2>/dev/null || true; if command -v bash >/dev/null 2>&1; then export PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]\$ '; exec bash --noprofile --norc -i; fi; export PS1='\u@\h:\w\$ '; exec /bin/sh -i`,
+			`if command -v locale >/dev/null 2>&1 && locale -a 2>/dev/null | grep -Eiq '^C([.-])?UTF-?8$'; then export LANG=C.UTF-8 LC_ALL=C.UTF-8; else export LANG=C LC_ALL=C; fi; alias ls='ls --color=auto' 2>/dev/null || true; alias grep='grep --color=auto' 2>/dev/null || true; alias diff='diff --color=auto' 2>/dev/null || true; if command -v git >/dev/null 2>&1; then alias git='git -c color.ui=always'; fi; if command -v bash >/dev/null 2>&1; then export PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]\$ '; exec bash --noprofile --norc -i; fi; export PS1='\u@\h:\w\$ '; exec /bin/sh -i`,
 		},
 	}
 }

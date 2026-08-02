@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -19,5 +20,24 @@ func TestHostPTYSupportsResizeCtrlCAndTermination(t *testing.T) {
 	}
 	if !result.PTY || !result.Resize || !result.CtrlC || !result.SessionTerminated {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestWaitForTerminalReadyReturnsAfterReadySignal(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create ready pipe: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	go func() {
+		_, _ = writer.Write([]byte("ready\n"))
+		_ = writer.Close()
+	}()
+
+	if !waitForTerminalReady(reader) {
+		t.Fatal("ready signal was not detected")
 	}
 }

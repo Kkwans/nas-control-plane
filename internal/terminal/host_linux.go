@@ -5,7 +5,6 @@ package terminal
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,8 +134,9 @@ func waitForTerminalReady(reader *os.File) bool {
 	defer reader.Close()
 	ready := make(chan bool, 1)
 	go func() {
-		output, err := io.ReadAll(io.LimitReader(reader, 32))
-		ready <- err == nil && strings.Contains(string(output), "ready")
+		output := make([]byte, 32)
+		read, err := reader.Read(output)
+		ready <- err == nil && strings.Contains(string(output[:read]), "ready")
 	}()
 	select {
 	case result := <-ready:
