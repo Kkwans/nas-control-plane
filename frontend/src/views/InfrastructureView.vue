@@ -308,15 +308,18 @@ onMounted(loadDetails)
           <div v-else class="inline-empty">未发现系统代理、TUN 网卡或服务代理关联。</div>
         </details>
 
-        <article class="panel detail-card network-layout__full">
-          <header class="detail-card__header type-network"><Gauge :size="20" /><div><h2>监听服务</h2><p>按端口合并显示，便于判断 NAS 对外提供了哪些入口</p></div></header>
+        <details class="panel network-details ports-disclosure network-layout__full">
+          <summary>
+            <span class="ports-disclosure__title"><Gauge :size="19" /><span><strong>监听服务</strong><small>按端口合并显示，仅在需要排查入口时展开</small></span></span>
+            <span>{{ listeningPortGroups.length }} 个端口</span>
+          </summary>
           <div v-if="listeningPortGroups.length" class="port-grid">
             <span v-for="item in listeningPortGroups" :key="`${item.protocol}-${item.port}`">
               <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-if="item.pids.length">PID {{ item.pids.join('、') }}</em>
             </span>
           </div>
           <div v-else class="inline-empty">未取得监听服务信息。</div>
-        </article>
+        </details>
       </section>
 
       <section v-else-if="activeTab === 'storage'" class="storage-layout">
@@ -401,4 +404,5 @@ onMounted(loadDetails)
 @media(max-width:1050px){.overview-section--processor,.overview-section--resources{grid-column:1/-1}.network-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.storage-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.primary-interface-row{grid-template-columns:118px minmax(140px,1fr) minmax(150px,1fr)}.primary-interface-row>div:last-child{grid-column:2/-1}.port-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){.system-tabs-toolbar{align-items:stretch;flex-direction:column;gap:9px}.system-tabs-toolbar .detail-tabs{width:100%;flex:none}.collection-meta{justify-content:space-between}.overview-section--processor,.overview-section--resources{grid-column:1/-1}.network-summary-grid,.storage-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.primary-interface-list{padding-inline:15px}.primary-interface-row{grid-template-columns:1fr 1fr;gap:9px;padding-block:12px}.primary-interface-row__status{grid-column:1/-1}.primary-interface-row>div:last-child{grid-column:auto}.network-detail-row{grid-template-columns:minmax(0,1fr) auto}.network-detail-row>span:nth-child(3){display:none}.network-detail-row code{grid-column:1/-1}.volume-list,.disk-list{padding-inline:15px}.volume-row{grid-template-columns:1fr;gap:8px;padding-block:12px}.volume-row__usage{grid-template-columns:minmax(100px,1fr) auto}.volume-row__usage .meter{grid-column:1/-1}.disk-row{grid-template-columns:30px minmax(0,1fr) auto}.disk-health{grid-column:2/-1}.port-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding-inline:15px}.evidence-disclosure>summary{padding-inline:15px}.evidence-table>div{padding-inline:15px}}
 @media(max-width:520px){.collection-time{display:inline-flex;font-size:.7rem}.collection-meta{width:100%}.collection-meta .system-refresh{min-width:76px}.processor-facts{grid-template-columns:1fr}.resource-summary{grid-template-columns:1fr}.network-summary-grid,.storage-summary-grid{grid-template-columns:1fr}.network-summary-card,.storage-summary-card{padding:13px}.network-details summary,.storage-details summary{padding-inline:15px}.network-detail-row{padding-inline:15px}.port-grid{grid-template-columns:1fr}.storage-details__list>div{grid-template-columns:1fr auto;padding-inline:15px}.storage-details__list>div span:last-child{grid-column:2;grid-row:1}.disk-row__size{font-size:.7rem}}
+.ports-disclosure{overflow:hidden}.ports-disclosure>summary{min-height:76px;background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet))}.ports-disclosure__title{display:flex!important;align-items:center;gap:10px;margin-left:0!important}.ports-disclosure__title>svg{box-sizing:content-box;padding:9px;border-radius:11px;background:var(--ncp-object-network-soft);color:var(--ncp-object-network)}.ports-disclosure__title>span{display:grid;gap:2px}.ports-disclosure__title strong{color:var(--ncp-text);font-size:.9rem}.ports-disclosure__title small{color:var(--ncp-text-subtle);font-size:.72rem;font-weight:500}
 </style>
