@@ -169,10 +169,10 @@ function primaryKeys(table: DatabaseTable) {
               </div>
             </div>
           </div>
-          <span>{{ table.type === 'view' ? '视图' : '数据表' }}</span>
-          <span><Columns3 :size="14" />{{ table.columns.length }}</span>
-          <span><Rows3 :size="14" />{{ formatNumber(table.rowCount ?? null) }}</span>
-          <span><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
+          <span class="table-row__metric"><small>类型</small>{{ table.type === 'view' ? '视图' : '数据表' }}</span>
+          <span class="table-row__metric"><small>字段</small><Columns3 :size="14" />{{ table.columns.length }}</span>
+          <span class="table-row__metric"><small>数据行</small><Rows3 :size="14" />{{ formatNumber(table.rowCount ?? null) }}</span>
+          <span class="table-row__metric"><small>大小</small><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
           <span class="open-table">打开<ArrowRight :size="16" /></span>
         </RouterLink>
         <div v-if="!tables.length" class="empty-table">没有匹配的数据表。</div>
@@ -218,4 +218,7 @@ function primaryKeys(table: DatabaseTable) {
 @media(max-width:1100px){.table-list__head,.table-row{grid-template-columns:minmax(220px,1.4fr) 78px 72px 92px 92px 64px;gap:8px}.source-summary{grid-template-columns:140px 140px 1fr 1.4fr}}
 @media(max-width:800px){.connection-panel{grid-template-columns:1fr}.table-search{width:100%}.source-summary{grid-template-columns:1fr 1fr}.source-summary>div:nth-child(2){border-right:0}.source-summary>div:nth-child(-n+2){border-bottom:1px solid var(--ncp-line)}.table-list__head{display:none}.table-row{grid-template-columns:minmax(0,1fr) auto auto; gap:10px; min-height:108px; padding:14px}.table-row>span:nth-of-type(2),.table-row>span:nth-of-type(4){display:none}}
 @media(max-width:560px){.connection-form{grid-template-columns:1fr}.connection-form :deep(.el-form-item:last-of-type),.connection-form>.el-button{grid-column:1}.connection-form>.el-button{width:100%}}
+.table-row__metric{min-width:0}.table-row__metric small{display:none}.table-list__head{background:var(--ncp-table-head)}.table-row{min-height:88px}.table-row__details{margin-top:2px}
+@media(max-width:800px){.source-summary{min-height:0}.source-summary>div{min-height:74px;padding:12px 14px}.table-list{overflow:hidden}.table-row{display:grid;grid-template-columns:minmax(0,1fr) auto;min-height:0;gap:9px;padding:15px 14px}.table-name{grid-column:1/-1}.table-row>span:nth-of-type(2),.table-row>span:nth-of-type(4){display:flex}.table-row__metric{display:flex;min-width:0;align-items:center;gap:5px;color:var(--ncp-text-muted);font-size:.75rem}.table-row__metric small{display:inline-flex;flex:0 0 auto;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:700}.table-row__metric:nth-of-type(2){grid-column:1}.table-row__metric:nth-of-type(3){grid-column:2}.table-row__metric:nth-of-type(4){grid-column:1}.table-row__metric:nth-of-type(5){grid-column:2}.open-table{grid-column:2;grid-row:4;min-height:34px;align-self:end;padding:0 3px}.table-name>div{gap:2px}.table-name strong{font-size:.88rem}}
+@media(max-width:560px){.source-summary{grid-template-columns:1fr 1fr}.source-summary>div{min-height:72px}.table-row{padding-inline:13px}.table-row__details{flex-wrap:wrap}.connection-panel{padding:18px 15px}}
 </style>

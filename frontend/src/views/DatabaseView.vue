@@ -132,7 +132,7 @@ onMounted(() => {
           <ElInput v-model="query" class="database-search" clearable placeholder="搜索数据库、项目或模块" aria-label="搜索数据库">
             <template #prefix><Search :size="17" /></template>
           </ElInput>
-          <ElButton :loading="databaseStore.loading" @click="refreshDiscovery"><RefreshCw :size="16" />重新发现</ElButton>
+          <ElButton :loading="databaseStore.loading" title="重新发现数据库" aria-label="重新发现数据库" @click="refreshDiscovery"><RefreshCw :size="16" />重新发现</ElButton>
         </div>
       </template>
     </WorkspaceHeader>
@@ -180,9 +180,9 @@ onMounted(() => {
                 <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
               </div>
             </div>
-            <span class="database-module">{{ source.module || '未标注用途' }}</span>
-            <span :class="['driver-badge', `driver-badge--${source.driver}`]">{{ driverLabel(source.driver) }}</span>
-            <code :title="source.location">{{ source.location }}</code>
+            <span class="database-module"><small class="database-field-label">用途</small>{{ source.module || '未标注用途' }}</span>
+            <span :class="['driver-badge', `driver-badge--${source.driver}`]"><small class="database-field-label">类型</small>{{ driverLabel(source.driver) }}</span>
+            <code class="database-location" :title="source.location"><small class="database-field-label">连接位置</small>{{ source.location }}</code>
             <span class="enter-database">{{ source.requiresLogin ? '连接' : '管理' }}<ArrowRight :size="16" /></span>
           </RouterLink>
         </div>
@@ -264,4 +264,7 @@ onMounted(() => {
     flex: 1;
   }
 }
+.database-field-label{display:none}.database-group__header{background:linear-gradient(120deg,var(--ncp-surface-quiet),#fff)}.database-group__header strong{font-size:.96rem}.database-group__header small{font-size:.76rem}.database-row{min-height:78px}.database-row:hover{box-shadow:inset 3px 0 0 var(--ncp-primary)}.database-location{min-width:0}
+@media(max-width:700px){.database-catalog{border-radius:var(--ncp-radius-md)}.database-group__header{min-height:64px;padding:10px 14px}.database-row{grid-template-columns:minmax(0,1fr) auto;min-height:0;gap:9px;padding:15px 14px}.database-identity{align-items:flex-start}.database-type-icon{width:36px;height:36px}.database-identity strong{font-size:.9rem}.database-module,.database-row code{display:flex;min-width:0;grid-column:1/-1;align-items:baseline;gap:8px;line-height:1.45;white-space:normal}.database-field-label{display:inline-flex;flex:0 0 auto;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:700}.database-module{color:var(--ncp-text-muted);font-size:.76rem}.database-location{overflow:hidden;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.67rem;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}.driver-badge{display:inline-flex;grid-column:1;align-items:center;gap:5px;padding:5px 8px}.driver-badge .database-field-label{color:inherit;opacity:.72}.enter-database{grid-column:2;grid-row:3;align-self:end;min-height:34px;padding:0 4px}.database-tools :deep(.el-button){min-width:96px}.database-search{flex:1;min-width:0}}
+@media(max-width:500px){.database-tools{gap:6px}.database-tools :deep(.el-button){min-width:42px;width:42px;padding:0;font-size:0}.database-tools :deep(.el-button svg){margin:0}.database-group__header{gap:8px}.database-group__header>div{gap:2px}.archive-button{min-height:34px}.database-row{padding-inline:13px}.database-location{max-width:100%}}
 </style>

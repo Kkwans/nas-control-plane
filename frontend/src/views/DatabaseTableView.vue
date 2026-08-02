@@ -292,6 +292,7 @@ function formatBytes(value?: number) {
         </div>
       </div>
       <div v-if="!primaryKeyColumns.length" class="primary-key-warning">当前表没有主键，为避免误改多行，编辑和删除已停用。</div>
+      <div class="data-table-hint"><span>表数据</span><small>左右滑动查看字段；编号和行操作已固定</small></div>
       <div class="data-table">
         <div v-if="rowsLoading && !tableRows" class="data-table-skeleton">
           <div class="data-table-skeleton__head"><i v-for="cell in Math.min(columns.length + 2, 8)" :key="cell" class="ncp-skeleton"></i></div>
@@ -401,4 +402,7 @@ function formatBytes(value?: number) {
 .missing-table{display:grid;min-height:260px;place-content:center;gap:8px;text-align:center}.missing-table h1{margin:0;font-size:1rem}.missing-table a{color:var(--ncp-primary-strong)}
 @media(max-width:1000px){.table-tabs button{min-width:104px;padding:0 10px}.table-profile{grid-template-columns:repeat(2,minmax(0,1fr))}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 300px)}}
 @media(max-width:680px){.table-tabs{width:100%}.table-tabs button{min-width:100px}.table-tabs button svg{display:none}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{height:calc(100dvh - 360px);min-height:540px}.data-toolbar{align-items:stretch;flex-direction:column}.data-toolbar>div:last-child{width:100%}.data-toolbar>div:last-child :deep(.el-button){flex:1}.data-pagination{align-items:stretch;flex-direction:column;gap:8px}.data-pagination>div :deep(.el-button){flex:1}.table-profile{grid-template-columns:1fr 1fr}.row-form{grid-template-columns:1fr}.sql-toolbar{align-items:flex-start;flex-direction:column}.sql-toolbar>div{width:100%;justify-content:space-between}.sql-toolbar kbd{display:none}}
+.data-table-hint{display:none;align-items:center;justify-content:space-between;gap:10px;padding:8px 13px;border-bottom:1px solid var(--ncp-line);background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.72rem}.data-table-hint small{color:var(--ncp-text-subtle);font-size:.68rem}.data-table :deep(.el-table__fixed),.data-table :deep(.el-table__fixed-right){box-shadow:0 0 10px rgba(28,45,75,.08)}.data-toolbar>div:first-child{min-width:0;flex-wrap:wrap}.data-toolbar>div:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.table-tabs{scrollbar-width:none}.table-tabs::-webkit-scrollbar{display:none}
+@media(max-width:680px){.data-table-hint{display:flex}.data-workbench,.structure-workbench,.definition-workbench,.sql-workbench{min-height:calc(100dvh - 340px)}.data-toolbar{padding:10px 13px}.data-toolbar>div:first-child{gap:6px}.data-table :deep(.el-table){font-size:.76rem}.table-profile{gap:1px}.table-profile>div{min-height:96px;padding:14px}.table-profile strong{font-size:.82rem}}
+@media(max-width:480px){.data-table-hint{align-items:flex-start;flex-direction:column;gap:2px}.data-toolbar>div:first-child>span{width:100%}}
 </style>
