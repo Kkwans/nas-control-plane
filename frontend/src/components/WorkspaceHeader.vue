@@ -46,6 +46,9 @@ defineProps<{
 
 <style scoped>
 .workspace-header {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
   border-color: var(--ncp-line-strong);
   background:
