@@ -7,7 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
-import { createTerminalPastePayload, isTerminalPasteShortcut } from '@/domain/terminal'
+import { createTerminalPastePayload } from '@/domain/terminal'
 import { useSystemStore } from '@/stores/system'
 
 type Target = 'host' | 'container'
@@ -85,15 +85,6 @@ async function connect() {
   terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
   pasteTarget = element
   pasteTarget.addEventListener('paste', handlePaste, true)
-  terminal.attachCustomKeyEventHandler((event) => {
-    if (event.type === 'keydown' && isTerminalPasteShortcut(event)) {
-      // Let the browser create the native paste event. handlePaste captures
-      // both keyboard and context-menu paste before xterm can add its own
-      // bracketed-paste frame a second time.
-      return false
-    }
-    return true
-  })
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const params = new URLSearchParams({
