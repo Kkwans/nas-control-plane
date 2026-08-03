@@ -1,7 +1,7 @@
 @keyframes ncp-rise-in {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(10px);
   }
 
   to {
@@ -13,21 +13,23 @@
 @keyframes ncp-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(140, 226, 190, 0.28);
+    box-shadow: 0 0 0 0 var(--ncp-success-border);
   }
 
   50% {
-    box-shadow: 0 0 0 6px rgba(140, 226, 190, 0);
+    box-shadow: 0 0 0 6px transparent;
   }
 }
 
-.reveal {
-  animation: ncp-rise-in var(--ncp-duration-slow) var(--ncp-ease-out) both;
-  animation-delay: calc(var(--reveal-index, 0) * 55ms);
-}
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    animation: ncp-rise-in var(--ncp-duration-slow) var(--ncp-ease-out) both;
+    animation-delay: calc(var(--reveal-index, 0) * 55ms);
+  }
 
-.presence-dot {
-  animation: ncp-pulse 2.6s ease-in-out infinite;
+  .presence-dot {
+    animation: ncp-pulse 2.6s ease-in-out infinite;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -35,8 +37,12 @@
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    animation-duration: 0.01ms !important;
+    animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: .01ms !important;
+  }
+
+  .ncp-skeleton::after {
+    display: none;
   }
 }
