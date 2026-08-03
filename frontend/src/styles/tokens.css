@@ -1,48 +1,69 @@
 :root {
   color-scheme: light;
 
-  --ncp-canvas: #f7f9fc;
-  --ncp-canvas-deep: #f1f5f9;
+  /* 画布与承载面 */
+  --ncp-canvas: #f6f8fb;
+  --ncp-canvas-deep: #edf2f8;
   --ncp-surface: #ffffff;
   --ncp-surface-raised: #ffffff;
   --ncp-surface-quiet: #f8fafd;
-  --ncp-surface-hover: #f3f7fc;
-  --ncp-line: #e4eaf2;
-  --ncp-line-strong: #cbd6e4;
-  --ncp-text: #1a2940;
-  --ncp-text-muted: #53657b;
-  --ncp-text-subtle: #78889c;
+  --ncp-surface-hover: #f2f6fb;
+  --ncp-surface-sunken: #edf2f7;
+  --ncp-surface-disabled: #f1f4f8;
+
+  /* 结构线与文字层级 */
+  --ncp-line-subtle: #eef2f6;
+  --ncp-line: #e1e8f0;
+  --ncp-line-strong: #c9d5e3;
+  --ncp-text: #1b2a3d;
+  --ncp-text-muted: #52657c;
+  --ncp-text-subtle: #73849a;
+  --ncp-text-disabled: #a3afbe;
+
+  /* 品牌蓝：页面只使用这一组主色表达主要操作与焦点。 */
   --ncp-primary: #3474d4;
-  --ncp-primary-strong: #2865bd;
+  --ncp-primary-strong: #255da9;
   --ncp-primary-soft: #eaf2fd;
   --ncp-primary-hover: #dceafd;
-  --ncp-primary-border: rgba(52, 116, 212, .22);
-  --ncp-focus-ring: rgba(52, 116, 212, 0.2);
+  --ncp-primary-active: #cbdff8;
+  --ncp-primary-border: rgba(52, 116, 212, .24);
+  --ncp-primary-wash: rgba(52, 116, 212, .08);
+  --ncp-on-primary: #ffffff;
+  --ncp-focus-ring: rgba(52, 116, 212, .22);
+  --ncp-focus-ring-strong: rgba(52, 116, 212, .34);
+
+  /* 控件 */
   --ncp-control-surface: #ffffff;
   --ncp-control-hover: #f8fafd;
   --ncp-control-active: #eef4fc;
-  --ncp-table-head: #f5f8fc;
-  --ncp-table-row-hover: #f7faff;
+  --ncp-control-disabled: #f1f4f8;
+  --ncp-control-border: #d7e0ea;
+  --ncp-control-border-hover: #b8c8da;
+  --ncp-control-border-focus: #3474d4;
+  --ncp-table-head: #f3f6fa;
+  --ncp-table-row-hover: #f6f9fd;
 
-  /* 状态色只表达运行状态和反馈，不用于资源类型。 */
+  /* 语义状态色只表达状态与反馈，不用于资源类型。 */
   --ncp-success: #1f806a;
   --ncp-success-strong: #176b59;
   --ncp-success-soft: #e4f4ef;
-  --ncp-success-border: rgba(31, 128, 106, .2);
+  --ncp-success-border: rgba(31, 128, 106, .22);
   --ncp-info: #3f76b5;
   --ncp-info-strong: #315f94;
   --ncp-info-soft: #e8f1fb;
+  --ncp-info-border: rgba(63, 118, 181, .22);
   --ncp-warning: #b36e18;
   --ncp-warning-strong: #8f5512;
   --ncp-warning-soft: #faedda;
-  --ncp-warning-border: rgba(179, 110, 24, .22);
+  --ncp-warning-border: rgba(179, 110, 24, .24);
   --ncp-danger: #c64a59;
   --ncp-danger-strong: #a73846;
   --ncp-danger-soft: #f9e7ea;
+  --ncp-danger-border: rgba(198, 74, 89, .24);
   --ncp-neutral: #64758a;
   --ncp-neutral-strong: #4d5d70;
   --ncp-neutral-soft: #e9eef4;
-  --ncp-neutral-border: rgba(100, 117, 138, .2);
+  --ncp-neutral-border: rgba(100, 117, 138, .22);
 
   /* 对象色只表达资源类型，不能替代状态色。 */
   --ncp-object-project: #23866f;
@@ -69,56 +90,107 @@
   --ncp-object-mysql-soft: #fbf0df;
   --ncp-object-postgresql: #4667b7;
   --ncp-object-postgresql-soft: #eaf0fb;
-  --ncp-shadow-panel: 0 1px 2px rgba(35, 60, 96, 0.025), 0 8px 24px rgba(44, 70, 105, 0.045);
-  --ncp-shadow-hover: 0 16px 34px rgba(45, 79, 124, 0.105);
-  --ncp-shadow-float: 0 26px 70px rgba(33, 55, 88, 0.17);
 
+  /* 统一的低对比层级，避免白色画布上的黑色硬阴影。 */
+  --ncp-shadow-control: 0 1px 2px rgba(35, 60, 96, .04), 0 3px 9px rgba(44, 70, 105, .04);
+  --ncp-shadow-panel: 0 1px 2px rgba(35, 60, 96, .035), 0 8px 22px rgba(44, 70, 105, .045);
+  --ncp-shadow-hover: 0 10px 24px rgba(45, 79, 124, .09);
+  --ncp-shadow-float: 0 22px 56px rgba(33, 55, 88, .15);
+
+  /* 一个明确的形状规则：面板 12px、控件 10px、状态与标签使用 pill。 */
+  --ncp-radius-xs: 6px;
   --ncp-radius-sm: 8px;
-  --ncp-radius-md: 14px;
+  --ncp-radius-control: 10px;
+  --ncp-radius-md: 12px;
   --ncp-radius-lg: 16px;
   --ncp-radius-pill: 999px;
 
+  /* 4px 基线间距。页面级间距使用这些 token，紧凑模式只调整少数结构变量。 */
+  --ncp-space-0: 0;
   --ncp-space-1: 4px;
   --ncp-space-2: 8px;
   --ncp-space-3: 12px;
   --ncp-space-4: 16px;
   --ncp-space-5: 20px;
   --ncp-space-6: 24px;
+  --ncp-space-7: 28px;
   --ncp-space-8: 32px;
+  --ncp-space-9: 36px;
   --ncp-space-10: 40px;
+  --ncp-space-11: 44px;
   --ncp-space-12: 48px;
+  --ncp-space-14: 56px;
+  --ncp-space-16: 64px;
 
-  --ncp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ncp-ease-in: cubic-bezier(0.55, 0, 0.8, 0.35);
+  /* 排版与数字 */
+  --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
+  --ncp-font-latin: 'Manrope Variable', 'Segoe UI Variable', sans-serif;
+  --ncp-font-body: 'Manrope Variable', 'Segoe UI Variable', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  --ncp-font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', ui-monospace, monospace;
+  --ncp-font-data: var(--ncp-font-mono);
+  --ncp-base-font-size: 15px;
+
+  /* 动效只用于反馈与状态转换。 */
+  --ncp-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ncp-ease-in: cubic-bezier(.55, 0, .8, .35);
+  --ncp-ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ncp-duration-instant: 80ms;
   --ncp-duration-fast: 160ms;
-  --ncp-duration-base: 240ms;
+  --ncp-duration-base: 220ms;
   --ncp-duration-slow: 420ms;
+
+  /* 布局与密度 */
+  --ncp-content-max-width: 1480px;
+  --ncp-content-max-width-narrow: 1120px;
+  --ncp-page-padding-inline: clamp(14px, 2.25vw, 34px);
+  --ncp-page-padding-block: clamp(16px, 1.8vw, 28px);
+  --ncp-density-scale: 1;
   --ncp-touch-target: 44px;
   --ncp-control-height: 42px;
   --ncp-resource-row-height: 66px;
   --ncp-toolbar-height: 58px;
   --ncp-section-gap: 16px;
-  --ncp-base-font-size: 15px;
-  --ncp-density-scale: 1;
-  --ncp-font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI Variable', sans-serif;
-  --ncp-font-latin: 'Manrope Variable', 'Segoe UI Variable', sans-serif;
-  --ncp-font-body: 'Manrope Variable', 'Segoe UI Variable', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
-  --ncp-font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', monospace;
   --ncp-sidebar-width: 232px;
   --ncp-sidebar-collapsed-width: 68px;
   --ncp-topbar-height: 64px;
 
+  /* Element Plus 语义映射，保证第三方控件与 NCP 基础层同源。 */
   --el-color-primary: var(--ncp-primary);
-  --el-color-success: #1a8b6d;
+  --el-color-primary-light-3: #79a6e3;
+  --el-color-primary-light-5: #a5c4ed;
+  --el-color-primary-light-7: #c8dcf6;
+  --el-color-primary-light-8: #d9e7f9;
+  --el-color-primary-light-9: var(--ncp-primary-soft);
+  --el-color-primary-dark-2: var(--ncp-primary-strong);
+  --el-color-success: var(--ncp-success);
   --el-color-warning: var(--ncp-warning);
   --el-color-danger: var(--ncp-danger);
+  --el-color-info: var(--ncp-info);
   --el-bg-color: var(--ncp-surface);
+  --el-bg-color-page: var(--ncp-canvas);
   --el-bg-color-overlay: var(--ncp-surface-raised);
+  --el-fill-color: var(--ncp-surface-quiet);
+  --el-fill-color-light: var(--ncp-surface-hover);
+  --el-fill-color-lighter: var(--ncp-line-subtle);
+  --el-fill-color-blank: var(--ncp-surface);
   --el-text-color-primary: var(--ncp-text);
   --el-text-color-regular: var(--ncp-text-muted);
+  --el-text-color-secondary: var(--ncp-text-subtle);
+  --el-text-color-placeholder: var(--ncp-text-subtle);
+  --el-text-color-disabled: var(--ncp-text-disabled);
   --el-border-color: var(--ncp-line);
-  --el-border-radius-base: var(--ncp-radius-sm);
-  --el-fill-color-blank: var(--ncp-surface);
+  --el-border-color-light: var(--ncp-line-subtle);
+  --el-border-color-lighter: var(--ncp-line-subtle);
+  --el-border-color-hover: var(--ncp-line-strong);
+  --el-disabled-bg-color: var(--ncp-control-disabled);
+  --el-disabled-text-color: var(--ncp-text-disabled);
+  --el-disabled-border-color: var(--ncp-line);
+  --el-border-radius-base: var(--ncp-radius-control);
+  --el-border-radius-small: var(--ncp-radius-sm);
+  --el-border-radius-round: var(--ncp-radius-pill);
+  --el-box-shadow: var(--ncp-shadow-panel);
+  --el-box-shadow-light: var(--ncp-shadow-control);
+  --el-box-shadow-lighter: none;
 }
 
 html[data-density='compact'] {
