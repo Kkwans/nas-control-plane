@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
@@ -49,6 +50,8 @@ type SocketConfig struct {
 	Compose           ComposeProvider
 	Database          DatabaseProvider
 	Journal           JournalProvider
+	System            SystemProvider
+	Proxy             ProxyProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -97,17 +100,36 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	if journalProvider == nil {
 		journalProvider = journal.NewReader(journal.OSRunner{})
 	}
+	systemProvider := config.System
+	if systemProvider == nil {
+		systemProvider = NewLiveSystemProvider(system.NewOSEnvironment(), os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"), nil)
+	}
+	proxyProvider := config.Proxy
+	if proxyProvider == nil {
+		endpoint := strings.TrimSpace(os.Getenv("NCP_MIHOMO_CONTROLLER_ENDPOINT"))
+		if endpoint == "" {
+			endpoint = strings.TrimSpace(os.Getenv("MIHOMO_CONTROLLER_ENDPOINT"))
+		}
+		if endpoint != "" {
+			proxyProvider, err = NewLiveProxyProvider(system.NewOSEnvironment(), endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"))
+			if err != nil {
+				return coded("AGENT_MIHOMO_INITIALIZATION_FAILED", err)
+			}
+		}
+	}
 
 	grpcServer := grpc.NewServer()
 	RegisterAgentProbeServiceServer(grpcServer, newStatusService())
 	RegisterAgentDashboardServiceServer(grpcServer, newDashboardService(dashboardProvider))
-	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl))
+	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl, composeProvider))
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))
 	RegisterAgentWebProbeServiceServer(grpcServer, newWebProbeService())
+	RegisterAgentSystemServiceServer(grpcServer, NewSystemService(systemProvider))
+	RegisterAgentProxyServiceServer(grpcServer, NewProxyService(proxyProvider))
 	if config.EnableTerminalPOC {
 		manager := config.TerminalManager
 		if manager == nil {
