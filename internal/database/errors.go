@@ -154,9 +154,10 @@ func ClassifyError(ctx context.Context, operation string, err error) ErrorCode {
 		"not enough privileges", "sqlstate 42501", "mysql error 1142", "error 1142") {
 		return CodePermissionDenied
 	}
-	if hasAny(text, "unknown database", "unknown database", "database does not exist", "database not found",
-		"no such database", "invalid catalog name", "3d000", "unknown database", "no such table",
-		"table does not exist", "relation does not exist", "数据表不存在") {
+	if hasAny(text, "unknown database", "database does not exist", "database not found",
+		"no such database", "invalid catalog name", "3d000", "no such table",
+		"table does not exist", "relation does not exist", "数据表不存在") ||
+		(strings.Contains(text, "database ") && strings.Contains(text, " does not exist")) {
 		return CodeDatabaseNotFound
 	}
 	if hasAny(text, "constraint failed", "constraint violation", "unique constraint", "duplicate key",
