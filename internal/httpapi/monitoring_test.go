@@ -28,7 +28,8 @@ func TestParseMonitoringRangeSupportsQuickAndExactRanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exact range error = %v", err)
 	}
-	if !exact.From.Equal(now.Add(-72*time.Hour)) || !exact.To.Equal(now) {
+	wantFrom := time.Date(2026, time.July, 20, 4, 0, 0, 0, time.UTC)
+	if !exact.From.Equal(wantFrom) || !exact.To.Equal(now) {
 		t.Fatalf("exact range = %#v", exact)
 	}
 }
