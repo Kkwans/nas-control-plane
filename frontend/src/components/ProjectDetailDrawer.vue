@@ -16,11 +16,13 @@ import {
 } from '@lucide/vue'
 import { ElDrawer, ElTooltip } from 'element-plus'
 
+import ActionButton from '@/components/ActionButton.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import { projectStateTone } from '@/domain/overview'
 import type { ContainerAction, DockerInventory, DockerProject } from '@/api/system'
 
 type DockerContainer = DockerInventory['containers'][number]
+type ProjectActionError = { containerId: string; name: string; message: string }
 
 const props = withDefaults(defineProps<{
   modelValue: boolean
@@ -29,9 +31,13 @@ const props = withDefaults(defineProps<{
   hostName: string
   allowOperations?: boolean
   actionPending?: string | null
+  projectActionPending?: ContainerAction | null
+  projectActionErrors?: ProjectActionError[]
 }>(), {
   allowOperations: false,
   actionPending: null,
+  projectActionPending: null,
+  projectActionErrors: () => [],
 })
 
 const emit = defineEmits<{
@@ -39,6 +45,7 @@ const emit = defineEmits<{
   action: [containerId: string, action: ContainerAction]
   logs: [container: { id: string; name: string }]
   compose: []
+  'project-action': [action: ContainerAction]
 }>()
 
 const isMobile = ref(window.innerWidth < 768)
@@ -50,6 +57,20 @@ const publicPorts = computed(() => [...new Set(props.containers
 
 function stateLabel(state: DockerProject['state']) {
   return state === 'running' ? '运行中' : state === 'degraded' ? '需关注' : '已停止'
+}
+function actionLabel(action: ContainerAction) {
+  return action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'
+}
+const currentStateLabel = computed(() => {
+  if (props.projectActionPending) return `正在${actionLabel(props.projectActionPending)}`
+  return props.project ? stateLabel(props.project.state) : ''
+})
+const currentStateTone = computed(() => props.projectActionPending ? 'pending' : props.project ? projectStateTone(props.project.state) : 'neutral')
+function projectActionDisabled(action: ContainerAction) {
+  if (!props.project || props.projectActionPending || props.actionPending || !props.containers.length) return true
+  const runningCount = props.containers.filter((container) => container.state === 'running').length
+  if (action === 'start') return runningCount === props.containers.length
+  return runningCount === 0
 }
 
 function containerStateLabel(state: string) {
@@ -94,7 +115,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
       <div v-if="project" class="drawer-title">
         <span class="drawer-title__icon"><Boxes :size="21" /></span>
         <div><strong>{{ project.name }}</strong><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
-        <StatusPill :label="stateLabel(project.state)" :tone="projectStateTone(project.state)" />
+        <StatusPill :label="currentStateLabel" :tone="currentStateTone" />
       </div>
     </template>
 
@@ -107,6 +128,22 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
       <button v-if="project.kind === 'compose' && project.configFiles.length" class="compose-open-button" type="button" @click="emit('compose')">
         <Code2 :size="17" /><span><strong>打开 Compose 配置工作台</strong><small>读取真实 YAML、切换配置文件并执行校验</small></span><ArrowUpRight :size="16" />
       </button>
+
+      <section v-if="allowOperations" class="project-lifecycle" aria-label="Docker 项目操作">
+        <header>
+          <div><h3>项目操作</h3><p>按容器逐项执行，失败项会保留在这里。</p></div>
+          <span>{{ containers.length }} 个容器</span>
+        </header>
+        <div class="project-lifecycle__actions">
+          <ActionButton variant="ghost" size="sm" :icon="Play" :loading="projectActionPending === 'start'" :disabled="projectActionDisabled('start')" @click="emit('project-action', 'start')">启动</ActionButton>
+          <ActionButton variant="danger" size="sm" :icon="CircleStop" :loading="projectActionPending === 'stop'" :disabled="projectActionDisabled('stop')" @click="emit('project-action', 'stop')">停止</ActionButton>
+          <ActionButton variant="secondary" size="sm" :icon="RotateCw" :loading="projectActionPending === 'restart'" :disabled="projectActionDisabled('restart')" @click="emit('project-action', 'restart')">重启</ActionButton>
+        </div>
+        <div v-if="projectActionErrors.length" class="project-action-errors" role="alert">
+          <strong>部分容器操作失败</strong>
+          <ul><li v-for="failure in projectActionErrors" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
+        </div>
+      </section>
 
       <section class="detail-section">
         <header><div><h3>访问入口</h3><p>在新的浏览器标签页打开服务</p></div><span>{{ publicPorts.length }} 个端口</span></header>
@@ -185,6 +222,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .detail-overview span { color: var(--ncp-text-subtle); font-size: .7rem; }
 .detail-overview strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .compose-open-button{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;min-height:54px;padding:9px 13px;border:1px solid rgba(36,104,216,.18);border-radius:11px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);text-align:left;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast)}.compose-open-button:hover{border-color:rgba(36,104,216,.38);transform:translateY(-1px)}.compose-open-button>span{display:grid;gap:2px}.compose-open-button strong{font-size:.78rem}.compose-open-button small{color:var(--ncp-text-muted);font-size:.68rem}
+.project-lifecycle { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--ncp-line); border-radius: 12px; background: var(--ncp-surface-quiet); }
+.project-lifecycle>header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.project-lifecycle>header>div { display: grid; gap: 2px; }
+.project-lifecycle h3 { margin: 0; font-size: .86rem; }
+.project-lifecycle p { margin: 0; color: var(--ncp-text-subtle); font-size: .7rem; }
+.project-lifecycle>header>span { color: var(--ncp-text-subtle); font-size: .7rem; }
+.project-lifecycle__actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.project-action-errors { padding: 9px 10px; border: 1px solid var(--ncp-danger-border); border-radius: 9px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .7rem; }
+.project-action-errors ul { display: grid; gap: 3px; margin: 4px 0 0; padding-left: 17px; }
 .detail-section { display: grid; gap: 12px; }
 .detail-section>header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .detail-section h3 { margin: 0; font-size: .88rem; }

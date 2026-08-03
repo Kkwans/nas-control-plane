@@ -8,12 +8,16 @@ import (
 )
 
 const (
-	agentDockerControlServiceName                   = "ncp.agent.v1.AgentDockerControlService"
-	AgentDockerControlServiceControlContainerMethod = "/ncp.agent.v1.AgentDockerControlService/ControlContainer"
+	agentDockerControlServiceName                           = "ncp.agent.v1.AgentDockerControlService"
+	AgentDockerControlServiceControlContainerMethod         = "/ncp.agent.v1.AgentDockerControlService/ControlContainer"
+	AgentDockerControlServiceControlStandaloneProjectMethod = "/ncp.agent.v1.AgentDockerControlService/ControlStandaloneProject"
+	AgentDockerControlServiceControlComposeProjectMethod    = "/ncp.agent.v1.AgentDockerControlService/ControlComposeProject"
 )
 
 type AgentDockerControlServiceClient interface {
 	ControlContainer(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+	ControlStandaloneProject(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+	ControlComposeProject(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
 type agentDockerControlServiceClient struct {
@@ -32,8 +36,26 @@ func (c *agentDockerControlServiceClient) ControlContainer(ctx context.Context, 
 	return response, nil
 }
 
+func (c *agentDockerControlServiceClient) ControlStandaloneProject(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := c.connection.Invoke(ctx, AgentDockerControlServiceControlStandaloneProjectMethod, in, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *agentDockerControlServiceClient) ControlComposeProject(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := c.connection.Invoke(ctx, AgentDockerControlServiceControlComposeProjectMethod, in, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 type AgentDockerControlServiceServer interface {
 	ControlContainer(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	ControlStandaloneProject(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	ControlComposeProject(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func RegisterAgentDockerControlServiceServer(server grpc.ServiceRegistrar, implementation AgentDockerControlServiceServer) {
@@ -55,11 +77,47 @@ func agentDockerControlServiceControlContainerHandler(server any, ctx context.Co
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentDockerControlServiceControlStandaloneProjectHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(structpb.Struct)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return server.(AgentDockerControlServiceServer).ControlStandaloneProject(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: server, FullMethod: AgentDockerControlServiceControlStandaloneProjectMethod}
+	handler := func(ctx context.Context, request any) (any, error) {
+		return server.(AgentDockerControlServiceServer).ControlStandaloneProject(ctx, request.(*structpb.Struct))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
+func agentDockerControlServiceControlComposeProjectHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(structpb.Struct)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return server.(AgentDockerControlServiceServer).ControlComposeProject(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: server, FullMethod: AgentDockerControlServiceControlComposeProjectMethod}
+	handler := func(ctx context.Context, request any) (any, error) {
+		return server.(AgentDockerControlServiceServer).ControlComposeProject(ctx, request.(*structpb.Struct))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
 var agentDockerControlServiceDescription = grpc.ServiceDesc{
 	ServiceName: agentDockerControlServiceName,
 	HandlerType: (*AgentDockerControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{{
 		MethodName: "ControlContainer",
 		Handler:    agentDockerControlServiceControlContainerHandler,
+	}, {
+		MethodName: "ControlStandaloneProject",
+		Handler:    agentDockerControlServiceControlStandaloneProjectHandler,
+	}, {
+		MethodName: "ControlComposeProject",
+		Handler:    agentDockerControlServiceControlComposeProjectHandler,
 	}},
 }
