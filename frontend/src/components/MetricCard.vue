@@ -15,7 +15,7 @@ defineProps<{
 </script>
 
 <template>
-  <article class="metric-card" :class="`metric-card--${accent}`">
+  <article class="metric-card" :class="`metric-card--${accent}`" :aria-label="`${label}：${value}${unit ? ` ${unit}` : ''}`">
     <div class="metric-card__header">
       <span>{{ label }}</span>
       <span class="metric-card__icon" aria-hidden="true">
@@ -64,9 +64,13 @@ defineProps<{
 }
 
 .metric-card__header > span:first-child {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ncp-text-muted);
   font-size: 0.78rem;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric-card__icon {
@@ -91,6 +95,7 @@ defineProps<{
   font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
   font-size: clamp(1.8rem, 2.7vw, 2.32rem);
   font-weight: 650;
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.08em;
   line-height: 1;
 }
@@ -102,9 +107,17 @@ defineProps<{
 }
 
 .metric-card__footer {
+  min-width: 0;
   margin-top: 22px;
   color: var(--ncp-text-subtle);
   font-size: 0.7rem;
+}
+
+.metric-card__footer > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .metric-card__trend {
@@ -126,5 +139,10 @@ defineProps<{
 .metric-card--warning .metric-card__icon,
 .metric-card--warning .metric-card__trend {
   color: var(--ncp-warning-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metric-card { transition: border-color var(--ncp-duration-fast), background-color var(--ncp-duration-fast); }
+  .metric-card:hover { transform: none; }
 }
 </style>

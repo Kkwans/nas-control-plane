@@ -54,6 +54,10 @@ export interface SystemSummary {
     name: string
     temperatureCelsius: number
   }>
+  diskIO?: {
+    readBytes: number
+    writeBytes: number
+  }
   storage: Array<{
     mountpoint: string
     totalBytes: number

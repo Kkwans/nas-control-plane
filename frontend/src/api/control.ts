@@ -86,6 +86,9 @@ export interface MetricSample {
   diskPercent: number
   networkReceiveBytes: number
   networkTransmitBytes: number
+  diskReadBytes?: number
+  diskWriteBytes?: number
+  temperatures?: Array<{ name: string; temperatureCelsius: number }>
 }
 
 export interface LogEntry {
