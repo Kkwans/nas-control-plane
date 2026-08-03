@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
+	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -14,6 +15,18 @@ func DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Disc
 	var result ncpdatabase.Discovery
 	err := callDatabase(ctx, socketPath, struct{}{}, &result, func(client AgentDatabaseServiceClient, request *structpb.Struct) (*structpb.Struct, error) {
 		return client.Discover(ctx, request)
+	})
+	return result, err
+}
+
+func TestDatabaseConnection(ctx context.Context, socketPath string, request ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
+	var result ncpdatabase.ConnectionDiagnostic
+	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
+		connectionClient, ok := client.(AgentDatabaseConnectionServiceClient)
+		if !ok {
+			return nil, grpcstatus.Error(codes.Unimplemented, "database connection diagnostics are unavailable")
+		}
+		return connectionClient.TestConnection(ctx, payload)
 	})
 	return result, err
 }
@@ -68,11 +81,11 @@ func mutateDatabase(ctx context.Context, socketPath string, request any, call fu
 
 func callDatabase(ctx context.Context, socketPath string, request, result any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) error {
 	if err := ctx.Err(); err != nil {
-		return contextError(err)
+		return coded(string(ncpdatabase.CodeTimeout), errors.New(string(ncpdatabase.CodeTimeout)))
 	}
 	connection, err := dialSocket(socketPath)
 	if err != nil {
-		return err
+		return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
 	}
 	defer connection.Close()
 	encoded, err := json.Marshal(request)
@@ -89,11 +102,7 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 	}
 	response, err := call(NewAgentDatabaseServiceClient(connection), payload)
 	if err != nil {
-		message := grpcstatus.Convert(err).Message()
-		if message == "" {
-			message = "数据库操作失败"
-		}
-		return coded("AGENT_DATABASE_UNAVAILABLE", errors.New(message))
+		return databaseRPCError(err)
 	}
 	if response == nil {
 		return coded("AGENT_RPC_RESPONSE_INVALID", errors.New("数据库响应为空"))
@@ -106,4 +115,18 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 		return coded("AGENT_RPC_RESPONSE_INVALID", err)
 	}
 	return nil
+}
+
+func databaseRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	status := grpcstatus.Convert(err)
+	if status.Code() == codes.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return coded(string(ncpdatabase.CodeTimeout), errors.New(string(ncpdatabase.CodeTimeout)))
+	}
+	if code := ncpdatabase.CodeFromString(status.Message()); code != "" {
+		return coded(string(code), errors.New(string(code)))
+	}
+	return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
 }

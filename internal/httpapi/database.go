@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 )
 
@@ -30,6 +31,12 @@ func (api *handler) databaseCatalog(response http.ResponseWriter, request *http.
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.CatalogDatabase(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -45,6 +52,12 @@ func (api *handler) databaseQuery(response http.ResponseWriter, request *http.Re
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.QueryDatabase(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -60,6 +73,12 @@ func (api *handler) databaseRows(response http.ResponseWriter, request *http.Req
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.ReadDatabaseRows(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -75,6 +94,12 @@ func (api *handler) databaseInsert(response http.ResponseWriter, request *http.R
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.InsertDatabaseRow(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -90,6 +115,12 @@ func (api *handler) databaseUpdate(response http.ResponseWriter, request *http.R
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.UpdateDatabaseRow(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -105,6 +136,12 @@ func (api *handler) databaseDelete(response http.ResponseWriter, request *http.R
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
+	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
+	if err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
+	input.Connection = resolved
 	result, err := api.databaseAgent.DeleteDatabaseRow(ctx, api.agentSocketPath, input)
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
@@ -127,6 +164,40 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 	return true
 }
 
-func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, _ error) {
-	api.writeError(response, request, http.StatusBadRequest, "DATABASE_OPERATION_FAILED", "数据库操作失败，请检查连接信息、SQL 或数据约束。")
+func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, err error) {
+	code := ncpdatabase.ErrorCodeOf(err)
+	if code == "" {
+		code = ncpdatabase.CodeFromString(agentsocket.ErrorCode(err))
+	}
+	status := http.StatusBadRequest
+	message := "数据库操作失败，请检查连接信息、SQL 或数据约束。"
+	switch code {
+	case ncpdatabase.CodeCredentialsRequired:
+		message = "数据库连接需要凭据。"
+	case ncpdatabase.CodeAuthFailed:
+		status, message = http.StatusUnauthorized, "数据库认证失败。"
+	case ncpdatabase.CodeUnreachable:
+		status, message = http.StatusServiceUnavailable, "数据库服务不可达。"
+	case ncpdatabase.CodeDatabaseNotFound:
+		status, message = http.StatusNotFound, "目标数据库不存在。"
+	case ncpdatabase.CodePermissionDenied:
+		status, message = http.StatusForbidden, "数据库权限不足。"
+	case ncpdatabase.CodeSQLInvalid:
+		message = "SQL 或数据库请求无效。"
+	case ncpdatabase.CodeConstraintFailed:
+		status, message = http.StatusConflict, "数据库约束未满足。"
+	case ncpdatabase.CodeAgentUnavailable:
+		status, message = http.StatusServiceUnavailable, "Root Agent 暂不可用。"
+	case ncpdatabase.CodeTimeout:
+		status, message = http.StatusGatewayTimeout, "数据库操作超时。"
+	case ncpdatabase.CodeCredentialStoreUnavailable, ncpdatabase.CodeCredentialCorrupt,
+		ncpdatabase.CodeKeyUnavailable, ncpdatabase.CodeKeyRotationFailed, ncpdatabase.CodeMigrationFailed:
+		status, message = http.StatusServiceUnavailable, "数据库凭据服务暂不可用。"
+	default:
+		code = "DATABASE_OPERATION_FAILED"
+	}
+	if code == "" {
+		code = "DATABASE_OPERATION_FAILED"
+	}
+	api.writeError(response, request, status, string(code), message)
 }

@@ -4,19 +4,22 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const agentDatabaseServiceName = "ncp.agent.v1.AgentDatabaseService"
 
 const (
-	AgentDatabaseDiscoverMethod = "/ncp.agent.v1.AgentDatabaseService/Discover"
-	AgentDatabaseCatalogMethod  = "/ncp.agent.v1.AgentDatabaseService/Catalog"
-	AgentDatabaseQueryMethod    = "/ncp.agent.v1.AgentDatabaseService/Query"
-	AgentDatabaseRowsMethod     = "/ncp.agent.v1.AgentDatabaseService/Rows"
-	AgentDatabaseInsertMethod   = "/ncp.agent.v1.AgentDatabaseService/Insert"
-	AgentDatabaseUpdateMethod   = "/ncp.agent.v1.AgentDatabaseService/Update"
-	AgentDatabaseDeleteMethod   = "/ncp.agent.v1.AgentDatabaseService/Delete"
+	AgentDatabaseDiscoverMethod       = "/ncp.agent.v1.AgentDatabaseService/Discover"
+	AgentDatabaseTestConnectionMethod = "/ncp.agent.v1.AgentDatabaseService/TestConnection"
+	AgentDatabaseCatalogMethod        = "/ncp.agent.v1.AgentDatabaseService/Catalog"
+	AgentDatabaseQueryMethod          = "/ncp.agent.v1.AgentDatabaseService/Query"
+	AgentDatabaseRowsMethod           = "/ncp.agent.v1.AgentDatabaseService/Rows"
+	AgentDatabaseInsertMethod         = "/ncp.agent.v1.AgentDatabaseService/Insert"
+	AgentDatabaseUpdateMethod         = "/ncp.agent.v1.AgentDatabaseService/Update"
+	AgentDatabaseDeleteMethod         = "/ncp.agent.v1.AgentDatabaseService/Delete"
 )
 
 type AgentDatabaseServiceClient interface {
@@ -29,11 +32,20 @@ type AgentDatabaseServiceClient interface {
 	Delete(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
+type AgentDatabaseConnectionServiceClient interface {
+	AgentDatabaseServiceClient
+	TestConnection(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+}
+
 type agentDatabaseServiceClient struct {
 	connection grpc.ClientConnInterface
 }
 
 func NewAgentDatabaseServiceClient(connection grpc.ClientConnInterface) AgentDatabaseServiceClient {
+	return &agentDatabaseServiceClient{connection: connection}
+}
+
+func NewAgentDatabaseConnectionServiceClient(connection grpc.ClientConnInterface) AgentDatabaseConnectionServiceClient {
 	return &agentDatabaseServiceClient{connection: connection}
 }
 
@@ -47,6 +59,9 @@ func (c *agentDatabaseServiceClient) invoke(ctx context.Context, method string, 
 
 func (c *agentDatabaseServiceClient) Discover(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
 	return c.invoke(ctx, AgentDatabaseDiscoverMethod, in, options...)
+}
+func (c *agentDatabaseServiceClient) TestConnection(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	return c.invoke(ctx, AgentDatabaseTestConnectionMethod, in, options...)
 }
 func (c *agentDatabaseServiceClient) Catalog(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
 	return c.invoke(ctx, AgentDatabaseCatalogMethod, in, options...)
@@ -77,6 +92,11 @@ type AgentDatabaseServiceServer interface {
 	Delete(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
+type AgentDatabaseConnectionServiceServer interface {
+	AgentDatabaseServiceServer
+	TestConnection(context.Context, *structpb.Struct) (*structpb.Struct, error)
+}
+
 func RegisterAgentDatabaseServiceServer(server grpc.ServiceRegistrar, implementation AgentDatabaseServiceServer) {
 	server.RegisterService(&agentDatabaseServiceDescription, implementation)
 }
@@ -104,6 +124,13 @@ var agentDatabaseServiceDescription = grpc.ServiceDesc{
 	Methods: []grpc.MethodDesc{
 		{MethodName: "Discover", Handler: databaseUnaryHandler(AgentDatabaseDiscoverMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
 			return s.Discover(ctx, r)
+		})},
+		{MethodName: "TestConnection", Handler: databaseUnaryHandler(AgentDatabaseTestConnectionMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
+			implementation, ok := s.(AgentDatabaseConnectionServiceServer)
+			if !ok {
+				return nil, grpcstatus.Error(codes.Unimplemented, "database connection diagnostics are unavailable")
+			}
+			return implementation.TestConnection(ctx, r)
 		})},
 		{MethodName: "Catalog", Handler: databaseUnaryHandler(AgentDatabaseCatalogMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
 			return s.Catalog(ctx, r)

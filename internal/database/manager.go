@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	mobycontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -45,6 +45,24 @@ type Manager struct {
 
 func NewManager() *Manager {
 	return &Manager{now: time.Now}
+}
+
+func (m *Manager) TestConnection(ctx context.Context, request Connection) (ConnectionDiagnostic, error) {
+	started := time.Now()
+	source, db, err := m.connect(ctx, request)
+	if err != nil {
+		return diagnosticForError(Source{ID: request.SourceID}, "test_connection", started, err), err
+	}
+	defer db.Close()
+	return ConnectionDiagnostic{
+		Connected:  true,
+		Code:       "connected",
+		Driver:     source.Driver,
+		Endpoint:   sourceEndpoint(source, request.Credentials.Database),
+		Database:   effectiveDatabase(source, request.Credentials.Database),
+		Operation:  "test_connection",
+		DurationMs: time.Since(started).Milliseconds(),
+	}, nil
 }
 
 func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
@@ -153,12 +171,12 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 	defer db.Close()
 	tables, err := listTables(ctx, db, source, request.Credentials)
 	if err != nil {
-		return Catalog{}, err
+		return Catalog{}, MapError(ctx, source, "catalog", err)
 	}
 	for index := range tables {
 		columns, columnErr := listColumns(ctx, db, source.Driver, tables[index].Schema, tables[index].Name)
 		if columnErr != nil {
-			return Catalog{}, columnErr
+			return Catalog{}, MapError(ctx, source, "catalog_columns", columnErr)
 		}
 		tables[index].Columns = columns
 		enrichTable(ctx, db, source.Driver, &tables[index])
@@ -169,9 +187,9 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult, error) {
 	statement := strings.TrimSpace(request.SQL)
 	if statement == "" {
-		return QueryResult{}, errors.New("SQL 语句不能为空")
+		return QueryResult{}, newDatabaseError(CodeSQLInvalid, Source{ID: request.SourceID}, "query", errors.New("SQL statement is empty"))
 	}
-	_, db, err := m.connect(ctx, request.Connection)
+	source, db, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -180,19 +198,19 @@ func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult,
 	if !returnsRows(statement) {
 		result, execErr := db.ExecContext(ctx, statement)
 		if execErr != nil {
-			return QueryResult{}, execErr
+			return QueryResult{}, MapError(ctx, source, "query", execErr)
 		}
 		affected, _ := result.RowsAffected()
 		return QueryResult{Columns: []string{}, Rows: [][]any{}, RowsAffected: affected, DurationMs: time.Since(started).Milliseconds()}, nil
 	}
 	rows, err := db.QueryContext(ctx, statement)
 	if err != nil {
-		return QueryResult{}, err
+		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
 	defer rows.Close()
 	columns, err := rows.Columns()
 	if err != nil {
-		return QueryResult{}, err
+		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
 	result := QueryResult{Columns: columns, Rows: make([][]any, 0), DurationMs: 0}
 	for rows.Next() {
@@ -202,12 +220,12 @@ func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult,
 		}
 		values, scanErr := scanValues(rows, len(columns))
 		if scanErr != nil {
-			return QueryResult{}, scanErr
+			return QueryResult{}, MapError(ctx, source, "query", scanErr)
 		}
 		result.Rows = append(result.Rows, values)
 	}
 	if err := rows.Err(); err != nil {
-		return QueryResult{}, err
+		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
 	result.DurationMs = time.Since(started).Milliseconds()
 	return result, nil
@@ -221,7 +239,7 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	defer db.Close()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
-		return RowsResult{}, err
+		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
 	limit := request.Limit
 	if limit <= 0 {
@@ -236,7 +254,7 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	order := ""
 	if request.SortColumn != "" {
 		if !hasColumn(table.Columns, request.SortColumn) {
-			return RowsResult{}, errors.New("排序字段不存在")
+			return RowsResult{}, newDatabaseError(CodeSQLInvalid, source, "rows", errors.New("sort column does not exist"))
 		}
 		direction := "ASC"
 		if strings.EqualFold(request.SortDirection, "desc") {
@@ -248,18 +266,18 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 		" LIMIT " + strconv.Itoa(limit+1) + " OFFSET " + strconv.Itoa(request.Offset)
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
-		return RowsResult{}, err
+		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
 	defer rows.Close()
 	names, err := rows.Columns()
 	if err != nil {
-		return RowsResult{}, err
+		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
 	result := RowsResult{Table: table, Rows: make([]Row, 0, limit), Limit: limit, Offset: request.Offset}
 	for rows.Next() {
 		values, scanErr := scanValues(rows, len(names))
 		if scanErr != nil {
-			return RowsResult{}, scanErr
+			return RowsResult{}, MapError(ctx, source, "rows", scanErr)
 		}
 		if len(result.Rows) == limit {
 			result.HasMore = true
@@ -271,7 +289,7 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 		}
 		result.Rows = append(result.Rows, row)
 	}
-	return result, rows.Err()
+	return result, MapError(ctx, source, "rows", rows.Err())
 }
 
 func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationResult, error) {
@@ -282,11 +300,11 @@ func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationRe
 	defer db.Close()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "insert", err)
 	}
 	columns, args, err := mutationValues(table, request.Values)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "insert", err)
 	}
 	placeholders := make([]string, len(columns))
 	for index := range placeholders {
@@ -295,7 +313,8 @@ func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationRe
 	}
 	statement := "INSERT INTO " + qualified(source.Driver, table.Schema, table.Name) +
 		" (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
-	return execMutation(ctx, db, statement, args)
+	result, err := execMutation(ctx, db, statement, args)
+	return result, MapError(ctx, source, "insert", err)
 }
 
 func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationResult, error) {
@@ -306,11 +325,11 @@ func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationRe
 	defer db.Close()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "update", err)
 	}
 	columns, args, err := mutationValues(table, request.Values)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "update", err)
 	}
 	setParts := make([]string, len(columns))
 	for index, column := range columns {
@@ -318,12 +337,13 @@ func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationRe
 	}
 	where, keyArgs, err := primaryKeyWhere(source.Driver, table, request.Keys, len(args))
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "update", err)
 	}
 	args = append(args, keyArgs...)
 	statement := "UPDATE " + qualified(source.Driver, table.Schema, table.Name) +
 		" SET " + strings.Join(setParts, ", ") + " WHERE " + where
-	return execMutation(ctx, db, statement, args)
+	result, err := execMutation(ctx, db, statement, args)
+	return result, MapError(ctx, source, "update", err)
 }
 
 func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationResult, error) {
@@ -334,20 +354,21 @@ func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationRe
 	defer db.Close()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "delete", err)
 	}
 	where, args, err := primaryKeyWhere(source.Driver, table, request.Keys, 0)
 	if err != nil {
-		return MutationResult{}, err
+		return MutationResult{}, MapError(ctx, source, "delete", err)
 	}
 	statement := "DELETE FROM " + qualified(source.Driver, table.Schema, table.Name) + " WHERE " + where
-	return execMutation(ctx, db, statement, args)
+	result, err := execMutation(ctx, db, statement, args)
+	return result, MapError(ctx, source, "delete", err)
 }
 
 func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, error) {
 	discovery, err := m.Discover(ctx)
 	if err != nil {
-		return Source{}, nil, err
+		return Source{}, nil, MapError(ctx, Source{}, "discover", err)
 	}
 	var source Source
 	for _, candidate := range discovery.Sources {
@@ -357,21 +378,21 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 		}
 	}
 	if source.ID == "" {
-		return Source{}, nil, errors.New("数据库来源不存在或已离线")
+		return Source{}, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
 	}
 	driver, dsn, err := connectionString(source, connection.Credentials)
 	if err != nil {
-		return Source{}, nil, err
+		return Source{}, nil, MapError(ctx, source, "connect", err)
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
-		return Source{}, nil, err
+		return Source{}, nil, MapError(ctx, source, "connect", err)
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return Source{}, nil, err
+		return Source{}, nil, MapError(ctx, source, "connect", err)
 	}
 	return source, db, nil
 }
@@ -379,35 +400,60 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 func connectionString(source Source, credentials Credentials) (string, string, error) {
 	switch source.Driver {
 	case DriverSQLite:
+		if strings.TrimSpace(source.Path) == "" {
+			return "", "", errors.New("sqlite path is required")
+		}
 		return "sqlite", source.Path, nil
 	case DriverMySQL:
-		if credentials.Username == "" || credentials.Database == "" {
-			return "", "", errors.New("MySQL 用户名和数据库名不能为空")
+		databaseName := effectiveDatabase(source, credentials.Database)
+		if credentials.Username == "" || databaseName == "" {
+			return "", "", errors.New("mysql username and database are required")
 		}
-		config := url.Values{}
-		config.Set("parseTime", "true")
-		config.Set("charset", "utf8mb4")
-		return "mysql", credentials.Username + ":" + credentials.Password + "@tcp(" +
-			net.JoinHostPort(source.Host, strconv.Itoa(source.Port)) + ")/" +
-			url.PathEscape(credentials.Database) + "?" + config.Encode(), nil
+		host, port, _ := endpointParts(source.Location, source.Port, databaseName)
+		if strings.TrimSpace(source.Host) != "" {
+			host = source.Host
+		}
+		if strings.TrimSpace(host) == "" || port <= 0 {
+			return "", "", errors.New("mysql endpoint is required")
+		}
+		config := mysql.Config{
+			User: credentials.Username, Passwd: credentialSecret(credentials),
+			Net: "tcp", Addr: net.JoinHostPort(host, strconv.Itoa(port)), DBName: databaseName,
+			ParseTime: true, Params: map[string]string{"charset": "utf8mb4"},
+		}
+		return "mysql", config.FormatDSN(), nil
 	case DriverPostgreSQL:
 		if credentials.Username == "" {
-			return "", "", errors.New("PostgreSQL 用户名不能为空")
+			return "", "", errors.New("postgresql username is required")
 		}
-		databaseName := credentials.Database
+		databaseName := effectiveDatabase(source, credentials.Database)
 		if databaseName == "" {
-			databaseName = source.DefaultDatabase
+			return "", "", errors.New("postgresql database is required")
+		}
+		host, port, _ := endpointParts(source.Location, source.Port, databaseName)
+		if strings.TrimSpace(source.Host) != "" {
+			host = source.Host
+		}
+		if strings.TrimSpace(host) == "" || port <= 0 {
+			return "", "", errors.New("postgresql endpoint is required")
 		}
 		values := url.Values{"sslmode": []string{"disable"}}
 		target := &url.URL{
-			Scheme: "postgres", User: url.UserPassword(credentials.Username, credentials.Password),
-			Host: net.JoinHostPort(source.Host, strconv.Itoa(source.Port)), Path: databaseName,
+			Scheme: "postgres", User: url.UserPassword(credentials.Username, credentialSecret(credentials)),
+			Host: net.JoinHostPort(host, strconv.Itoa(port)), Path: databaseName,
 			RawQuery: values.Encode(),
 		}
 		return "pgx", target.String(), nil
 	default:
 		return "", "", errors.New("暂不支持该数据库类型")
 	}
+}
+
+func credentialSecret(credentials Credentials) string {
+	if credentials.Password != "" {
+		return credentials.Password
+	}
+	return credentials.Token
 }
 
 func listTables(ctx context.Context, db *sql.DB, source Source, credentials Credentials) ([]Table, error) {

@@ -35,12 +35,45 @@ type Discovery struct {
 type Credentials struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
+	Token    string `json:"token,omitempty"`
 	Database string `json:"database,omitempty"`
 }
 
 type Connection struct {
 	SourceID    string      `json:"sourceId"`
 	Credentials Credentials `json:"credentials,omitempty"`
+}
+
+// ConnectionDiagnostic is safe to return to the Server/API. It deliberately
+// contains endpoint metadata, driver and stable outcome only; credentials and
+// DSNs are never part of this result.
+type ConnectionDiagnostic struct {
+	Connected  bool   `json:"connected"`
+	Code       string `json:"code,omitempty"`
+	Driver     Driver `json:"driver"`
+	Endpoint   string `json:"endpoint"`
+	Database   string `json:"database,omitempty"`
+	Operation  string `json:"operation"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+type TestConnectionRequest struct {
+	Connection
+}
+
+// SavedCredential is the sanitized metadata exposed by the credential vault;
+// encrypted bytes are kept inside the persistence adapter and are not API
+// fields.
+type SavedCredential struct {
+	SourceID         string    `json:"sourceId"`
+	Driver           Driver    `json:"driver"`
+	Endpoint         string    `json:"endpoint"`
+	Username         string    `json:"username,omitempty"`
+	Database         string    `json:"database,omitempty"`
+	KeyVersion       int       `json:"keyVersion"`
+	AutomaticEnabled bool      `json:"automaticEnabled"`
+	LastErrorCode    string    `json:"lastErrorCode,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 type Column struct {

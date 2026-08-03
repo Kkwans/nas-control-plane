@@ -52,6 +52,10 @@ type DatabaseAgentClient interface {
 	DeleteDatabaseRow(context.Context, string, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+type DatabaseConnectionCoordinator interface {
+	Connect(context.Context, ncpdatabase.Source, *ncpdatabase.Credentials) (ncpdatabase.ConnectionDiagnostic, error)
+}
+
 type DockerImageAgentClient interface {
 	ListDockerImages(context.Context, string) (docker.ImageInventory, error)
 	SearchDockerHub(context.Context, string, docker.HubSearchRequest) (docker.HubSearchResult, error)
@@ -89,6 +93,7 @@ type ControlStore interface {
 type Config struct {
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
+	DatabaseConnections DatabaseConnectionCoordinator
 	DockerImages        DockerImageAgentClient
 	Compose             ComposeAgentClient
 	AgentSocketPath     string
@@ -129,6 +134,7 @@ type RealtimeSnapshot struct {
 type handler struct {
 	agent               AgentClient
 	databaseAgent       DatabaseAgentClient
+	databaseConnections DatabaseConnectionCoordinator
 	dockerImages        DockerImageAgentClient
 	compose             ComposeAgentClient
 	agentSocketPath     string
@@ -278,6 +284,7 @@ func NewHandler(config Config) http.Handler {
 	api := &handler{
 		agent:               config.Agent,
 		databaseAgent:       config.DatabaseAgent,
+		databaseConnections: config.DatabaseConnections,
 		dockerImages:        config.DockerImages,
 		compose:             config.Compose,
 		agentSocketPath:     config.AgentSocketPath,
@@ -356,6 +363,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/sites/ignored", api.ignoredSites)
 			protected.Post("/sites/{projectID}/restore", api.restoreSite)
 			protected.Get("/databases/discovery", api.databaseDiscovery)
+			protected.Post("/databases/connect", api.databaseConnect)
+			protected.Post("/databases/test-connection", api.databaseTestConnection)
 			protected.Get("/databases/project-preferences", api.databaseProjectPreferences)
 			protected.Put("/databases/project-preferences", api.updateDatabaseProjectPreference)
 			protected.Post("/databases/catalog", api.databaseCatalog)

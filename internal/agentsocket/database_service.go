@@ -20,6 +20,12 @@ type DatabaseProvider interface {
 	Delete(context.Context, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+// DatabaseConnectionProvider is optional to keep the existing database
+// provider contract source-compatible while newer Agents expose diagnostics.
+type DatabaseConnectionProvider interface {
+	TestConnection(context.Context, ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error)
+}
+
 type databaseService struct {
 	provider DatabaseProvider
 }
@@ -30,6 +36,21 @@ func newDatabaseService(provider DatabaseProvider) *databaseService {
 
 func (s *databaseService) Discover(ctx context.Context, _ *structpb.Struct) (*structpb.Struct, error) {
 	result, err := s.provider.Discover(ctx)
+	return databaseResponse(result, err)
+}
+
+func (s *databaseService) TestConnection(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	tester, ok := s.provider.(DatabaseConnectionProvider)
+	if !ok {
+		return databaseResponse(ncpdatabase.ConnectionDiagnostic{}, &ncpdatabase.DatabaseError{
+			Code: ncpdatabase.CodeAgentUnavailable, Operation: "test_connection",
+		})
+	}
+	var decoded ncpdatabase.Connection
+	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+		return nil, err
+	}
+	result, err := tester.TestConnection(ctx, decoded)
 	return databaseResponse(result, err)
 }
 
@@ -103,7 +124,27 @@ func decodeDatabaseRequest(request *structpb.Struct, destination any) error {
 
 func databaseResponse(result any, err error) (*structpb.Struct, error) {
 	if err != nil {
-		return nil, grpcstatus.Error(codes.InvalidArgument, err.Error())
+		code := ncpdatabase.ErrorCodeOf(err)
+		if code == "" {
+			code = ncpdatabase.ClassifyError(context.Background(), "database", err)
+			if code == "" {
+				code = ncpdatabase.CodeUnreachable
+			}
+		}
+		grpcCode := codes.InvalidArgument
+		switch code {
+		case ncpdatabase.CodeTimeout:
+			grpcCode = codes.DeadlineExceeded
+		case ncpdatabase.CodeUnreachable, ncpdatabase.CodeAgentUnavailable:
+			grpcCode = codes.Unavailable
+		case ncpdatabase.CodePermissionDenied:
+			grpcCode = codes.PermissionDenied
+		case ncpdatabase.CodeDatabaseNotFound:
+			grpcCode = codes.NotFound
+		case ncpdatabase.CodeConstraintFailed:
+			grpcCode = codes.FailedPrecondition
+		}
+		return nil, grpcstatus.Error(grpcCode, string(code))
 	}
 	return dashboardStruct(result, "AGENT_DATABASE_RESPONSE_INVALID")
 }
