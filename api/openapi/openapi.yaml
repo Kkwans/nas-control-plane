@@ -332,8 +332,14 @@ paths:
       security: [{RootSession: []}]
       parameters:
         - { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 6h } }
-        - { name: from, in: query, description: 精确范围起点；必须与 to 成对提供，优先于 range, schema: { type: string, format: date-time } }
-        - { name: to, in: query, description: 精确范围终点；不得晚于当前时间，最长跨度 7 天, schema: { type: string, format: date-time } }
+        - name: from
+          in: query
+          description: 精确范围起点；必须与 to 成对提供，优先于 range。
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: 精确范围终点；不得晚于当前时间，最长跨度 7 天。
+          schema: { type: string, format: date-time }
       responses:
         '200':
           description: Metric samples ordered by collection time
@@ -378,6 +384,261 @@ paths:
                 $ref: '#/components/schemas/DatabaseProjectPreference'
         '400':
           description: Invalid database project preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/discovery:
+    get:
+      operationId: discoverDatabases
+      summary: 发现宿主机和项目数据库
+      tags: [databases]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 数据库来源列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseDiscovery'
+        '503':
+          description: Root Agent 或数据库探测不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/connect:
+    post:
+      operationId: connectDatabase
+      summary: 使用已保存或手动提供的凭据连接数据库
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseConnectRequest'
+      responses:
+        '200':
+          description: 连接诊断结果；不会返回密码、Token 或 DSN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseConnectionDiagnostic'
+        '401':
+          description: 数据库认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 数据库来源或数据库不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/test-connection:
+    post:
+      operationId: testDatabaseConnection
+      summary: 测试数据库连接并返回稳定诊断码
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseConnection'
+      responses:
+        '200':
+          description: 连接诊断结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseConnectionDiagnostic'
+        '401':
+          description: 认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: SQL 或数据约束错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库不可达或 Root Agent 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/catalog:
+    post:
+      operationId: getDatabaseCatalog
+      summary: 读取数据库表和视图目录
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseConnection'
+      responses:
+        '200':
+          description: 数据库目录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseCatalog'
+        '400':
+          description: 数据库请求、SQL 或凭据无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库不可达或凭据服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/query:
+    post:
+      operationId: queryDatabase
+      summary: 执行受控数据库 SQL
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseQueryRequest'
+      responses:
+        '200':
+          description: SQL 查询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseQueryResult'
+        '409':
+          description: SQL 无效或约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/rows:
+    post:
+      operationId: listDatabaseRows
+      summary: 分页读取数据表行
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseRowsRequest'
+      responses:
+        '200':
+          description: 数据表行
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseRowsResult'
+        '400':
+          description: 表名、排序或分页参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/rows/insert:
+    post:
+      operationId: insertDatabaseRow
+      summary: 插入一行数据库记录
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseInsertRequest'
+      responses:
+        '201':
+          description: 插入完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseMutationResult'
+        '409':
+          description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/rows/update:
+    post:
+      operationId: updateDatabaseRow
+      summary: 更新数据库记录
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseUpdateRequest'
+      responses:
+        '200':
+          description: 更新完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseMutationResult'
+        '409':
+          description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/databases/rows/delete:
+    post:
+      operationId: deleteDatabaseRow
+      summary: 删除数据库记录
+      tags: [databases]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DatabaseDeleteRequest'
+      responses:
+        '200':
+          description: 删除完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseMutationResult'
+        '409':
+          description: 数据约束失败
           content:
             application/json:
               schema:
@@ -435,6 +696,197 @@ paths:
                 $ref: '#/components/schemas/SystemSummary'
         '503':
           description: Root Agent or a required metric source is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/details:
+    get:
+      operationId: getSystemDetails
+      summary: 获取设备、硬件、网络、存储、代理和控制链路详情
+      description: 由 Root Agent 低频采集；无法获取的能力通过 warnings 和不可用字段明确表达。
+      tags: [system]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: NAS 静态系统详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemDetails'
+        '503':
+          description: Root Agent 或系统详情采集暂不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/dns/capability:
+    get:
+      operationId: getDNSCapability
+      summary: 获取 DNS 读取和安全修改能力
+      tags: [system]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: DNS 能力矩阵
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSCapability'
+        '503':
+          description: DNS 能力不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/dns/preview:
+    post:
+      operationId: previewDNSChange
+      summary: 预览 DNS 修改，不立即写入系统
+      tags: [system]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSChangeRequest'
+      responses:
+        '200':
+          description: DNS 修改预览
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSChangePreview'
+        '409':
+          description: 当前 DNS 后端只读或无法预览
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/dns/confirm:
+    post:
+      operationId: confirmDNSChange
+      summary: 确认并应用 DNS 修改
+      tags: [system]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSChangeConfirmation'
+      responses:
+        '200':
+          description: DNS 修改结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSChangeResult'
+        '409':
+          description: 确认失败或预览已过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/dns/rollback:
+    post:
+      operationId: rollbackDNSChange
+      summary: 回滚已应用的 DNS 修改
+      tags: [system]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSRollbackRequest'
+      responses:
+        '200':
+          description: DNS 回滚结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSChangeResult'
+        '409':
+          description: 回滚失败或变更已不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/system/public-egress/capability:
+    get:
+      operationId: getPublicEgressCapability
+      summary: 获取公网出口检测能力
+      description: 只读取部署配置，不会自动访问外部检测端点。
+      tags: [system]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 公网出口检测能力
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEgressCapability'
+  /api/v1/system/public-egress/detect:
+    post:
+      operationId: detectPublicEgress
+      summary: 用户显式触发公网出口检测
+      tags: [system]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 公网出口地址及可选地区信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEgressResult'
+        '503':
+          description: 检测端点未配置、不可达或返回无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEgressResult'
+  /api/v1/proxy/mihomo/capability:
+    get:
+      operationId: getMihomoCapability
+      summary: 获取 Mihomo 控制器能力
+      tags: [proxy]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Mihomo 进程和 allowlist 能力
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MihomoCapability'
+  /api/v1/proxy/mihomo/invoke:
+    post:
+      operationId: invokeMihomo
+      summary: 调用受 allowlist 保护的 Mihomo 操作
+      tags: [proxy]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MihomoInvokeRequest'
+      responses:
+        '200':
+          description: Mihomo 控制器响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MihomoInvokeResult'
+        '400':
+          description: 操作不在 allowlist 或参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 控制器不可用
           content:
             application/json:
               schema:
@@ -502,6 +954,107 @@ paths:
                 $ref: '#/components/schemas/DockerImageInventory'
         '503':
           description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/images/remove-batch:
+    post:
+      operationId: removeDockerImages
+      summary: 批量删除未被容器引用的 Docker 镜像
+      description: 最多 50 个镜像；服务端预检容器引用并始终使用非 force 删除。
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerImageRemoveBatchRequest'
+      responses:
+        '200':
+          description: 每个镜像的删除结果；被引用镜像会以 item errorCode 拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerImageRemoveBatchResult'
+        '400':
+          description: 镜像数量或 ID 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Root Agent 或 Docker Engine 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/projects/{projectID}/actions/{action}:
+    post:
+      operationId: controlStandaloneDockerProject
+      summary: 批量启动、停止或重启独立容器项目
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StandaloneProjectActionRequest'
+      responses:
+        '200':
+          description: 逐容器生命周期结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerProjectActionResult'
+        '400':
+          description: 项目、容器或操作参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 项目操作部分失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/compose/projects/{projectID}/actions/{action}:
+    post:
+      operationId: controlComposeDockerProject
+      summary: 批量启动、停止或重启 Compose 项目
+      description: 仅调用 compose start、stop 或 restart，不执行 down，也不删除卷。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComposeLifecycleRequest'
+      responses:
+        '200':
+          description: Compose 服务状态与命令输出
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComposeLifecycleResult'
+        '400':
+          description: Compose 项目或配置路径无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Compose 操作或状态复核失败
           content:
             application/json:
               schema:
@@ -984,7 +1537,7 @@ paths:
     get:
       operationId: openTerminalPOCWebSocket
       summary: 打开 NAS 主机或 Docker 容器终端 WebSocket
-      description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize 与 close 控制消息。
+      description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
       tags: [terminal]
       security: [{RootSession: []}]
       parameters:
@@ -1002,9 +1555,19 @@ paths:
             type: string
             minLength: 1
             maxLength: 128
+        - name: rows
+          in: query
+          required: false
+          description: 初始终端行数；必须与 cols 同时提供。
+          schema: { type: integer, minimum: 1, maximum: 200, default: 24 }
+        - name: cols
+          in: query
+          required: false
+          description: 初始终端列数；必须与 rows 同时提供。
+          schema: { type: integer, minimum: 1, maximum: 400, default: 80 }
       responses:
         '101':
-          description: WebSocket 已切换协议。二进制帧承载终端输入/输出，文本帧承载 resize、close 与会话状态。
+          description: WebSocket 已切换协议。二进制帧承载终端输入/输出；文本帧承载 resize、close，以及包含 shell、enhancement、reason、rows、cols 的 started 状态。
         '400':
           description: 终端目标或握手参数无效
           content:
@@ -1017,7 +1580,7 @@ components:
   schemas:
     UserPreferences:
       type: object
-      required: [refreshIntervalSeconds, interfaceDensity, baseFontSize, pageSize, sidebarDefault, linkOpenMode, siteDefaultProtocol, chineseFont, latinFont]
+      required: [refreshIntervalSeconds, interfaceDensity, baseFontSize, pageSize, sidebarDefault, linkOpenMode, siteDefaultProtocol, chineseFont, latinFont, navigationOrder]
       properties:
         refreshIntervalSeconds:
           type: integer
@@ -1049,6 +1612,13 @@ components:
         latinFont:
           type: string
           enum: [system, manrope, inter, ibm-plex-sans]
+        navigationOrder:
+          type: array
+          description: 使用稳定路由 ID 保存的侧栏顺序；服务端会合并新增路由并清理已删除路由。
+          uniqueItems: true
+          items:
+            type: string
+            enum: [overview, sites, docker, databases, logs, monitoring, system, users, terminal, settings]
     DatabaseProjectPreference:
       type: object
       required: [projectKey, archived]
@@ -1059,9 +1629,170 @@ components:
           maxLength: 512
         archived:
           type: boolean
+    DatabaseDriver:
+      type: string
+      enum: [sqlite, mysql, postgresql]
+    DatabaseCredentials:
+      type: object
+      properties:
+        username: { type: string, maxLength: 256 }
+        password: { type: string, format: password, maxLength: 512 }
+        token: { type: string, format: password, maxLength: 2048 }
+        database: { type: string, maxLength: 256 }
+      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password 或 token。
+    DatabaseConnection:
+      type: object
+      required: [sourceId]
+      properties:
+        sourceId: { type: string, minLength: 1, maxLength: 512 }
+        credentials:
+          $ref: '#/components/schemas/DatabaseCredentials'
+    DatabaseConnectRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseConnection'
+    DatabaseSource:
+      type: object
+      required: [id, name, driver, category, project, module, location, requiresLogin, status, tags]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        driver: { $ref: '#/components/schemas/DatabaseDriver' }
+        category: { type: string, enum: [system, project] }
+        project: { type: string }
+        module: { type: string }
+        location: { type: string }
+        path: { type: string }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        defaultDatabase: { type: string }
+        requiresLogin: { type: boolean }
+        status: { type: string }
+        tags: { type: array, items: { type: string } }
+    DatabaseDiscovery:
+      type: object
+      required: [collectedAt, sources]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        sources:
+          type: array
+          items: { $ref: '#/components/schemas/DatabaseSource' }
+    DatabaseConnectionDiagnostic:
+      type: object
+      required: [connected, driver, endpoint, operation, durationMs]
+      properties:
+        connected: { type: boolean }
+        code: { type: string, description: 稳定诊断码，例如 auth_failed、unreachable 或 constraint_failed }
+        driver: { $ref: '#/components/schemas/DatabaseDriver' }
+        endpoint: { type: string }
+        database: { type: string }
+        operation: { type: string }
+        durationMs: { type: integer, minimum: 0 }
+    DatabaseColumn:
+      type: object
+      required: [name, dataType, nullable, primaryKey, position]
+      properties:
+        name: { type: string }
+        dataType: { type: string }
+        nullable: { type: boolean }
+        primaryKey: { type: boolean }
+        default: {}
+        position: { type: integer, minimum: 0 }
+    DatabaseTable:
+      type: object
+      required: [schema, name, type, columns]
+      properties:
+        schema: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [table, view, virtual, unknown] }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/DatabaseColumn' }
+        rowCount: { type: integer, format: int64, minimum: 0 }
+        sizeBytes: { type: integer, format: int64, minimum: 0 }
+        createdAt: { type: string }
+        definition: { type: string }
+    DatabaseCatalog:
+      type: object
+      required: [source, tables]
+      properties:
+        source: { $ref: '#/components/schemas/DatabaseSource' }
+        tables:
+          type: array
+          items: { $ref: '#/components/schemas/DatabaseTable' }
+    DatabaseQueryRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseConnection'
+        - type: object
+          required: [sql]
+          properties:
+            sql: { type: string, minLength: 1, maxLength: 1048576 }
+    DatabaseQueryResult:
+      type: object
+      required: [columns, rows, rowsAffected, truncated, durationMs]
+      properties:
+        columns: { type: array, items: { type: string } }
+        rows:
+          type: array
+          items: { type: array, items: {} }
+        rowsAffected: { type: integer, format: int64 }
+        truncated: { type: boolean }
+        durationMs: { type: integer, minimum: 0 }
+    DatabaseRowsRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseConnection'
+        - type: object
+          required: [table]
+          properties:
+            schema: { type: string, maxLength: 256 }
+            table: { type: string, minLength: 1, maxLength: 256 }
+            limit: { type: integer, minimum: 1, maximum: 200 }
+            offset: { type: integer, minimum: 0 }
+            sortColumn: { type: string, maxLength: 256 }
+            sortDirection: { type: string, enum: [asc, desc] }
+    DatabaseRowsResult:
+      type: object
+      required: [table, rows, limit, offset, hasMore]
+      properties:
+        table: { $ref: '#/components/schemas/DatabaseTable' }
+        rows:
+          type: array
+          items: { type: object, additionalProperties: {} }
+        limit: { type: integer, minimum: 1 }
+        offset: { type: integer, minimum: 0 }
+        hasMore: { type: boolean }
+    DatabaseInsertRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseConnection'
+        - type: object
+          required: [table, values]
+          properties:
+            schema: { type: string }
+            table: { type: string, minLength: 1 }
+            values: { type: object, additionalProperties: {} }
+    DatabaseUpdateRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseInsertRequest'
+        - type: object
+          required: [keys]
+          properties:
+            keys: { type: object, additionalProperties: {} }
+    DatabaseDeleteRequest:
+      allOf:
+        - $ref: '#/components/schemas/DatabaseConnection'
+        - type: object
+          required: [table, keys]
+          properties:
+            schema: { type: string }
+            table: { type: string, minLength: 1 }
+            keys: { type: object, additionalProperties: {} }
+    DatabaseMutationResult:
+      type: object
+      required: [rowsAffected]
+      properties:
+        rowsAffected: { type: integer, format: int64, minimum: 0 }
     MetricSample:
       type: object
-      required: [collectedAt, cpuPercent, memoryPercent, load1, diskPercent, networkReceiveBytes, networkTransmitBytes]
+      required: [collectedAt, cpuPercent, memoryPercent, load1, diskPercent, networkReceiveBytes, networkTransmitBytes, diskReadBytes, diskWriteBytes]
       properties:
         collectedAt: { type: string, format: date-time }
         cpuPercent: { type: number, format: double }
@@ -1070,6 +1801,16 @@ components:
         diskPercent: { type: number, format: double }
         networkReceiveBytes: { type: integer, format: int64 }
         networkTransmitBytes: { type: integer, format: int64 }
+        diskReadBytes: { type: integer, format: int64, minimum: 0 }
+        diskWriteBytes: { type: integer, format: int64, minimum: 0 }
+        temperatures:
+          type: array
+          items:
+            type: object
+            required: [name, temperatureCelsius]
+            properties:
+              name: { type: string }
+              temperatureCelsius: { type: number, format: double }
     SiteProfileInput:
       type: object
       required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
@@ -1255,6 +1996,20 @@ components:
           $ref: '#/components/schemas/CpuStats'
         memory:
           $ref: '#/components/schemas/MemoryStats'
+        sensors:
+          type: array
+          items:
+            type: object
+            required: [name, temperatureCelsius]
+            properties:
+              name: { type: string }
+              temperatureCelsius: { type: number, format: double }
+        diskIO:
+          type: object
+          required: [readBytes, writeBytes]
+          properties:
+            readBytes: { type: integer, format: int64, minimum: 0 }
+            writeBytes: { type: integer, format: int64, minimum: 0 }
         storage:
           type: array
           items:
@@ -1309,6 +2064,191 @@ components:
       properties:
         code: { type: string, examples: [SYSTEM_SUMMARY_SOURCE_UNAVAILABLE] }
         source: { type: string }
+    SystemDetails:
+      type: object
+      required: [collectedAt, warnings, device, hardware, network, storage, proxy, control]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        warnings: { type: array, items: { type: string } }
+        device: { $ref: '#/components/schemas/SystemDeviceDetails' }
+        hardware: { $ref: '#/components/schemas/SystemHardwareDetails' }
+        network: { $ref: '#/components/schemas/SystemNetworkDetails' }
+        storage: { $ref: '#/components/schemas/SystemStorageDetails' }
+        proxy: { $ref: '#/components/schemas/SystemProxyDetails' }
+        tailscale: { $ref: '#/components/schemas/TailscaleCapability' }
+        dns: { $ref: '#/components/schemas/DNSCapability' }
+        publicEgress: { $ref: '#/components/schemas/PublicEgressCapability' }
+        control: { $ref: '#/components/schemas/SystemControlDetails' }
+    SystemDeviceDetails:
+      type: object
+      properties:
+        hostname: { type: string }
+        model: { type: string }
+        operatingSystem: { type: string }
+        kernelVersion: { type: string }
+        architecture: { type: string }
+        uptimeSeconds: { type: integer, minimum: 0 }
+        processCount: { type: integer, minimum: 0 }
+        cgroupVersion: { type: string }
+    SystemHardwareDetails:
+      type: object
+      properties:
+        cpu:
+          type: object
+          properties:
+            model: { type: string }
+            physicalCores: { type: integer, minimum: 0 }
+            logicalCores: { type: integer, minimum: 0 }
+            frequencyMHz: { type: number, minimum: 0 }
+            temperatureCelsius: { type: number }
+        memory:
+          type: object
+          properties:
+            totalBytes: { type: integer, minimum: 0 }
+            availableBytes: { type: integer, minimum: 0 }
+        sensors:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              temperatureCelsius: { type: number }
+    SystemNetworkDetails:
+      type: object
+      properties:
+        interfaces:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              hardwareAddress: { type: string }
+              mtu: { type: integer, minimum: 0 }
+              state: { type: string }
+              speedMbps: { type: integer, minimum: 0 }
+              duplex: { type: string }
+              addresses:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    address: { type: string }
+                    prefixLength: { type: integer, minimum: 0 }
+                    family: { type: string }
+        gateway: { type: string }
+        routes:
+          type: array
+          items:
+            type: object
+            properties:
+              destination: { type: string }
+              gateway: { type: string }
+              interface: { type: string }
+              metric: { type: integer }
+        dnsServers: { type: array, items: { type: string } }
+        listeningPorts:
+          type: array
+          items:
+            type: object
+            properties:
+              protocol: { type: string }
+              address: { type: string }
+              port: { type: integer, minimum: 0, maximum: 65535 }
+              pid: { type: integer }
+              processName: { type: string }
+              executable: { type: string }
+              systemdUnit: { type: string }
+              containerId: { type: string }
+              containerName: { type: string }
+              service: { type: string }
+              detectionSource: { type: string }
+              detectionSources: { type: array, items: { type: string } }
+              detectionStatus: { type: string }
+              detectionErrorCode: { type: string }
+    SystemStorageDetails:
+      type: object
+      properties:
+        mounts:
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              device: { type: string }
+              filesystem: { type: string }
+              totalBytes: { type: integer, minimum: 0 }
+              usedBytes: { type: integer, minimum: 0 }
+              availableBytes: { type: integer, minimum: 0 }
+              usedPercent: { type: number, minimum: 0 }
+        disks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              model: { type: string }
+              sizeBytes: { type: integer, minimum: 0 }
+              rotational: { type: boolean }
+              health: { type: string }
+              temperatureCelsius: { type: number }
+        raid:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              level: { type: string }
+              state: { type: string }
+              devices: { type: array, items: { type: string } }
+    SystemProxyDetails:
+      type: object
+      properties:
+        mihomo:
+          type: object
+          properties:
+            detected: { type: boolean }
+            state: { type: string }
+            detail: { type: string }
+            controllerEndpoint: { type: string }
+            authRequired: { type: boolean }
+            operations: { type: array, items: { type: string } }
+        mihomoCapability: { $ref: '#/components/schemas/MihomoCapability' }
+        system:
+          type: array
+          items: { $ref: '#/components/schemas/ProxyEvidence' }
+        associations:
+          type: array
+          items:
+            type: object
+            properties:
+              subject: { type: string }
+              kind: { type: string }
+              method: { type: string, enum: [http, socks, tun, transparent, unknown] }
+              evidence: { type: string, enum: [confirmed, inferred, unknown] }
+              endpoint: { type: string }
+              detail: { type: string }
+    ProxyEvidence:
+      type: object
+      properties:
+        source: { type: string }
+        method: { type: string, enum: [http, socks, tun, transparent, unknown] }
+        evidence: { type: string, enum: [confirmed, inferred, unknown] }
+        address: { type: string }
+        detail: { type: string }
+    SystemControlDetails:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              detail: { type: string }
+              status: { type: string }
+              version: { type: string }
+              lastSeen: { type: string, format: date-time }
     DockerInventory:
       type: object
       required: [collectedAt, engine, containers, projects]
@@ -1370,7 +2310,7 @@ components:
         completed: { type: boolean }
     JobSnapshot:
       type: object
-      required: [id, type, status, message, progress, createdAt, updatedAt]
+      required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]
       properties:
         id: { type: string }
         type: { type: string }
@@ -1396,6 +2336,98 @@ components:
           type: string
           minLength: 1
           maxLength: 512
+    DockerImageRemoveBatchRequest:
+      type: object
+      required: [imageIds]
+      properties:
+        imageIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 512 }
+    DockerImageRemoveBatchItem:
+      type: object
+      required: [imageId, removed]
+      properties:
+        imageId: { type: string }
+        removed: { type: boolean }
+        errorCode: { type: string, description: DOCKER_IMAGE_IN_USE 等稳定错误码 }
+    DockerImageRemoveBatchResult:
+      type: object
+      required: [items, removedCount, failedCount, completed]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/DockerImageRemoveBatchItem' }
+        removedCount: { type: integer, minimum: 0 }
+        failedCount: { type: integer, minimum: 0 }
+        completed: { type: boolean }
+    StandaloneProjectActionRequest:
+      type: object
+      required: [containerIds]
+      properties:
+        projectId: { type: string }
+        kind: { type: string, enum: [standalone] }
+        containerIds:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1 }
+        action: { type: string, enum: [start, stop, restart] }
+    DockerProjectContainerActionResult:
+      type: object
+      required: [containerId, name, action, state, success]
+      properties:
+        containerId: { type: string }
+        name: { type: string }
+        action: { type: string, enum: [start, stop, restart] }
+        state: { type: string }
+        success: { type: boolean }
+        errorCode: { type: string }
+    DockerProjectActionResult:
+      type: object
+      required: [projectId, kind, action, state, completed, containers]
+      properties:
+        projectId: { type: string }
+        kind: { type: string, enum: [standalone] }
+        action: { type: string, enum: [start, stop, restart] }
+        state: { type: string }
+        completed: { type: boolean }
+        containers:
+          type: array
+          items: { $ref: '#/components/schemas/DockerProjectContainerActionResult' }
+    ComposeLifecycleRequest:
+      type: object
+      required: [projectId, workingDirectory, configFiles, action]
+      properties:
+        projectId: { type: string, minLength: 1 }
+        workingDirectory: { type: string, minLength: 1 }
+        configFiles:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
+        action: { type: string, enum: [start, stop, restart] }
+    ComposeLifecycleServiceStatus:
+      type: object
+      required: [name, state, running]
+      properties:
+        name: { type: string }
+        containerId: { type: string }
+        state: { type: string }
+        running: { type: boolean }
+    ComposeLifecycleResult:
+      type: object
+      required: [projectId, action, state, services, output, completed]
+      properties:
+        projectId: { type: string }
+        action: { type: string, enum: [start, stop, restart] }
+        state: { type: string }
+        services:
+          type: array
+          items: { $ref: '#/components/schemas/ComposeLifecycleServiceStatus' }
+        output: { type: string }
+        completed: { type: boolean }
     ComposeReadRequest:
       type: object
       required: [projectId, workingDirectory, configFiles]
@@ -1697,10 +2729,171 @@ components:
           type: boolean
         hostTerminal:
           type: boolean
+        tailscale:
+          $ref: '#/components/schemas/TailscaleCapability'
+        mihomo:
+          $ref: '#/components/schemas/MihomoCapability'
+        dns:
+          $ref: '#/components/schemas/DNSCapability'
+        publicEgress:
+          $ref: '#/components/schemas/PublicEgressCapability'
         warnings:
           type: array
           items:
             $ref: '#/components/schemas/ProbeWarning'
+    CapabilityEvidence:
+      type: object
+      required: [source, status, detail]
+      properties:
+        source: { type: string }
+        status: { type: string }
+        detail: { type: string }
+    TailscaleCapability:
+      type: object
+      required: [detected, state, backendState, version, interface, overlayIps, online, linkState, heartbeatState, reachable, evidence, warnings]
+      properties:
+        detected: { type: boolean }
+        state: { type: string }
+        backendState: { type: string }
+        version: { type: string }
+        interface: { type: string }
+        overlayIps: { type: array, items: { type: string } }
+        online: { type: boolean }
+        linkState: { type: string }
+        heartbeatState: { type: string }
+        reachable: { type: boolean }
+        evidence: { type: array, items: { $ref: '#/components/schemas/CapabilityEvidence' } }
+        warnings: { type: array, items: { $ref: '#/components/schemas/ProbeWarning' } }
+    MihomoControllerCapability:
+      type: object
+      required: [detected, endpoint, reachable, authRequired, tokenConfigured, operations, detectionSource]
+      properties:
+        detected: { type: boolean }
+        endpoint: { type: string, description: 已脱敏的控制器地址 }
+        reachable: { type: boolean }
+        authRequired: { type: boolean }
+        tokenConfigured: { type: boolean }
+        operations: { type: array, items: { type: string } }
+        detectionSource: { type: string }
+    MihomoCapability:
+      type: object
+      required: [detected, state, processName, executable, version, controller, evidence, warnings]
+      properties:
+        detected: { type: boolean }
+        state: { type: string }
+        processName: { type: string }
+        executable: { type: string }
+        version: { type: string }
+        controller: { $ref: '#/components/schemas/MihomoControllerCapability' }
+        evidence: { type: array, items: { $ref: '#/components/schemas/CapabilityEvidence' } }
+        warnings: { type: array, items: { $ref: '#/components/schemas/ProbeWarning' } }
+    MihomoInvokeRequest:
+      type: object
+      required: [operation]
+      properties:
+        operation: { type: string, enum: [version, health, traffic, connections, proxies, select-proxy] }
+        group: { type: string, maxLength: 128 }
+        proxy: { type: string, maxLength: 128 }
+    MihomoInvokeResult:
+      type: object
+      required: [operation, statusCode, data]
+      properties:
+        operation: { type: string }
+        statusCode: { type: integer, minimum: 100, maximum: 599 }
+        data: {}
+    DNSCapability:
+      type: object
+      required: [backend, detected, state, readOnly, canRead, canPreview, canConfirm, canRollback, nameservers, detectionSource, errorCode]
+      properties:
+        backend: { type: string, enum: [systemd-resolved, networkmanager, static-resolv-conf, unknown] }
+        detected: { type: boolean }
+        state: { type: string }
+        readOnly: { type: boolean }
+        canRead: { type: boolean }
+        canPreview: { type: boolean }
+        canConfirm: { type: boolean }
+        canRollback: { type: boolean }
+        nameservers: { type: array, items: { type: string } }
+        detectionSource: { type: string }
+        errorCode: { type: string }
+    DNSChangeRequest:
+      type: object
+      required: [nameservers]
+      properties:
+        interface: { type: string, maxLength: 128 }
+        connectionId: { type: string, maxLength: 256 }
+        nameservers:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { type: string, format: ipv4 }
+        searchDomains:
+          type: array
+          maxItems: 8
+          items: { type: string, maxLength: 253 }
+    DNSState:
+      type: object
+      required: [interface, connectionId, nameservers, searchDomains]
+      properties:
+        interface: { type: string }
+        connectionId: { type: string }
+        nameservers: { type: array, items: { type: string } }
+        searchDomains: { type: array, items: { type: string } }
+    DNSChangePreview:
+      type: object
+      required: [previewId, backend, before, after, requiresConfirm, rollbackAvailable, expiresAt, errorCode]
+      properties:
+        previewId: { type: string }
+        backend: { type: string }
+        before: { $ref: '#/components/schemas/DNSState' }
+        after: { $ref: '#/components/schemas/DNSState' }
+        requiresConfirm: { type: boolean }
+        rollbackAvailable: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+        errorCode: { type: string }
+    DNSChangeConfirmation:
+      type: object
+      required: [previewId, confirmed]
+      properties:
+        previewId: { type: string, minLength: 1 }
+        confirmed: { type: boolean, const: true }
+    DNSRollbackRequest:
+      type: object
+      required: [changeId]
+      properties:
+        changeId: { type: string, minLength: 1 }
+    DNSChangeResult:
+      type: object
+      required: [changeId, backend, applied, rollbackAvailable, appliedAt, errorCode]
+      properties:
+        changeId: { type: string }
+        backend: { type: string }
+        applied: { type: boolean }
+        rollbackAvailable: { type: boolean }
+        appliedAt: { type: string, format: date-time }
+        errorCode: { type: string }
+    PublicEgressCapability:
+      type: object
+      required: [configured, status, endpoint, requiresUserAction, detectionSource, errorCode]
+      properties:
+        configured: { type: boolean }
+        status: { type: string }
+        endpoint: { type: string, description: 已脱敏的检测端点 }
+        requiresUserAction: { type: boolean }
+        detectionSource: { type: string }
+        errorCode: { type: string }
+    PublicEgressResult:
+      type: object
+      required: [status, address, checkedAt, detectionSource, errorCode]
+      properties:
+        status: { type: string }
+        address: { type: string }
+        country: { type: string }
+        region: { type: string }
+        isp: { type: string }
+        checkedAt: { type: string, format: date-time }
+        detectionSource: { type: string }
+        errorCode: { type: string }
     OperatingSystem:
       type: object
       properties:
