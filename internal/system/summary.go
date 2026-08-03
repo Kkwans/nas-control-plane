@@ -26,6 +26,7 @@ type Summary struct {
 	Memory      MemoryStats        `json:"memory"`
 	Sensors     []TemperatureProbe `json:"sensors"`
 	Storage     []DiskStats        `json:"storage"`
+	DiskIO      DiskIOStats        `json:"diskIO"`
 	Network     []NetworkStats     `json:"network"`
 	Warnings    []SummaryWarning   `json:"warnings"`
 }
@@ -60,6 +61,13 @@ type DiskStats struct {
 	FreeBytes  uint64 `json:"freeBytes"`
 }
 
+// DiskIOStats 是宿主机磁盘读写累计计数器的快照。
+// 计数器来自 gopsutil，不是本次采样期间的速率；调用方可基于相邻样本计算速率。
+type DiskIOStats struct {
+	ReadBytes  uint64 `json:"readBytes"`
+	WriteBytes uint64 `json:"writeBytes"`
+}
+
 type NetworkStats struct {
 	Name          string `json:"name"`
 	ReceiveBytes  uint64 `json:"receiveBytes"`
@@ -81,6 +89,11 @@ type SummarySource interface {
 
 type temperatureSummarySource interface {
 	Temperatures(context.Context) ([]TemperatureProbe, error)
+}
+
+// diskIOSummarySource 是可选接口，避免给已有 SummarySource 实现增加必需方法。
+type diskIOSummarySource interface {
+	DiskIO(context.Context) (DiskIOStats, error)
 }
 
 type SummaryCollector struct {
@@ -148,12 +161,34 @@ func (c *SummaryCollector) Collect(ctx context.Context) (Summary, error) {
 	} else {
 		summary.Network = value
 	}
+	if err := ctx.Err(); err != nil {
+		return Summary{}, err
+	}
+	if source, ok := c.source.(diskIOSummarySource); ok {
+		value, err := source.DiskIO(ctx)
+		summary.DiskIO = value
+		if err != nil {
+			addSummaryWarning(&summary, "SYSTEM_SUMMARY_SOURCE_UNAVAILABLE", "disk-io")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Summary{}, err
+	}
 	if source, ok := c.source.(temperatureSummarySource); ok {
-		if value, err := source.Temperatures(ctx); err == nil {
-			summary.Sensors = value
-		} else {
+		value, err := source.Temperatures(ctx)
+		// gopsutil may return readable sensors together with a warning for an
+		// individual unreadable sensor. Keep the readable subset and surface the
+		// warning instead of replacing it with fabricated values.
+		if value == nil {
+			value = make([]TemperatureProbe, 0)
+		}
+		summary.Sensors = value
+		if err != nil {
 			addSummaryWarning(&summary, "SYSTEM_SUMMARY_SOURCE_UNAVAILABLE", "temperature")
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Summary{}, err
 	}
 	return summary, nil
 }
@@ -248,8 +283,12 @@ func (gopsutilSummarySource) Network(ctx context.Context) ([]NetworkStats, error
 	return result, nil
 }
 
-func (gopsutilSummarySource) Temperatures(context.Context) ([]TemperatureProbe, error) {
-	return collectTemperatures(), nil
+func (gopsutilSummarySource) DiskIO(ctx context.Context) (DiskIOStats, error) {
+	return collectDiskIOWithContext(ctx)
+}
+
+func (gopsutilSummarySource) Temperatures(ctx context.Context) ([]TemperatureProbe, error) {
+	return collectTemperaturesWithContext(ctx)
 }
 
 func persistentMountpoint(mountpoint string) bool {

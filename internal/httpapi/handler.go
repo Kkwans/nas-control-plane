@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -480,40 +481,20 @@ func (api *handler) monitoringSamples(response http.ResponseWriter, request *htt
 		api.writeError(response, request, http.StatusServiceUnavailable, "MONITORING_STORE_UNAVAILABLE", "监控历史暂不可用。")
 		return
 	}
-	query := request.URL.Query()
-	ranges := map[string]time.Duration{
-		"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour,
-	}
-	now := time.Now().UTC()
-	from := now.Add(-6 * time.Hour)
-	to := now
-	if query.Has("from") || query.Has("to") {
-		if !query.Has("from") || !query.Has("to") {
-			api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "精确时间范围必须同时提供开始和结束时间。")
-			return
-		}
-		parsedFrom, fromErr := time.Parse(time.RFC3339, query.Get("from"))
-		parsedTo, toErr := time.Parse(time.RFC3339, query.Get("to"))
-		if fromErr != nil || toErr != nil || !parsedFrom.Before(parsedTo) || parsedTo.After(now.Add(time.Minute)) || parsedTo.Sub(parsedFrom) > 7*24*time.Hour {
-			api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间不能晚于当前时间。")
-			return
-		}
-		from, to = parsedFrom.UTC(), parsedTo.UTC()
-	} else if duration, ok := ranges[query.Get("range")]; ok {
-		from = now.Add(-duration)
-	}
-	samples, err := api.controlStore.MetricSamples(request.Context(), from)
+	historyRange, err := ParseMonitoringRange(request.URL.Query(), time.Now().UTC())
 	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间不能晚于当前时间。")
+		return
+	}
+	samples, err := QueryMonitoringSamples(request.Context(), api.controlStore, historyRange)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
 		return
 	}
-	filtered := samples[:0]
-	for _, sample := range samples {
-		if !sample.CollectedAt.After(to) {
-			filtered = append(filtered, sample)
-		}
-	}
-	writeJSON(response, http.StatusOK, filtered)
+	writeJSON(response, http.StatusOK, samples)
 }
 
 func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
@@ -730,25 +711,25 @@ func (api *handler) recordMetricSample(ctx context.Context, summary system.Summa
 	if api.controlStore == nil {
 		return
 	}
-	var storageTotal, storageUsed, networkReceive, networkTransmit uint64
-	for _, disk := range summary.Storage {
-		storageTotal += disk.TotalBytes
-		storageUsed += disk.UsedBytes
-	}
-	for _, item := range summary.Network {
-		networkReceive += item.ReceiveBytes
-		networkTransmit += item.TransmitBytes
-	}
-	memoryPercent, diskPercent := 0.0, 0.0
-	if summary.Memory.TotalBytes > 0 {
-		memoryPercent = float64(summary.Memory.UsedBytes) / float64(summary.Memory.TotalBytes) * 100
-	}
-	if storageTotal > 0 {
-		diskPercent = float64(storageUsed) / float64(storageTotal) * 100
+	metric := summary.MetricSample()
+	temperatures := make([]controlstore.MetricTemperature, 0, len(metric.Temperatures))
+	for _, temperature := range metric.Temperatures {
+		temperatures = append(temperatures, controlstore.MetricTemperature{
+			Name:               temperature.Name,
+			TemperatureCelsius: temperature.TemperatureCelsius,
+		})
 	}
 	_ = api.controlStore.RecordMetricSample(ctx, controlstore.MetricSample{
-		CollectedAt: summary.CollectedAt, CPUPercent: summary.CPU.UsagePercent, MemoryPercent: memoryPercent,
-		Load1: summary.CPU.Load1, DiskPercent: diskPercent, NetworkReceive: networkReceive, NetworkTransmit: networkTransmit,
+		CollectedAt:     metric.CollectedAt,
+		CPUPercent:      metric.CPUPercent,
+		MemoryPercent:   metric.MemoryPercent,
+		Load1:           metric.Load1,
+		DiskPercent:     metric.DiskPercent,
+		NetworkReceive:  metric.NetworkReceive,
+		NetworkTransmit: metric.NetworkTransmit,
+		DiskReadBytes:   metric.DiskReadBytes,
+		DiskWriteBytes:  metric.DiskWriteBytes,
+		Temperatures:    temperatures,
 	})
 }
 

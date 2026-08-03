@@ -72,6 +72,54 @@ func TestSummaryCollectorIncludesTemperatureSensorsWhenSourceSupportsThem(t *tes
 	}
 }
 
+func TestSummaryCollectorIncludesDiskIOCountersWhenSourceSupportsThem(t *testing.T) {
+	collector := NewSummaryCollector(fakeMonitoringSummarySource{
+		fakeSummarySource: fakeSummarySource{network: []NetworkStats{}},
+		diskIO:            DiskIOStats{ReadBytes: 12_345, WriteBytes: 67_890},
+	})
+
+	summary, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if summary.DiskIO != (DiskIOStats{ReadBytes: 12_345, WriteBytes: 67_890}) {
+		t.Fatalf("diskIO = %#v", summary.DiskIO)
+	}
+}
+
+func TestSummaryCollectorKeepsReadableTemperaturesWithSourceWarning(t *testing.T) {
+	collector := NewSummaryCollector(fakeTemperatureSummarySource{
+		fakeSummarySource: fakeSummarySource{network: []NetworkStats{}},
+		sensors:           []TemperatureProbe{{Name: "soc-thermal", TemperatureCelsius: 38.8}},
+		temperatureErr:    errors.New("one sensor unavailable"),
+	})
+
+	summary, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(summary.Sensors) != 1 || summary.Sensors[0].Name != "soc-thermal" {
+		t.Fatalf("sensors = %#v", summary.Sensors)
+	}
+	if !hasSummaryWarning(summary.Warnings, "SYSTEM_SUMMARY_SOURCE_UNAVAILABLE", "temperature") {
+		t.Fatalf("warnings = %#v, want temperature warning", summary.Warnings)
+	}
+}
+
+func TestSummaryCollectorNormalizesMissingTemperatureSensorsToEmptySlice(t *testing.T) {
+	collector := NewSummaryCollector(fakeTemperatureSummarySource{
+		fakeSummarySource: fakeSummarySource{network: []NetworkStats{}},
+	})
+
+	summary, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if summary.Sensors == nil || len(summary.Sensors) != 0 {
+		t.Fatalf("sensors = %#v, want non-nil empty slice", summary.Sensors)
+	}
+}
+
 func TestSummaryCollectorReturnsPartialDataWithStableWarnings(t *testing.T) {
 	collector := NewSummaryCollector(fakeSummarySource{
 		host:     HostSnapshot{Hostname: "DH4300-PLUS"},
@@ -121,7 +169,13 @@ type fakeSummarySource struct {
 
 type fakeTemperatureSummarySource struct {
 	fakeSummarySource
-	sensors []TemperatureProbe
+	sensors        []TemperatureProbe
+	temperatureErr error
+}
+
+type fakeMonitoringSummarySource struct {
+	fakeSummarySource
+	diskIO DiskIOStats
 }
 
 func (f fakeSummarySource) Host(context.Context) (HostSnapshot, error) { return f.host, f.hostErr }
@@ -135,7 +189,11 @@ func (f fakeSummarySource) Network(context.Context) ([]NetworkStats, error) {
 }
 
 func (f fakeTemperatureSummarySource) Temperatures(context.Context) ([]TemperatureProbe, error) {
-	return f.sensors, nil
+	return f.sensors, f.temperatureErr
+}
+
+func (f fakeMonitoringSummarySource) DiskIO(context.Context) (DiskIOStats, error) {
+	return f.diskIO, nil
 }
 
 func hasSummaryWarning(warnings []SummaryWarning, code, source string) bool {
