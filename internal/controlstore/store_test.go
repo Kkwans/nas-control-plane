@@ -147,6 +147,42 @@ func TestMetricSamplesDeduplicateMinuteAndRespectRange(t *testing.T) {
 	}
 }
 
+func TestMetricSamplesPersistDiskIOAndTemperatures(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "metrics-extended.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 8, 4, 0, 10, 45, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	want := MetricSample{
+		CollectedAt:    now,
+		CPUPercent:     12.5,
+		DiskReadBytes:  1024,
+		DiskWriteBytes: 2048,
+		Temperatures:   []MetricTemperature{{Name: "SoC", TemperatureCelsius: 41.25}},
+	}
+	if err := store.RecordMetricSample(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+
+	samples, err := store.MetricSamples(context.Background(), now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 1 {
+		t.Fatalf("samples = %#v, want one sample", samples)
+	}
+	got := samples[0]
+	if got.DiskReadBytes != want.DiskReadBytes || got.DiskWriteBytes != want.DiskWriteBytes {
+		t.Fatalf("disk io = (%d, %d), want (%d, %d)", got.DiskReadBytes, got.DiskWriteBytes, want.DiskReadBytes, want.DiskWriteBytes)
+	}
+	if !reflect.DeepEqual(got.Temperatures, want.Temperatures) {
+		t.Fatalf("temperatures = %#v, want %#v", got.Temperatures, want.Temperatures)
+	}
+}
+
 func TestSiteProfilePersistenceAndVisit(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "control.sqlite"))
 	if err != nil {

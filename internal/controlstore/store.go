@@ -195,13 +195,21 @@ type JobRecord struct {
 }
 
 type MetricSample struct {
-	CollectedAt     time.Time `json:"collectedAt"`
-	CPUPercent      float64   `json:"cpuPercent"`
-	MemoryPercent   float64   `json:"memoryPercent"`
-	Load1           float64   `json:"load1"`
-	DiskPercent     float64   `json:"diskPercent"`
-	NetworkReceive  uint64    `json:"networkReceiveBytes"`
-	NetworkTransmit uint64    `json:"networkTransmitBytes"`
+	CollectedAt     time.Time           `json:"collectedAt"`
+	CPUPercent      float64             `json:"cpuPercent"`
+	MemoryPercent   float64             `json:"memoryPercent"`
+	Load1           float64             `json:"load1"`
+	DiskPercent     float64             `json:"diskPercent"`
+	NetworkReceive  uint64              `json:"networkReceiveBytes"`
+	NetworkTransmit uint64              `json:"networkTransmitBytes"`
+	DiskReadBytes   uint64              `json:"diskReadBytes"`
+	DiskWriteBytes  uint64              `json:"diskWriteBytes"`
+	Temperatures    []MetricTemperature `json:"temperatures,omitempty"`
+}
+
+type MetricTemperature struct {
+	Name               string  `json:"name"`
+	TemperatureCelsius float64 `json:"temperatureCelsius"`
 }
 
 func Open(databasePath string) (*Store, error) {
@@ -291,21 +299,37 @@ func (s *Store) RecordMetricSample(ctx context.Context, sample MetricSample) err
 	_, err := s.database.ExecContext(ctx, `
 		INSERT OR IGNORE INTO metric_samples (
 			collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
-			network_receive_bytes, network_transmit_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			network_receive_bytes, network_transmit_bytes, disk_read_bytes, disk_write_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, bucket, sample.CPUPercent, sample.MemoryPercent, sample.Load1, sample.DiskPercent,
-		sample.NetworkReceive, sample.NetworkTransmit)
+		sample.NetworkReceive, sample.NetworkTransmit, sample.DiskReadBytes, sample.DiskWriteBytes)
 	if err != nil {
 		return err
 	}
+	for _, temperature := range sample.Temperatures {
+		if strings.TrimSpace(temperature.Name) == "" {
+			continue
+		}
+		if _, err := s.database.ExecContext(ctx, `
+			INSERT OR REPLACE INTO metric_temperature_samples (
+				collected_at_unix, sensor_name, temperature_celsius
+			) VALUES (?, ?, ?)
+		`, bucket, temperature.Name, temperature.TemperatureCelsius); err != nil {
+			return err
+		}
+	}
 	_, err = s.database.ExecContext(ctx, `DELETE FROM metric_samples WHERE collected_at_unix < ?`, s.now().UTC().Add(-7*24*time.Hour).Unix())
+	if err != nil {
+		return err
+	}
+	_, err = s.database.ExecContext(ctx, `DELETE FROM metric_temperature_samples WHERE collected_at_unix < ?`, s.now().UTC().Add(-7*24*time.Hour).Unix())
 	return err
 }
 
 func (s *Store) MetricSamples(ctx context.Context, since time.Time) ([]MetricSample, error) {
 	rows, err := s.database.QueryContext(ctx, `
 		SELECT collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
-			network_receive_bytes, network_transmit_bytes
+			network_receive_bytes, network_transmit_bytes, disk_read_bytes, disk_write_bytes
 		FROM metric_samples
 		WHERE collected_at_unix >= ?
 		ORDER BY collected_at_unix
@@ -319,13 +343,44 @@ func (s *Store) MetricSamples(ctx context.Context, since time.Time) ([]MetricSam
 		var sample MetricSample
 		var collectedAtUnix int64
 		if err := rows.Scan(&collectedAtUnix, &sample.CPUPercent, &sample.MemoryPercent, &sample.Load1, &sample.DiskPercent,
-			&sample.NetworkReceive, &sample.NetworkTransmit); err != nil {
+			&sample.NetworkReceive, &sample.NetworkTransmit, &sample.DiskReadBytes, &sample.DiskWriteBytes); err != nil {
 			return nil, err
 		}
 		sample.CollectedAt = time.Unix(collectedAtUnix, 0).UTC()
 		samples = append(samples, sample)
 	}
-	return samples, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(samples) == 0 {
+		return samples, nil
+	}
+	temperatureRows, err := s.database.QueryContext(ctx, `
+		SELECT collected_at_unix, sensor_name, temperature_celsius
+		FROM metric_temperature_samples
+		WHERE collected_at_unix >= ?
+		ORDER BY collected_at_unix, sensor_name
+	`, since.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer temperatureRows.Close()
+	byBucket := make(map[int64][]MetricTemperature)
+	for temperatureRows.Next() {
+		var collectedAtUnix int64
+		var temperature MetricTemperature
+		if err := temperatureRows.Scan(&collectedAtUnix, &temperature.Name, &temperature.TemperatureCelsius); err != nil {
+			return nil, err
+		}
+		byBucket[collectedAtUnix] = append(byBucket[collectedAtUnix], temperature)
+	}
+	if err := temperatureRows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range samples {
+		samples[index].Temperatures = byBucket[samples[index].CollectedAt.Unix()]
+	}
+	return samples, nil
 }
 
 func validatePreferences(preferences Preferences) error {
@@ -856,8 +911,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			load1 REAL NOT NULL,
 			disk_percent REAL NOT NULL,
 			network_receive_bytes INTEGER NOT NULL,
-			network_transmit_bytes INTEGER NOT NULL
+			network_transmit_bytes INTEGER NOT NULL,
+			disk_read_bytes INTEGER NOT NULL DEFAULT 0,
+			disk_write_bytes INTEGER NOT NULL DEFAULT 0
 		)`,
+		`CREATE TABLE IF NOT EXISTS metric_temperature_samples (
+			collected_at_unix INTEGER NOT NULL,
+			sensor_name TEXT NOT NULL,
+			temperature_celsius REAL NOT NULL,
+			PRIMARY KEY (collected_at_unix, sensor_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS metric_temperature_samples_time
+			ON metric_temperature_samples(collected_at_unix)`,
 		`CREATE TABLE IF NOT EXISTS jobs (
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
@@ -916,6 +981,17 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	for _, column := range siteColumns {
 		if err := s.ensureColumn(ctx, "site_profiles", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "disk_read_bytes", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "disk_write_bytes", definition: "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := s.ensureColumn(ctx, "metric_samples", column.name, column.definition); err != nil {
 			return err
 		}
 	}
