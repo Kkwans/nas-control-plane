@@ -6,6 +6,7 @@ import {
   updateDatabaseProjectPreference,
 } from '@/api/control'
 import {
+  connectDatabase,
   discoverDatabases,
   loadDatabaseCatalog,
   type DatabaseCatalog,
@@ -88,7 +89,13 @@ export const useDatabaseStore = defineStore('database', () => {
   async function connect(sourceId: string, input: DatabaseCredentials) {
     credentials.value = { ...credentials.value, [sourceId]: { ...input } }
     try {
-      return await loadCatalog(sourceId)
+      const hasCredentials = Object.values(input).some((value) => typeof value === 'string' && value.trim() !== '')
+      const diagnostic = await connectDatabase(hasCredentials ? { sourceId, credentials: input } : { sourceId })
+      if (!diagnostic.connected) {
+        throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
+      }
+      const catalog = await loadCatalog(sourceId)
+      return { catalog, diagnostic }
     } catch (error) {
       const next = { ...credentials.value }
       delete next[sourceId]

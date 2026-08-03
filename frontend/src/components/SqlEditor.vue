@@ -45,29 +45,30 @@ onMounted(() => {
       EditorView.theme({
         '&': {
           height: '100%',
-          color: '#172033',
-          backgroundColor: '#ffffff',
+          color: 'var(--ncp-text)',
+          backgroundColor: 'var(--ncp-surface)',
           fontSize: '13px',
         },
         '&.cm-focused': { outline: 'none' },
         '.cm-scroller': {
-          fontFamily: '"JetBrains Mono Variable", ui-monospace, monospace',
+          fontFamily: 'var(--ncp-font-mono)',
           lineHeight: '1.72',
           overflow: 'auto',
         },
         '.cm-content': { padding: '14px 0 28px' },
         '.cm-line': { padding: '0 18px 0 10px' },
         '.cm-gutters': {
-          color: '#9aa6ba',
-          backgroundColor: '#f8fafc',
-          borderRight: '1px solid #e8edf5',
+          color: 'var(--ncp-text-subtle)',
+          backgroundColor: 'var(--ncp-surface-quiet)',
+          borderRight: '1px solid var(--ncp-line)',
         },
-        '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#f2f6ff' },
-        '.cm-selectionBackground, ::selection': { backgroundColor: '#dce9ff !important' },
-        '.cm-cursor': { borderLeftColor: '#2468d8' },
+        '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--ncp-primary-wash)' },
+        '.cm-selectionBackground, ::selection': { backgroundColor: 'var(--ncp-primary-active) !important' },
+        '.cm-cursor': { borderLeftColor: 'var(--ncp-primary)' },
       }),
     ],
   })
+  syncDisabledState(props.disabled)
 })
 
 watch(() => props.modelValue, (value) => {
@@ -77,11 +78,19 @@ watch(() => props.modelValue, (value) => {
   })
 })
 
+watch(() => props.disabled, (disabled) => syncDisabledState(disabled))
+
+function syncDisabledState(disabled: boolean) {
+  const content = editorHost.value?.querySelector<HTMLElement>('.cm-content')
+  content?.setAttribute('contenteditable', String(!disabled))
+  editorHost.value?.setAttribute('aria-disabled', String(disabled))
+}
+
 onBeforeUnmount(() => editor?.destroy())
 </script>
 
 <template>
-  <div ref="editorHost" :class="['sql-editor-host', { 'sql-editor-host--disabled': disabled }]" />
+  <div ref="editorHost" :class="['sql-editor-host', { 'sql-editor-host--disabled': disabled }]" aria-label="SQL 编辑器" role="group" />
 </template>
 
 <style scoped>
@@ -89,7 +98,7 @@ onBeforeUnmount(() => editor?.destroy())
   min-height: 220px;
   height: 100%;
   overflow: hidden;
-  background: #fff;
+  background: var(--ncp-surface);
 }
 
 .sql-editor-host :deep(.cm-editor) {
@@ -97,7 +106,7 @@ onBeforeUnmount(() => editor?.destroy())
 }
 
 .sql-editor-host--disabled :deep(.cm-content) {
-  cursor: text;
+  cursor: default;
 }
 
 .sql-editor-host--disabled :deep(.cm-cursor) {

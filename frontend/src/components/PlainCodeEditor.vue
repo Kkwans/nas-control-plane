@@ -24,20 +24,20 @@ onMounted(() => {
         if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
       }),
       EditorView.theme({
-        '&': { height: '100%', color: '#172033', backgroundColor: '#fff', fontSize: '13px' },
+        '&': { height: '100%', color: 'var(--ncp-text)', backgroundColor: 'var(--ncp-surface)', fontSize: '13px' },
         '&.cm-focused': { outline: 'none' },
-        '.cm-scroller': { fontFamily: '"JetBrains Mono Variable", ui-monospace, monospace', lineHeight: '1.72' },
+        '.cm-scroller': { fontFamily: 'var(--ncp-font-mono)', lineHeight: '1.72', overflow: 'auto' },
         '.cm-content': { padding: '14px 0 36px' },
         '.cm-line': { padding: '0 18px 0 10px' },
-        '.cm-gutters': { color: '#9aa6ba', backgroundColor: '#f8fafc', borderRight: '1px solid #e8edf5' },
-        '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#f2f6ff' },
-        '.cm-selectionBackground, ::selection': { backgroundColor: '#dce9ff !important' },
-        '.cm-cursor': { borderLeftColor: '#2468d8' },
-        '.tok-keyword, .tok-bool, .tok-null': { color: '#7a4cc2' },
-        '.tok-string': { color: '#26785f' },
-        '.tok-number': { color: '#b2691d' },
-        '.tok-comment': { color: '#8795a8', fontStyle: 'italic' },
-        '.tok-propertyName, .tok-labelName': { color: '#245fa9' },
+        '.cm-gutters': { color: 'var(--ncp-text-subtle)', backgroundColor: 'var(--ncp-surface-quiet)', borderRight: '1px solid var(--ncp-line)' },
+        '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--ncp-primary-wash)' },
+        '.cm-selectionBackground, ::selection': { backgroundColor: 'var(--ncp-primary-active) !important' },
+        '.cm-cursor': { borderLeftColor: 'var(--ncp-primary)' },
+        '.tok-keyword, .tok-bool, .tok-null': { color: 'var(--ncp-object-storage)' },
+        '.tok-string': { color: 'var(--ncp-success-strong)' },
+        '.tok-number': { color: 'var(--ncp-warning-strong)' },
+        '.tok-comment': { color: 'var(--ncp-text-subtle)', fontStyle: 'italic' },
+        '.tok-propertyName, .tok-labelName': { color: 'var(--ncp-info-strong)' },
       }),
     ],
   })
@@ -51,8 +51,20 @@ watch(() => props.modelValue, (value) => {
 onBeforeUnmount(() => editor?.destroy())
 </script>
 
-<template><div ref="host" class="plain-code-editor" /></template>
+<template><div ref="host" class="plain-code-editor" aria-label="配置编辑器" role="group" /></template>
 
 <style scoped>
-.plain-code-editor{height:100%;min-height:0;overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px}.plain-code-editor :deep(.cm-editor){height:100%}
+.plain-code-editor {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ncp-line);
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-surface);
+  box-shadow: var(--ncp-shadow-control);
+}
+
+.plain-code-editor :deep(.cm-editor) {
+  height: 100%;
+}
 </style>
