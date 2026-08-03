@@ -16,36 +16,7 @@
 
 ## 终端快捷键与粘贴
 
-终端同时支持 Windows/Linux 与 macOS 的系统粘贴快捷键：Windows/Linux 使用 `Ctrl+V`，macOS 使用 `⌘V`；`Ctrl+Shift+V` / `⌘Shift+V` 作为兼容快捷键保留。浏览器右键菜单粘贴也会走同一条粘贴链路，不会把 `ESC[200~` 或 `ESC[201~` 当成命令字符显示。
-
-粘贴包含换行的内容后，终端会进入“多行粘贴模式”。此时：
-
-1. `Enter` 或 `Ctrl+M`：在当前内容中插入换行。
-2. `Ctrl+J`：执行整段多行内容。
-3. `Ctrl+Q`：按字面插入下一个按键，替代被 `Ctrl+V` 占用的 Bash `quoted-insert` 行为。
-
-提示中的 `Ctrl` 是完整的 Control 键名称，不再使用 ble.sh 默认的 `C-m`、`C-j` 缩写。
-
-| 快捷键 | 功能 |
-| --- | --- |
-| `Ctrl+V` / `⌘V` | 粘贴系统剪贴板内容 |
-| `Ctrl+Shift+V` / `⌘Shift+V` | 粘贴系统剪贴板内容（兼容快捷键） |
-| `Ctrl+Q` | 按字面插入下一个按键 |
-| `Enter` | 执行单行命令；多行粘贴模式下插入换行 |
-| `Ctrl+M` | 多行粘贴模式下插入换行 |
-| `Ctrl+J` | 执行多行粘贴内容 |
-| `Ctrl+C` | 中断正在运行的命令；编辑命令时取消当前输入 |
-| `Ctrl+L` | 请求 Shell 清空当前屏幕 |
-| `Tab` | 命令、路径和参数补全 |
-| `↑` / `↓` | 浏览历史命令 |
-| `Ctrl+R` | 反向搜索历史命令 |
-| `Ctrl+A` / `Home` | 移动到当前命令开头 |
-| `Ctrl+E` / `End` | 移动到当前命令末尾 |
-| `Ctrl+U` | 删除光标前的整段输入 |
-| `Ctrl+W` | 删除光标前的一个单词 |
-| `Ctrl+D` | 删除光标下字符；空输入时结束 Shell |
-
-终端标题栏的“清空内容”只清除浏览器当前会话的可见内容和滚动缓冲，不会断开 PTY、删除 Shell 历史或执行远程命令。输入命令由 ble.sh 提供语法高亮；Shell 输出保留 ANSI 颜色，并为 `ls`、`grep`、`diff`、Git 等常用命令启用语义配色。
+终端支持 Windows/Linux 的 `Ctrl+V`、macOS 的 `⌘V`、多行粘贴确认、`Ctrl+Q` literal-next、隐藏滚动条以及按主机/容器实际探测结果显示能力。完整快捷键、`started.capabilities` 字段、降级策略和 WebSocket 控制帧说明见 [docs/terminal-shortcuts.md](docs/terminal-shortcuts.md)。
 
 NAS Control Plane（NCP）是面向绿联 NAS 的本地服务器管理面板。项目参考服务器控制面板的管理思路，通过浏览器统一查看 NAS 实时状态、访问局域网服务、管理 Docker 与数据库，并逐步接入监控、日志和终端等能力。
 
