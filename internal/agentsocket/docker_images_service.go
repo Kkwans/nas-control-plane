@@ -23,6 +23,10 @@ type DockerImageProgressProvider interface {
 	PullWithProgress(context.Context, docker.ImagePullRequest, func(docker.ImagePullProgress)) (docker.ImagePullResult, error)
 }
 
+type DockerImageBatchProvider interface {
+	RemoveBatch(context.Context, docker.ImageRemoveBatchRequest) (docker.ImageRemoveBatchResult, error)
+}
+
 func (s *dockerImageService) SearchImages(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	if s.provider == nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_DOCKER_IMAGES_UNAVAILABLE")
@@ -146,6 +150,38 @@ func (s *dockerImageService) RemoveImage(ctx context.Context, request *structpb.
 	result, err := s.provider.Remove(ctx, docker.ImageRemoveRequest{ImageID: imageID})
 	if err != nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_IMAGE_REMOVE_FAILED")
+	}
+	return dashboardStruct(result, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
+}
+
+func (s *dockerImageService) RemoveImages(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	provider, ok := s.provider.(DockerImageBatchProvider)
+	if !ok {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_DOCKER_IMAGES_UNAVAILABLE")
+	}
+	imageIDs, err := requiredStringList(request, "image_ids")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "DOCKER_IMAGE_REMOVE_BATCH_INVALID")
+	}
+	result, err := provider.RemoveBatch(ctx, docker.ImageRemoveBatchRequest{ImageIDs: imageIDs})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, grpcstatus.Error(codes.DeadlineExceeded, "AGENT_RPC_TIMEOUT")
+		}
+		code := docker.ErrorCode(err)
+		if code == "DOCKER_IMAGE_REMOVE_BATCH_INVALID" {
+			return nil, grpcstatus.Error(codes.InvalidArgument, code)
+		}
+		if code == "DOCKER_IMAGE_REMOVE_BATCH_LIST_FAILED" {
+			return nil, grpcstatus.Error(codes.Unavailable, code)
+		}
+		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_IMAGE_REMOVE_BATCH_FAILED")
 	}
 	return dashboardStruct(result, "AGENT_DOCKER_IMAGES_RESPONSE_INVALID")
 }

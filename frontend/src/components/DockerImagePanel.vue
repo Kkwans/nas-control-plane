@@ -11,7 +11,7 @@ import {
   pullDockerImage,
   requestJobs,
   retryJob,
-  removeDockerImage,
+  removeDockerImages,
   requestDockerHubTags,
   requestDockerImages,
   searchDockerHub,
@@ -21,6 +21,7 @@ import {
   type DockerInventory,
   type JobSnapshot,
 } from '@/api/system'
+import ActionButton from '@/components/ActionButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { useListPreference } from '@/composables/useListPreference'
@@ -36,7 +37,9 @@ const mode = ref<ImageMode>('local')
 const images = ref<DockerImageSummary[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
-const removePending = ref<string | null>(null)
+const removePendingIds = ref<string[]>([])
+const removeFailures = ref<Array<{ id: string; name: string; message: string }>>([])
+const selectedImageIds = ref<string[]>([])
 const hubQuery = ref('')
 const hubSort = ref('relevance')
 const hubLoading = ref(false)
@@ -86,6 +89,7 @@ const filteredImages = computed(() => {
   return [...matching].sort((left, right) => {
     if (key === 'size') return (left.sizeBytes - right.sizeBytes) * direction
     if (key === 'created') return (new Date(left.createdAt).valueOf() - new Date(right.createdAt).valueOf()) * direction
+    if (key === 'containers') return (containerReferenceCount(left) - containerReferenceCount(right)) * direction
     return displayName(left).localeCompare(displayName(right), 'zh-CN') * direction
   })
 })
@@ -94,6 +98,11 @@ const pagedImages = computed(() => {
   const start = (localPage.value - 1) * props.pageSize
   return filteredImages.value.slice(start, start + props.pageSize)
 })
+const visibleImageIds = computed(() => pagedImages.value.map((image) => image.id))
+const allVisibleSelected = computed(() => visibleImageIds.value.length > 0 && visibleImageIds.value.every((id) => selectedImageIds.value.includes(id)))
+const someVisibleSelected = computed(() => visibleImageIds.value.some((id) => selectedImageIds.value.includes(id)))
+const selectedImageCount = computed(() => selectedImageIds.value.length)
+const bulkRemovePending = computed(() => removePendingIds.value.length > 0)
 const totalPages = computed(() => Math.max(1, Math.ceil(hubCount.value / 20)))
 const pullReference = computed(() => {
   if (!selectedRepository.value) return ''
@@ -131,7 +140,36 @@ watch(downloadPageCount, (count) => {
   if (downloadPage.value > count) downloadPage.value = count
 })
 
-async function toggleLocalSort(key: 'name' | 'size' | 'created') {
+function toggleVisibleSelection(checked: boolean) {
+  const visible = new Set(visibleImageIds.value)
+  if (checked) {
+    selectedImageIds.value = [...new Set([...selectedImageIds.value, ...visible])]
+  } else {
+    selectedImageIds.value = selectedImageIds.value.filter((id) => !visible.has(id))
+  }
+}
+
+function toggleImageSelection(imageId: string, checked: boolean) {
+  if (checked) {
+    if (!selectedImageIds.value.includes(imageId)) selectedImageIds.value = [...selectedImageIds.value, imageId]
+  } else {
+    selectedImageIds.value = selectedImageIds.value.filter((id) => id !== imageId)
+  }
+}
+
+function handleVisibleSelectionChange(event: Event) {
+  toggleVisibleSelection((event.currentTarget as HTMLInputElement).checked)
+}
+
+function handleImageSelectionChange(imageId: string, event: Event) {
+  toggleImageSelection(imageId, (event.currentTarget as HTMLInputElement).checked)
+}
+
+function isRemovePending(imageId: string) {
+  return removePendingIds.value.includes(imageId)
+}
+
+async function toggleLocalSort(key: 'name' | 'size' | 'created' | 'containers') {
   if (localPreference.value.sortKey !== key) {
     await setLocalSort(key, 'asc')
     return
@@ -166,6 +204,8 @@ async function refresh() {
   error.value = null
   try {
     images.value = (await requestDockerImages()).images
+    const availableIds = new Set(images.value.map((image) => image.id))
+    selectedImageIds.value = selectedImageIds.value.filter((id) => availableIds.has(id))
   } catch (caught) {
     error.value = caught instanceof NcpApiError ? caught.message : '本地镜像读取失败。'
   } finally {
@@ -290,30 +330,77 @@ async function confirmDeleteJob(job: JobSnapshot) {
   }
 }
 
+function containerReferenceCount(image: DockerImageSummary) {
+  const inventoryCount = props.containers.filter((container) => image.repoTags.includes(container.image) || container.image === image.id).length
+  return Math.max(Number.isFinite(image.containers) ? image.containers : 0, inventoryCount)
+}
+
+function failureMessage(caught: unknown) {
+  return caught instanceof NcpApiError ? caught.message : '镜像删除失败，请稍后重试。'
+}
+
 async function confirmRemove(image: DockerImageSummary) {
-  const name = displayName(image)
+  await confirmRemoveImages([image])
+}
+
+async function confirmRemoveSelected() {
+  const selected = images.value.filter((image) => selectedImageIds.value.includes(image.id))
+  await confirmRemoveImages(selected)
+}
+
+async function confirmRemoveImages(requested: DockerImageSummary[]) {
+  if (!requested.length) return
+  const inUse = requested.filter((image) => containerReferenceCount(image) > 0)
+  const removable = requested.filter((image) => containerReferenceCount(image) === 0)
+  if (!removable.length) {
+    ElMessage.warning('所选镜像都正在被容器引用，已跳过删除；不会强制删除。')
+    return
+  }
+  const skippedMessage = inUse.length
+    ? `其中 ${inUse.length} 个镜像正在被容器引用，会跳过且不会 force 删除。`
+    : ''
+  const names = removable.length === 1 ? `“${displayName(removable[0] as DockerImageSummary)}”` : `${removable.length} 个未被引用的镜像`
   try {
-    await ElMessageBox.confirm(`将从 NAS 删除本地镜像“${name}”。正在被容器使用的镜像会被 Docker 拒绝删除。`, '删除本地镜像', {
-      confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning',
+    await ElMessageBox.confirm(`将从 NAS 删除 ${names}。${skippedMessage}`, '删除本地镜像', {
+      confirmButtonText: removable.length === 1 ? '确认删除' : `删除 ${removable.length} 个`, cancelButtonText: '取消', type: 'warning',
     })
   } catch { return }
-  removePending.value = image.id
+
+  removeFailures.value = []
+  removePendingIds.value = removable.map((image) => image.id)
   try {
-    await removeDockerImage(image.id)
-    ElMessage.success(`已删除镜像 ${name}`)
+    const batches: DockerImageSummary[][] = []
+    for (let index = 0; index < removable.length; index += 50) batches.push(removable.slice(index, index + 50))
+    const results = await Promise.allSettled(batches.map((batch) => removeDockerImages(batch.map((image) => image.id))))
+    const failures: Array<{ id: string; name: string; message: string }> = []
+    let succeededCount = 0
+    results.forEach((result, batchIndex) => {
+      const batch = batches[batchIndex] ?? []
+      if (result.status === 'rejected') {
+        failures.push(...batch.map((image) => ({ id: image.id, name: displayName(image), message: failureMessage(result.reason) })))
+        return
+      }
+      succeededCount += result.value.removedCount
+      const imageById = new Map(batch.map((image) => [image.id, image]))
+      for (const item of result.value.items) {
+        if (item.removed) continue
+        const image = imageById.get(item.imageId)
+        if (!image) continue
+        failures.push({ id: image.id, name: displayName(image), message: item.errorCode ? `删除失败（${item.errorCode}）` : '镜像删除失败，请稍后重试。' })
+      }
+    })
+    removeFailures.value = failures
+    if (succeededCount) ElMessage.success(`已删除 ${succeededCount} 个本地镜像`)
+    if (failures.length) ElMessage.error(`${failures.length} 个镜像删除失败，请查看列表中的错误。`)
+    selectedImageIds.value = failures.map((failure) => failure.id)
     await refresh()
-  } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像删除失败。')
   } finally {
-    removePending.value = null
+    removePendingIds.value = []
   }
 }
 
 function displayName(image: DockerImageSummary) { return image.repoTags[0] ?? '未标记镜像' }
 function shortId(imageId: string) { return imageId.replace(/^sha256:/, '').slice(0, 12) }
-function usageCount(image: DockerImageSummary) {
-  return props.containers.filter((container) => image.repoTags.includes(container.image) || container.image === image.id).length
-}
 function localImageForJob(job: JobSnapshot) {
   const reference = (job.reference ?? '').replace(/^docker\.io\//, '')
   return images.value.find((image) => image.repoTags.some((tag) => tag === reference || tag.replace(/^docker\.io\//, '') === reference))
@@ -330,7 +417,7 @@ function downloadStateLabel(job: JobSnapshot) {
 function effectiveTotal(job: JobSnapshot) {
   return job.totalBytes || localImageForJob(job)?.sizeBytes || 0
 }
-function sortIcon(key: 'name' | 'size' | 'created') {
+function sortIcon(key: 'name' | 'size' | 'created' | 'containers') {
   if (localPreference.value.sortKey !== key) return ArrowUpDown
   return localPreference.value.sortDirection === 'desc' ? ArrowDown : ArrowUp
 }
@@ -408,6 +495,8 @@ onMounted(() => {
         <ElInput :model-value="query" clearable placeholder="搜索镜像名称、标签或 ID" @update:model-value="emit('update:query', String($event))">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
+        <span v-if="selectedImageCount" class="selection-count">已选 {{ selectedImageCount }} 个</span>
+        <ActionButton v-if="selectedImageCount" variant="danger" size="sm" :icon="Trash2" :loading="bulkRemovePending" @click="confirmRemoveSelected">批量删除</ActionButton>
         <ElTooltip content="刷新本地镜像"><button class="icon-button" type="button" :disabled="loading" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="17" /></button></ElTooltip>
       </div>
       <form v-else-if="mode === 'hub'" class="hub-search" @submit.prevent="runHubSearch(1)">
@@ -428,22 +517,37 @@ onMounted(() => {
 
     <div v-if="mode === 'local'">
       <div v-if="error" class="inline-error"><span>{{ error }}</span><button type="button" @click="refresh">重新加载</button></div>
+      <div v-if="removeFailures.length" class="inline-error bulk-remove-error" role="alert">
+        <div><strong>部分镜像删除失败</strong><ul><li v-for="failure in removeFailures" :key="failure.id">{{ failure.name }}：{{ failure.message }}</li></ul></div>
+        <button type="button" @click="removeFailures = []">关闭</button>
+      </div>
       <section class="resource-table panel">
         <div class="resource-head">
-          <button :class="{ active: localPreference.sortKey === 'name' }" type="button" @click="toggleLocalSort('name')">镜像<component :is="sortIcon('name')" :size="14" /></button>
+          <div class="resource-select-head">
+            <input type="checkbox" :checked="allVisibleSelected" :indeterminate="someVisibleSelected && !allVisibleSelected" :aria-label="allVisibleSelected ? '取消选择当前页镜像' : '选择当前页镜像'" @change="handleVisibleSelectionChange">
+            <button :class="{ active: localPreference.sortKey === 'name' }" type="button" @click="toggleLocalSort('name')">镜像<component :is="sortIcon('name')" :size="14" /></button>
+          </div>
           <span>镜像 ID</span>
           <button :class="{ active: localPreference.sortKey === 'size' }" type="button" @click="toggleLocalSort('size')">大小<component :is="sortIcon('size')" :size="14" /></button>
           <button :class="{ active: localPreference.sortKey === 'created' }" type="button" @click="toggleLocalSort('created')">创建日期<component :is="sortIcon('created')" :size="14" /></button>
-          <span>容器引用</span><span>操作</span>
+          <button :class="{ active: localPreference.sortKey === 'containers' }" type="button" @click="toggleLocalSort('containers')">容器引用<component :is="sortIcon('containers')" :size="14" /></button><span>操作</span>
         </div>
         <template v-if="loading && !images.length">
           <div v-for="row in 7" :key="row" class="resource-row skeleton-row"><i v-for="cell in 6" :key="cell" class="ncp-skeleton"></i></div>
         </template>
         <div v-for="image in pagedImages" :key="image.id" class="resource-row">
-          <div class="resource-name"><span><ImageIcon :size="18" /></span><div><strong>{{ displayName(image) }}</strong><small>{{ image.repoDigests[0] ?? '本地构建镜像' }}</small></div></div>
+          <div class="resource-name-cell">
+            <input type="checkbox" :checked="selectedImageIds.includes(image.id)" :aria-label="`选择镜像 ${displayName(image)}`" @change="handleImageSelectionChange(image.id, $event)">
+            <div class="resource-name"><span><ImageIcon :size="18" /></span><div><strong>{{ displayName(image) }}</strong><small>{{ image.repoDigests[0] ?? '本地构建镜像' }}</small></div></div>
+          </div>
           <code>{{ shortId(image.id) }}</code><span>{{ formatBytes(image.sizeBytes) }}</span><span>{{ dateLabel(image.createdAt) }}</span>
-          <span>{{ usageCount(image) ? `${usageCount(image)} 个容器` : '未被引用' }}</span>
-          <ElTooltip content="删除未使用的本地镜像"><button class="danger-button" type="button" :disabled="removePending === image.id" @click="confirmRemove(image)"><Trash2 :size="15" />删除</button></ElTooltip>
+          <ElTooltip :content="containerReferenceCount(image) ? `正在被 ${containerReferenceCount(image)} 个容器引用，不能强制删除` : '删除未使用的本地镜像'">
+            <span class="usage-cell">
+              <span v-if="containerReferenceCount(image)" class="usage-warning">{{ containerReferenceCount(image) }} 个容器使用中</span>
+              <span v-else>未被引用</span>
+            </span>
+          </ElTooltip>
+          <ElTooltip :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ActionButton variant="danger" size="sm" :icon="Trash2" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :aria-label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)">删除</ActionButton></ElTooltip>
         </div>
         <div v-if="!loading && !filteredImages.length" class="empty-state">没有匹配的本地镜像</div>
         <footer v-else class="resource-pagination">
@@ -571,6 +675,14 @@ onMounted(() => {
 .job-state--deleted{border-color:#d5dce6;background:#edf1f5;color:#5f6f83}
 .job-state--failed{border-color:rgba(201,83,97,.28);background:#fcecef;color:#a83d4b}
 .job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
+.resource-select-head{display:flex;min-width:0;align-items:center;gap:8px}.resource-name-cell{display:flex;min-width:0;align-items:center;gap:8px}.resource-select-head input,.resource-name-cell>input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--ncp-primary)}.usage-cell{display:grid;justify-items:center;gap:2px;line-height:1.25}.usage-warning{color:var(--ncp-danger-strong);font-size:.72rem;font-weight:720}.bulk-remove-error>div{min-width:0}.bulk-remove-error ul{margin:4px 0 0;padding-left:17px}.selection-count{white-space:nowrap;font-variant-numeric:tabular-nums}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 78px;gap:8px}.hub-workspace{grid-template-columns:minmax(300px,.8fr) minmax(430px,1.2fr)}}
-@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.hub-search{width:100%}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar nav{width:100%}.image-modebar nav button{flex:1;justify-content:center}.mode-actions,.download-mode-actions{width:100%;flex-wrap:wrap}.mode-actions :deep(.el-input){min-width:160px;flex:1 1 180px}.hub-search{width:100%}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.hub-workspace{grid-template-columns:1fr}.repository-list{max-height:430px}.repository-detail{min-height:520px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
+</style>
+
+<style scoped>
+.resource-select-head button { width: auto; min-width: 0; flex: 1; }
+.resource-head>button:nth-child(5) { justify-content: center; }
+.resource-name-cell .resource-name { flex: 1; }
+.mode-actions :deep(.action-button) { flex: 0 0 auto; }
 </style>
