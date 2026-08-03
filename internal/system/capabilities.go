@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -35,28 +36,32 @@ type Environment interface {
 // Capabilities 是 OpenAPI 和 Agent RPC 共用的 P0-01 数据模型。
 // 对应能力缺失或无法安全查询时，可选字段为 nil。
 type Capabilities struct {
-	Hostname               string          `json:"hostname"`
-	Architecture           string          `json:"architecture"`
-	OperatingSystem        OperatingSystem `json:"operatingSystem"`
-	DeviceModel            *string         `json:"deviceModel"`
-	Docker                 bool            `json:"docker"`
-	DockerAPIVersion       *string         `json:"dockerApiVersion"`
-	Compose                bool            `json:"compose"`
-	ComposeVersion         *string         `json:"composeVersion"`
-	Systemd                bool            `json:"systemd"`
-	Journald               bool            `json:"journald"`
-	CgroupVersion          int             `json:"cgroupVersion"`
-	ProcReadable           bool            `json:"procReadable"`
-	SysReadable            bool            `json:"sysReadable"`
-	Smartctl               bool            `json:"smartctl"`
-	NvmeCLI                bool            `json:"nvmeCli"`
-	TemperatureSensors     []string        `json:"temperatureSensors"`
-	DataVolumes            []string        `json:"dataVolumes"`
-	NetworkInterfaces      []string        `json:"networkInterfaces"`
-	CanManageSystemUsers   bool            `json:"canManageSystemUsers"`
-	RootFilesystemWritable bool            `json:"rootFilesystemWritable"`
-	HostTerminal           bool            `json:"hostTerminal"`
-	Warnings               []ProbeWarning  `json:"warnings"`
+	Hostname               string                 `json:"hostname"`
+	Architecture           string                 `json:"architecture"`
+	OperatingSystem        OperatingSystem        `json:"operatingSystem"`
+	DeviceModel            *string                `json:"deviceModel"`
+	Docker                 bool                   `json:"docker"`
+	DockerAPIVersion       *string                `json:"dockerApiVersion"`
+	Compose                bool                   `json:"compose"`
+	ComposeVersion         *string                `json:"composeVersion"`
+	Systemd                bool                   `json:"systemd"`
+	Journald               bool                   `json:"journald"`
+	CgroupVersion          int                    `json:"cgroupVersion"`
+	ProcReadable           bool                   `json:"procReadable"`
+	SysReadable            bool                   `json:"sysReadable"`
+	Smartctl               bool                   `json:"smartctl"`
+	NvmeCLI                bool                   `json:"nvmeCli"`
+	TemperatureSensors     []string               `json:"temperatureSensors"`
+	DataVolumes            []string               `json:"dataVolumes"`
+	NetworkInterfaces      []string               `json:"networkInterfaces"`
+	CanManageSystemUsers   bool                   `json:"canManageSystemUsers"`
+	RootFilesystemWritable bool                   `json:"rootFilesystemWritable"`
+	HostTerminal           bool                   `json:"hostTerminal"`
+	Tailscale              TailscaleCapability    `json:"tailscale"`
+	Mihomo                 MihomoCapability       `json:"mihomo"`
+	DNS                    DNSCapability          `json:"dns"`
+	PublicEgress           PublicEgressCapability `json:"publicEgress"`
+	Warnings               []ProbeWarning         `json:"warnings"`
 }
 
 type OperatingSystem struct {
@@ -89,7 +94,15 @@ func (p *Probe) Collect(ctx context.Context) (Capabilities, error) {
 		TemperatureSensors: make([]string, 0),
 		DataVolumes:        make([]string, 0),
 		NetworkInterfaces:  make([]string, 0),
-		Warnings:           make([]ProbeWarning, 0),
+		Tailscale: TailscaleCapability{
+			OverlayIPs: make([]string, 0), Evidence: make([]CapabilityEvidence, 0), Warnings: make([]ProbeWarning, 0),
+		},
+		Mihomo: MihomoCapability{
+			Controller: MihomoControllerCapability{Operations: make([]string, 0)},
+			Evidence:   make([]CapabilityEvidence, 0), Warnings: make([]ProbeWarning, 0),
+		},
+		DNS:      DNSCapability{Backend: DNSBackendUnknown, Nameservers: make([]string, 0)},
+		Warnings: make([]ProbeWarning, 0),
 	}
 
 	if hostname, err := p.environment.Hostname(); err == nil {
@@ -146,6 +159,11 @@ func (p *Probe) Collect(ctx context.Context) (Capabilities, error) {
 	} else {
 		addWarning(&capabilities, "PROBE_SOURCE_UNAVAILABLE", "network-interfaces")
 	}
+
+	capabilities.Tailscale = ProbeTailscale(ctx, p.environment, interfaceSnapshots(p.environment))
+	capabilities.Mihomo = ProbeMihomo(ctx, p.environment)
+	capabilities.DNS = ProbeDNS(ctx, p.environment)
+	capabilities.PublicEgress = NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"))
 
 	return capabilities, nil
 }

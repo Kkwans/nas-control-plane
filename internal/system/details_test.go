@@ -25,6 +25,14 @@ func TestDetailsCollectorReturnsStableCollections(t *testing.T) {
 		details.Storage.RAID == nil ||
 		details.Proxy.System == nil ||
 		details.Proxy.Associations == nil ||
+		details.Proxy.Mihomo.Operations == nil ||
+		details.Proxy.MihomoCapability.Evidence == nil ||
+		details.Proxy.MihomoCapability.Warnings == nil ||
+		details.Proxy.MihomoCapability.Controller.Operations == nil ||
+		details.Tailscale.OverlayIPs == nil ||
+		details.Tailscale.Evidence == nil ||
+		details.Tailscale.Warnings == nil ||
+		details.DNS.Nameservers == nil ||
 		details.Control.Nodes == nil {
 		t.Fatal("collection fields must serialize as arrays instead of null")
 	}

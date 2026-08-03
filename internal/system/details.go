@@ -22,14 +22,17 @@ import (
 )
 
 type Details struct {
-	CollectedAt time.Time       `json:"collectedAt"`
-	Warnings    []string        `json:"warnings"`
-	Device      DeviceDetails   `json:"device"`
-	Hardware    HardwareDetails `json:"hardware"`
-	Network     NetworkDetails  `json:"network"`
-	Storage     StorageDetails  `json:"storage"`
-	Proxy       ProxyDetails    `json:"proxy"`
-	Control     ControlDetails  `json:"control"`
+	CollectedAt  time.Time              `json:"collectedAt"`
+	Warnings     []string               `json:"warnings"`
+	Device       DeviceDetails          `json:"device"`
+	Hardware     HardwareDetails        `json:"hardware"`
+	Network      NetworkDetails         `json:"network"`
+	Storage      StorageDetails         `json:"storage"`
+	Proxy        ProxyDetails           `json:"proxy"`
+	Tailscale    TailscaleCapability    `json:"tailscale"`
+	DNS          DNSCapability          `json:"dns"`
+	PublicEgress PublicEgressCapability `json:"publicEgress"`
+	Control      ControlDetails         `json:"control"`
 }
 
 type DeviceDetails struct {
@@ -39,6 +42,7 @@ type DeviceDetails struct {
 	KernelVersion   string `json:"kernelVersion"`
 	Architecture    string `json:"architecture"`
 	UptimeSeconds   uint64 `json:"uptimeSeconds"`
+	ProcessCount    uint64 `json:"processCount"`
 	CgroupVersion   string `json:"cgroupVersion"`
 }
 
@@ -98,10 +102,20 @@ type NetworkRoute struct {
 }
 
 type ListeningPort struct {
-	Protocol string `json:"protocol"`
-	Address  string `json:"address"`
-	Port     uint32 `json:"port"`
-	PID      int32  `json:"pid"`
+	Protocol           string   `json:"protocol"`
+	Address            string   `json:"address"`
+	Port               uint32   `json:"port"`
+	PID                int32    `json:"pid"`
+	ProcessName        string   `json:"processName"`
+	Executable         string   `json:"executable"`
+	SystemdUnit        string   `json:"systemdUnit"`
+	ContainerID        string   `json:"containerId"`
+	ContainerName      string   `json:"containerName"`
+	Service            string   `json:"service"`
+	DetectionSource    string   `json:"detectionSource"`
+	DetectionSources   []string `json:"detectionSources"`
+	DetectionStatus    string   `json:"detectionStatus"`
+	DetectionErrorCode string   `json:"detectionErrorCode"`
 }
 
 type StorageDetails struct {
@@ -137,15 +151,19 @@ type RAIDDetails struct {
 }
 
 type ProxyDetails struct {
-	Mihomo       ProxyService       `json:"mihomo"`
-	System       []ProxyEvidence    `json:"system"`
-	Associations []ProxyAssociation `json:"associations"`
+	Mihomo           ProxyService       `json:"mihomo"`
+	MihomoCapability MihomoCapability   `json:"mihomoCapability"`
+	System           []ProxyEvidence    `json:"system"`
+	Associations     []ProxyAssociation `json:"associations"`
 }
 
 type ProxyService struct {
-	Detected bool   `json:"detected"`
-	State    string `json:"state"`
-	Detail   string `json:"detail"`
+	Detected           bool     `json:"detected"`
+	State              string   `json:"state"`
+	Detail             string   `json:"detail"`
+	ControllerEndpoint string   `json:"controllerEndpoint"`
+	AuthRequired       bool     `json:"authRequired"`
+	Operations         []string `json:"operations"`
 }
 
 type ProxyEvidence struct {
@@ -178,10 +196,21 @@ type ControlNode struct {
 	LastSeen time.Time `json:"lastSeen"`
 }
 
-type DetailsCollector struct{}
+type DetailsCollector struct {
+	environment Environment
+}
 
 func NewDetailsCollector() *DetailsCollector {
-	return &DetailsCollector{}
+	return NewDetailsCollectorWithEnvironment(NewOSEnvironment())
+}
+
+// NewDetailsCollectorWithEnvironment 允许测试替换命令、进程和 DNS 探测源；Environment
+// 的旧接口保持不变，未实现扩展探测的替身会安全降级。
+func NewDetailsCollectorWithEnvironment(environment Environment) *DetailsCollector {
+	if environment == nil {
+		environment = NewOSEnvironment()
+	}
+	return &DetailsCollector{environment: environment}
 }
 
 func (c *DetailsCollector) Collect(ctx context.Context) (Details, error) {
@@ -194,8 +223,11 @@ func (c *DetailsCollector) Collect(ctx context.Context) (Details, error) {
 			Interfaces: []NetworkInterface{}, Routes: []NetworkRoute{},
 			DNSServers: []string{}, ListeningPorts: []ListeningPort{},
 		},
-		Storage: StorageDetails{Mounts: []MountDetails{}, Disks: []PhysicalDiskDetails{}, RAID: []RAIDDetails{}},
-		Proxy:   ProxyDetails{System: []ProxyEvidence{}, Associations: []ProxyAssociation{}},
+		Storage:      StorageDetails{Mounts: []MountDetails{}, Disks: []PhysicalDiskDetails{}, RAID: []RAIDDetails{}},
+		Proxy:        ProxyDetails{System: []ProxyEvidence{}, Associations: []ProxyAssociation{}, MihomoCapability: MihomoCapability{Controller: MihomoControllerCapability{Operations: []string{}}, Evidence: []CapabilityEvidence{}, Warnings: []ProbeWarning{}}},
+		Tailscale:    TailscaleCapability{OverlayIPs: []string{}, Evidence: []CapabilityEvidence{}, Warnings: []ProbeWarning{}},
+		DNS:          DNSCapability{Backend: DNSBackendUnknown, Nameservers: []string{}},
+		PublicEgress: NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT")),
 		Control: ControlDetails{Nodes: []ControlNode{{
 			ID: "agent", Name: "Root Agent", Detail: "宿主机与 Docker Engine 采集端",
 			Status: "ready", LastSeen: now,
@@ -207,8 +239,9 @@ func (c *DetailsCollector) Collect(ctx context.Context) (Details, error) {
 	c.collectDevice(ctx, &result)
 	c.collectHardware(ctx, &result)
 	c.collectNetwork(ctx, &result)
+	c.collectCapabilities(ctx, &result)
 	c.collectStorage(ctx, &result)
-	c.collectProxy(&result)
+	c.collectProxy(ctx, &result)
 	return result, nil
 }
 
@@ -226,6 +259,7 @@ func (c *DetailsCollector) collectDevice(ctx context.Context, result *Details) {
 		KernelVersion:   info.KernelVersion,
 		Architecture:    firstNonEmpty(info.KernelArch, runtime.GOARCH),
 		UptimeSeconds:   info.Uptime,
+		ProcessCount:    info.Procs,
 		CgroupVersion:   detectCgroupVersion(),
 	}
 }
@@ -308,10 +342,12 @@ func (c *DetailsCollector) collectNetwork(ctx context.Context, result *Details) 
 			continue
 		}
 		seen[key] = true
-		result.Network.ListeningPorts = append(result.Network.ListeningPorts, ListeningPort{
+		port := ListeningPort{
 			Protocol: protocol, Address: connection.Laddr.IP,
 			Port: connection.Laddr.Port, PID: connection.Pid,
-		})
+		}
+		enrichListeningPort(&port)
+		result.Network.ListeningPorts = append(result.Network.ListeningPorts, port)
 	}
 	sort.Slice(result.Network.ListeningPorts, func(i, j int) bool {
 		return result.Network.ListeningPorts[i].Port < result.Network.ListeningPorts[j].Port
@@ -344,7 +380,27 @@ func (c *DetailsCollector) collectStorage(ctx context.Context, result *Details) 
 	result.Storage.RAID = collectRAID()
 }
 
-func (c *DetailsCollector) collectProxy(result *Details) {
+func (c *DetailsCollector) collectCapabilities(ctx context.Context, result *Details) {
+	interfaces := make([]InterfaceSnapshot, 0, len(result.Network.Interfaces))
+	for _, item := range result.Network.Interfaces {
+		current := InterfaceSnapshot{Name: item.Name, State: item.State, Addresses: make([]string, 0, len(item.Addresses))}
+		for _, address := range item.Addresses {
+			current.Addresses = append(current.Addresses, address.Address)
+		}
+		interfaces = append(interfaces, current)
+	}
+	if len(interfaces) == 0 {
+		interfaces = interfaceSnapshots(c.environment)
+	}
+	result.Tailscale = ProbeTailscale(ctx, c.environment, interfaces)
+	result.Proxy.MihomoCapability = ProbeMihomo(ctx, c.environment)
+	result.DNS = ProbeDNS(ctx, c.environment)
+	result.Network.DNSServers = append([]string{}, result.DNS.Nameservers...)
+	result.PublicEgress = NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"))
+}
+
+func (c *DetailsCollector) collectProxy(ctx context.Context, result *Details) {
+	_ = ctx
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"} {
 		value := firstNonEmpty(os.Getenv(key), os.Getenv(strings.ToLower(key)))
 		if value == "" {
@@ -364,22 +420,21 @@ func (c *DetailsCollector) collectProxy(result *Details) {
 			})
 		}
 	}
-	processes, _ := filepath.Glob("/proc/[0-9]*/comm")
-	for _, path := range processes {
-		name := strings.ToLower(readTrimmed(path))
-		if name != "mihomo" && name != "clash" && name != "clash-meta" {
-			continue
-		}
-		result.Proxy.Mihomo = ProxyService{Detected: true, State: "running", Detail: "检测到 " + name + " 进程"}
-		result.Proxy.Associations = append(result.Proxy.Associations, ProxyAssociation{
-			Subject: name, Kind: "process", Method: "unknown",
-			Evidence: "confirmed", Detail: "运行中的代理核心进程",
-		})
-		break
-	}
-	if !result.Proxy.Mihomo.Detected {
+	capability := result.Proxy.MihomoCapability
+	if capability.Detected {
 		result.Proxy.Mihomo = ProxyService{
-			Detected: false, State: "not-found", Detail: "未发现运行中的 Mihomo/Clash 进程",
+			Detected: true, State: capability.State, Detail: "检测到 " + firstNonEmpty(capability.ProcessName, "Mihomo") + " 进程",
+			ControllerEndpoint: capability.Controller.Endpoint,
+			AuthRequired:       capability.Controller.AuthRequired,
+			Operations:         append([]string{}, capability.Controller.Operations...),
+		}
+		result.Proxy.Associations = append(result.Proxy.Associations, ProxyAssociation{
+			Subject: firstNonEmpty(capability.ProcessName, "mihomo"), Kind: "process", Method: "unknown",
+			Evidence: "confirmed", Endpoint: capability.Controller.Endpoint, Detail: "运行中的代理核心进程",
+		})
+	} else {
+		result.Proxy.Mihomo = ProxyService{
+			Detected: false, State: "not-found", Detail: "未发现运行中的 Mihomo/Clash 进程", Operations: []string{},
 		}
 	}
 }
