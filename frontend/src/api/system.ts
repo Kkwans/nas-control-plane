@@ -310,6 +310,24 @@ export interface DockerProject {
   runningCount: number
 }
 
+export interface DockerProjectContainerActionResult {
+  containerId: string
+  name: string
+  action: ContainerAction
+  state: string
+  success: boolean
+  errorCode?: string
+}
+
+export interface DockerProjectActionResult {
+  projectId: string
+  kind: DockerProject['kind']
+  action: ContainerAction
+  state: string
+  completed: boolean
+  containers: DockerProjectContainerActionResult[]
+}
+
 export interface DockerInventory {
   collectedAt: string
   engine: {
@@ -424,6 +442,35 @@ export interface JobListResult {
 export interface DockerImageRemoveResult {
   imageId: string
   removed: boolean
+}
+
+export interface DockerImageRemoveBatchItem {
+  imageId: string
+  removed: boolean
+  errorCode?: string
+}
+
+export interface DockerImageRemoveBatchResult {
+  items: DockerImageRemoveBatchItem[]
+  removedCount: number
+  failedCount: number
+  completed: boolean
+}
+
+export interface ComposeLifecycleServiceStatus {
+  name: string
+  containerId?: string
+  state: string
+  running: boolean
+}
+
+export interface ComposeLifecycleResult {
+  projectId: string
+  action: ContainerAction
+  state: string
+  services: ComposeLifecycleServiceStatus[]
+  output: string
+  completed: boolean
 }
 
 export interface DockerHubRepository {
@@ -674,6 +721,47 @@ export async function requestContainerAction(
   )
 }
 
+export async function requestDockerProjectAction(
+  project: Pick<DockerProject, 'id' | 'kind' | 'workingDirectory' | 'configFiles'> & { containerIds?: string[] },
+  action: ContainerAction,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerProjectActionResult | ComposeLifecycleResult> {
+  if (project.kind === 'compose') {
+    return requestJson(
+      `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}/actions/${action}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: project.id,
+          workingDirectory: project.workingDirectory,
+          configFiles: project.configFiles,
+          action,
+        }),
+      },
+      isComposeLifecycleResult,
+      fetcher,
+      'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
+    )
+  }
+  return requestJson(
+    `/api/v1/docker/projects/${encodeURIComponent(project.id)}/actions/${action}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectId: project.id,
+        kind: 'standalone',
+        containerIds: project.containerIds ?? [],
+        action,
+      }),
+    },
+    isDockerProjectActionResult,
+    fetcher,
+    'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
+  )
+}
+
 export async function requestContainerLogs(
   containerId: string,
   tail = 120,
@@ -808,6 +896,23 @@ export async function removeDockerImage(
     isDockerImageRemoveResult,
     fetcher,
     'DOCKER_IMAGE_REMOVE_RESPONSE_INVALID',
+  )
+}
+
+export async function removeDockerImages(
+  imageIds: string[],
+  fetcher: typeof fetch = fetch,
+): Promise<DockerImageRemoveBatchResult> {
+  return requestJson(
+    '/api/v1/docker/images/remove-batch',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageIds }),
+    },
+    isDockerImageRemoveBatchResult,
+    fetcher,
+    'DOCKER_IMAGE_REMOVE_BATCH_RESPONSE_INVALID',
   )
 }
 
