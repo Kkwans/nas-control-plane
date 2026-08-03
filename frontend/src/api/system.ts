@@ -1,14 +1,103 @@
 export interface SystemCapabilities {
   hostname?: string
   architecture: string
+  operatingSystem?: { id: string; versionId: string; prettyName: string }
+  deviceModel?: string | null
   docker: boolean
   compose: boolean
   systemd: boolean
   journald: boolean
   cgroupVersion: number
+  procReadable?: boolean
+  sysReadable?: boolean
+  smartctl?: boolean
+  nvmeCli?: boolean
+  temperatureSensors?: string[]
+  canManageSystemUsers?: boolean
+  rootFilesystemWritable?: boolean
+  hostTerminal?: boolean
+  tailscale?: TailscaleCapability
+  mihomo?: MihomoCapability
+  dns?: DNSCapability
+  publicEgress?: PublicEgressCapability
+  warnings?: Array<{ code: string; source: string }>
   dataVolumes?: string[]
   networkInterfaces?: string[]
   [key: string]: unknown
+}
+
+export interface CapabilityEvidence {
+  source: string
+  status: string
+  detail: string
+}
+
+export interface TailscaleCapability {
+  detected: boolean
+  state: string
+  backendState: string
+  version: string
+  interface: string
+  overlayIps: string[]
+  online: boolean
+  linkState: string
+  heartbeatState: string
+  reachable: boolean
+  evidence: CapabilityEvidence[]
+  warnings: Array<{ code: string; source: string }>
+}
+
+export interface MihomoCapability {
+  detected: boolean
+  state: string
+  processName: string
+  executable: string
+  version: string
+  controller: {
+    detected: boolean
+    endpoint: string
+    reachable: boolean
+    authRequired: boolean
+    tokenConfigured: boolean
+    operations: string[]
+    detectionSource: string
+  }
+  evidence: CapabilityEvidence[]
+  warnings: Array<{ code: string; source: string }>
+}
+
+export interface DNSCapability {
+  backend: string
+  detected: boolean
+  state: string
+  readOnly: boolean
+  canRead: boolean
+  canPreview: boolean
+  canConfirm: boolean
+  canRollback: boolean
+  nameservers: string[]
+  detectionSource: string
+  errorCode: string
+}
+
+export interface PublicEgressCapability {
+  configured: boolean
+  status: string
+  endpoint: string
+  requiresUserAction: boolean
+  detectionSource: string
+  errorCode: string
+}
+
+export interface PublicEgressResult {
+  status: string
+  address: string
+  country?: string
+  region?: string
+  isp?: string
+  checkedAt: string
+  detectionSource: string
+  errorCode: string
 }
 
 export interface RootUser {
@@ -85,6 +174,7 @@ export interface SystemDetails {
     kernelVersion: string
     architecture: string
     uptimeSeconds: number
+    processCount: number
     cgroupVersion: string
   }
   hardware: {
@@ -131,6 +221,16 @@ export interface SystemDetails {
       address: string
       port: number
       pid: number
+      processName?: string
+      executable?: string
+      systemdUnit?: string
+      containerId?: string
+      containerName?: string
+      service?: string
+      detectionSource?: string
+      detectionSources?: string[]
+      detectionStatus?: string
+      detectionErrorCode?: string
     }>
   }
   storage: {
@@ -163,7 +263,11 @@ export interface SystemDetails {
       detected: boolean
       state: string
       detail: string
+      controllerEndpoint?: string
+      authRequired?: boolean
+      operations?: string[]
     }
+    mihomoCapability?: MihomoCapability
     system: Array<{
       source: string
       method: string
@@ -180,6 +284,9 @@ export interface SystemDetails {
       detail: string
     }>
   }
+  tailscale?: TailscaleCapability
+  dns?: DNSCapability
+  publicEgress?: PublicEgressCapability
   control: {
     nodes: Array<{
       id: string
@@ -449,6 +556,73 @@ export async function requestSystemSummary(fetcher: typeof fetch = fetch): Promi
 
 export async function requestSystemDetails(fetcher: typeof fetch = fetch): Promise<SystemDetails> {
   return requestJson('/api/v1/system/details', {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+}
+
+export async function requestDNSCapability(fetcher: typeof fetch = fetch): Promise<DNSCapability> {
+  return requestJson('/api/v1/system/dns/capability', {}, isDNSCapability, fetcher, 'SYSTEM_DNS_RESPONSE_INVALID')
+}
+
+export interface DNSChangeRequest {
+  interface?: string
+  connectionId?: string
+  nameservers: string[]
+  searchDomains?: string[]
+}
+
+export interface DNSChangePreview {
+  previewId: string
+  backend: string
+  before: { interface: string; connectionId: string; nameservers: string[]; searchDomains: string[] }
+  after: { interface: string; connectionId: string; nameservers: string[]; searchDomains: string[] }
+  requiresConfirm: boolean
+  rollbackAvailable: boolean
+  expiresAt: string
+  errorCode: string
+}
+
+export interface DNSChangeConfirmation {
+  previewId: string
+  confirmed: boolean
+}
+
+export interface DNSChangeResult {
+  changeId: string
+  backend: string
+  applied: boolean
+  rollbackAvailable: boolean
+  appliedAt: string
+  errorCode: string
+}
+
+export async function previewDNSChange(input: DNSChangeRequest, fetcher: typeof fetch = fetch): Promise<DNSChangePreview> {
+  return requestJson('/api/v1/system/dns/preview', jsonRequest(input), isDNSChangePreview, fetcher, 'SYSTEM_DNS_PREVIEW_RESPONSE_INVALID')
+}
+
+export async function confirmDNSChange(input: DNSChangeConfirmation, fetcher: typeof fetch = fetch): Promise<DNSChangeResult> {
+  return requestJson('/api/v1/system/dns/confirm', jsonRequest(input), isDNSChangeResult, fetcher, 'SYSTEM_DNS_CONFIRM_RESPONSE_INVALID')
+}
+
+export async function rollbackDNSChange(changeId: string, fetcher: typeof fetch = fetch): Promise<DNSChangeResult> {
+  return requestJson('/api/v1/system/dns/rollback', jsonRequest({ changeId }), isDNSChangeResult, fetcher, 'SYSTEM_DNS_ROLLBACK_RESPONSE_INVALID')
+}
+
+export async function requestMihomoCapability(fetcher: typeof fetch = fetch): Promise<MihomoCapability> {
+  return requestJson('/api/v1/proxy/mihomo/capability', {}, isMihomoCapability, fetcher, 'PROXY_MIHOMO_RESPONSE_INVALID')
+}
+
+export async function invokeMihomo(
+  input: { operation: string; group?: string; proxy?: string },
+  fetcher: typeof fetch = fetch,
+): Promise<{ operation: string; statusCode: number; data: unknown }> {
+  return requestJson('/api/v1/proxy/mihomo/invoke', jsonRequest(input), isMihomoInvokeResult, fetcher, 'PROXY_MIHOMO_RESPONSE_INVALID')
+}
+
+export async function requestPublicEgressCapability(fetcher: typeof fetch = fetch): Promise<PublicEgressCapability> {
+  return requestJson('/api/v1/system/public-egress/capability', {}, isPublicEgressCapability, fetcher, 'PUBLIC_EGRESS_RESPONSE_INVALID')
+}
+
+export async function detectPublicEgress(fetcher: typeof fetch = fetch): Promise<PublicEgressResult> {
+  return requestJson('/api/v1/system/public-egress/detect', { method: 'POST' }, isPublicEgressResult, fetcher, 'PUBLIC_EGRESS_RESPONSE_INVALID')
 }
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {
@@ -794,6 +968,14 @@ function requestOptions(init: RequestInit): RequestInit {
   }
 }
 
+function jsonRequest(body: unknown): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }
+}
+
 async function responseError(response: Response): Promise<NcpApiError> {
   try {
     const payload = await response.json()
@@ -808,6 +990,202 @@ async function responseError(response: Response): Promise<NcpApiError> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isCapabilityEvidence(value: unknown): value is CapabilityEvidence {
+  return isRecord(value) && typeof value.source === 'string' && typeof value.status === 'string' && typeof value.detail === 'string'
+}
+
+function isDNSCapability(value: unknown): value is DNSCapability {
+  return (
+    isRecord(value) &&
+    typeof value.backend === 'string' &&
+    typeof value.detected === 'boolean' &&
+    typeof value.state === 'string' &&
+    typeof value.readOnly === 'boolean' &&
+    typeof value.canRead === 'boolean' &&
+    typeof value.canPreview === 'boolean' &&
+    typeof value.canConfirm === 'boolean' &&
+    typeof value.canRollback === 'boolean' &&
+    isStringArray(value.nameservers) &&
+    typeof value.detectionSource === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isDNSChangeEndpoint(value: unknown): value is DNSChangePreview['before'] {
+  return (
+    isRecord(value) &&
+    typeof value.interface === 'string' &&
+    typeof value.connectionId === 'string' &&
+    isStringArray(value.nameservers) &&
+    isStringArray(value.searchDomains)
+  )
+}
+
+function isDNSChangePreview(value: unknown): value is DNSChangePreview {
+  return (
+    isRecord(value) &&
+    typeof value.previewId === 'string' &&
+    typeof value.backend === 'string' &&
+    isDNSChangeEndpoint(value.before) &&
+    isDNSChangeEndpoint(value.after) &&
+    typeof value.requiresConfirm === 'boolean' &&
+    typeof value.rollbackAvailable === 'boolean' &&
+    typeof value.expiresAt === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isDNSChangeResult(value: unknown): value is DNSChangeResult {
+  return (
+    isRecord(value) &&
+    typeof value.changeId === 'string' &&
+    typeof value.backend === 'string' &&
+    typeof value.applied === 'boolean' &&
+    typeof value.rollbackAvailable === 'boolean' &&
+    typeof value.appliedAt === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isTailscaleCapability(value: unknown): value is TailscaleCapability {
+  return (
+    isRecord(value) &&
+    typeof value.detected === 'boolean' &&
+    typeof value.state === 'string' &&
+    typeof value.backendState === 'string' &&
+    typeof value.version === 'string' &&
+    typeof value.interface === 'string' &&
+    isStringArray(value.overlayIps) &&
+    typeof value.online === 'boolean' &&
+    typeof value.linkState === 'string' &&
+    typeof value.heartbeatState === 'string' &&
+    typeof value.reachable === 'boolean' &&
+    Array.isArray(value.evidence) && value.evidence.every(isCapabilityEvidence) &&
+    Array.isArray(value.warnings)
+  )
+}
+
+function isMihomoCapability(value: unknown): value is MihomoCapability {
+  if (
+    !isRecord(value) ||
+    typeof value.detected !== 'boolean' ||
+    typeof value.state !== 'string' ||
+    typeof value.processName !== 'string' ||
+    typeof value.executable !== 'string' ||
+    typeof value.version !== 'string' ||
+    !isRecord(value.controller) ||
+    !Array.isArray(value.evidence) ||
+    !value.evidence.every(isCapabilityEvidence) ||
+    !Array.isArray(value.warnings)
+  ) return false
+  return (
+    typeof value.controller.detected === 'boolean' &&
+    typeof value.controller.endpoint === 'string' &&
+    typeof value.controller.reachable === 'boolean' &&
+    typeof value.controller.authRequired === 'boolean' &&
+    typeof value.controller.tokenConfigured === 'boolean' &&
+    isStringArray(value.controller.operations) &&
+    typeof value.controller.detectionSource === 'string'
+  )
+}
+
+function isMihomoInvokeResult(value: unknown): value is { operation: string; statusCode: number; data: unknown } {
+  return isRecord(value) && typeof value.operation === 'string' && typeof value.statusCode === 'number' && 'data' in value
+}
+
+function isPublicEgressCapability(value: unknown): value is PublicEgressCapability {
+  return (
+    isRecord(value) &&
+    typeof value.configured === 'boolean' &&
+    typeof value.status === 'string' &&
+    typeof value.endpoint === 'string' &&
+    typeof value.requiresUserAction === 'boolean' &&
+    typeof value.detectionSource === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isPublicEgressResult(value: unknown): value is PublicEgressResult {
+  return (
+    isRecord(value) &&
+    typeof value.status === 'string' &&
+    typeof value.address === 'string' &&
+    (value.country === undefined || typeof value.country === 'string') &&
+    (value.region === undefined || typeof value.region === 'string') &&
+    (value.isp === undefined || typeof value.isp === 'string') &&
+    typeof value.checkedAt === 'string' &&
+    typeof value.detectionSource === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isContainerAction(value: unknown): value is ContainerAction {
+  return value === 'start' || value === 'stop' || value === 'restart'
+}
+
+function isDockerProjectActionResult(value: unknown): value is DockerProjectActionResult {
+  return (
+    isRecord(value) &&
+    typeof value.projectId === 'string' &&
+    (value.kind === 'standalone' || value.kind === 'compose') &&
+    isContainerAction(value.action) &&
+    typeof value.state === 'string' &&
+    typeof value.completed === 'boolean' &&
+    Array.isArray(value.containers) &&
+    value.containers.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.containerId === 'string' &&
+        typeof item.name === 'string' &&
+        isContainerAction(item.action) &&
+        typeof item.state === 'string' &&
+        typeof item.success === 'boolean' &&
+        (item.errorCode === undefined || typeof item.errorCode === 'string'),
+    )
+  )
+}
+
+function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResult {
+  return (
+    isRecord(value) &&
+    typeof value.projectId === 'string' &&
+    isContainerAction(value.action) &&
+    typeof value.state === 'string' &&
+    typeof value.output === 'string' &&
+    typeof value.completed === 'boolean' &&
+    Array.isArray(value.services) &&
+    value.services.every(
+      (service) =>
+        isRecord(service) &&
+        typeof service.name === 'string' &&
+        (service.containerId === undefined || typeof service.containerId === 'string') &&
+        typeof service.state === 'string' &&
+        typeof service.running === 'boolean',
+    )
+  )
+}
+
+function isDockerImageRemoveBatchResult(value: unknown): value is DockerImageRemoveBatchResult {
+  return (
+    isRecord(value) &&
+    typeof value.removedCount === 'number' &&
+    typeof value.failedCount === 'number' &&
+    typeof value.completed === 'boolean' &&
+    Array.isArray(value.items) &&
+    value.items.every(
+      (item) =>
+        isRecord(item) &&
+        typeof item.imageId === 'string' &&
+        typeof item.removed === 'boolean' &&
+        (item.errorCode === undefined || typeof item.errorCode === 'string'),
+    )
+  )
 }
 
 function isApiErrorResponse(value: unknown): value is ApiErrorResponse {
@@ -841,7 +1219,11 @@ function isSystemCapabilities(value: unknown): value is SystemCapabilities {
     isRecord(value) &&
     typeof value.architecture === 'string' &&
     typeof value.docker === 'boolean' &&
-    typeof value.cgroupVersion === 'number'
+    typeof value.cgroupVersion === 'number' &&
+    (value.tailscale === undefined || isTailscaleCapability(value.tailscale)) &&
+    (value.mihomo === undefined || isMihomoCapability(value.mihomo)) &&
+    (value.dns === undefined || isDNSCapability(value.dns)) &&
+    (value.publicEgress === undefined || isPublicEgressCapability(value.publicEgress))
   )
 }
 

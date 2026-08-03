@@ -21,7 +21,18 @@ import {
 } from '@lucide/vue'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
-import { requestSystemDetails, type SystemDetails } from '@/api/system'
+import {
+  confirmDNSChange,
+  detectPublicEgress,
+  previewDNSChange,
+  requestSystemDetails,
+  rollbackDNSChange,
+  type DNSCapability,
+  type DNSChangePreview,
+  type PublicEgressResult,
+  type SystemDetails,
+  type TailscaleCapability,
+} from '@/api/system'
 import { useSystemStore } from '@/stores/system'
 
 type DetailTab = 'overview' | 'network' | 'storage' | 'services'
@@ -31,6 +42,27 @@ const details = ref<SystemDetails | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const activeTab = ref<DetailTab>('overview')
+const dnsDraft = ref('')
+const dnsPreview = ref<DNSChangePreview | null>(null)
+const dnsChangeId = ref('')
+const dnsMessage = ref('')
+const publicEgressResult = ref<PublicEgressResult | null>(null)
+const publicEgressMessage = ref('')
+
+const dnsDetails = computed<DNSCapability>(() => details.value?.dns ?? {
+  backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
+  canPreview: false, canConfirm: false, canRollback: false, nameservers: [],
+  detectionSource: '', errorCode: '',
+})
+const tailscaleDetails = computed<TailscaleCapability>(() => details.value?.tailscale ?? {
+  detected: false, state: 'not-found', backendState: 'unknown', version: '', interface: '',
+  overlayIps: [], online: false, linkState: 'unknown', heartbeatState: 'unknown', reachable: false,
+  evidence: [], warnings: [],
+})
+const publicEgressDetails = computed(() => details.value?.publicEgress ?? {
+  configured: false, status: 'unavailable', endpoint: '', requiresUserAction: true,
+  detectionSource: '', errorCode: 'PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED',
+})
 
 const tabs: Array<{ id: DetailTab; label: string; icon: typeof Server }> = [
   { id: 'overview', label: '设备概览', icon: Server },
@@ -61,23 +93,27 @@ const volumeUsedPercent = computed(() => volumeTotalBytes.value ? volumeUsedByte
 const physicalDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !/^(loop|zram|mmcblk\d+boot)/i.test(item.name)))
 const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !physicalDisks.value.some((disk) => disk.name === item.name)))
 const listeningPortGroups = computed(() => {
-  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[] }>()
+  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; services: Array<{ label: string; detail: string }> }>()
   for (const item of details.value?.network.listeningPorts ?? []) {
     const key = `${item.protocol}:${item.port}`
-    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [] }
+    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], services: [] }
     if (item.address && !group.addresses.includes(item.address)) group.addresses.push(item.address)
     if (item.pid && !group.pids.includes(item.pid)) group.pids.push(item.pid)
+    const label = item.service || item.containerName || item.systemdUnit || item.processName || item.executable
+    const detail = [item.containerName, item.systemdUnit, item.processName, item.executable]
+      .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index && value !== label)
+      .join(' · ')
+    if (label && !group.services.some((service) => service.label === label)) group.services.push({ label, detail })
     groups.set(key, group)
   }
   return [...groups.values()].sort((left, right) => left.port - right.port)
 })
-const proxyEvidenceCount = computed(() => (details.value?.proxy.system.length ?? 0) + (details.value?.proxy.associations.length ?? 0))
 
 const capabilityItems = computed(() => [
   { name: 'Docker Engine', enabled: Boolean(systemStore.capabilities?.docker), detail: systemStore.inventory?.engine.serverVersion ? `版本 ${systemStore.inventory.engine.serverVersion}` : '等待检测', icon: Boxes, type: 'docker' },
   { name: 'Docker Compose', enabled: Boolean(systemStore.capabilities?.compose), detail: `已发现 ${systemStore.services.length} 个项目`, icon: Database, type: 'database' },
   { name: 'systemd', enabled: Boolean(systemStore.capabilities?.systemd), detail: '宿主机服务管理', icon: Server, type: 'system' },
-  { name: 'journald', enabled: Boolean(systemStore.capabilities?.journald), detail: '系统与服务日志', icon: Activity, type: 'system' },
+  { name: '系统日志服务（journald）', enabled: Boolean(systemStore.capabilities?.journald), detail: 'Linux 系统与服务日志', icon: Activity, type: 'system' },
   { name: '数据卷', enabled: Boolean(systemStore.capabilities?.dataVolumes?.length), detail: systemStore.capabilities?.dataVolumes?.join('、') || '未发现', icon: HardDrive, type: 'storage' },
   { name: '网络接口', enabled: Boolean(systemStore.capabilities?.networkInterfaces?.length), detail: `${systemStore.capabilities?.networkInterfaces?.length ?? 0} 个接口`, icon: Network, type: 'network' },
 ])
@@ -87,10 +123,74 @@ async function loadDetails() {
   errorMessage.value = ''
   try {
     details.value = await requestSystemDetails()
+    dnsDraft.value = dnsDetails.value.nameservers.join(', ')
+    dnsPreview.value = null
+    dnsChangeId.value = ''
+    dnsMessage.value = ''
+    publicEgressResult.value = null
+    publicEgressMessage.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '系统详情暂不可用'
   } finally {
     loading.value = false
+  }
+}
+
+function dnsServersFromDraft() {
+  return [...new Set(dnsDraft.value.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean))]
+}
+
+async function previewDNS() {
+  if (!dnsDetails.value.canPreview || dnsDetails.value.readOnly) return
+  const nameservers = dnsServersFromDraft()
+  if (!nameservers.length) {
+    dnsMessage.value = '至少填写一个 DNS 地址。'
+    return
+  }
+  dnsMessage.value = ''
+  try {
+    dnsPreview.value = await previewDNSChange({ nameservers })
+    dnsMessage.value = dnsPreview.value.requiresConfirm ? '预览已生成，确认后才会应用。' : '当前后端不要求二次确认。'
+  } catch (error) {
+    dnsMessage.value = error instanceof Error ? error.message : 'DNS 预览失败。'
+  }
+}
+
+async function confirmDNS() {
+  if (!dnsPreview.value) return
+  try {
+    const result = await confirmDNSChange({ previewId: dnsPreview.value.previewId, confirmed: true })
+    const rollbackId = result.applied && result.rollbackAvailable ? result.changeId : ''
+    await loadDetails()
+    dnsChangeId.value = rollbackId
+    dnsMessage.value = result.applied ? 'DNS 已应用。' : `DNS 未应用（${result.errorCode || '未知原因'}）。`
+  } catch (error) {
+    dnsMessage.value = error instanceof Error ? error.message : 'DNS 应用失败。'
+  }
+}
+
+async function rollbackDNS() {
+  if (!dnsChangeId.value) return
+  try {
+    const result = await rollbackDNSChange(dnsChangeId.value)
+    await loadDetails()
+    dnsMessage.value = result.applied ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
+  } catch (error) {
+    dnsMessage.value = error instanceof Error ? error.message : 'DNS 回滚失败。'
+  }
+}
+
+async function checkPublicEgress() {
+  if (!publicEgressDetails.value.configured) {
+    publicEgressMessage.value = '未配置公网出口探针；不会把 Tailscale Overlay IP 当作公网 IP。'
+    return
+  }
+  publicEgressMessage.value = ''
+  try {
+    publicEgressResult.value = await detectPublicEgress()
+    if (publicEgressResult.value.errorCode) publicEgressMessage.value = publicEgressResult.value.errorCode
+  } catch (error) {
+    publicEgressMessage.value = error instanceof Error ? error.message : '公网出口检测失败。'
   }
 }
 
@@ -119,7 +219,7 @@ function formatTemperature(value: number) {
 }
 
 function isVirtualInterface(name: string) {
-  return /^(br-|docker|veth|virbr|tun|tap)/i.test(name)
+  return /^(br-|docker|veth|virbr|tun|tap|tailscale)/i.test(name)
 }
 
 function interfaceAddress(item: SystemDetails['network']['interfaces'][number]) {
@@ -128,6 +228,7 @@ function interfaceAddress(item: SystemDetails['network']['interfaces'][number]) 
 
 function interfaceKind(name: string) {
   if (/^(br-|docker|veth)/i.test(name)) return 'Docker 虚拟接口'
+  if (/^tailscale/i.test(name)) return 'Tailscale Overlay 接口'
   if (/^(tun|tap)/i.test(name)) return '代理虚拟接口'
   if (name === 'lo') return '本机回环'
   return '主机网络接口'
@@ -147,14 +248,6 @@ function formatTime(value: string) {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
-}
-
-function evidenceLabel(value: string) {
-  return (({ confirmed: '已确认', inferred: '推断', unknown: '未知' } as Record<string, string>)[value] ?? value) || '未知'
-}
-
-function methodLabel(value: string) {
-  return (({ http: 'HTTP', socks: 'SOCKS', tun: 'TUN', transparent: '透明代理', unknown: '未知' } as Record<string, string>)[value] ?? value) || '未知'
 }
 
 onMounted(loadDetails)
@@ -220,7 +313,8 @@ onMounted(loadDetails)
           <div><span>内核版本</span><strong>{{ details.device.kernelVersion || '不可用' }}</strong></div>
           <div><span>系统架构</span><strong>{{ details.device.architecture || '不可用' }}</strong></div>
           <div><span>运行时间</span><strong>{{ formatDuration(details.device.uptimeSeconds) }}</strong></div>
-          <div><span>cgroup</span><strong>{{ details.device.cgroupVersion || '不可用' }}</strong></div>
+          <div><span>运行进程</span><strong>{{ details.device.processCount.toLocaleString('zh-CN') }}</strong></div>
+          <div class="overview-fact--cgroup"><span>资源隔离（cgroup）</span><strong>{{ details.device.cgroupVersion || '不可用' }}</strong><small>Linux 控制组版本，用于统计与限制进程资源</small></div>
         </article>
 
         <article class="panel overview-section overview-section--processor">
@@ -282,6 +376,17 @@ onMounted(loadDetails)
             <div><dt>路由数量</dt><dd>{{ details.network.routes.length }}</dd></div>
             <div><dt>默认出口</dt><dd>{{ details.network.routes.find((route) => route.destination === '0.0.0.0/0')?.interface || '未识别' }}</dd></div>
           </dl>
+          <div class="dns-management">
+            <div class="dns-management__state">
+              <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
+              <small>{{ dnsDetails.readOnly ? '当前使用静态 /etc/resolv.conf，NCP 不会直接覆盖它。' : dnsDetails.detectionSource || 'DNS 能力未报告' }}</small>
+            </div>
+            <template v-if="dnsDetails.canPreview && dnsDetails.canConfirm && !dnsDetails.readOnly">
+              <label class="dns-management__input"><span>DNS 服务器</span><input v-model="dnsDraft" type="text" placeholder="例如 223.5.5.5, 1.1.1.1" /></label>
+              <div class="dns-management__actions"><button type="button" class="text-button" @click="previewDNS">预览修改</button><button v-if="dnsPreview" type="button" class="text-button text-button--primary" @click="confirmDNS">确认应用</button><button v-if="dnsChangeId" type="button" class="text-button" @click="rollbackDNS">回滚</button></div>
+            </template>
+            <small v-if="dnsMessage" class="dns-management__message" role="status">{{ dnsMessage }}</small>
+          </div>
         </article>
 
         <article class="panel detail-card">
@@ -290,32 +395,34 @@ onMounted(loadDetails)
             <span :class="{ active: details.proxy.mihomo.detected }"><i></i>{{ proxyStateLabel(details.proxy.mihomo.state, details.proxy.mihomo.detected) }}</span>
             <strong>{{ details.proxy.mihomo.detected ? 'Mihomo / Clash' : '未发现 Mihomo / Clash' }}</strong>
             <p>{{ details.proxy.mihomo.detail || '当前未取得更多服务信息' }}</p>
-            <small>{{ proxyEvidenceCount }} 条关联证据，展开下方明细可查看来源</small>
+            <div class="proxy-facts">
+              <div><small>Tailscale Overlay</small><strong>{{ tailscaleDetails.reachable ? '已连接' : tailscaleDetails.detected ? '已发现，链路未确认' : '未发现' }}</strong><code>{{ tailscaleDetails.overlayIps.join('、') || '无 Overlay IP' }}</code></div>
+              <div><small>公网出口</small><strong>{{ publicEgressResult?.address || (publicEgressDetails.configured ? '待手动检测' : '未配置探针') }}</strong><code>{{ publicEgressResult?.country || publicEgressResult?.region || '不把 Tailscale IP 当公网 IP' }}</code></div>
+            </div>
+            <small>{{ details.proxy.mihomoCapability?.controller.operations?.length ? `已开放：${details.proxy.mihomoCapability.controller.operations.join('、')}` : '当前只提供进程与控制器状态；域名、进程和容器分流规则未开放。' }}</small>
+            <button v-if="publicEgressDetails.configured" type="button" class="text-button text-button--primary" @click="checkPublicEgress">检测公网出口</button>
+            <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
           </div>
         </article>
 
-        <details class="panel evidence-disclosure network-layout__full">
-          <summary><span class="evidence-disclosure__title"><ShieldCheck :size="19" /><span><strong>代理关联证据</strong><small>不会通过抓包或 eBPF 推断流量关系</small></span></span><span>{{ proxyEvidenceCount }} 条</span></summary>
-          <div v-if="details.proxy.system.length || details.proxy.associations.length" class="evidence-table">
-            <div class="evidence-table__header"><span>来源 / 对象</span><span>方式</span><span>证据</span><span>端点与说明</span></div>
-            <div v-for="item in details.proxy.system" :key="`${item.source}-${item.address}`">
-              <strong>{{ item.source }}<small>{{ item.detail }}</small></strong><span>{{ methodLabel(item.method) }}</span><span :class="`evidence-${item.evidence}`">{{ evidenceLabel(item.evidence) }}</span><code>{{ item.address || '—' }}</code>
-            </div>
-            <div v-for="item in details.proxy.associations" :key="`${item.subject}-${item.endpoint}`">
-              <strong>{{ item.subject }}<small>{{ item.kind }}</small></strong><span>{{ methodLabel(item.method) }}</span><span :class="`evidence-${item.evidence}`">{{ evidenceLabel(item.evidence) }}</span><code>{{ item.endpoint || item.detail || '—' }}</code>
-            </div>
+        <article class="panel detail-card proxy-rules-card network-layout__full">
+          <header class="detail-card__header type-site"><ShieldCheck :size="20" /><div><h2>代理分流能力</h2><p>只在控制器真实开放对应 API 时提供管理入口</p></div></header>
+          <div class="proxy-rules-grid">
+            <div><strong>域名规则</strong><span>未开放</span><small>当前 Agent 不读取或修改 Mihomo 配置文件。</small></div>
+            <div><strong>应用进程规则</strong><span>未开放</span><small>没有可靠的进程级流量归属接口，不显示猜测结果。</small></div>
+            <div><strong>Docker 容器规则</strong><span>未开放</span><small>容器网络命名空间与控制器规则尚未建立安全映射。</small></div>
           </div>
-          <div v-else class="inline-empty">未发现系统代理、TUN 网卡或服务代理关联。</div>
-        </details>
+          <p class="proxy-rules-note">可用的控制器操作：{{ details.proxy.mihomoCapability?.controller.operations?.join('、') || '无' }}。后续只有完成能力探测、规则校验和回滚设计后，才会开放修改。</p>
+        </article>
 
         <details class="panel network-details ports-disclosure network-layout__full">
           <summary>
             <span class="ports-disclosure__title"><Gauge :size="19" /><span><strong>监听服务</strong><small>按端口合并显示，仅在需要排查入口时展开</small></span></span>
             <span>{{ listeningPortGroups.length }} 个端口</span>
           </summary>
-          <div v-if="listeningPortGroups.length" class="port-grid">
+            <div v-if="listeningPortGroups.length" class="port-grid">
             <span v-for="item in listeningPortGroups" :key="`${item.protocol}-${item.port}`">
-              <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-if="item.pids.length">PID {{ item.pids.join('、') }}</em>
+              <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-if="item.services.length" :title="item.services.map((service) => service.detail ? `${service.label} · ${service.detail}` : service.label).join('、')">应用 {{ item.services.map((service) => service.label).join('、') }}</em><em v-else-if="item.pids.length">PID {{ item.pids.join('、') }}</em>
             </span>
           </div>
           <div v-else class="inline-empty">未取得监听服务信息。</div>
@@ -404,5 +511,7 @@ onMounted(loadDetails)
 @media(max-width:1050px){.overview-section--processor,.overview-section--resources{grid-column:1/-1}.network-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.storage-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.primary-interface-row{grid-template-columns:118px minmax(140px,1fr) minmax(150px,1fr)}.primary-interface-row>div:last-child{grid-column:2/-1}.port-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){.system-tabs-toolbar{align-items:stretch;flex-direction:column;gap:9px}.system-tabs-toolbar .detail-tabs{width:100%;flex:none}.collection-meta{justify-content:space-between}.overview-section--processor,.overview-section--resources{grid-column:1/-1}.network-summary-grid,.storage-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.primary-interface-list{padding-inline:15px}.primary-interface-row{grid-template-columns:1fr 1fr;gap:9px;padding-block:12px}.primary-interface-row__status{grid-column:1/-1}.primary-interface-row>div:last-child{grid-column:auto}.network-detail-row{grid-template-columns:minmax(0,1fr) auto}.network-detail-row>span:nth-child(3){display:none}.network-detail-row code{grid-column:1/-1}.volume-list,.disk-list{padding-inline:15px}.volume-row{grid-template-columns:1fr;gap:8px;padding-block:12px}.volume-row__usage{grid-template-columns:minmax(100px,1fr) auto}.volume-row__usage .meter{grid-column:1/-1}.disk-row{grid-template-columns:30px minmax(0,1fr) auto}.disk-health{grid-column:2/-1}.port-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding-inline:15px}.evidence-disclosure>summary{padding-inline:15px}.evidence-table>div{padding-inline:15px}}
 @media(max-width:520px){.collection-time{display:inline-flex;font-size:.7rem}.collection-meta{width:100%}.collection-meta .system-refresh{min-width:76px}.processor-facts{grid-template-columns:1fr}.resource-summary{grid-template-columns:1fr}.network-summary-grid,.storage-summary-grid{grid-template-columns:1fr}.network-summary-card,.storage-summary-card{padding:13px}.network-details summary,.storage-details summary{padding-inline:15px}.network-detail-row{padding-inline:15px}.port-grid{grid-template-columns:1fr}.storage-details__list>div{grid-template-columns:1fr auto;padding-inline:15px}.storage-details__list>div span:last-child{grid-column:2;grid-row:1}.disk-row__size{font-size:.7rem}}
-.ports-disclosure{overflow:hidden}.ports-disclosure>summary{min-height:76px;background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet))}.ports-disclosure__title{display:flex!important;align-items:center;gap:10px;margin-left:0!important}.ports-disclosure__title>svg{box-sizing:content-box;padding:9px;border-radius:11px;background:var(--ncp-object-network-soft);color:var(--ncp-object-network)}.ports-disclosure__title>span{display:grid;gap:2px}.ports-disclosure__title strong{color:var(--ncp-text);font-size:.9rem}.ports-disclosure__title small{color:var(--ncp-text-subtle);font-size:.72rem;font-weight:500}
+.ports-disclosure{overflow:hidden}.ports-disclosure>summary{min-height:76px;background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet))}.ports-disclosure__title{display:flex!important;align-items:center;gap:10px;margin-left:0!important}.ports-disclosure__title>svg{box-sizing:content-box;padding:9px;border-radius:11px;background:var(--ncp-object-network-soft);color:var(--ncp-object-network)}.ports-disclosure__title>span{display:grid;gap:2px}.ports-disclosure__title strong{color:var(--ncp-text);font-size:.9rem}.ports-disclosure__title small{color:var(--ncp-text-subtle);font-size:.72rem;font-weight:500}.overview-fact--cgroup small{margin-top:4px;color:var(--ncp-text-subtle);font-size:.66rem;line-height:1.35}
+.dns-management{display:grid;gap:10px;padding:0 18px 18px;border-top:1px solid var(--ncp-line)}.dns-management__state{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:14px}.dns-management__state small,.dns-management__message{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input{display:grid;gap:5px}.dns-management__input span{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input input{min-height:36px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text);font:inherit;font-size:.76rem;outline:none}.dns-management__input input:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}.dns-management__actions{display:flex;flex-wrap:wrap;gap:7px}.text-button{min-height:32px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.72rem;font-weight:700;cursor:pointer}.text-button:hover,.text-button:focus-visible{border-color:var(--ncp-primary-border);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);outline:none}.text-button--primary{border-color:var(--ncp-primary);background:var(--ncp-primary);color:#fff}.text-button--primary:hover,.text-button--primary:focus-visible{background:var(--ncp-primary-strong);color:#fff}.proxy-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.proxy-facts>div{display:grid;min-width:0;gap:3px;padding:10px;border:1px solid var(--ncp-line);border-radius:9px;background:var(--ncp-surface-quiet)}.proxy-facts small{color:var(--ncp-text-subtle);font-size:.68rem}.proxy-facts strong{overflow:hidden;font-family:var(--ncp-font-latin);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.proxy-facts code{overflow:hidden;color:var(--ncp-text-muted);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.proxy-message{color:var(--ncp-warning-strong);font-size:.7rem}.proxy-rules-card{overflow:hidden}.proxy-rules-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 18px}.proxy-rules-grid>div{display:grid;gap:4px;padding:13px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-rules-grid strong{font-size:.78rem}.proxy-rules-grid span{width:max-content;padding:3px 6px;border-radius:5px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.68rem;font-weight:700}.proxy-rules-grid small,.proxy-rules-note{color:var(--ncp-text-subtle);font-size:.7rem;line-height:1.45}.proxy-rules-note{margin:0;padding:0 18px 17px}
+@media(max-width:760px){.dns-management__state{align-items:flex-start;flex-direction:column;gap:5px}.proxy-facts,.proxy-rules-grid{grid-template-columns:1fr}}
 </style>

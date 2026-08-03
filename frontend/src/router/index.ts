@@ -30,7 +30,7 @@ const router = createRouter({
       path: '/system',
       name: 'system',
       component: () => import('@/views/InfrastructureView.vue'),
-      meta: { title: '系统信息', realtime: ['summary', 'docker'], capabilities: true },
+      meta: { title: '系统信息', capabilities: true },
     },
     {
       path: '/databases',
