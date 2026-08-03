@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/auth"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
+	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/httpapi"
 )
 
@@ -89,6 +91,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	listenAddress := flags.String("listen", defaultHTTPListenAddress, "HTTP 监听地址")
 	agentSocketPath := flags.String("agent-socket", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径")
 	databasePath := flags.String("database", defaultDatabasePath, "SQLite 数据库路径")
+	databaseKeyPath := flags.String("database-key", os.Getenv("NCP_DATABASE_KEY_PATH"), "数据库凭据密钥环路径；未配置时不启用自动凭据保存")
 	secureCookie := flags.Bool("secure-cookie", false, "仅通过 HTTPS 发送登录 Cookie")
 	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 WebSocket 通道")
 	if err := flags.Parse(args); err != nil {
@@ -108,6 +111,31 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	}
 	defer controlStore.Close()
 
+	var databaseConnections *ncpdatabase.ConnectionCoordinator
+	var credentialStore *ncpdatabase.SQLiteCredentialStore
+	if keyPath := filepath.Clean(*databaseKeyPath); strings.TrimSpace(*databaseKeyPath) != "" {
+		credentialStore, err = ncpdatabase.OpenCredentialStore(*databasePath)
+		if err != nil {
+			return err
+		}
+		defer credentialStore.Close()
+		keyProvider, keyErr := ncpdatabase.NewFileKeyProvider(keyPath)
+		if keyErr != nil {
+			return keyErr
+		}
+		vault, vaultErr := ncpdatabase.NewCredentialVault(credentialStore, keyProvider)
+		if vaultErr != nil {
+			return vaultErr
+		}
+		if migrateErr := vault.Migrate(ctx); migrateErr != nil {
+			return migrateErr
+		}
+		databaseConnections, err = ncpdatabase.NewConnectionCoordinator(vault, socketDatabaseConnectionTester{socketPath: *agentSocketPath})
+		if err != nil {
+			return err
+		}
+	}
+
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		return err
@@ -117,6 +145,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 			AgentSocketPath:     *agentSocketPath,
 			Auth:                authService,
 			ControlStore:        controlStore,
+			DatabaseConnections: databaseConnections,
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,
 			TerminalPOCEnabled:  *terminalPOC,
@@ -144,4 +173,12 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		}
 		return <-serveErrors
 	}
+}
+
+type socketDatabaseConnectionTester struct {
+	socketPath string
+}
+
+func (tester socketDatabaseConnectionTester) TestConnection(ctx context.Context, connection ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
+	return agentsocket.TestDatabaseConnection(ctx, tester.socketPath, connection)
 }

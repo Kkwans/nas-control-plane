@@ -23,12 +23,35 @@ export interface DatabaseSource {
 export interface DatabaseCredentials {
   username?: string
   password?: string
+  token?: string
   database?: string
 }
 
 export interface DatabaseConnection {
   sourceId: string
   credentials?: DatabaseCredentials
+}
+
+export interface DatabaseConnectionDiagnostic {
+  connected: boolean
+  code?: string
+  driver: DatabaseDriver
+  endpoint: string
+  database?: string
+  operation: string
+  durationMs: number
+}
+
+export interface DatabaseSavedCredential {
+  sourceId: string
+  driver: DatabaseDriver
+  endpoint: string
+  username?: string
+  database?: string
+  keyVersion: number
+  automaticEnabled: boolean
+  lastErrorCode?: string
+  updatedAt: string
 }
 
 export interface DatabaseColumn {
@@ -79,6 +102,14 @@ export interface QueryResult {
 
 export async function discoverDatabases(): Promise<DatabaseDiscovery> {
   return request<DatabaseDiscovery>('/api/v1/databases/discovery')
+}
+
+export async function testDatabaseConnection(connection: DatabaseConnection): Promise<DatabaseConnectionDiagnostic> {
+  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/test-connection', connection)
+}
+
+export async function connectDatabase(connection: DatabaseConnection): Promise<DatabaseConnectionDiagnostic> {
+  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/connect', connection)
 }
 
 export async function loadDatabaseCatalog(connection: DatabaseConnection): Promise<DatabaseCatalog> {
