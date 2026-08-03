@@ -179,7 +179,7 @@ func ProbeTailscale(ctx context.Context, environment Environment, interfaces []I
 	}
 
 	statusFound := false
-	if environment.LookPath("tailscale") == nil {
+	if _, lookPathErr := environment.LookPath("tailscale"); lookPathErr == nil {
 		result.Detected = true
 		output, err := runWithTimeout(ctx, environment, "tailscale", "status", "--json")
 		if err == nil {
@@ -563,7 +563,7 @@ func ProbeDNS(ctx context.Context, environment Environment) DNSCapability {
 		result.ErrorCode = "DNS_SOURCE_UNAVAILABLE"
 	}
 
-	if environment.LookPath("resolvectl") == nil {
+	if _, lookPathErr := environment.LookPath("resolvectl"); lookPathErr == nil {
 		if output, commandErr := runWithTimeout(ctx, environment, "resolvectl", "status"); commandErr == nil && len(output) > 0 {
 			result.Backend = DNSBackendSystemdResolved
 			result.Detected = true
@@ -576,7 +576,7 @@ func ProbeDNS(ctx context.Context, environment Environment) DNSCapability {
 			return result
 		}
 	}
-	if environment.LookPath("nmcli") == nil {
+	if _, lookPathErr := environment.LookPath("nmcli"); lookPathErr == nil {
 		if output, commandErr := runWithTimeout(ctx, environment, "nmcli", "general", "status"); commandErr == nil && len(output) > 0 {
 			result.Backend = DNSBackendNetworkManager
 			result.Detected = true
