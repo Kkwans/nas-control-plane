@@ -77,10 +77,8 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 			if err := writeAll(attachment.Conn, []byte("exit\n")); err != nil && cancelErr == nil {
 				cancelErr = err
 			}
-			if attachment.CloseWrite != nil {
-				if err := attachment.CloseWrite(); err != nil && cancelErr == nil {
-					cancelErr = err
-				}
+			if err := attachment.CloseWrite(); err != nil && cancelErr == nil {
+				cancelErr = err
 			}
 			attachment.Close()
 			return cancelErr

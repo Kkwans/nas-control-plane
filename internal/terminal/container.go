@@ -122,6 +122,7 @@ func (s *containerSession) Read(ctx context.Context, output []byte) (int, error)
 		return s.attachment.Reader.Read(output)
 	}
 	if err := ctx.Err(); err != nil {
+		s.cancelRead()
 		return 0, err
 	}
 	stop := context.AfterFunc(ctx, s.cancelRead)
