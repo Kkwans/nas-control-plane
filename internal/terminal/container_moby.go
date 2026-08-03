@@ -2,6 +2,9 @@ package terminal
 
 import (
 	"context"
+	"errors"
+	"io"
+	"path/filepath"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -10,6 +13,8 @@ import (
 type mobyContainerGateway struct {
 	client *client.Client
 }
+
+const containerShellProbeTimeout = 2 * time.Second
 
 func newMobyContainerGateway(apiClient *client.Client) *mobyContainerGateway {
 	return &mobyContainerGateway{client: apiClient}
@@ -35,7 +40,11 @@ func (g *mobyContainerGateway) Inspect(ctx context.Context, containerID string) 
 }
 
 func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, rows, cols uint16) (ContainerAttachment, error) {
-	exec, err := g.client.ExecCreate(ctx, containerID, protectedContainerExecOptions(rows, cols))
+	shell, err := g.detectContainerShell(ctx, containerID)
+	if err != nil {
+		return ContainerAttachment{}, err
+	}
+	exec, err := g.client.ExecCreate(ctx, containerID, protectedContainerExecOptionsForShell(rows, cols, shell))
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
@@ -46,19 +55,109 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
+	metadata := containerShellMetadata(shell)
 	return ContainerAttachment{
-		ExecID:      exec.ID,
-		Reader:      attachment.Reader,
-		Writer:      attachment.Conn,
-		Shell:       "auto",
-		Enhancement: "native",
-		Reason:      "容器使用自身 Shell，已启用 ANSI 色彩；未向容器注入 ble.sh",
+		ExecID:       exec.ID,
+		Reader:       attachment.Reader,
+		Writer:       attachment.Conn,
+		Shell:        metadata.Shell,
+		Enhancement:  metadata.Enhancement,
+		Reason:       metadata.Reason,
+		Capabilities: metadata.Capabilities,
 		Close: func() error {
 			attachment.Close()
 			return nil
 		},
 		CloseWrite: attachment.CloseWrite,
+		CancelRead: func() error {
+			var cancelErr error
+			if err := writeAll(attachment.Conn, []byte{3}); err != nil {
+				cancelErr = err
+			}
+			if err := writeAll(attachment.Conn, []byte("exit\n")); err != nil && cancelErr == nil {
+				cancelErr = err
+			}
+			if attachment.CloseWrite != nil {
+				if err := attachment.CloseWrite(); err != nil && cancelErr == nil {
+					cancelErr = err
+				}
+			}
+			attachment.Close()
+			return cancelErr
+		},
 	}, nil
+}
+
+func (g *mobyContainerGateway) detectContainerShell(ctx context.Context, containerID string) (string, error) {
+	for _, shell := range []string{"/bin/bash", "/usr/bin/bash", "bash"} {
+		available, err := g.probeContainerCommand(ctx, containerID, shell, "--version")
+		if err != nil && ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if available {
+			return shell, nil
+		}
+	}
+	for _, shell := range []string{"/bin/sh", "/usr/bin/sh", "sh"} {
+		available, err := g.probeContainerCommand(ctx, containerID, shell, "-n")
+		if err != nil && ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if available {
+			return shell, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("container does not provide an interactive shell")
+}
+
+func (g *mobyContainerGateway) probeContainerCommand(ctx context.Context, containerID string, command ...string) (bool, error) {
+	probeContext, cancel := context.WithTimeout(ctx, containerShellProbeTimeout)
+	defer cancel()
+	exec, err := g.client.ExecCreate(probeContext, containerID, client.ExecCreateOptions{
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          command,
+	})
+	if err != nil {
+		return false, err
+	}
+	attachment, err := g.client.ExecAttach(probeContext, exec.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer attachment.Close()
+	if _, err := io.Copy(io.Discard, attachment.Reader); err != nil {
+		return false, err
+	}
+	inspection, err := g.client.ExecInspect(probeContext, exec.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return false, err
+	}
+	return inspection.ExitCode == 0, nil
+}
+
+func containerShellMetadata(shellPath string) SessionMetadata {
+	shell := filepath.Base(shellPath)
+	if shell == "bash" {
+		return SessionMetadata{
+			Shell:        shell,
+			Enhancement:  "readline",
+			Reason:       "容器使用 Bash 内置 readline，不加载主机 ble.sh",
+			Capabilities: sessionCapabilitiesFor(shell, "readline"),
+		}
+	}
+	if shell == "" || shell == "." {
+		shell = "sh"
+	}
+	return SessionMetadata{
+		Shell:        shell,
+		Enhancement:  "native",
+		Reason:       "容器未发现 Bash，已回退原生 /bin/sh；不具备 readline",
+		Capabilities: sessionCapabilitiesFor(shell, "native"),
+	}
 }
 
 func (g *mobyContainerGateway) Resize(ctx context.Context, execID string, rows, cols uint16) error {
@@ -86,6 +185,17 @@ func (g *mobyContainerGateway) WaitForExit(ctx context.Context, execID string) e
 }
 
 func protectedContainerExecOptions(rows, cols uint16) client.ExecCreateOptions {
+	return protectedContainerExecOptionsForShell(rows, cols, "/bin/bash")
+}
+
+func protectedContainerExecOptionsForShell(rows, cols uint16, shell string) client.ExecCreateOptions {
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	arguments := []string{shell, "-i"}
+	if filepath.Base(shell) == "bash" {
+		arguments = []string{shell, "--noprofile", "--norc", "-i"}
+	}
 	return client.ExecCreateOptions{
 		AttachStdin:  true,
 		AttachStdout: true,
@@ -106,10 +216,8 @@ func protectedContainerExecOptions(rows, cols uint16) client.ExecCreateOptions {
 			"HISTFILE=/tmp/.ncp_shell_history",
 			"HISTCONTROL=ignoredups",
 			"HISTSIZE=1000",
+			"PS1=\\[\\e[38;5;25m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[38;5;30m\\]\\w\\[\\e[0m\\]\\$ ",
 		},
-		Cmd: []string{
-			"/bin/sh", "-lc",
-			`if command -v locale >/dev/null 2>&1 && locale -a 2>/dev/null | grep -Eiq '^C([.-])?UTF-?8$'; then export LANG=C.UTF-8 LC_ALL=C.UTF-8; else export LANG=C LC_ALL=C; fi; alias ls='ls --color=auto' 2>/dev/null || true; alias grep='grep --color=auto' 2>/dev/null || true; alias diff='diff --color=auto' 2>/dev/null || true; if command -v git >/dev/null 2>&1; then alias git='git -c color.ui=always'; fi; if command -v bash >/dev/null 2>&1; then export PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]\$ '; exec bash --noprofile --norc -i; fi; export PS1='\u@\h:\w\$ '; exec /bin/sh -i`,
-		},
+		Cmd: arguments,
 	}
 }

@@ -16,47 +16,50 @@ import (
 	"github.com/creack/pty"
 )
 
-type hostStarter struct{}
+type hostStarter struct {
+	terminalRCFile string
+	bleSHFile      string
+}
 
 const ncpTerminalRCFile = "/opt/ncp/etc/terminal.bashrc"
 const ncpBleSHFile = "/opt/ncp/share/blesh/ble.sh"
 const terminalReadyTimeout = 2 * time.Second
 
 func HostEnhancement() string {
-	if _, err := os.Stat(ncpTerminalRCFile); err == nil {
-		if _, err := os.Stat(ncpBleSHFile); err == nil {
-			return "blesh"
-		}
-	}
-	return "native"
+	return hostEnhancement(ncpTerminalRCFile, ncpBleSHFile)
 }
 
 func NewHostStarter() Starter {
-	return hostStarter{}
+	return hostStarter{terminalRCFile: ncpTerminalRCFile, bleSHFile: ncpBleSHFile}
 }
 
-func (hostStarter) Start(ctx context.Context, request StartRequest) (Session, error) {
+func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, error) {
 	shell := "/bin/bash"
 	arguments := []string{"--noprofile", "--norc", "-i"}
 	metadata := SessionMetadata{Shell: "bash", Enhancement: "native"}
+	rcFile := s.terminalRCFile
+	if rcFile == "" {
+		rcFile = ncpTerminalRCFile
+	}
+	bleFile := s.bleSHFile
+	if bleFile == "" {
+		bleFile = ncpBleSHFile
+	}
 	var readyReader *os.File
 	var readyWriter *os.File
 	if _, err := os.Stat(shell); err != nil {
 		shell = "/bin/sh"
 		arguments = []string{"-i"}
-		metadata.Shell = "sh"
-		metadata.Reason = "主机未安装 Bash，已回退 /bin/sh"
-	} else if _, err := os.Stat(ncpTerminalRCFile); err == nil {
-		arguments = []string{"--noprofile", "--rcfile", ncpTerminalRCFile, "-i"}
+		metadata = hostSessionMetadata("sh", false, false)
+	} else if _, err := os.Stat(rcFile); err == nil {
+		arguments = []string{"--noprofile", "--rcfile", rcFile, "-i"}
 		readyReader, readyWriter, err = os.Pipe()
 		if err != nil {
 			return nil, coded("TERMINAL_HOST_START_FAILED", err)
 		}
-		if _, statErr := os.Stat(ncpBleSHFile); statErr != nil {
-			metadata.Reason = "ble.sh 不可用，已回退原生 Bash"
-		}
+		metadata = hostSessionMetadata("bash", true, pathExists(bleFile))
 	} else {
-		metadata.Reason = "NCP 专用 Bash 配置不可用，已回退原生 Bash"
+		metadata = hostSessionMetadata("bash", false, false)
 	}
 	command := exec.CommandContext(ctx, shell, arguments...)
 	command.Dir = "/root"
@@ -95,18 +98,26 @@ func (hostStarter) Start(ctx context.Context, request StartRequest) (Session, er
 		_ = readyWriter.Close()
 	}
 	if readyReader != nil {
-		if waitForTerminalReady(readyReader) {
-			if _, statErr := os.Stat(ncpBleSHFile); statErr == nil {
-				metadata.Enhancement = "blesh"
-				metadata.Reason = ""
-			}
-		} else if metadata.Reason == "" {
+		if waitForTerminalReady(readyReader, ctx) && pathExists(bleFile) {
+			metadata.Enhancement = "blesh"
+			metadata.Reason = ""
+			metadata.Capabilities = sessionCapabilitiesFor(metadata.Shell, metadata.Enhancement)
+		} else if metadata.Enhancement == "blesh" {
+			metadata.Enhancement = "native"
 			metadata.Reason = "Shell 增强启动超时，已回退原生 Bash"
+			metadata.Capabilities = sessionCapabilitiesFor(metadata.Shell, metadata.Enhancement)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		_ = terminalFile.Close()
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, coded("TERMINAL_SESSION_CANCELED", err)
 	}
 	if err := syscall.SetNonblock(int(terminalFile.Fd()), true); err != nil {
 		_ = terminalFile.Close()
 		_ = command.Process.Kill()
+		_ = command.Wait()
 		return nil, coded("TERMINAL_HOST_START_FAILED", err)
 	}
 
@@ -116,6 +127,41 @@ func (hostStarter) Start(ctx context.Context, request StartRequest) (Session, er
 		close(session.exited)
 	}()
 	return session, nil
+}
+
+func hostEnhancement(rcFile, bleFile string) string {
+	if pathExists(rcFile) && pathExists(bleFile) {
+		return "blesh"
+	}
+	return "native"
+}
+
+func hostSessionMetadata(shell string, rcAvailable, bleAvailable bool) SessionMetadata {
+	metadata := SessionMetadata{
+		Shell:        shell,
+		Enhancement:  "native",
+		Capabilities: sessionCapabilitiesFor(shell, "native"),
+	}
+	if shell != "bash" {
+		metadata.Reason = "主机未安装 Bash，已回退 /bin/sh"
+		return metadata
+	}
+	if !rcAvailable {
+		metadata.Reason = "NCP 专用 Bash 配置不可用，已回退原生 Bash"
+		return metadata
+	}
+	if !bleAvailable {
+		metadata.Reason = "ble.sh 不可用，已回退原生 Bash"
+		return metadata
+	}
+	metadata.Enhancement = "blesh"
+	metadata.Capabilities = sessionCapabilitiesFor(shell, metadata.Enhancement)
+	return metadata
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func supportedTerminalLocale() string {
@@ -130,17 +176,24 @@ func supportedTerminalLocale() string {
 	return "C"
 }
 
-func waitForTerminalReady(reader *os.File) bool {
+func waitForTerminalReady(reader *os.File, contexts ...context.Context) bool {
 	defer reader.Close()
 	ready := make(chan bool, 1)
 	go func() {
 		output := make([]byte, 32)
-		read, err := reader.Read(output)
-		ready <- err == nil && strings.Contains(string(output[:read]), "ready")
+		read, _ := reader.Read(output)
+		ready <- read > 0 && strings.Contains(string(output[:read]), "ready")
 	}()
+	var contextDone <-chan struct{}
+	if len(contexts) > 0 && contexts[0] != nil {
+		contextDone = contexts[0].Done()
+	}
 	select {
 	case result := <-ready:
 		return result
+	case <-contextDone:
+		_ = reader.Close()
+		return false
 	case <-time.After(terminalReadyTimeout):
 		_ = reader.Close()
 		return false

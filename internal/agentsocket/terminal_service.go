@@ -40,13 +40,14 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	defer func() { _ = s.manager.Close(opened.ID) }()
 
 	started, err := terminalMessageToStruct(terminal.Message{
-		Type:        terminal.MessageStarted,
-		SessionID:   opened.ID,
-		Shell:       opened.Shell,
-		Enhancement: opened.Enhancement,
-		Reason:      opened.Reason,
-		Rows:        opened.Rows,
-		Cols:        opened.Cols,
+		Type:         terminal.MessageStarted,
+		SessionID:    opened.ID,
+		Shell:        opened.Shell,
+		Enhancement:  opened.Enhancement,
+		Reason:       opened.Reason,
+		Capabilities: opened.Capabilities,
+		Rows:         opened.Rows,
+		Cols:         opened.Cols,
 	})
 	if err != nil {
 		return grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
@@ -160,6 +161,8 @@ func terminalStreamSendError(error) error {
 
 func terminalManagerError(err error) error {
 	switch terminal.ErrorCode(err) {
+	case "TERMINAL_SESSION_CANCELED":
+		return nil
 	case "TERMINAL_TARGET_REJECTED", "TERMINAL_DIMENSIONS_INVALID", "TERMINAL_INPUT_INVALID":
 		return grpcstatus.Error(codes.InvalidArgument, "TERMINAL_REQUEST_INVALID")
 	case "TERMINAL_SESSION_LIMIT_REACHED":

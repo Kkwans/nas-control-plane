@@ -52,7 +52,7 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 	defer connection.CloseNow()
 	connection.SetReadLimit(maxWebSocketInput)
 
-	sessionContext, cancel := context.WithTimeout(context.Background(), api.terminalTimeout)
+	sessionContext, cancel := context.WithTimeout(request.Context(), api.terminalTimeout)
 	defer cancel()
 	stream, err := api.terminal.Open(sessionContext, api.agentSocketPath)
 	if err != nil {
@@ -77,13 +77,14 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		return
 	}
 	if err := writeTerminalControl(sessionContext, connection, terminalControl{
-		Type:        "started",
-		SessionID:   started.SessionID,
-		Shell:       started.Shell,
-		Enhancement: started.Enhancement,
-		Reason:      started.Reason,
-		Rows:        int(started.Rows),
-		Cols:        int(started.Cols),
+		Type:         "started",
+		SessionID:    started.SessionID,
+		Shell:        started.Shell,
+		Enhancement:  started.Enhancement,
+		Reason:       started.Reason,
+		Capabilities: started.Capabilities,
+		Rows:         int(started.Rows),
+		Cols:         int(started.Cols),
 	}); err != nil {
 		return
 	}
@@ -231,13 +232,14 @@ func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream
 }
 
 type terminalControl struct {
-	Type        string `json:"type"`
-	Rows        int    `json:"rows,omitempty"`
-	Cols        int    `json:"cols,omitempty"`
-	SessionID   string `json:"sessionId,omitempty"`
-	Shell       string `json:"shell,omitempty"`
-	Enhancement string `json:"enhancement,omitempty"`
-	Reason      string `json:"reason,omitempty"`
+	Type         string                       `json:"type"`
+	Rows         int                          `json:"rows,omitempty"`
+	Cols         int                          `json:"cols,omitempty"`
+	SessionID    string                       `json:"sessionId,omitempty"`
+	Shell        string                       `json:"shell,omitempty"`
+	Enhancement  string                       `json:"enhancement,omitempty"`
+	Reason       string                       `json:"reason,omitempty"`
+	Capabilities terminal.SessionCapabilities `json:"capabilities,omitempty"`
 }
 
 func decodeTerminalControl(data []byte) (terminalControl, error) {

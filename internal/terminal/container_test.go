@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestContainerStarterRejectsStoppedTargetBeforeOpeningExec(t *testing.T) {
@@ -65,6 +67,10 @@ func TestContainerStarterUsesSelectedTargetAndClosesAttachment(t *testing.T) {
 	if got := input.String(); got != "\x03exit\n" {
 		t.Fatalf("termination input = %q", got)
 	}
+	metadata := session.(SessionMetadataProvider).Metadata()
+	if metadata.Shell != "sh" || metadata.Enhancement != "native" || metadata.Capabilities.Readline {
+		t.Fatalf("fallback metadata = %#v", metadata)
+	}
 }
 
 func TestProtectedContainerExecOptionsAreInteractiveButNotPrivileged(t *testing.T) {
@@ -75,18 +81,91 @@ func TestProtectedContainerExecOptionsAreInteractiveButNotPrivileged(t *testing.
 	if options.ConsoleSize.Height != 34 || options.ConsoleSize.Width != 120 {
 		t.Fatalf("console size = %#v", options.ConsoleSize)
 	}
-	if len(options.Cmd) != 3 || options.Cmd[0] != "/bin/sh" || options.Cmd[1] != "-lc" {
+	if len(options.Cmd) != 4 || options.Cmd[0] != "/bin/bash" || options.Cmd[1] != "--noprofile" || options.Cmd[2] != "--norc" || options.Cmd[3] != "-i" {
 		t.Fatalf("command = %#v", options.Cmd)
 	}
-	if !strings.Contains(options.Cmd[2], "exec bash") || len(options.Env) < 3 {
-		t.Fatalf("interactive shell bootstrap = %#v, env = %#v", options.Cmd, options.Env)
+	if strings.Contains(strings.Join(options.Cmd, " "), " -c") || strings.Contains(strings.Join(options.Cmd, " "), " -lc") {
+		t.Fatalf("shell command must not be assembled through -c: %#v", options.Cmd)
+	}
+	if len(options.Env) < 3 {
+		t.Fatalf("interactive shell environment = %#v", options.Env)
 	}
 	environment := strings.Join(options.Env, "\n")
 	if !strings.Contains(environment, "TERM=xterm-256color") || !strings.Contains(environment, "COLORTERM=truecolor") {
 		t.Fatalf("terminal environment = %#v", options.Env)
 	}
-	if !strings.Contains(options.Cmd[2], "C.UTF-8") || !strings.Contains(options.Cmd[2], "ls --color=auto") {
-		t.Fatalf("locale and color bootstrap = %q", options.Cmd[2])
+	if !strings.Contains(environment, "PS1=") || strings.Contains(environment, "/opt/ncp/share/blesh") {
+		t.Fatalf("interactive shell environment = %#v", options.Env)
+	}
+}
+
+func TestProtectedContainerExecOptionsUseNativeBusyBoxShellWithoutScript(t *testing.T) {
+	options := protectedContainerExecOptionsForShell(24, 80, "/bin/sh")
+	if len(options.Cmd) != 2 || options.Cmd[0] != "/bin/sh" || options.Cmd[1] != "-i" {
+		t.Fatalf("BusyBox shell command = %#v", options.Cmd)
+	}
+	if strings.Contains(strings.Join(options.Cmd, " "), "-c") {
+		t.Fatalf("BusyBox shell command must not contain -c: %#v", options.Cmd)
+	}
+}
+
+func TestContainerShellMetadataReportsBashReadline(t *testing.T) {
+	metadata := containerShellMetadata("/bin/bash")
+	if metadata.Shell != "bash" || metadata.Enhancement != "readline" || metadata.Reason == "" {
+		t.Fatalf("Bash metadata = %#v", metadata)
+	}
+	if !metadata.Capabilities.Readline || !metadata.Capabilities.BracketedPaste || !metadata.Capabilities.MultilinePaste {
+		t.Fatalf("Bash capabilities = %#v", metadata.Capabilities)
+	}
+	if strings.Contains(metadata.Reason, "blesh") && !strings.Contains(metadata.Reason, "不加载") {
+		t.Fatalf("Bash metadata must not claim host ble.sh: %q", metadata.Reason)
+	}
+}
+
+func TestContainerShellMetadataReportsBusyBoxNativeFallback(t *testing.T) {
+	metadata := containerShellMetadata("/bin/sh")
+	if metadata.Shell != "sh" || metadata.Enhancement != "native" || metadata.Reason == "" {
+		t.Fatalf("BusyBox metadata = %#v", metadata)
+	}
+	if metadata.Capabilities.Readline || metadata.Capabilities.BracketedPaste || metadata.Capabilities.MultilinePaste {
+		t.Fatalf("BusyBox capabilities = %#v", metadata.Capabilities)
+	}
+}
+
+func TestContainerSessionReadHonorsContextCancellation(t *testing.T) {
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	readCanceled := make(chan struct{})
+	session := &containerSession{attachment: ContainerAttachment{
+		Reader: reader,
+		CancelRead: func() error {
+			close(readCanceled)
+			return reader.Close()
+		},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := session.Read(ctx, make([]byte, 16))
+		result <- err
+	}()
+	cancel()
+
+	select {
+	case <-readCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("context cancellation did not interrupt container read")
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("read error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("container read did not return after cancellation")
 	}
 }
 

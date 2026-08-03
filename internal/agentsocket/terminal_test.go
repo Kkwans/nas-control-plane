@@ -43,6 +43,9 @@ func TestTerminalPOCServiceRelaysInputResizeAndCloseOverGRPC(t *testing.T) {
 	if startedMessage.Type != terminal.MessageStarted || startedMessage.SessionID == "" {
 		t.Fatalf("started message = %#v", startedMessage)
 	}
+	if !startedMessage.Capabilities.Resize {
+		t.Fatalf("started capabilities = %#v", startedMessage.Capabilities)
+	}
 
 	if err := stream.Send(mustTerminalStruct(t, terminal.Message{Type: terminal.MessageInput, Data: []byte("printf ready\\n")})); err != nil {
 		t.Fatalf("send input: %v", err)
@@ -81,6 +84,34 @@ func TestTerminalPOCServiceRelaysInputResizeAndCloseOverGRPC(t *testing.T) {
 	}
 }
 
+func TestTerminalPOCServiceReclaimsSessionOnClientDisconnect(t *testing.T) {
+	session := newFakeTerminalSession()
+	manager := terminal.NewManager(&fakeTerminalStarter{session: session}, &fakeTerminalStarter{}, 1)
+	connection := newTerminalPOCTestConnection(t, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	stream, err := NewAgentTerminalPOCServiceClient(connection).Open(ctx)
+	if err != nil {
+		t.Fatalf("open terminal stream: %v", err)
+	}
+	if err := stream.Send(mustTerminalStruct(t, terminal.Message{Type: terminal.MessageStart, Target: terminal.TargetHost, Rows: 24, Cols: 80})); err != nil {
+		t.Fatalf("send start: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("receive started: %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("disconnect terminal stream: %v", err)
+	}
+
+	select {
+	case <-session.closedC:
+	case <-ctx.Done():
+		t.Fatal("terminal session was not reclaimed after client disconnect")
+	}
+}
+
 func TestTerminalPOCServiceRejectsCommandBearingStartMessage(t *testing.T) {
 	manager := terminal.NewManager(&fakeTerminalStarter{session: newFakeTerminalSession()}, &fakeTerminalStarter{}, 1)
 	connection := newTerminalPOCTestConnection(t, manager)
@@ -116,8 +147,15 @@ func TestTerminalStartedMessagePreservesSessionMetadata(t *testing.T) {
 		Shell:       "bash",
 		Enhancement: "blesh",
 		Reason:      "ready",
-		Rows:        42,
-		Cols:        132,
+		Capabilities: terminal.SessionCapabilities{
+			Resize:         true,
+			Readline:       true,
+			BracketedPaste: true,
+			MultilinePaste: true,
+			ANSIColors:     true,
+		},
+		Rows: 42,
+		Cols: 132,
 	})
 	decoded, err := terminalMessageFromStruct(encoded)
 	if err != nil {
@@ -125,6 +163,9 @@ func TestTerminalStartedMessagePreservesSessionMetadata(t *testing.T) {
 	}
 	if decoded.Shell != "bash" || decoded.Enhancement != "blesh" || decoded.Reason != "ready" || decoded.Rows != 42 || decoded.Cols != 132 {
 		t.Fatalf("started metadata = %#v", decoded)
+	}
+	if !decoded.Capabilities.Resize || !decoded.Capabilities.Readline || !decoded.Capabilities.BracketedPaste || !decoded.Capabilities.MultilinePaste || !decoded.Capabilities.ANSIColors {
+		t.Fatalf("started capabilities = %#v", decoded.Capabilities)
 	}
 }
 

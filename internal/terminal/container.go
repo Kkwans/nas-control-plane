@@ -20,14 +20,16 @@ type ContainerInfo struct {
 }
 
 type ContainerAttachment struct {
-	ExecID      string
-	Reader      io.Reader
-	Writer      io.Writer
-	Close       func() error
-	CloseWrite  func() error
-	Shell       string
-	Enhancement string
-	Reason      string
+	ExecID       string
+	Reader       io.Reader
+	Writer       io.Writer
+	Close        func() error
+	CloseWrite   func() error
+	CancelRead   func() error
+	Shell        string
+	Enhancement  string
+	Reason       string
+	Capabilities SessionCapabilities
 }
 
 type ContainerGateway interface {
@@ -54,11 +56,19 @@ func newContainerStarter(gateway ContainerGateway) Starter {
 }
 
 func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Session, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, coded("TERMINAL_SESSION_CANCELED", err)
+		}
+	}
 	if s.gateway == nil {
 		return nil, coded("TERMINAL_CONTAINER_UNAVAILABLE", errors.New("container gateway is required"))
 	}
 	info, err := s.gateway.Inspect(ctx, request.ContainerID)
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, coded("TERMINAL_SESSION_CANCELED", ctx.Err())
+		}
 		return nil, coded("TERMINAL_CONTAINER_TARGET_REJECTED", err)
 	}
 	if info.ID == "" || !info.Running {
@@ -66,6 +76,9 @@ func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Ses
 	}
 	attachment, err := s.gateway.Open(ctx, info.ID, request.Rows, request.Cols)
 	if err != nil {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, coded("TERMINAL_SESSION_CANCELED", ctx.Err())
+		}
 		return nil, coded("TERMINAL_CONTAINER_OPEN_FAILED", err)
 	}
 	if attachment.ExecID == "" || attachment.Reader == nil || attachment.Writer == nil || attachment.Close == nil {
@@ -73,6 +86,15 @@ func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Ses
 			_ = attachment.Close()
 		}
 		return nil, coded("TERMINAL_CONTAINER_OPEN_FAILED", errors.New("container terminal attachment is incomplete"))
+	}
+	if attachment.Shell == "" {
+		attachment.Shell = "sh"
+	}
+	if attachment.Enhancement == "" {
+		attachment.Enhancement = "native"
+	}
+	if attachment.Capabilities == (SessionCapabilities{}) {
+		attachment.Capabilities = sessionCapabilitiesFor(attachment.Shell, attachment.Enhancement)
 	}
 	return &containerSession{gateway: s.gateway, attachment: attachment}, nil
 }
@@ -86,16 +108,38 @@ type containerSession struct {
 
 func (s *containerSession) Metadata() SessionMetadata {
 	return SessionMetadata{
-		Shell:       s.attachment.Shell,
-		Enhancement: s.attachment.Enhancement,
-		Reason:      s.attachment.Reason,
+		Shell:        s.attachment.Shell,
+		Enhancement:  s.attachment.Enhancement,
+		Reason:       s.attachment.Reason,
+		Capabilities: s.attachment.Capabilities,
 	}
 }
 
 const containerTerminationTimeout = 2 * time.Second
 
-func (s *containerSession) Read(_ context.Context, output []byte) (int, error) {
-	return s.attachment.Reader.Read(output)
+func (s *containerSession) Read(ctx context.Context, output []byte) (int, error) {
+	if ctx == nil {
+		return s.attachment.Reader.Read(output)
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	stop := context.AfterFunc(ctx, s.cancelRead)
+	read, err := s.attachment.Reader.Read(output)
+	if !stop() && ctx.Err() != nil && read == 0 {
+		return 0, ctx.Err()
+	}
+	return read, err
+}
+
+func (s *containerSession) cancelRead() {
+	if s.attachment.CancelRead != nil {
+		_ = s.attachment.CancelRead()
+		return
+	}
+	if closer, ok := s.attachment.Reader.(io.Closer); ok {
+		_ = closer.Close()
+	}
 }
 
 func (s *containerSession) Write(input []byte) (int, error) {

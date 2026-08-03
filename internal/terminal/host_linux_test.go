@@ -9,6 +9,57 @@ import (
 	"time"
 )
 
+func TestHostEnhancementRequiresBothNCPFiles(t *testing.T) {
+	directory := t.TempDir()
+	rcFile := directory + "/terminal.bashrc"
+	bleFile := directory + "/ble.sh"
+	if got := hostEnhancement(rcFile, bleFile); got != "native" {
+		t.Fatalf("missing files enhancement = %q", got)
+	}
+	if err := os.WriteFile(rcFile, []byte("# test\n"), 0o600); err != nil {
+		t.Fatalf("write rc file: %v", err)
+	}
+	if got := hostEnhancement(rcFile, bleFile); got != "native" {
+		t.Fatalf("missing ble.sh enhancement = %q", got)
+	}
+	if err := os.WriteFile(bleFile, []byte("# test\n"), 0o600); err != nil {
+		t.Fatalf("write ble.sh file: %v", err)
+	}
+	if got := hostEnhancement(rcFile, bleFile); got != "blesh" {
+		t.Fatalf("complete host enhancement = %q", got)
+	}
+}
+
+func TestHostSessionMetadataReportsBleshCapabilities(t *testing.T) {
+	metadata := hostSessionMetadata("bash", true, true)
+	if metadata.Shell != "bash" || metadata.Enhancement != "blesh" || metadata.Reason != "" {
+		t.Fatalf("ble.sh metadata = %#v", metadata)
+	}
+	if !metadata.Capabilities.Readline || !metadata.Capabilities.BracketedPaste || !metadata.Capabilities.MultilinePaste {
+		t.Fatalf("ble.sh capabilities = %#v", metadata.Capabilities)
+	}
+}
+
+func TestHostSessionMetadataReportsBashWithoutEnhancement(t *testing.T) {
+	metadata := hostSessionMetadata("bash", false, false)
+	if metadata.Shell != "bash" || metadata.Enhancement != "native" || metadata.Reason == "" {
+		t.Fatalf("Bash fallback metadata = %#v", metadata)
+	}
+	if !metadata.Capabilities.Readline || !metadata.Capabilities.BracketedPaste || !metadata.Capabilities.MultilinePaste {
+		t.Fatalf("Bash fallback capabilities = %#v", metadata.Capabilities)
+	}
+}
+
+func TestHostSessionMetadataReportsNoEnhancementForSh(t *testing.T) {
+	metadata := hostSessionMetadata("sh", false, false)
+	if metadata.Shell != "sh" || metadata.Enhancement != "native" || metadata.Reason == "" {
+		t.Fatalf("sh metadata = %#v", metadata)
+	}
+	if metadata.Capabilities.Readline || metadata.Capabilities.BracketedPaste || metadata.Capabilities.MultilinePaste {
+		t.Fatalf("sh capabilities = %#v", metadata.Capabilities)
+	}
+}
+
 func TestHostPTYSupportsResizeCtrlCAndTermination(t *testing.T) {
 	manager := NewManager(NewHostStarter(), nil, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -39,5 +90,21 @@ func TestWaitForTerminalReadyReturnsAfterReadySignal(t *testing.T) {
 
 	if !waitForTerminalReady(reader) {
 		t.Fatal("ready signal was not detected")
+	}
+}
+
+func TestWaitForTerminalReadyHonorsContextCancellation(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create ready pipe: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitForTerminalReady(reader, ctx) {
+		t.Fatal("canceled readiness wait must not report ready")
 	}
 }

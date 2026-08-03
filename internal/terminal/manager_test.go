@@ -91,6 +91,9 @@ func TestManagerReturnsActualDimensionsAndSessionMetadata(t *testing.T) {
 	if opened.Shell != "bash" || opened.Enhancement != "blesh" || opened.Reason != "ready" {
 		t.Fatalf("opened metadata = %#v", opened)
 	}
+	if !opened.Capabilities.Resize || !opened.Capabilities.Readline || !opened.Capabilities.BracketedPaste || !opened.Capabilities.MultilinePaste {
+		t.Fatalf("opened capabilities = %#v", opened.Capabilities)
+	}
 	if starter.request.Rows != 42 || starter.request.Cols != 132 {
 		t.Fatalf("starter request = %#v", starter.request)
 	}

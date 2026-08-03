@@ -30,6 +30,7 @@ func terminalMessageToStruct(message terminal.Message) (*structpb.Struct, error)
 			fields["shell"] = message.Shell
 			fields["enhancement"] = message.Enhancement
 			fields["reason"] = message.Reason
+			fields["capabilities"] = terminalCapabilitiesToMap(message.Capabilities)
 			fields["rows"] = message.Rows
 			fields["cols"] = message.Cols
 		}
@@ -113,6 +114,13 @@ func terminalMessageFromStruct(input *structpb.Struct) (terminal.Message, error)
 			message.Shell, _ = fields["shell"].(string)
 			message.Enhancement, _ = fields["enhancement"].(string)
 			message.Reason, _ = fields["reason"].(string)
+			if capabilities, ok := fields["capabilities"]; ok {
+				decodedCapabilities, err := terminalCapabilitiesFromValue(capabilities)
+				if err != nil {
+					return terminal.Message{}, err
+				}
+				message.Capabilities = decodedCapabilities
+			}
 			rows, err := terminalNumberField(fields, "rows")
 			if err != nil {
 				return terminal.Message{}, err
@@ -150,11 +158,77 @@ func terminalFieldsFor(messageType terminal.MessageType) map[string]struct{} {
 			fields["shell"] = struct{}{}
 			fields["enhancement"] = struct{}{}
 			fields["reason"] = struct{}{}
+			fields["capabilities"] = struct{}{}
 			fields["rows"] = struct{}{}
 			fields["cols"] = struct{}{}
 		}
 	}
 	return fields
+}
+
+func terminalCapabilitiesToMap(capabilities terminal.SessionCapabilities) map[string]any {
+	return map[string]any{
+		"resize":         capabilities.Resize,
+		"readline":       capabilities.Readline,
+		"bracketedPaste": capabilities.BracketedPaste,
+		"multilinePaste": capabilities.MultilinePaste,
+		"ansiColors":     capabilities.ANSIColors,
+	}
+}
+
+func terminalCapabilitiesFromValue(value any) (terminal.SessionCapabilities, error) {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return terminal.SessionCapabilities{}, errors.New("terminal capabilities are invalid")
+	}
+	allowed := map[string]struct{}{
+		"resize":         {},
+		"readline":       {},
+		"bracketedPaste": {},
+		"multilinePaste": {},
+		"ansiColors":     {},
+	}
+	if !containsOnlyTerminalFields(fields, allowed) {
+		return terminal.SessionCapabilities{}, errors.New("terminal capabilities contain unsupported fields")
+	}
+	readBool := func(name string) (bool, error) {
+		field, exists := fields[name]
+		if !exists {
+			return false, nil
+		}
+		value, ok := field.(bool)
+		if !ok {
+			return false, errors.New("terminal capability is invalid")
+		}
+		return value, nil
+	}
+	resize, err := readBool("resize")
+	if err != nil {
+		return terminal.SessionCapabilities{}, err
+	}
+	readline, err := readBool("readline")
+	if err != nil {
+		return terminal.SessionCapabilities{}, err
+	}
+	bracketedPaste, err := readBool("bracketedPaste")
+	if err != nil {
+		return terminal.SessionCapabilities{}, err
+	}
+	multilinePaste, err := readBool("multilinePaste")
+	if err != nil {
+		return terminal.SessionCapabilities{}, err
+	}
+	ansiColors, err := readBool("ansiColors")
+	if err != nil {
+		return terminal.SessionCapabilities{}, err
+	}
+	return terminal.SessionCapabilities{
+		Resize:         resize,
+		Readline:       readline,
+		BracketedPaste: bracketedPaste,
+		MultilinePaste: multilinePaste,
+		ANSIColors:     ansiColors,
+	}, nil
 }
 
 func containsOnlyTerminalFields(fields map[string]any, allowed map[string]struct{}) bool {

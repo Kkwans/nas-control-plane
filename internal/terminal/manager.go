@@ -33,19 +33,32 @@ type StartRequest struct {
 }
 
 type SessionInfo struct {
-	ID          string
-	Target      Target
-	Shell       string
-	Enhancement string
-	Reason      string
-	Rows        uint16
-	Cols        uint16
+	ID           string
+	Target       Target
+	Shell        string
+	Enhancement  string
+	Reason       string
+	Capabilities SessionCapabilities
+	Rows         uint16
+	Cols         uint16
 }
 
 type SessionMetadata struct {
-	Shell       string
-	Enhancement string
-	Reason      string
+	Shell        string
+	Enhancement  string
+	Reason       string
+	Capabilities SessionCapabilities
+}
+
+// SessionCapabilities describes terminal behavior that the client can use for
+// paste, multiline editing, and display decisions. It is deliberately about
+// the active session, not the host or container in general.
+type SessionCapabilities struct {
+	Resize         bool `json:"resize"`
+	Readline       bool `json:"readline"`
+	BracketedPaste bool `json:"bracketedPaste"`
+	MultilinePaste bool `json:"multilinePaste"`
+	ANSIColors     bool `json:"ansiColors"`
 }
 
 type SessionMetadataProvider interface {
@@ -116,12 +129,13 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 
 	m.nextID++
 	info := SessionInfo{
-		ID:          fmt.Sprintf("term-p0-%d", m.nextID),
-		Target:      request.Target,
-		Shell:       "shell",
-		Enhancement: "native",
-		Rows:        request.Rows,
-		Cols:        request.Cols,
+		ID:           fmt.Sprintf("term-p0-%d", m.nextID),
+		Target:       request.Target,
+		Shell:        "shell",
+		Enhancement:  "native",
+		Capabilities: SessionCapabilities{Resize: true},
+		Rows:         request.Rows,
+		Cols:         request.Cols,
 	}
 	if metadataProvider, ok := session.(SessionMetadataProvider); ok {
 		metadata := metadataProvider.Metadata()
@@ -132,6 +146,10 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 			info.Enhancement = metadata.Enhancement
 		}
 		info.Reason = metadata.Reason
+		info.Capabilities = metadata.Capabilities
+		if info.Capabilities == (SessionCapabilities{}) {
+			info.Capabilities = sessionCapabilitiesFor(info.Shell, info.Enhancement)
+		}
 	}
 	m.sessions[info.ID] = session
 	return info, nil
