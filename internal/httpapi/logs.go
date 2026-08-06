@@ -21,6 +21,7 @@ type logEntry struct {
 	Source     string    `json:"source"`
 	Unit       string    `json:"unit"`
 	Level      string    `json:"level"`
+	Stream     string    `json:"stream,omitempty"`
 	Message    string    `json:"message"`
 	RawMessage string    `json:"rawMessage,omitempty"`
 }
@@ -185,15 +186,12 @@ func (api *handler) readContainerLogCenter(ctx context.Context, limit int, conta
 	}
 	entries := make([]logEntry, 0, len(result.Entries))
 	for _, item := range result.Entries {
-		level := "info"
-		if item.Stream == "stderr" {
-			level = "error"
-		}
+		level := docker.ResolveContainerLogLevel(item.Level, item.Message)
 		identifier := fmt.Sprintf("%x", sha256.Sum256([]byte(containerID+"\x00"+item.Stream+"\x00"+item.Timestamp.Format(time.RFC3339Nano)+"\x00"+item.Message)))
 		message, rawMessage := normalizeLogMessage(item.Message)
 		entries = append(entries, logEntry{
 			ID: identifier[:20], Timestamp: item.Timestamp, Source: "container",
-			Unit: containerID, Level: level, Message: message, RawMessage: rawMessage,
+			Unit: containerID, Level: level, Stream: item.Stream, Message: message, RawMessage: rawMessage,
 		})
 	}
 	return logResponse{CollectedAt: result.CollectedAt, Entries: entries, NextCursor: ""}, nil

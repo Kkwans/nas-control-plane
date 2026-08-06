@@ -23,6 +23,9 @@ func TestContainerLogCollectorNormalizesDefaultTailAndPreservesEntries(t *testin
 	if len(result.Entries) != 1 || result.Entries[0].Message != "ready" {
 		t.Fatalf("entries = %#v", result.Entries)
 	}
+	if result.Entries[0].Level != "info" {
+		t.Fatalf("entry level = %q, want info", result.Entries[0].Level)
+	}
 }
 
 func TestContainerLogCollectorRejectsTailOutsideRange(t *testing.T) {
@@ -49,6 +52,9 @@ func TestDecodeDockerLogEntriesSupportsMultiplexedStreams(t *testing.T) {
 	entries := decodeDockerLogEntries(payload.Bytes())
 	if len(entries) != 2 || entries[0].Stream != "stdout" || entries[0].Message != "ready" || entries[1].Stream != "stderr" || entries[1].Message != "warning" {
 		t.Fatalf("entries = %#v", entries)
+	}
+	if entries[0].Level != "info" || entries[1].Level != "warning" {
+		t.Fatalf("levels = %q, %q; want info, warning", entries[0].Level, entries[1].Level)
 	}
 }
 
@@ -88,5 +94,47 @@ func TestDecodeDockerLogEntriesPreservesRealTimestamp(t *testing.T) {
 	}
 	if entries[0].Timestamp.Format(time.RFC3339Nano) != "2026-07-26T09:15:39.123456789Z" || entries[0].Message != "service ready" {
 		t.Fatalf("entry = %#v", entries[0])
+	}
+	if entries[0].Level != "info" {
+		t.Fatalf("entry level = %q, want info", entries[0].Level)
+	}
+}
+
+func TestResolveContainerLogLevelRequiresAnExplicitPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "stderr content does not become error", message: "request completed with ERROR code", want: "info"},
+		{name: "error prefix", message: "ERROR request failed", want: "error"},
+		{name: "bracketed warning prefix", message: "[WARN] slow request", want: "warning"},
+		{name: "debug prefix", message: "debug cache miss", want: "debug"},
+		{name: "explicit info prefix", message: "INFO service ready", want: "info"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ResolveContainerLogLevel("", test.message); got != test.want {
+				t.Fatalf("ResolveContainerLogLevel(%q) = %q, want %q", test.message, got, test.want)
+			}
+		})
+	}
+}
+
+func TestContainerLogCollectorNormalizesExplicitAndMissingLevels(t *testing.T) {
+	collector := NewContainerLogCollector(fakeContainerLogGateway{entries: []ContainerLogEntry{
+		{Stream: "stderr", Message: "service failed"},
+		{Stream: "stdout", Level: "ERROR", Message: "explicit failure"},
+	}})
+	result, err := collector.Read(context.Background(), ContainerLogsRequest{ContainerID: "abc123", Tail: 2})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got := result.Entries[0].Level; got != "info" {
+		t.Fatalf("missing level = %q, want info", got)
+	}
+	if got := result.Entries[1].Level; got != "error" {
+		t.Fatalf("explicit level = %q, want error", got)
 	}
 }

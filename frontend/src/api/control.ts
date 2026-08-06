@@ -97,6 +97,7 @@ export interface LogEntry {
   source: 'system' | 'agent' | 'container'
   unit: string
   level: 'error' | 'warning' | 'info' | 'debug'
+  stream?: 'stdout' | 'stderr'
   message: string
   rawMessage?: string
 }

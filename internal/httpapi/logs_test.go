@@ -1,6 +1,13 @@
 package httpapi
 
-import "testing"
+import (
+	"context"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/Kkwans/nas-control-plane/internal/docker"
+)
 
 func TestNormalizeLogMessage(t *testing.T) {
 	t.Parallel()
@@ -64,5 +71,33 @@ func TestNormalizeLogMessage(t *testing.T) {
 				t.Fatalf("normalizeLogMessage(%q) = (%q, %q), want (%q, %q)", test.input, message, raw, test.wantMessage, test.wantRaw)
 			}
 		})
+	}
+}
+
+func TestReadContainerLogCenterKeepsStreamAndDefaultsStderrToInfo(t *testing.T) {
+	collectedAt := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
+	agent := &fakeAgentClient{logsResult: docker.ContainerLogsResult{
+		ContainerID: "abc123",
+		Tail:        10,
+		CollectedAt: collectedAt,
+		Entries: []docker.ContainerLogEntry{
+			{Timestamp: collectedAt, Stream: "stderr", Message: "request completed with ERROR code"},
+			{Timestamp: collectedAt.Add(time.Second), Stream: "stdout", Message: "ERROR request failed"},
+		},
+	}}
+	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock"}
+
+	result, err := api.readContainerLogCenter(context.Background(), 10, "abc123", httptest.NewRequest("GET", "/api/v1/logs?source=container", nil))
+	if err != nil {
+		t.Fatalf("readContainerLogCenter() error = %v", err)
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("entries = %#v", result.Entries)
+	}
+	if result.Entries[0].Level != "info" || result.Entries[0].Stream != "stderr" {
+		t.Fatalf("stderr entry = %#v, want info/stderr", result.Entries[0])
+	}
+	if result.Entries[1].Level != "error" || result.Entries[1].Stream != "stdout" {
+		t.Fatalf("explicit-level entry = %#v, want error/stdout", result.Entries[1])
 	}
 }

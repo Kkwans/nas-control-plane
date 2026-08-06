@@ -381,6 +381,8 @@ export interface ContainerActionResult {
 }
 
 export interface ContainerLogEntry {
+  timestamp: string
+  level: 'error' | 'warning' | 'info' | 'debug'
   stream: 'stdout' | 'stderr'
   message: string
 }
@@ -1403,6 +1405,8 @@ function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
     value.entries.every(
       (entry) =>
         isRecord(entry) &&
+        typeof entry.timestamp === 'string' &&
+        (entry.level === 'error' || entry.level === 'warning' || entry.level === 'info' || entry.level === 'debug') &&
         (entry.stream === 'stdout' || entry.stream === 'stderr') &&
         typeof entry.message === 'string',
     )

@@ -46,6 +46,7 @@ func (r ContainerLogsRequest) Normalize() (ContainerLogsRequest, error) {
 
 type ContainerLogEntry struct {
 	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"`
 	Stream    string    `json:"stream"`
 	Message   string    `json:"message"`
 }
@@ -95,6 +96,9 @@ func (c *ContainerLogCollector) Read(ctx context.Context, request ContainerLogsR
 	}
 	if entries == nil {
 		entries = make([]ContainerLogEntry, 0)
+	}
+	for index := range entries {
+		entries[index].Level = ResolveContainerLogLevel(entries[index].Level, entries[index].Message)
 	}
 	return ContainerLogsResult{
 		ContainerID: request.ContainerID,
@@ -165,7 +169,12 @@ func (a *logAccumulator) append(stream, text string) {
 		return
 	}
 	timestamp, message := parseDockerLogLine(text)
-	a.entries = append(a.entries, ContainerLogEntry{Timestamp: timestamp, Stream: stream, Message: message})
+	a.entries = append(a.entries, ContainerLogEntry{
+		Timestamp: timestamp,
+		Level:     ResolveContainerLogLevel("", message),
+		Stream:    stream,
+		Message:   message,
+	})
 }
 
 func (a *logAccumulator) flush() {
@@ -199,10 +208,46 @@ func textLogEntries(stream, text string) []ContainerLogEntry {
 	for _, line := range lines {
 		if line != "" {
 			timestamp, message := parseDockerLogLine(line)
-			entries = append(entries, ContainerLogEntry{Timestamp: timestamp, Stream: stream, Message: message})
+			entries = append(entries, ContainerLogEntry{
+				Timestamp: timestamp,
+				Level:     ResolveContainerLogLevel("", message),
+				Stream:    stream,
+				Message:   message,
+			})
 		}
 	}
 	return entries
+}
+
+// ResolveContainerLogLevel keeps Docker log severity conservative: a stream
+// never raises the level by itself, and only an explicit level prefix can do
+// so.  In particular, stderr defaults to info just like stdout.
+func ResolveContainerLogLevel(explicit, message string) string {
+	if level := normalizeContainerLogLevel(explicit); level != "" {
+		return level
+	}
+	if fields := strings.Fields(message); len(fields) > 0 {
+		token := strings.Trim(fields[0], "[](){}:;,|")
+		if level := normalizeContainerLogLevel(token); level != "" {
+			return level
+		}
+	}
+	return "info"
+}
+
+func normalizeContainerLogLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "trace", "debug":
+		return "debug"
+	case "info", "notice":
+		return "info"
+	case "warn", "warning":
+		return "warning"
+	case "error", "fatal", "panic":
+		return "error"
+	default:
+		return ""
+	}
 }
 
 func parseDockerLogLine(line string) (time.Time, string) {
