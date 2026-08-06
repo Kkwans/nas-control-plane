@@ -27,6 +27,7 @@ import { useDatabaseStore } from '@/stores/database'
 interface ErrorState {
   code: string
   message: string
+  nextStep: string
 }
 
 type ConnectionDiagnostic = DatabaseConnectionDiagnostic
@@ -231,9 +232,22 @@ function errorMessage(error: unknown, fallback: string) {
   return databaseErrorCopy[code] || (error instanceof NcpApiError ? error.message : fallback)
 }
 
+function errorNextStep(error: unknown) {
+  switch (errorCode(error)) {
+    case 'credentials_required': return '输入凭据后重新测试连接。'
+    case 'auth_failed': return '核对用户名、密码和数据库名；密码不会显示在错误信息中。'
+    case 'unreachable': return '确认数据库服务运行且地址、端口可访问。'
+    case 'database_not_found': return '确认数据库名、schema 或对象名称。'
+    case 'permission_denied': return '改用具备目录读取权限的账号。'
+    case 'sql_invalid': return '检查 SQL 语句和参数后重试。'
+    case 'constraint_failed': return '检查必填字段、唯一键和外键约束。'
+    default: return '稍后重试；若持续失败，请记录错误码联系管理员。'
+  }
+}
+
 function setError(error: unknown, fallback: string) {
   const code = errorCode(error)
-  errorState.value = { code, message: errorMessage(error, fallback) }
+  errorState.value = { code, message: errorMessage(error, fallback), nextStep: errorNextStep(error) }
 }
 
 function clearError() {
@@ -257,7 +271,7 @@ function clearError() {
 
     <div v-if="errorState" class="database-error" role="alert">
       <CircleAlert :size="18" />
-      <div><strong>数据库操作失败</strong><span>{{ errorState.message }}</span></div>
+      <div><strong>数据库操作失败</strong><span>{{ errorState.message }}</span><small>下一步：{{ errorState.nextStep }}</small></div>
       <code>代码 {{ errorState.code }}</code>
     </div>
 
@@ -388,6 +402,12 @@ function clearError() {
 .diagnostic-result span {
   font-size: .77rem;
   line-height: 1.45;
+}
+
+.database-error small {
+  color: var(--ncp-danger-strong);
+  font-size: .7rem;
+  line-height: 1.4;
 }
 
 .database-error code,
