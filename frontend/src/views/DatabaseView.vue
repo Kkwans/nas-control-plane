@@ -9,6 +9,7 @@ import {
   Database,
   FolderKanban,
   HardDrive,
+  Info,
   RefreshCw,
   Search,
   Server,
@@ -33,24 +34,30 @@ interface DatabaseProjectGroup {
 interface ErrorState {
   code: string
   message: string
+  nextStep: string
 }
 
-const databaseErrorCopy: Record<string, string> = {
-  credentials_required: '连接需要数据库凭据。',
-  auth_failed: '数据库认证失败，请核对用户名和密码。',
-  unreachable: '数据库服务不可达，请检查地址和端口。',
-  database_not_found: '目标数据库或数据表不存在。',
-  permission_denied: '当前账号没有执行该操作的权限。',
-  sql_invalid: 'SQL 或数据库请求无效。',
-  constraint_failed: '数据约束未满足，请检查提交内容。',
-  agent_unavailable: 'Root Agent 暂不可用，请确认代理服务状态。',
-  timeout: '数据库操作超时，请稍后重试。',
-  credential_store_unavailable: '数据库凭据服务暂不可用。',
-  credential_corrupt: '保存的数据库凭据不可用，请重新连接。',
-  key_unavailable: '数据库凭据加密服务不可用。',
-  key_rotation_failed: '数据库凭据密钥更新失败。',
-  migration_failed: '数据库凭据存储迁移失败。',
-  DATABASE_OPERATION_FAILED: '数据库操作失败，请稍后重试。',
+interface DatabaseErrorCopy {
+  message: string
+  nextStep: string
+}
+
+const databaseErrorCopy: Record<string, DatabaseErrorCopy> = {
+  credentials_required: { message: '连接需要数据库凭据。', nextStep: '打开对应数据源，输入凭据后重新测试连接。' },
+  auth_failed: { message: '数据库认证失败，请核对用户名、密码和数据库名。', nextStep: '核对连接信息后重新测试；错误提示不会显示或保存密码。' },
+  unreachable: { message: '数据库服务不可达，请检查地址和端口。', nextStep: '确认数据库服务运行且主机、端口可访问后重试。' },
+  database_not_found: { message: '目标数据库或数据表不存在。', nextStep: '确认数据库名、schema 或表名后重新读取目录。' },
+  permission_denied: { message: '当前账号没有执行该操作的权限。', nextStep: '改用具备目录读取或操作权限的账号后重试。' },
+  sql_invalid: { message: 'SQL 或数据库请求无效。', nextStep: '检查 SQL 语句、表名和参数后重试。' },
+  constraint_failed: { message: '数据约束未满足，请检查提交内容。', nextStep: '检查必填字段、唯一键和外键约束后重试。' },
+  agent_unavailable: { message: 'Root Agent 暂不可用，请确认代理服务状态。', nextStep: '确认 Root Agent 正常运行后重新发现数据库。' },
+  timeout: { message: '数据库操作超时，请稍后重试。', nextStep: '检查网络和数据库负载，稍后重新发现。' },
+  credential_store_unavailable: { message: '数据库凭据服务暂不可用。', nextStep: '确认凭据服务正常后重新测试连接。' },
+  credential_corrupt: { message: '保存的数据库凭据不可用，请重新连接。', nextStep: '返回数据源详情页重新输入凭据。' },
+  key_unavailable: { message: '数据库凭据加密服务不可用。', nextStep: '确认凭据加密服务正常后重试。' },
+  key_rotation_failed: { message: '数据库凭据密钥更新失败。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
+  migration_failed: { message: '数据库凭据存储迁移失败。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
+  DATABASE_OPERATION_FAILED: { message: '数据库操作失败，请稍后重试。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
 }
 
 const databaseStore = useDatabaseStore()
@@ -121,18 +128,18 @@ function databaseDisplayName(source: DatabaseSource, projectName: string) {
 
 function sourceStatus(source: DatabaseSource) {
   if (databaseStore.catalogs[source.id]) {
-    return { label: '已连接', tone: 'success' as StatusTone, detail: '可直接打开' }
+    return { label: '已连接', tone: 'success' as StatusTone, detail: '认证通过 · 目录已读' }
   }
   if (source.status === 'credentials_required' || source.requiresLogin) {
-    return { label: '需要凭据', tone: 'warning' as StatusTone, detail: '连接后查看' }
+    return { label: '需要凭据', tone: 'warning' as StatusTone, detail: '认证后读取目录' }
   }
   if (source.status === 'available') {
-    return { label: '可用', tone: 'success' as StatusTone, detail: '可直接打开' }
+    return { label: '可用', tone: 'success' as StatusTone, detail: '已发现 · 尚未连接' }
   }
   if (source.status === 'unreachable') {
-    return { label: '不可达', tone: 'danger' as StatusTone, detail: '检查连接' }
+    return { label: '不可达', tone: 'danger' as StatusTone, detail: '检查地址和端口' }
   }
-  return { label: source.status || '未知', tone: 'neutral' as StatusTone, detail: '需要检查' }
+  return { label: source.status || '未知', tone: 'neutral' as StatusTone, detail: '需要检查连接' }
 }
 
 function errorCode(error: unknown) {
@@ -141,12 +148,16 @@ function errorCode(error: unknown) {
 
 function errorMessage(error: unknown, fallback: string) {
   const code = errorCode(error)
-  return databaseErrorCopy[code] || (error instanceof NcpApiError ? error.message : fallback)
+  return databaseErrorCopy[code]?.message || fallback
 }
 
-function setError(error: unknown, fallback: string) {
+function errorNextStep(error: unknown, fallback: string) {
+  return databaseErrorCopy[errorCode(error)]?.nextStep || fallback
+}
+
+function setError(error: unknown, fallback: string, nextStep = '稍后重试；若持续失败，请记录错误码联系管理员。') {
   const code = errorCode(error)
-  errorState.value = { code, message: errorMessage(error, fallback) }
+  errorState.value = { code, message: errorMessage(error, fallback), nextStep: errorNextStep(error, nextStep) }
 }
 
 function clearError() {
@@ -204,14 +215,23 @@ onMounted(() => {
 
     <div v-if="errorState" class="database-error" role="alert">
       <CircleAlert :size="18" />
-      <div><strong>数据库发现失败</strong><span>{{ errorState.message }}</span></div>
+      <div class="database-error__body">
+        <strong>数据库发现失败</strong>
+        <span>{{ errorState.message }}</span>
+        <small>下一步：{{ errorState.nextStep }}</small>
+      </div>
       <code>代码 {{ errorState.code }}</code>
+    </div>
+
+    <div class="database-connection-note" role="note">
+      <Info :size="16" aria-hidden="true" />
+      <span><strong>连接说明</strong>打开数据源会先完成认证，再读取对象目录；目录读取成功后才标记为“已连接”。</span>
     </div>
 
     <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-catalog panel" aria-label="正在发现数据库">
       <div v-for="group in 3" :key="group" class="database-skeleton">
         <header><i class="ncp-skeleton"></i><span class="ncp-skeleton"></span></header>
-        <div v-for="row in 2" :key="row"><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
+        <div v-for="row in 2" :key="row"><i v-for="cell in 6" :key="cell" class="ncp-skeleton"></i></div>
       </div>
     </section>
 
@@ -221,20 +241,30 @@ onMounted(() => {
       </div>
       <article v-for="group in filteredGroups" :key="group.key" class="database-group">
         <header class="database-group__header">
-          <span :class="['project-icon', { 'project-icon--system': group.category === 'system' }]" aria-hidden="true"><FolderKanban :size="19" /></span>
-          <div><strong>{{ group.name }}</strong><small>{{ group.sources.length }} 个数据库来源</small></div>
-          <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]"><span>{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span></span>
-          <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
-            <button class="archive-button" type="button" @click="toggleArchive(group)">
-              <ArchiveRestore v-if="databaseStore.isProjectArchived(group.key)" :size="16" />
-              <Archive v-else :size="16" />
-              <span>{{ databaseStore.isProjectArchived(group.key) ? '恢复' : '归档' }}</span>
-            </button>
-          </ElTooltip>
+          <div class="database-group__summary">
+            <span :class="['project-icon', { 'project-icon--system': group.category === 'system' }]" aria-hidden="true"><FolderKanban :size="19" /></span>
+            <div><strong>{{ group.name }}</strong><small>{{ group.sources.length }} 个数据库来源</small></div>
+          </div>
+          <div class="database-group__meta">
+            <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]"><span>{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span></span>
+            <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
+              <button class="archive-button" type="button" @click="toggleArchive(group)">
+                <ArchiveRestore v-if="databaseStore.isProjectArchived(group.key)" :size="16" />
+                <Archive v-else :size="16" />
+                <span>{{ databaseStore.isProjectArchived(group.key) ? '恢复' : '归档' }}</span>
+              </button>
+            </ElTooltip>
+          </div>
         </header>
 
         <div class="database-table">
-          <div v-for="source in group.sources" :key="source.id" class="database-row">
+          <RouterLink
+            v-for="source in group.sources"
+            :key="source.id"
+            class="database-row"
+            :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
+            :aria-label="`进入 ${databaseDisplayName(source, group.name)} 数据库详情`"
+          >
             <div class="database-identity">
               <span :class="['database-type-icon', `database-type-icon--${source.driver}`, { 'database-type-icon--system': source.category === 'system' }]" aria-hidden="true">
                 <component :is="driverIcon(source.driver)" :size="19" />
@@ -246,12 +276,10 @@ onMounted(() => {
             </div>
             <div class="database-module database-cell"><small class="database-field-label">用途</small><span>{{ source.module || '未标注用途' }}</span></div>
             <div class="database-cell"><span :class="['driver-badge', `driver-badge--${source.driver}`]"><small class="database-field-label">类型</small>{{ driverLabel(source.driver) }}</span></div>
-            <div class="database-cell"><span :class="['source-status', `source-status--${sourceStatus(source).tone}`]"><small class="database-field-label">状态</small>{{ sourceStatus(source).label }}</span></div>
-            <code class="database-location database-cell" :title="source.location"><small class="database-field-label">位置</small><span>{{ source.location }}</span></code>
-            <RouterLink class="open-button" :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }">
-              <span>打开</span><ArrowRight :size="16" />
-            </RouterLink>
-          </div>
+            <div class="database-cell"><span :class="['source-status', `source-status--${sourceStatus(source).tone}`]"><small class="database-field-label">状态</small><strong>{{ sourceStatus(source).label }}</strong><small>{{ sourceStatus(source).detail }}</small></span></div>
+            <code class="database-location database-cell" :title="source.location || '未提供连接位置'"><small class="database-field-label">位置</small><span>{{ source.location || '未提供' }}</span></code>
+            <span class="database-row__affordance" aria-hidden="true"><ArrowRight :size="17" /></span>
+          </RouterLink>
         </div>
       </article>
     </section>
@@ -328,6 +356,12 @@ onMounted(() => {
   gap: 2px;
 }
 
+.database-error__body small {
+  color: var(--ncp-danger-strong);
+  font-size: .72rem;
+  line-height: 1.4;
+}
+
 .database-error strong {
   font-size: .8rem;
 }
@@ -349,6 +383,27 @@ onMounted(() => {
   white-space: nowrap;
 }
 
+.database-connection-note {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  color: var(--ncp-text-subtle);
+  font-size: .74rem;
+}
+
+.database-connection-note svg {
+  flex: 0 0 auto;
+  color: var(--ncp-primary-strong);
+}
+
+.database-connection-note strong {
+  margin-right: 6px;
+  color: var(--ncp-text-muted);
+  font-weight: 740;
+}
+
 .database-catalog {
   overflow: hidden;
 }
@@ -358,14 +413,30 @@ onMounted(() => {
 }
 
 .database-group__header {
-  display: grid;
+  display: flex;
   min-height: 60px;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 11px;
+  justify-content: space-between;
+  gap: 16px;
   padding: 8px 18px;
   border-bottom: 1px solid var(--ncp-line);
   background: linear-gradient(120deg, var(--ncp-surface-quiet), var(--ncp-surface));
+}
+
+.database-group__summary,
+.database-group__meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.database-group__summary {
+  gap: 11px;
+}
+
+.database-group__meta {
+  flex: 0 0 auto;
+  gap: 10px;
 }
 
 .project-icon,
@@ -388,7 +459,7 @@ onMounted(() => {
   background: var(--ncp-object-system-soft);
 }
 
-.database-group__header > div {
+.database-group__summary > div {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -453,7 +524,7 @@ onMounted(() => {
 .database-table__head,
 .database-row {
   display: grid;
-  grid-template-columns: minmax(250px, 1.3fr) minmax(170px, .8fr) 150px 126px minmax(220px, 1.1fr) 92px;
+  grid-template-columns: minmax(250px, 1.3fr) minmax(170px, .8fr) 150px 126px minmax(220px, 1.1fr) 56px;
   align-items: center;
   gap: 16px;
   padding-inline: 18px;
@@ -474,12 +545,21 @@ onMounted(() => {
 .database-row {
   min-height: 76px;
   border-top: 1px solid var(--ncp-line);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
   transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), box-shadow var(--ncp-duration-fast) var(--ncp-ease-out);
 }
 
-.database-row:hover {
+.database-row:hover,
+.database-row:focus-visible {
   background: var(--ncp-table-row-hover);
   box-shadow: inset 3px 0 0 var(--ncp-primary);
+}
+
+.database-row:focus-visible {
+  outline: 2px solid var(--ncp-primary);
+  outline-offset: -2px;
 }
 
 .database-identity {
@@ -487,6 +567,7 @@ onMounted(() => {
   min-width: 0;
   align-items: center;
   gap: 11px;
+  justify-self: start;
 }
 
 .database-type-icon {
@@ -572,6 +653,26 @@ onMounted(() => {
   padding: 0 9px;
 }
 
+.source-status {
+  display: grid;
+  min-width: 92px;
+  gap: 2px;
+  padding-block: 4px;
+  line-height: 1.1;
+}
+
+.source-status > strong {
+  font-size: .7rem;
+  font-weight: 740;
+}
+
+.source-status > small {
+  color: currentColor;
+  font-size: .62rem;
+  font-weight: 600;
+  opacity: .82;
+}
+
 .source-status--success {
   color: var(--ncp-success-strong);
   background: var(--ncp-success-soft);
@@ -593,35 +694,38 @@ onMounted(() => {
 }
 
 .database-location {
+  max-width: 100%;
   color: var(--ncp-text-subtle);
   font-family: var(--ncp-font-mono);
   font-size: .69rem;
 }
 
-.open-button {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 10px;
-  border: 1px solid var(--ncp-primary-border);
-  border-radius: var(--ncp-radius-control);
+.database-row__affordance {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  justify-self: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--ncp-text-subtle);
+  transition: color var(--ncp-duration-fast) var(--ncp-ease-out), background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out), transform var(--ncp-duration-fast) var(--ncp-ease-out);
+}
+
+.database-row:hover .database-row__affordance,
+.database-row:focus-visible .database-row__affordance {
+  border-color: var(--ncp-primary-border);
   background: var(--ncp-primary-soft);
   color: var(--ncp-primary-strong);
-  font-size: .75rem;
-  font-weight: 740;
-  transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out), transform var(--ncp-duration-fast) var(--ncp-ease-out);
+  transform: translateX(2px);
 }
 
-.open-button:hover {
-  border-color: var(--ncp-primary);
-  background: var(--ncp-primary-hover);
-  transform: translateY(-1px);
+.database-row:active .database-row__affordance {
+  transform: translateX(2px) scale(.96);
 }
 
-.open-button:active {
-  transform: translateY(0) scale(.98);
+.database-row__affordance svg {
+  display: block;
 }
 
 .empty-panel {
@@ -679,7 +783,7 @@ onMounted(() => {
 .database-skeleton > div {
   display: grid;
   min-height: 76px;
-  grid-template-columns: minmax(220px, 1.3fr) 150px 120px 110px 1fr;
+  grid-template-columns: minmax(220px, 1.3fr) 150px 120px 110px minmax(180px, 1fr) 56px;
   align-items: center;
   gap: 24px;
   padding: 0 18px;
@@ -743,8 +847,15 @@ onMounted(() => {
 
   .database-group__header {
     min-height: 62px;
-    grid-template-columns: auto minmax(0, 1fr) auto;
     padding-inline: 14px;
+  }
+
+  .database-group__summary {
+    gap: 9px;
+  }
+
+  .database-group__meta {
+    gap: 0;
   }
 
   .project-kind {
@@ -807,7 +918,7 @@ onMounted(() => {
     text-align: left;
   }
 
-  .open-button {
+  .database-row__affordance {
     grid-column: 2;
     grid-row: 1;
     align-self: start;
