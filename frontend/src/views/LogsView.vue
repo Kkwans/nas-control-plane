@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CirclePause, Eye, FileClock, Play, RefreshCw, Search } from '@lucide/vue'
-import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch } from 'element-plus'
+import { CirclePause, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
+import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTooltip } from 'element-plus'
 
 import { followLogs, requestLogs, type LogEntry } from '@/api/control'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
@@ -9,6 +9,7 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatLocalTimestamp } from '@/lib/datetime'
+import { logTokens } from '@/utils/logTokens'
 
 type LogSource = 'system' | 'agent' | 'container'
 const systemStore = useSystemStore()
@@ -127,21 +128,21 @@ function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
 }
 
-function logTokens(message: string) {
-  const pattern = /(HTTP\/\d(?:\.\d)?\s+[1-5]\d{2}|\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|\b(?:error|warn(?:ing)?|fatal|panic|exception|timeout|success|ready)\b|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|(?:\/[\w.%~-]+)+|[A-Za-z_][\w.-]*(?==)|[{}[\],:])/gi
-  return message.split(pattern).filter(Boolean).map((text) => {
-    const normalized = text.toLowerCase()
-    const tone = /^(get|post|put|patch|delete|head|options)$/.test(normalized) ? 'method'
-      : /^http\/\d(?:\.\d)?\s+[1-5]\d{2}$/i.test(text) ? (/\s[23]\d{2}$/.test(text) ? 'success' : 'danger')
-        : /^(error|warning|warn|fatal|panic|exception)$/.test(normalized) ? 'danger'
-          : /^(success|ready)$/.test(normalized) ? 'success'
-            : /^timeout$/.test(normalized) ? 'warning'
-              : /^["']/.test(text) ? 'string'
-                : /^\//.test(text) ? 'path'
-                  : /^[A-Za-z_][\w.-]*$/.test(text) ? 'field'
-                    : /^[{}[\],:]$/.test(text) ? 'punctuation' : ''
-    return { text, tone }
-  })
+function sourceLabel(value: LogEntry['source']) {
+  return value === 'system' ? '系统日志' : value === 'agent' ? 'NCP Agent' : 'Docker 容器日志'
+}
+
+function sourceDescription(value: LogEntry['source']) {
+  return value === 'system'
+    ? '来自 systemd-journald 的宿主机系统日志。'
+    : value === 'agent'
+      ? '来自 ncp-agent.service 的 Root 能力采集与控制日志。'
+      : '来自 Docker 容器的 stdout/stderr；stderr 默认按 INFO 展示，只有明确级别前缀才会提升。'
+}
+
+function entryContext(entry: LogEntry) {
+  const stream = entry.source === 'container' && entry.stream ? ` · ${entry.stream}` : ''
+  return entry.unit ? `${sourceLabel(entry.source)}${stream} · ${entry.unit}` : `${sourceLabel(entry.source)}${stream}`
 }
 </script>
 
@@ -151,14 +152,19 @@ function logTokens(message: string) {
 
     <section class="log-toolbar panel">
       <div class="log-filters">
-        <div class="log-filter-field"><ElSelect v-model="source" aria-label="日志来源" placeholder="选择日志来源">
-          <ElOption label="系统日志（journald）" value="system" /><ElOption label="系统采集代理（Root Agent）" value="agent" /><ElOption label="Docker 容器日志" value="container" />
-        </ElSelect></div>
-        <div v-if="source === 'container'" class="log-filter-field"><ElSelect v-model="containerId" filterable placeholder="选择容器" aria-label="Docker 容器">
+        <div class="log-filter-field log-filter-field--source">
+          <ElSelect v-model="source" aria-label="日志来源" placeholder="选择日志来源">
+            <ElOption label="系统日志" value="system" /><ElOption label="NCP Agent" value="agent" /><ElOption label="Docker 容器日志" value="container" />
+          </ElSelect>
+          <ElTooltip :content="sourceDescription(source)" placement="top">
+            <span class="log-source-help" tabindex="0" role="img" :aria-label="sourceDescription(source)"><Info :size="14" /></span>
+          </ElTooltip>
+        </div>
+        <div v-if="source === 'container'" class="log-filter-field log-filter-field--container"><ElSelect v-model="containerId" filterable placeholder="选择容器" aria-label="Docker 容器">
           <ElOption v-for="container in containers" :key="container.id" :label="container.name" :value="container.id" />
         </ElSelect></div>
-        <div class="log-filter-field"><ElSelect v-model="level" aria-label="日志级别" placeholder="日志级别"><ElOption label="全部级别" value="all" /><ElOption label="错误" value="error" /><ElOption label="警告" value="warning" /><ElOption label="信息" value="info" /><ElOption label="调试" value="debug" /></ElSelect></div>
-        <div class="log-filter-field"><ElSelect v-model="hours" aria-label="时间范围" placeholder="时间范围"><ElOption label="最近 1 小时" :value="1" /><ElOption label="最近 6 小时" :value="6" /><ElOption label="最近 24 小时" :value="24" /><ElOption label="最近 7 天" :value="168" /></ElSelect></div>
+        <div class="log-filter-field log-filter-field--level"><ElSelect v-model="level" aria-label="日志级别" placeholder="日志级别"><ElOption label="全部级别" value="all" /><ElOption label="错误" value="error" /><ElOption label="警告" value="warning" /><ElOption label="信息" value="info" /><ElOption label="调试" value="debug" /></ElSelect></div>
+        <div class="log-filter-field log-filter-field--hours"><ElSelect v-model="hours" aria-label="时间范围" placeholder="时间范围"><ElOption label="最近 1 小时" :value="1" /><ElOption label="最近 6 小时" :value="6" /><ElOption label="最近 24 小时" :value="24" /><ElOption label="最近 7 天" :value="168" /></ElSelect></div>
       </div>
       <div class="log-tools">
         <ListPageSizeControl list-key="logs.events" />
@@ -177,7 +183,7 @@ function logTokens(message: string) {
       <div v-for="entry in pagedEntries" v-else :key="entry.id" class="log-row">
         <time>{{ formatLocalTimestamp(entry.timestamp) }}</time>
         <span :class="['level-badge', `level-badge--${entry.level}`]">{{ levelLabel(entry.level) }}</span>
-        <div class="log-message" :title="entry.message"><small>{{ entry.unit || entry.source }}</small><span class="log-message__text"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></span></div>
+        <div class="log-message" :title="entry.message"><small>{{ entryContext(entry) }}</small><span class="log-message__text"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></span></div>
         <button class="log-detail-button" type="button" title="查看日志详情" @click="selectedEntry = entry"><Eye :size="16" /></button>
       </div>
       <div v-if="!loading && !entries.length" class="log-empty">当前筛选条件下没有日志记录</div>
@@ -191,7 +197,7 @@ function logTokens(message: string) {
         <dl v-if="selectedEntry" class="log-detail-meta">
           <div><dt>时间</dt><dd>{{ formatLocalTimestamp(selectedEntry.timestamp, { fractional: true }) }}</dd></div>
           <div><dt>级别</dt><dd><span :class="['level-badge', `level-badge--${selectedEntry.level}`]">{{ levelLabel(selectedEntry.level) }}</span></dd></div>
-          <div><dt>来源</dt><dd>{{ selectedEntry.source }}</dd></div>
+          <div><dt>来源</dt><dd><span>{{ sourceLabel(selectedEntry.source) }}</span><small class="log-detail-source-note">{{ sourceDescription(selectedEntry.source) }}</small></dd></div>
           <div><dt>服务 / 容器</dt><dd>{{ selectedEntry.unit }}</dd></div>
         </dl>
         <pre v-if="selectedEntry" class="log-detail-message"><span v-for="(token, index) in logTokens(selectedEntry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></pre>
@@ -212,4 +218,81 @@ function logTokens(message: string) {
 @media(max-width:1180px){.log-toolbar{gap:14px}.log-filters{align-items:stretch}.log-filter-field,.log-filter-field:first-child{flex:1;min-width:0}.log-tools{align-items:center}}
 @media(max-width:700px){.log-toolbar{gap:12px;padding:12px}.log-filters{display:grid;grid-template-columns:1fr 1fr;gap:9px}.log-filter-field{min-width:0}.log-filter-field>span{font-size:.67rem}.log-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}.log-tools :deep(.el-input){grid-column:1/-1;order:0;width:100%;flex:none}.log-tools .follow-switch{min-width:0;justify-content:space-between}.log-refresh-button{min-width:86px}.log-row{grid-template-columns:minmax(0,1fr) auto auto;gap:9px;padding:12px 13px}.log-message{grid-column:1/-1;gap:3px;padding-top:2px}.log-message__text{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}.log-detail-dialog{gap:12px}.log-detail-message{max-height:55vh;padding:14px}.logs-page :deep(.el-dialog){width:calc(100vw - 24px)!important;margin:0 auto!important}.logs-page :deep(.el-dialog__body){padding:12px}.log-pagination{align-items:flex-start;flex-direction:column;gap:8px;padding:10px 13px}.log-pagination>div{width:100%;justify-content:space-between}.log-pagination button{flex:1}}
 @media(max-width:420px){.log-filters{grid-template-columns:1fr}.log-tools{grid-template-columns:1fr 1fr}.log-tools :deep(.el-input){grid-column:1/-1}.follow-switch,.log-refresh-button{width:100%}.log-row{grid-template-columns:minmax(0,1fr) auto;}.log-row .log-detail-button{grid-column:2;grid-row:1}.level-badge{grid-column:1;grid-row:1;justify-self:start}.log-row time{grid-column:1;grid-row:2}.log-message{grid-row:3}}
+
+/* Keep the desktop toolbar compact; the source field grows only when a container is selected. */
+.log-toolbar { flex-wrap: nowrap; }
+.log-filters { min-width: 0; flex: 1 1 auto; flex-wrap: nowrap; }
+.log-filter-field { display: flex; min-width: 0; align-items: center; }
+.log-filter-field :deep(.el-select) { min-width: 0; width: 100%; }
+.log-filter-field--source { flex: 1 1 142px; }
+.log-filter-field--container { flex: 1 1 132px; }
+.log-filter-field--level, .log-filter-field--hours { flex: 0 1 102px; }
+.log-source-help { display: grid; width: 20px; height: 32px; flex: 0 0 20px; place-items: center; color: var(--ncp-text-subtle); cursor: help; }
+.log-source-help:hover, .log-source-help:focus-visible { color: var(--ncp-primary-strong); outline: none; }
+.log-tools { min-width: 0; flex: 0 1 auto; }
+.log-tools :deep(.page-size-control) { gap: 5px; white-space: nowrap; }
+.log-tools :deep(.page-size-control .ncp-select) { width: 78px; min-width: 78px; }
+.log-tools :deep(.el-input) { width: clamp(150px, 15vw, 220px); }
+.log-tools .follow-switch { padding-inline: 9px; font-size: .76rem; white-space: nowrap; }
+.log-refresh-button { min-width: 72px; padding-inline: 10px; }
+.log-console { max-height: min(70vh, 760px); overflow: auto; }
+.log-head { position: sticky; top: 0; z-index: 1; }
+.log-row { grid-template-columns: 174px 74px minmax(260px, 1fr) 54px; align-items: center; }
+.log-message { display: grid; min-width: 0; gap: 3px; line-height: 1.55; }
+.log-message > small { overflow: hidden; color: var(--ncp-text-subtle); font-family: var(--ncp-font-ui); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.log-message__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-detail-source-note { display: block; margin-top: 3px; color: var(--ncp-text-subtle); font-family: var(--ncp-font-ui); font-size: .72rem; line-height: 1.45; }
+
+@media(min-width:1181px) {
+  .log-toolbar { gap: 10px; padding: 10px 12px; }
+  .log-filters, .log-tools { gap: 6px; }
+  .log-filter-field--source { max-width: 154px; }
+  .log-filter-field--container { max-width: 136px; }
+  .log-filter-field--level, .log-filter-field--hours { max-width: 104px; }
+  .log-toolbar :deep(.el-select__wrapper), .log-toolbar :deep(.el-input__wrapper), .follow-switch, .log-refresh-button { min-height: 40px; }
+  .log-tools :deep(.page-size-control) { font-size: .74rem; }
+}
+
+@media(max-width:1180px) {
+  .log-toolbar { align-items: stretch; flex-direction: column; gap: 12px; }
+  .log-filters { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 8px; }
+  .log-filter-field, .log-filter-field--source, .log-filter-field--container, .log-filter-field--level, .log-filter-field--hours { max-width: none; flex: none; }
+  .log-tools { display: grid; width: 100%; grid-template-columns: auto minmax(150px, 1fr) auto auto; align-items: center; gap: 8px; }
+  .log-tools :deep(.el-input) { width: auto; min-width: 0; }
+}
+
+@media(max-width:700px) {
+  .log-toolbar { gap: 12px; padding: 12px; }
+  .log-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .log-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
+  .log-tools :deep(.page-size-control) { grid-column: 1; grid-row: 2; min-width: 0; }
+  .log-tools :deep(.el-input) { grid-column: 1 / -1; grid-row: 1; width: 100%; }
+  .log-tools .follow-switch { grid-column: 2; grid-row: 2; min-width: 0; justify-content: space-between; }
+  .log-tools .log-refresh-button { grid-column: 3; grid-row: 2; min-width: 72px; }
+  .log-console { max-height: none; }
+  .log-head { display: none; }
+  .log-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 9px; padding: 12px 13px; }
+  .log-row time { grid-column: 1; grid-row: 1; }
+  .log-row .level-badge { grid-column: 2; grid-row: 1; justify-self: end; }
+  .log-row .log-detail-button { grid-column: 3; grid-row: 1; }
+  .log-message { grid-column: 1 / -1; grid-row: 2; }
+  .log-message__text { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .log-detail-source-note { font-size: .7rem; }
+  .log-detail-message { max-height: 55vh; padding: 14px; }
+  .logs-page :deep(.el-dialog) { width: calc(100vw - 24px) !important; margin: 0 auto !important; }
+  .logs-page :deep(.el-dialog__body) { padding: 12px; }
+  .log-pagination { align-items: flex-start; flex-direction: column; gap: 8px; padding: 10px 13px; }
+  .log-pagination > div { width: 100%; justify-content: space-between; }
+  .log-pagination button { flex: 1; }
+}
+
+@media(max-width:420px) {
+  .log-filters { grid-template-columns: 1fr; }
+  .log-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .log-tools .log-refresh-button { grid-column: 1 / -1; grid-row: 3; width: 100%; }
+  .log-tools .follow-switch { grid-column: 2; }
+  .log-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .log-row .level-badge { grid-column: 1; justify-self: start; }
+  .log-row .log-detail-button { grid-column: 2; }
+}
 </style>

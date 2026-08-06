@@ -125,7 +125,7 @@ describe('NCP API client', () => {
           containerId: 'abc123',
           tail: 40,
           collectedAt: '2026-07-23T02:00:00Z',
-          entries: [{ stream: 'stdout', message: 'ready' }],
+          entries: [{ timestamp: '2026-07-23T02:00:00Z', level: 'info', stream: 'stdout', message: 'ready' }],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
