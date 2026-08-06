@@ -8,7 +8,6 @@ import type { SystemSummary } from '@/api/system'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
-import { formatLocalTimestamp } from '@/lib/datetime'
 import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -58,23 +57,6 @@ const error = ref('')
 const latest = computed(() => samples.value.at(-1))
 const timestamps = computed(() => samples.value.map((item) => item.collectedAt))
 
-const temperatureSensors = computed(() => (systemStore.summary?.sensors ?? []).map((sensor, index) => ({
-  ...sensor,
-  label: temperatureLabel(sensor.name, index),
-  tone: temperatureTone(sensor.temperatureCelsius),
-})))
-const temperatureGridStyle = computed(() => ({ '--temperature-columns': temperatureColumns(temperatureSensors.value.length) }))
-const hasRealtimeSummary = computed(() => Boolean(systemStore.summary))
-const temperatureWarning = computed(() => Boolean(systemStore.summary?.warnings.some((warning) => warning.source === 'temperature')))
-const temperatureStatus = computed(() => {
-  if (temperatureSensors.value.length) return '实时'
-  return hasRealtimeSummary.value ? '无传感器' : '等待数据'
-})
-const temperatureEmptyMessage = computed(() => {
-  if (!hasRealtimeSummary.value) return '等待实时快照，以确认宿主机是否暴露温度传感器。'
-  if (temperatureWarning.value) return '宿主机温度采集暂不可用；请检查传感器权限或驱动状态。'
-  return '当前宿主机未暴露可用的温度传感器，温度卡片不会使用虚构的 0 °C 填充。'
-})
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '采样数量', value: samples.value.length },
   { label: 'CPU', value: latest.value && finiteNumber(latest.value.cpuPercent) ? `${latest.value.cpuPercent.toFixed(1)}%` : '—' },
@@ -143,7 +125,7 @@ const temperatureSeries = computed<TrendSeries[]>(() => temperatureNames.value.m
 const hasTemperatureHistoryField = computed(() => samples.value.some((sample) => Array.isArray(sample.temperatures)))
 const temperatureTrendMessage = computed(() => {
   if (!samples.value.length) return '当前范围暂无温度历史样本。'
-  if (!hasTemperatureHistoryField.value) return '当前接口尚未提供 temperatures 历史字段；下方卡片仍显示实时传感器状态。'
+  if (!hasTemperatureHistoryField.value) return '当前接口尚未提供 temperatures 历史字段；温度趋势图暂无法绘制历史曲线。'
   return '当前范围暂无可绘制的温度历史样本。'
 })
 
@@ -261,15 +243,6 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-function temperatureColumns(count: number) {
-  if (count <= 1) return 1
-  const start = Math.ceil(Math.sqrt(count))
-  for (let columns = start; columns <= count; columns += 1) {
-    if (count % columns !== 1) return columns
-  }
-  return count
-}
-
 function temperatureLabel(name: string, index: number) {
   const normalized = name.trim().toLowerCase()
   const labels: Record<string, string> = {
@@ -286,13 +259,6 @@ function temperatureLabel(name: string, index: number) {
   if (normalized.includes('gpu')) return 'GPU 图形处理器'
   if (normalized.includes('npu')) return 'NPU AI 加速器'
   return `温度传感器 ${index + 1}`
-}
-
-function temperatureTone(value: number) {
-  if (!Number.isFinite(value)) return 'unknown'
-  if (value >= 80) return 'danger'
-  if (value >= 65) return 'warning'
-  return 'normal'
 }
 
 watch(() => systemStore.summary?.collectedAt, (next, previous) => {
@@ -329,26 +295,6 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
     <div v-if="loading && samples.length" class="monitor-loading" role="status" aria-live="polite">
       <LoaderCircle :size="16" aria-hidden="true" />正在更新监控历史…
     </div>
-
-    <section class="temperature-panel panel" aria-labelledby="temperature-title">
-      <header class="temperature-panel__header">
-        <div class="temperature-panel__title">
-          <span class="temperature-panel__icon" aria-hidden="true"><Thermometer :size="18" /></span>
-          <div>
-            <h2 id="temperature-title">温度监控</h2>
-            <p>实时快照 · {{ systemStore.summary?.collectedAt ? formatLocalTimestamp(systemStore.summary.collectedAt) : '等待数据' }}</p>
-          </div>
-        </div>
-        <span :class="['temperature-panel__status', `temperature-panel__status--${temperatureSensors.length ? 'ready' : hasRealtimeSummary ? 'missing' : 'waiting'}`]" role="status" aria-live="polite"><i aria-hidden="true"></i>{{ temperatureStatus }}</span>
-      </header>
-      <div v-if="temperatureSensors.length" class="temperature-grid" role="list" aria-label="实时温度传感器" :style="temperatureGridStyle">
-        <article v-for="(sensor, index) in temperatureSensors" :key="`${sensor.name}-${index}`" :class="['temperature-card', `temperature-card--${sensor.tone}`]" role="listitem" :aria-label="`${sensor.label}：${Number.isFinite(sensor.temperatureCelsius) ? `${sensor.temperatureCelsius.toFixed(1)} °C` : '不可用'}`">
-          <span>{{ sensor.label }}</span>
-          <strong>{{ Number.isFinite(sensor.temperatureCelsius) ? `${sensor.temperatureCelsius.toFixed(1)} °C` : '不可用' }}</strong>
-        </article>
-      </div>
-      <div v-else class="temperature-empty" role="status" aria-live="polite">{{ temperatureEmptyMessage }}</div>
-    </section>
 
     <section v-if="loading && !samples.length" class="monitor-grid monitor-grid--loading" role="status" aria-live="polite" aria-label="正在加载监控图表">
       <article v-for="item in 6" :key="item" class="chart-card panel" aria-hidden="true"><i v-for="line in 8" :key="line" class="ncp-skeleton"></i></article>
@@ -392,7 +338,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
       <article class="chart-card panel" aria-labelledby="temperature-chart-title">
         <header>
           <span class="chart-card__icon chart-card__icon--amber" aria-hidden="true"><Thermometer :size="18" /></span>
-          <div><h2 id="temperature-chart-title">温度历史</h2><p>按传感器显示历史温度趋势</p></div>
+          <div><h2 id="temperature-chart-title">温度趋势</h2><p>按传感器显示历史温度趋势</p></div>
         </header>
         <RealtimeTrendChart :timestamps="timestamps" :series="temperatureSeries" unit="°C" :empty-message="temperatureTrendMessage" />
       </article>
@@ -406,28 +352,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 .monitor-error { margin-bottom:14px; padding:12px 14px; border:1px solid color-mix(in srgb, var(--ncp-danger) 20%, transparent); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.86rem; }
 .monitor-loading { display:flex; min-height:36px; align-items:center; gap:7px; margin-bottom:12px; color:var(--ncp-text-muted); font-size:.76rem; }
 .monitor-loading svg { animation:monitor-spin .9s linear infinite; color:var(--ncp-primary); }
-.temperature-panel { overflow:hidden; }
-.temperature-panel__header { display:flex; min-height:64px; align-items:center; justify-content:space-between; gap:16px; padding:13px 18px; border-bottom:1px solid var(--ncp-line); background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet)); }
-.temperature-panel__title { display:flex; min-width:0; align-items:center; gap:10px; }
-.temperature-panel__icon { display:grid; width:36px; height:36px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-warning-soft); color:var(--ncp-warning-strong); }
-.temperature-panel__title div { display:grid; min-width:0; gap:2px; }
-.temperature-panel__title h2 { margin:0; color:var(--ncp-text); font-size:.96rem; }
-.temperature-panel__title p { margin:0; overflow:hidden; color:var(--ncp-text-subtle); font-size:.75rem; text-overflow:ellipsis; white-space:nowrap; }
-.temperature-panel__status { display:inline-flex; align-items:center; gap:6px; padding:5px 9px; border:1px solid var(--ncp-line); border-radius:999px; background:var(--ncp-surface-quiet); color:var(--ncp-text-subtle); font-size:.72rem; font-weight:750; white-space:nowrap; }
-.temperature-panel__status i { width:6px; height:6px; border-radius:50%; background:currentColor; }
-.temperature-panel__status--ready { border-color:var(--ncp-success-border); background:var(--ncp-success-soft); color:var(--ncp-success-strong); }
-.temperature-panel__status--missing { border-color:var(--ncp-warning-border); background:var(--ncp-warning-soft); color:var(--ncp-warning-strong); }
-.temperature-panel__status--waiting { color:var(--ncp-text-subtle); }
-.temperature-grid { display:grid; grid-template-columns:repeat(var(--temperature-columns),minmax(0,1fr)); gap:10px; padding:14px 18px 18px; }
-.temperature-card { display:grid; min-width:0; gap:6px; padding:12px 13px; border:1px solid var(--ncp-line); border-radius:11px; background:var(--ncp-surface-quiet); }
-.temperature-card span { overflow:hidden; color:var(--ncp-text-muted); font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
-.temperature-card strong { color:var(--ncp-text); font-family:var(--ncp-font-latin); font-size:1.05rem; font-variant-numeric:tabular-nums; }
-.temperature-card--warning { border-color:rgba(179,110,24,.24); background:var(--ncp-warning-soft); }
-.temperature-card--warning strong { color:var(--ncp-warning-strong); }
-.temperature-card--danger { border-color:rgba(198,74,89,.24); background:var(--ncp-danger-soft); }
-.temperature-card--danger strong { color:var(--ncp-danger-strong); }
-.temperature-empty { padding:17px 18px 19px; color:var(--ncp-text-subtle); font-size:.8rem; }
-.monitor-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:stretch; }
+.monitor-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; align-items:stretch; }
 .chart-card { min-width:0; padding:20px; transition:border-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .chart-card:hover { border-color:rgba(52,116,212,.22); box-shadow:0 15px 34px rgba(44,66,94,.08); transform:translateY(-1px); }
 .chart-card>header { display:flex; align-items:center; gap:11px; margin-bottom:12px; }
@@ -440,13 +365,11 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 .chart-card>.ncp-skeleton { display:block; width:100%; height:18px; margin:10px 0; }
 .monitor-grid--loading .chart-card { min-height:300px; }
 @keyframes monitor-spin { to { transform:rotate(360deg); } }
-@media(max-width:920px) {
-  .monitor-grid { grid-template-columns:1fr; }
+@media(max-width:1100px) {
+  .monitor-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media(max-width:640px) {
-  .temperature-panel__header { align-items:flex-start; flex-direction:column; gap:10px; padding:13px 15px; }
-  .temperature-panel__status { align-self:flex-start; }
-  .temperature-grid { padding:12px 15px 15px; }
+  .monitor-grid { grid-template-columns:1fr; }
   .chart-card { padding:16px; }
 }
 @media(prefers-reduced-motion: reduce) {
