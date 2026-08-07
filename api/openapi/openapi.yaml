@@ -958,6 +958,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers:
+    post:
+      operationId: createDockerContainer
+      summary: 使用本地镜像创建容器
+      description: 接受结构化 Docker 参数；可选择仅创建或创建并启动。失败时清理本次创建的容器，不删除既有卷或镜像。
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerContainerCreateRequest'
+      responses:
+        '201':
+          description: 容器已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerContainerCreateResult'
+        '400':
+          description: 容器配置无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Docker 创建、启动或清理失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images/remove-batch:
     post:
       operationId: removeDockerImages
@@ -2363,6 +2395,113 @@ components:
         removedCount: { type: integer, minimum: 0 }
         failedCount: { type: integer, minimum: 0 }
         completed: { type: boolean }
+    DockerContainerMountInput:
+      type: object
+      required: [type, target]
+      properties:
+        type: { type: string, enum: [bind, volume, tmpfs] }
+        source: { type: string }
+        target: { type: string, minLength: 1 }
+        readOnly: { type: boolean, default: false }
+        volumeDriver: { type: string }
+        tmpfsSizeBytes: { type: integer, minimum: 0 }
+    DockerContainerNetworkInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+        driver: { type: string }
+        subnet: { type: string }
+        gateway: { type: string }
+        ip: { type: string }
+    DockerContainerPortInput:
+      type: object
+      required: [containerPort]
+      properties:
+        containerPort: { type: integer, minimum: 1, maximum: 65535 }
+        hostPort: { type: integer, minimum: 0, maximum: 65535 }
+        hostIp: { type: string }
+        protocol: { type: string, enum: [tcp, udp, sctp], default: tcp }
+    DockerContainerDeviceInput:
+      type: object
+      required: [hostPath, containerPath]
+      properties:
+        hostPath: { type: string }
+        containerPath: { type: string }
+        cgroupPermissions: { type: string, default: rwm }
+    DockerContainerGPUInput:
+      type: object
+      properties:
+        driver: { type: string }
+        count: { type: integer, minimum: -1, maximum: 128 }
+        deviceIds: { type: array, items: { type: string } }
+        capabilities: { type: array, items: { type: string } }
+    DockerContainerCreateRequest:
+      type: object
+      required: [image, runContainer]
+      properties:
+        image: { type: string, minLength: 1, maxLength: 512 }
+        name: { type: string, maxLength: 128 }
+        cpu: { type: number, exclusiveMinimum: 0, maximum: 256 }
+        memoryBytes: { type: integer, minimum: 0 }
+        restartPolicy: { type: string, enum: ['no', always, on-failure, unless-stopped], default: 'no' }
+        restartMaxRetries: { type: integer, minimum: 0 }
+        environment: { type: object, additionalProperties: { type: string } }
+        mounts: { type: array, items: { $ref: '#/components/schemas/DockerContainerMountInput' } }
+        network: { $ref: '#/components/schemas/DockerContainerNetworkInput' }
+        ports: { type: array, items: { $ref: '#/components/schemas/DockerContainerPortInput' } }
+        command:
+          type: array
+          description: Docker argv 参数；每项作为独立参数传递，不由 NCP 拼接。
+          minItems: 1
+          items: { type: string, minLength: 1 }
+        privileged: { type: boolean, default: false }
+        capAdd: { type: array, items: { type: string } }
+        capDrop: { type: array, items: { type: string } }
+        devices: { type: array, items: { $ref: '#/components/schemas/DockerContainerDeviceInput' } }
+        gpus: { type: array, items: { $ref: '#/components/schemas/DockerContainerGPUInput' } }
+        runContainer: { type: boolean }
+    DockerContainerCreateResult:
+      type: object
+      required: [containerId, name, image, state, created, started, runContainer]
+      properties:
+        containerId: { type: string }
+        name: { type: string }
+        image: { type: string }
+        state: { type: string, enum: [running, stopped] }
+        created: { type: boolean }
+        started: { type: boolean }
+        runContainer: { type: boolean }
+    DockerProjectDeleteRequest:
+      type: object
+      required: [projectId, kind, registryName]
+      properties:
+        projectId: { type: string, minLength: 1 }
+        kind: { type: string, enum: [compose] }
+        registryName: { type: string, minLength: 1 }
+    DockerProjectDeleteContainerResult:
+      type: object
+      required: [containerId, name, state, deleted, success]
+      properties:
+        containerId: { type: string }
+        name: { type: string }
+        state: { type: string }
+        deleted: { type: boolean }
+        success: { type: boolean }
+        errorCode: { type: string }
+    DockerProjectDeleteResult:
+      type: object
+      required: [projectId, kind, completed, partial, registryDeleted, registryRolledBack, containers]
+      properties:
+        projectId: { type: string }
+        kind: { type: string, enum: [compose] }
+        completed: { type: boolean }
+        partial: { type: boolean }
+        registryDeleted: { type: boolean }
+        registryRolledBack: { type: boolean }
+        containers:
+          type: array
+          items: { $ref: '#/components/schemas/DockerProjectDeleteContainerResult' }
     StandaloneProjectActionRequest:
       type: object
       required: [containerIds]

@@ -459,6 +459,90 @@ export interface DockerImageRemoveBatchResult {
   completed: boolean
 }
 
+export interface DockerContainerMountInput {
+  type: 'bind' | 'volume' | 'tmpfs'
+  source?: string
+  target: string
+  readOnly?: boolean
+  volumeDriver?: string
+  tmpfsSizeBytes?: number
+}
+
+export interface DockerContainerNetworkInput {
+  name: string
+  driver?: string
+  subnet?: string
+  gateway?: string
+  ip?: string
+}
+
+export interface DockerContainerPortInput {
+  containerPort: number
+  hostPort?: number
+  hostIp?: string
+  protocol?: 'tcp' | 'udp' | 'sctp'
+}
+
+export interface DockerContainerDeviceInput {
+  hostPath: string
+  containerPath: string
+  cgroupPermissions?: string
+}
+
+export interface DockerContainerGPUInput {
+  driver?: string
+  count?: number
+  deviceIds?: string[]
+  capabilities?: string[]
+}
+
+export interface DockerContainerCreateInput {
+  image: string
+  name?: string
+  cpu?: number
+  memoryBytes?: number
+  restartPolicy?: 'no' | 'always' | 'on-failure' | 'unless-stopped'
+  restartMaxRetries?: number
+  environment?: Record<string, string>
+  mounts?: DockerContainerMountInput[]
+  network?: DockerContainerNetworkInput
+  ports?: DockerContainerPortInput[]
+  command?: string[]
+  privileged?: boolean
+  capAdd?: string[]
+  capDrop?: string[]
+  devices?: DockerContainerDeviceInput[]
+  gpus?: DockerContainerGPUInput[]
+  runContainer: boolean
+}
+
+export interface DockerContainerCreateResult {
+  containerId: string
+  name: string
+  image: string
+  state: string
+  created: boolean
+  started: boolean
+  runContainer: boolean
+}
+
+export interface DockerProjectDeleteResult {
+  projectId: string
+  kind: 'compose'
+  completed: boolean
+  partial: boolean
+  registryDeleted: boolean
+  registryRolledBack: boolean
+  containers: Array<{
+    containerId: string
+    name: string
+    state: string
+    deleted: boolean
+    success: boolean
+    errorCode?: string
+  }>
+}
+
 export interface ComposeLifecycleServiceStatus {
   name: string
   containerId?: string
@@ -915,6 +999,36 @@ export async function removeDockerImages(
     isDockerImageRemoveBatchResult,
     fetcher,
     'DOCKER_IMAGE_REMOVE_BATCH_RESPONSE_INVALID',
+  )
+}
+
+export async function createDockerContainer(
+  input: DockerContainerCreateInput,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerContainerCreateResult> {
+  return requestJson(
+    '/api/v1/docker/containers',
+    jsonRequest(input),
+    isDockerContainerCreateResult,
+    fetcher,
+    'DOCKER_CONTAINER_CREATE_RESPONSE_INVALID',
+  )
+}
+
+export async function deleteDockerProject(
+  project: Pick<DockerProject, 'id' | 'name' | 'kind'>,
+  fetcher: typeof fetch = fetch,
+): Promise<DockerProjectDeleteResult> {
+  return requestJson(
+    `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: project.id, kind: project.kind, registryName: project.name }),
+    },
+    isDockerProjectDeleteResult,
+    fetcher,
+    'DOCKER_PROJECT_DELETE_RESPONSE_INVALID',
   )
 }
 
@@ -1431,6 +1545,41 @@ function isDockerImageWireInventory(value: unknown): value is DockerImageWireInv
         typeof image.sizeBytes === 'number' &&
         typeof image.createdAt === 'string' &&
         typeof image.containers === 'number',
+    )
+  )
+}
+
+function isDockerContainerCreateResult(value: unknown): value is DockerContainerCreateResult {
+  return (
+    isRecord(value) &&
+    typeof value.containerId === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.image === 'string' &&
+    typeof value.state === 'string' &&
+    value.created === true &&
+    typeof value.started === 'boolean' &&
+    typeof value.runContainer === 'boolean'
+  )
+}
+
+function isDockerProjectDeleteResult(value: unknown): value is DockerProjectDeleteResult {
+  return (
+    isRecord(value) &&
+    typeof value.projectId === 'string' &&
+    value.kind === 'compose' &&
+    value.completed === true &&
+    typeof value.partial === 'boolean' &&
+    typeof value.registryDeleted === 'boolean' &&
+    typeof value.registryRolledBack === 'boolean' &&
+    Array.isArray(value.containers) &&
+    value.containers.every((container) =>
+      isRecord(container) &&
+      typeof container.containerId === 'string' &&
+      typeof container.name === 'string' &&
+      typeof container.state === 'string' &&
+      typeof container.deleted === 'boolean' &&
+      typeof container.success === 'boolean' &&
+      (container.errorCode === undefined || typeof container.errorCode === 'string'),
     )
   )
 }

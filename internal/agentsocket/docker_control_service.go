@@ -23,6 +23,13 @@ type DockerComposeControlProvider interface {
 	ControlComposeProject(context.Context, ncpcompose.LifecycleRequest) (ncpcompose.LifecycleResult, error)
 }
 
+// Optional capabilities keep existing agent fakes and older providers source
+// compatible while allowing the default ContainerController to expose the
+// new Root Agent operations.
+type DockerContainerCreateProvider interface {
+	CreateContainer(context.Context, docker.ContainerCreateRequest) (docker.ContainerCreateResult, error)
+}
+
 type dockerControlService struct {
 	provider        DockerControlProvider
 	composeProvider ComposeProvider
@@ -119,6 +126,39 @@ func (s *dockerControlService) ControlComposeProject(ctx context.Context, reques
 			return nil, grpcstatus.Error(codes.FailedPrecondition, code)
 		default:
 			return nil, grpcstatus.Error(codes.Unavailable, "COMPOSE_LIFECYCLE_UNAVAILABLE")
+		}
+	}
+	return dashboardStruct(result, "AGENT_DOCKER_CONTROL_RESPONSE_INVALID")
+}
+
+func (s *dockerControlService) CreateContainer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	provider, ok := s.provider.(DockerContainerCreateProvider)
+	if !ok {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE")
+	}
+	decoded, err := decodeContainerCreateRequest(request)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "DOCKER_CONTAINER_CREATE_INVALID")
+	}
+	result, err := provider.CreateContainer(ctx, decoded)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, grpcstatus.Error(codes.DeadlineExceeded, "AGENT_RPC_TIMEOUT")
+		}
+		code := docker.ErrorCode(err)
+		switch code {
+		case "DOCKER_CONTAINER_CREATE_INVALID":
+			return nil, grpcstatus.Error(codes.InvalidArgument, code)
+		case "DOCKER_CONTAINER_CREATE_FAILED", "DOCKER_CONTAINER_START_FAILED", "DOCKER_CONTAINER_INSPECT_FAILED", "DOCKER_CONTAINER_CREATE_CLEANUP_FAILED":
+			return nil, grpcstatus.Error(codes.FailedPrecondition, code)
+		default:
+			return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_CONTAINER_CREATE_UNAVAILABLE")
 		}
 	}
 	return dashboardStruct(result, "AGENT_DOCKER_CONTROL_RESPONSE_INVALID")

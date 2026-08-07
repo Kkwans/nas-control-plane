@@ -6,8 +6,17 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 )
+
+type DockerContainerCreateAgentClient interface {
+	CreateDockerContainer(context.Context, string, docker.ContainerCreateRequest) (docker.ContainerCreateResult, error)
+}
+
+func (socketAgentClient) CreateDockerContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
+	return agentsocket.CreateDockerContainer(ctx, socketPath, request)
+}
 
 func (api *handler) dockerImageInventory(response http.ResponseWriter, request *http.Request) {
 	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
@@ -91,4 +100,39 @@ func (api *handler) removeDockerImage(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+// createDockerContainer consumes only the structured image-to-container
+// contract. The command field remains an argv vector all the way to Docker;
+// NCP never joins it into, or evaluates it as, a host shell command.
+func (api *handler) createDockerContainer(response http.ResponseWriter, request *http.Request) {
+	var input docker.ContainerCreateRequest
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	if _, err := input.Normalize(); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_CONTAINER_CREATE_INVALID", "容器创建参数无效。")
+		return
+	}
+	client, ok := api.agent.(DockerContainerCreateAgentClient)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Root Agent 尚未提供 Docker 容器创建能力。")
+		return
+	}
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDockerImageTimeout)
+	defer cancel()
+	result, err := client.CreateDockerContainer(requestContext, api.agentSocketPath, input)
+	if err != nil {
+		code := agentsocket.ErrorCode(err)
+		switch code {
+		case "DOCKER_CONTAINER_CREATE_INVALID":
+			api.writeError(response, request, http.StatusBadRequest, code, "容器创建参数无效。")
+		case "DOCKER_CONTAINER_CREATE_FAILED", "DOCKER_CONTAINER_START_FAILED", "DOCKER_CONTAINER_INSPECT_FAILED", "DOCKER_CONTAINER_CREATE_CLEANUP_FAILED":
+			api.writeError(response, request, http.StatusConflict, code, "Docker 容器创建或启动失败，请刷新状态后重试。")
+		default:
+			api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Docker 容器创建暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		}
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
 }

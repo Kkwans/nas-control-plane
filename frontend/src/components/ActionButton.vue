@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   loading?: boolean
   block?: boolean
+  iconOnly?: boolean
   ariaLabel?: string
   ariaPressed?: boolean
 }>(), {
@@ -24,6 +25,7 @@ const props = withDefaults(defineProps<{
   disabled: false,
   loading: false,
   block: false,
+  iconOnly: false,
   ariaLabel: undefined,
   ariaPressed: undefined,
 })
@@ -31,7 +33,7 @@ const props = withDefaults(defineProps<{
 const buttonClass = computed(() => [
   `action-button--${props.variant}`,
   `action-button--${props.size}`,
-  { 'action-button--block': props.block },
+  { 'action-button--block': props.block, 'action-button--icon-only': props.iconOnly },
 ])
 </script>
 
@@ -91,6 +93,24 @@ const buttonClass = computed(() => [
 
 .action-button--block {
   width: 100%;
+}
+
+.action-button--icon-only {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  gap: 0;
+}
+
+.action-button--icon-only .action-button__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .action-button--primary {

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  createDockerContainer,
+  deleteDockerProject,
   loginRoot,
   pullDockerImage,
   requestCapabilities,
@@ -116,6 +118,80 @@ describe('NCP API client', () => {
       '/api/v1/docker/containers/abc123/actions/restart',
       expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
     )
+  })
+
+  it('creates a Docker container from structured options without shell interpolation', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          containerId: 'created-123',
+          name: 'redis-cache',
+          image: 'redis:8-alpine',
+          state: 'stopped',
+          created: true,
+          started: false,
+          runContainer: false,
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(createDockerContainer({
+      image: 'redis:8-alpine',
+      name: 'redis-cache',
+      environment: { APP_MODE: 'production' },
+      ports: [{ containerPort: 6379, hostPort: 6379, protocol: 'tcp' }],
+      command: ['redis-server', '--appendonly', 'yes'],
+      runContainer: false,
+    }, fetcher)).resolves.toMatchObject({ containerId: 'created-123', started: false })
+
+    const [, init] = fetcher.mock.calls[0]!
+    expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin' })
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      image: 'redis:8-alpine',
+      command: ['redis-server', '--appendonly', 'yes'],
+      runContainer: false,
+    })
+  })
+
+  it('deletes a stopped Compose project using only its public identity', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          projectId: 'compose:heimdall',
+          kind: 'compose',
+          completed: true,
+          partial: false,
+          registryDeleted: true,
+          registryRolledBack: false,
+          containers: [{
+            containerId: 'abc123',
+            name: 'heimdall',
+            state: 'stopped',
+            deleted: true,
+            success: true,
+          }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await expect(deleteDockerProject({
+      id: 'compose:heimdall',
+      name: 'heimdall',
+      kind: 'compose',
+    }, fetcher)).resolves.toMatchObject({ completed: true, registryDeleted: true })
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/docker/compose/projects/compose%3Aheimdall',
+      expect.objectContaining({ method: 'DELETE', credentials: 'same-origin' }),
+    )
+    const [, init] = fetcher.mock.calls[0]!
+    expect(JSON.parse(String(init?.body))).toEqual({
+      projectId: 'compose:heimdall',
+      kind: 'compose',
+      registryName: 'heimdall',
+    })
   })
 
   it('requests a bounded container log tail', async () => {

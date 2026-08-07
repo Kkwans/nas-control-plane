@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
@@ -105,6 +106,106 @@ func ControlComposeProject(ctx context.Context, socketPath string, request ncpco
 	return result, nil
 }
 
+func CreateDockerContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
+	spec, err := request.Normalize()
+	if err != nil {
+		return docker.ContainerCreateResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return docker.ContainerCreateResult{}, contextError(err)
+	}
+	if err := ensureDockerAgentProtocol(ctx, socketPath); err != nil {
+		return docker.ContainerCreateResult{}, err
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ContainerCreateResult{}, err
+	}
+	defer connection.Close()
+	payload, err := containerCreatePayload(spec)
+	if err != nil {
+		return docker.ContainerCreateResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerControlServiceClient(connection).CreateContainer(ctx, payload)
+	if err != nil {
+		return docker.ContainerCreateResult{}, dockerRPCError(err)
+	}
+	var result docker.ContainerCreateResult
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ContainerCreateResult{}, err
+	}
+	if result.ContainerID == "" || result.Image == "" || result.State == "" || !result.Created || result.RunContainer != spec.RunContainer || result.Started != spec.RunContainer {
+		return docker.ContainerCreateResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("container create result is incomplete"))
+	}
+	return result, nil
+}
+
+func CreateContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
+	return CreateDockerContainer(ctx, socketPath, request)
+}
+
+func containerCreatePayload(spec docker.ContainerCreateSpec) (*structpb.Struct, error) {
+	mounts := make([]any, 0, len(spec.Mounts))
+	for _, value := range spec.Mounts {
+		mounts = append(mounts, map[string]any{
+			"type": value.Type, "source": value.Source, "target": value.Target, "read_only": value.ReadOnly,
+			"volume_driver": value.VolumeDriver, "tmpfs_size_bytes": value.TmpfsSizeByte,
+		})
+	}
+	ports := make([]any, 0, len(spec.Ports))
+	for _, value := range spec.Ports {
+		ports = append(ports, map[string]any{
+			"container_port": int64(value.ContainerPort), "host_port": int64(value.HostPort), "host_ip": value.HostIP, "protocol": value.Protocol,
+		})
+	}
+	devices := make([]any, 0, len(spec.Devices))
+	for _, value := range spec.Devices {
+		devices = append(devices, map[string]any{"host_path": value.HostPath, "container_path": value.ContainerPath, "cgroup_permissions": value.CgroupPermissions})
+	}
+	gpus := make([]any, 0, len(spec.GPUs))
+	for _, value := range spec.GPUs {
+		ids := make([]any, 0, len(value.DeviceIDs))
+		for _, id := range value.DeviceIDs {
+			ids = append(ids, id)
+		}
+		capabilities := make([]any, 0, len(value.Capabilities))
+		for _, capability := range value.Capabilities {
+			capabilities = append(capabilities, capability)
+		}
+		gpus = append(gpus, map[string]any{"driver": value.Driver, "count": value.Count, "device_ids": ids, "capabilities": capabilities, "options": value.Options})
+	}
+	values := map[string]any{
+		"image": spec.Image, "name": spec.Name, "cpu_nano_cpus": spec.NanoCPUs, "memory_bytes": spec.MemoryBytes,
+		"cpu_shares": spec.CPUShares, "restart_policy": spec.RestartPolicy, "restart_max_retries": spec.RestartMaxRetries,
+		"environment": environmentMap(spec.Environment), "env": []any{}, "mounts": mounts, "ports": ports,
+		"command": stringSliceAny(spec.Command), "privileged": spec.Privileged, "cap_add": stringSliceAny(spec.CapAdd),
+		"cap_drop": stringSliceAny(spec.CapDrop), "devices": devices, "gpus": gpus, "run_container": spec.RunContainer,
+	}
+	if spec.Network != nil {
+		values["network"] = map[string]any{"name": spec.Network.Name, "driver": spec.Network.Driver, "subnet": spec.Network.Subnet, "gateway": spec.Network.Gateway, "ip": spec.Network.IP}
+	}
+	return structpb.NewStruct(values)
+}
+
+func environmentMap(values []string) map[string]any {
+	result := make(map[string]any)
+	for _, value := range values {
+		separator := strings.IndexByte(value, '=')
+		if separator > 0 {
+			result[value[:separator]] = value[separator+1:]
+		}
+	}
+	return result
+}
+
+func stringSliceAny(values []string) []any {
+	result := make([]any, 0, len(values))
+	for _, value := range values {
+		result = append(result, value)
+	}
+	return result
+}
+
 func ensureDockerAgentProtocol(ctx context.Context, socketPath string) error {
 	status, err := Probe(ctx, socketPath)
 	if err != nil {
@@ -130,6 +231,14 @@ func dockerRPCError(err error) error {
 	message := status.Convert(err).Message()
 	switch message {
 	case "DOCKER_PROJECT_ACTION_INVALID", "DOCKER_PROJECT_ACTION_FAILED",
+		"DOCKER_CONTAINER_CREATE_INVALID", "DOCKER_CONTAINER_CREATE_FAILED", "DOCKER_CONTAINER_START_FAILED",
+		"DOCKER_CONTAINER_INSPECT_FAILED", "DOCKER_CONTAINER_CREATE_CLEANUP_FAILED", "DOCKER_CONTAINER_CREATE_UNAVAILABLE",
+		"DOCKER_PROJECT_DELETE_INVALID", "DOCKER_PROJECT_DELETE_PROTECTED", "DOCKER_PROJECT_DELETE_RUNNING",
+		"DOCKER_PROJECT_DELETE_NOT_FOUND", "DOCKER_PROJECT_DELETE_FAILED", "DOCKER_PROJECT_DELETE_INSPECT_FAILED",
+		"DOCKER_PROJECT_DELETE_INVENTORY_FAILED", "DOCKER_PROJECT_DELETE_REGISTRY_NOT_FOUND",
+		"DOCKER_PROJECT_DELETE_REGISTRY_FAILED", "DOCKER_PROJECT_DELETE_INTEGRITY_FAILED",
+		"DOCKER_PROJECT_DELETE_ROLLBACK_FAILED", "DOCKER_PROJECT_DELETE_REGISTRY_BACKUP_FAILED",
+		"DOCKER_PROJECT_DELETE_REGISTRY_UNAVAILABLE",
 		"DOCKER_IMAGE_REMOVE_BATCH_INVALID", "DOCKER_IMAGE_REMOVE_BATCH_LIST_FAILED",
 		"DOCKER_IMAGE_REMOVE_BATCH_FAILED", "COMPOSE_LIFECYCLE_INVALID",
 		"COMPOSE_LIFECYCLE_FAILED", "COMPOSE_LIFECYCLE_VERIFY_FAILED",
