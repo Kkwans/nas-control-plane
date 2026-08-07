@@ -5,7 +5,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/console/Dockerfile.server
-    image: nas-control-plane:2026.7.29-v1
+    image: nas-control-plane:2026.8.7-v1
     container_name: nas-control-plane
     restart: unless-stopped
     command:
@@ -16,11 +16,15 @@ services:
       - /run/ncp/agent.sock
       - --database
       - /data/ncp.sqlite
+      - --database-key
+      - /run/secrets/ncp-database-credentials.key
     volumes:
       # Root Agent owns this socket; the Server only needs group access to connect.
       - /run/ncp:/run/ncp:ro
       # Create this directory as NAS user 1000 before the first compose deployment.
       - ../../data:/data
+      # Provisioned once by `ncp-server database-key-init`; never stored in Git.
+      - ../../secrets/database-credentials.key:/run/secrets/ncp-database-credentials.key:ro
     expose:
       - "8750"
     read_only: true
