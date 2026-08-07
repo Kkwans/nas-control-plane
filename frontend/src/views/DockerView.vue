@@ -9,6 +9,7 @@ import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
+import ListIconButton from '@/components/ListIconButton.vue'
 import ComposeEditorDrawer from '@/components/ComposeEditorDrawer.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
@@ -383,17 +384,17 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           </ElTooltip>
           <div class="project-actions" @click.stop>
             <ElTooltip content="启动项目" placement="top">
-              <ActionButton variant="ghost" size="sm" icon-only :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :aria-label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')"><span>启动项目</span></ActionButton>
+              <ListIconButton :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')" />
             </ElTooltip>
             <ElTooltip content="停止项目" placement="top">
-              <ActionButton variant="danger" size="sm" icon-only :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :aria-label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')"><span>停止项目</span></ActionButton>
+              <ListIconButton :icon="Square" tone="danger" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')" />
             </ElTooltip>
             <ElTooltip content="重启项目" placement="top">
-              <ActionButton variant="secondary" size="sm" icon-only :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :aria-label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')"><span>重启项目</span></ActionButton>
+              <ListIconButton :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')" />
             </ElTooltip>
             <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
               <span class="project-action-tooltip-target">
-                <ActionButton variant="danger" size="sm" icon-only :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :aria-label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)"><span>删除项目</span></ActionButton>
+                <ListIconButton :icon="Trash2" tone="danger" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)" />
               </span>
             </ElTooltip>
           </div>
@@ -516,7 +517,6 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .port-cell>span { color: var(--ncp-text-subtle); font-size: .72rem; }
 .path-cell { overflow: hidden; padding-right: 8px; color: var(--ncp-text-muted); font-family:var(--ncp-font-mono); font-size:.78rem; text-overflow: ellipsis; white-space: nowrap; }
 .project-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-.project-actions :deep(.action-button) { width: 40px; min-width: 40px; padding: 0; }
 .project-action-tooltip-target { display: inline-flex; }
 .project-action-tooltip-target--mobile, .project-action-tooltip-target--mobile :deep(.action-button) { width: 100%; }
 .project-row-feedback { grid-column: 1 / -1; align-self: stretch; padding: 8px 10px; border: 1px solid var(--ncp-danger-border); border-radius: 8px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .72rem; }

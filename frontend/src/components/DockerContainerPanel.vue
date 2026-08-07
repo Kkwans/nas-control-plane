@@ -4,8 +4,10 @@ import { FileText, Play, RotateCcw, Square, Box } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
 import type { ContainerAction, DockerInventory } from '@/api/system'
+import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import { formatDockerContainerStatus } from '@/domain/docker'
 
 type DockerContainer = DockerInventory['containers'][number]
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
@@ -78,7 +80,7 @@ function pending(containerId: string, action: ContainerAction) {
         <span><Box :size="18" /></span>
         <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
       </div>
-      <div><StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" /><small class="status-detail">{{ container.status }}</small></div>
+      <div class="container-state"><StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" /><small class="status-detail" :title="container.status">{{ formatDockerContainerStatus(container.status) }}</small></div>
       <span class="cell-ellipsis">{{ container.projectName || '独立容器' }}</span>
       <span class="cell-ellipsis mono">{{ container.image }}</span>
       <div class="port-list">
@@ -87,24 +89,16 @@ function pending(containerId: string, action: ContainerAction) {
       </div>
       <div class="container-actions">
         <ElTooltip v-if="container.state !== 'running'" content="启动容器" placement="top">
-          <button type="button" :disabled="Boolean(actionPending)" aria-label="启动容器" @click="emit('action', container.id, 'start')">
-            <Play :size="16" /><span v-if="pending(container.id, 'start')" class="action-dot"></span>
-          </button>
+          <ListIconButton :icon="Play" label="启动容器" :loading="pending(container.id, 'start')" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'start')" />
         </ElTooltip>
         <ElTooltip v-else content="停止容器" placement="top">
-          <button class="danger" type="button" :disabled="Boolean(actionPending)" aria-label="停止容器" @click="emit('action', container.id, 'stop')">
-            <Square :size="15" /><span v-if="pending(container.id, 'stop')" class="action-dot"></span>
-          </button>
+          <ListIconButton :icon="Square" label="停止容器" tone="danger" :loading="pending(container.id, 'stop')" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'stop')" />
         </ElTooltip>
         <ElTooltip content="重启容器" placement="top">
-          <button type="button" :disabled="Boolean(actionPending) || container.state !== 'running'" aria-label="重启容器" @click="emit('action', container.id, 'restart')">
-            <RotateCcw :size="16" />
-          </button>
+          <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
         </ElTooltip>
         <ElTooltip content="查看容器日志" placement="top">
-          <button type="button" aria-label="查看容器日志" @click="emit('logs', container)">
-            <FileText :size="16" />
-          </button>
+          <ListIconButton :icon="FileText" label="查看容器日志" @click="emit('logs', container)" />
         </ElTooltip>
       </div>
     </div>
@@ -130,7 +124,7 @@ function pending(containerId: string, action: ContainerAction) {
       </header>
       <dl>
         <div><dt>镜像</dt><dd>{{ container.image }}</dd></div>
-        <div><dt>状态</dt><dd>{{ container.status }}</dd></div>
+        <div><dt>状态</dt><dd :title="container.status">{{ formatDockerContainerStatus(container.status) }}</dd></div>
         <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.publicPort).join('、') || '无' }}</dd></div>
       </dl>
       <div class="mobile-actions">
@@ -164,18 +158,13 @@ function pending(containerId: string, action: ContainerAction) {
 .container-name strong,.cell-ellipsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .container-name strong { color:var(--ncp-text); font-size:.92rem; }
 .container-name small,.status-detail { color:var(--ncp-text-subtle); font-size:.76rem; }
-.container-row>div:nth-child(2) { display:grid; justify-items:center; gap:4px; }
+.container-state { display:grid; min-width:0; justify-items:center; gap:5px; }
+.status-detail { overflow:hidden; max-width:100%; line-height:1.25; text-overflow:ellipsis; white-space:nowrap; }
 .mono { font-family:'JetBrains Mono Variable',monospace; font-size:.78rem; }
 .port-list { display:flex; align-items:center; gap:5px; }
 .port-list span { padding:4px 7px; border-radius:6px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); font-family:'JetBrains Mono Variable',monospace; font-size:.72rem; }
 .port-list small { color:var(--ncp-text-subtle); font-size:.72rem; }
 .container-actions { display:flex; justify-content:flex-end; gap:5px; }
-.container-actions button { position:relative; display:grid; width:34px; height:34px; place-items:center; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-primary-strong); transition:transform var(--ncp-duration-fast),background-color var(--ncp-duration-fast); }
-.container-actions button:hover:not(:disabled) { transform:translateY(-1px); background:var(--ncp-primary-soft); }
-.container-actions button.danger { color:var(--ncp-danger-strong); }
-.container-actions button.danger:hover:not(:disabled) { background:var(--ncp-danger-soft); }
-.container-actions button:disabled { cursor:not-allowed; opacity:.42; }
-.action-dot { position:absolute; right:3px; bottom:3px; width:5px; height:5px; border-radius:50%; background:currentColor; animation:pulse 1s infinite; }
 .table-empty { padding:36px; color:var(--ncp-text-subtle); font-size:.72rem; text-align:center; }
 .container-pagination { display:flex; min-height:52px; align-items:center; justify-content:space-between; gap:12px; padding:8px 16px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-subtle); font-size:.82rem; }
 .container-pagination div { display:flex; align-items:center; gap:8px; }
@@ -183,7 +172,6 @@ function pending(containerId: string, action: ContainerAction) {
 .container-pagination button:disabled { cursor:not-allowed; opacity:.42; }
 .container-pagination strong { min-width:62px; color:var(--ncp-text); text-align:center; }
 .container-mobile-list { display:none; }
-@keyframes pulse { 50% { opacity:.25; } }
 @media(max-width:1100px){.container-table__head,.container-row{grid-template-columns:minmax(170px,1fr) 120px minmax(110px,.7fr) minmax(150px,1fr) 120px 152px;gap:8px}.container-actions{gap:3px}}
 @media(max-width:820px){
   .container-panel{display:none}.container-mobile-list{display:grid;gap:10px}.container-card{display:grid;gap:13px;padding:15px}.container-card header{display:flex;align-items:center;justify-content:space-between;gap:10px}

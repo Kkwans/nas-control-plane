@@ -23,6 +23,7 @@ import {
 } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import CreateContainerDrawer from '@/components/CreateContainerDrawer.vue'
+import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { useListPreference } from '@/composables/useListPreference'
@@ -561,8 +562,8 @@ onMounted(() => {
             </span>
           </ElTooltip>
           <div class="image-row-actions">
-            <ElTooltip content="使用此镜像创建容器"><ActionButton variant="ghost" size="sm" icon-only :icon="PackagePlus" :aria-label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)"><span>创建容器</span></ActionButton></ElTooltip>
-            <ElTooltip :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ActionButton variant="danger" size="sm" icon-only :icon="Trash2" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :aria-label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)"><span>删除镜像</span></ActionButton></ElTooltip>
+            <ElTooltip content="使用此镜像创建容器"><ListIconButton :icon="PackagePlus" :label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)" /></ElTooltip>
+            <ElTooltip :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ListIconButton :icon="Trash2" tone="danger" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)" /></ElTooltip>
           </div>
         </div>
         <div v-if="!loading && !filteredImages.length" class="empty-state">没有匹配的本地镜像</div>
