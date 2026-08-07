@@ -110,7 +110,7 @@ func TestProtectedContainerExecOptionsUseNativeBusyBoxShellWithoutScript(t *test
 }
 
 func TestContainerShellMetadataReportsBashReadline(t *testing.T) {
-	metadata := containerShellMetadata("/bin/bash")
+	metadata := containerShellMetadataWithProbe("/bin/bash", shellCapabilityProbe{Readline: true, BracketedPaste: true})
 	if metadata.Shell != "bash" || metadata.Enhancement != "readline" || metadata.Reason == "" {
 		t.Fatalf("Bash metadata = %#v", metadata)
 	}
@@ -119,6 +119,19 @@ func TestContainerShellMetadataReportsBashReadline(t *testing.T) {
 	}
 	if strings.Contains(metadata.Reason, "blesh") && !strings.Contains(metadata.Reason, "不加载") {
 		t.Fatalf("Bash metadata must not claim host ble.sh: %q", metadata.Reason)
+	}
+}
+
+func TestContainerShellMetadataReportsBashPasteDowngrade(t *testing.T) {
+	metadata := containerShellMetadataWithProbe("/bin/bash", shellCapabilityProbe{Readline: true})
+	if metadata.Enhancement != "readline" || !metadata.Capabilities.Readline {
+		t.Fatalf("Bash readline metadata = %#v", metadata)
+	}
+	if metadata.Capabilities.BracketedPaste || metadata.Capabilities.MultilinePaste {
+		t.Fatalf("Bash paste capabilities = %#v", metadata.Capabilities)
+	}
+	if !strings.Contains(metadata.Reason, "bracketed paste") {
+		t.Fatalf("Bash paste downgrade reason = %q", metadata.Reason)
 	}
 }
 

@@ -5,6 +5,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,11 +48,12 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 	}
 	var readyReader *os.File
 	var readyWriter *os.File
+	var capabilityProbe shellCapabilityProbe
 	if _, err := os.Stat(shell); err != nil {
 		shell = "/bin/sh"
 		arguments = []string{"-i"}
 		metadata = hostSessionMetadata("sh", false, false)
-	} else if _, err := os.Stat(rcFile); err == nil {
+	} else if pathExists(rcFile) {
 		arguments = []string{"--noprofile", "--rcfile", rcFile, "-i"}
 		readyReader, readyWriter, err = os.Pipe()
 		if err != nil {
@@ -60,6 +62,7 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 		metadata = hostSessionMetadata("bash", true, pathExists(bleFile))
 	} else {
 		metadata = hostSessionMetadata("bash", false, false)
+		capabilityProbe = probeBashCapabilities(ctx, shell, "")
 	}
 	command := exec.CommandContext(ctx, shell, arguments...)
 	command.Dir = "/root"
@@ -98,15 +101,22 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 		_ = readyWriter.Close()
 	}
 	if readyReader != nil {
-		if waitForTerminalReady(readyReader, ctx) && pathExists(bleFile) {
+		ready, probe := waitForTerminalReady(readyReader, ctx)
+		capabilityProbe = probe
+		if ready && probe.BleSH {
 			metadata.Enhancement = "blesh"
 			metadata.Reason = ""
-			metadata.Capabilities = sessionCapabilitiesFor(metadata.Shell, metadata.Enhancement)
 		} else if metadata.Enhancement == "blesh" {
 			metadata.Enhancement = "native"
-			metadata.Reason = "Shell 增强启动超时，已回退原生 Bash"
-			metadata.Capabilities = sessionCapabilitiesFor(metadata.Shell, metadata.Enhancement)
+			if ready {
+				metadata.Reason = "ble.sh 未在当前 PTY 中完成加载，已回退原生 Bash"
+			} else {
+				metadata.Reason = "Shell 增强启动超时，已回退原生 Bash"
+			}
 		}
+	}
+	if metadata.Shell == "bash" {
+		applyHostBashCapabilities(&metadata, capabilityProbe)
 	}
 	if err := ctx.Err(); err != nil {
 		_ = terminalFile.Close()
@@ -155,13 +165,35 @@ func hostSessionMetadata(shell string, rcAvailable, bleAvailable bool) SessionMe
 		return metadata
 	}
 	metadata.Enhancement = "blesh"
-	metadata.Capabilities = sessionCapabilitiesFor(shell, metadata.Enhancement)
 	return metadata
 }
 
+func applyHostBashCapabilities(metadata *SessionMetadata, probe shellCapabilityProbe) {
+	if metadata == nil || metadata.Shell != "bash" {
+		return
+	}
+	if metadata.Enhancement == "blesh" && (!probe.BleSH || !probe.Readline) {
+		metadata.Enhancement = "native"
+		metadata.Reason = "ble.sh 或 readline 未能确认，已回退原生 Bash"
+	}
+	metadata.Capabilities = sessionCapabilitiesForProbe(metadata.Shell, metadata.Enhancement, probe)
+	if !probe.Readline {
+		metadata.Reason = appendCapabilityReason(metadata.Reason, "Bash 未确认 readline，补全与历史编辑不可用")
+	} else if !probe.BracketedPaste {
+		metadata.Reason = appendCapabilityReason(metadata.Reason, "Bash 未启用 bracketed paste，多行粘贴将按行发送")
+	}
+}
+
+func appendCapabilityReason(reason, addition string) string {
+	if reason == "" {
+		return addition
+	}
+	return reason + "；" + addition
+}
+
 func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func supportedTerminalLocale() string {
@@ -176,13 +208,17 @@ func supportedTerminalLocale() string {
 	return "C"
 }
 
-func waitForTerminalReady(reader *os.File, contexts ...context.Context) bool {
+func waitForTerminalReady(reader *os.File, contexts ...context.Context) (bool, shellCapabilityProbe) {
 	defer reader.Close()
-	ready := make(chan bool, 1)
+	type result struct {
+		ready bool
+		probe shellCapabilityProbe
+	}
+	ready := make(chan result, 1)
 	go func() {
-		output := make([]byte, 32)
-		read, _ := reader.Read(output)
-		ready <- read > 0 && strings.Contains(string(output[:read]), "ready")
+		output, _ := io.ReadAll(io.LimitReader(reader, 512))
+		confirmed, probe := parseTerminalReadySignal(output)
+		ready <- result{ready: confirmed, probe: probe}
 	}()
 	var contextDone <-chan struct{}
 	if len(contexts) > 0 && contexts[0] != nil {
@@ -190,13 +226,13 @@ func waitForTerminalReady(reader *os.File, contexts ...context.Context) bool {
 	}
 	select {
 	case result := <-ready:
-		return result
+		return result.ready, result.probe
 	case <-contextDone:
 		_ = reader.Close()
-		return false
+		return false, shellCapabilityProbe{Err: context.Canceled}
 	case <-time.After(terminalReadyTimeout):
 		_ = reader.Close()
-		return false
+		return false, shellCapabilityProbe{Err: context.DeadlineExceeded}
 	}
 }
 

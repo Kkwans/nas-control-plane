@@ -32,6 +32,7 @@ func TestHostEnhancementRequiresBothNCPFiles(t *testing.T) {
 
 func TestHostSessionMetadataReportsBleshCapabilities(t *testing.T) {
 	metadata := hostSessionMetadata("bash", true, true)
+	applyHostBashCapabilities(&metadata, shellCapabilityProbe{Readline: true, BracketedPaste: true, BleSH: true})
 	if metadata.Shell != "bash" || metadata.Enhancement != "blesh" || metadata.Reason != "" {
 		t.Fatalf("ble.sh metadata = %#v", metadata)
 	}
@@ -45,8 +46,19 @@ func TestHostSessionMetadataReportsBashWithoutEnhancement(t *testing.T) {
 	if metadata.Shell != "bash" || metadata.Enhancement != "native" || metadata.Reason == "" {
 		t.Fatalf("Bash fallback metadata = %#v", metadata)
 	}
-	if !metadata.Capabilities.Readline || !metadata.Capabilities.BracketedPaste || !metadata.Capabilities.MultilinePaste {
+	if metadata.Capabilities.Readline || metadata.Capabilities.BracketedPaste || metadata.Capabilities.MultilinePaste {
 		t.Fatalf("Bash fallback capabilities = %#v", metadata.Capabilities)
+	}
+}
+
+func TestApplyHostBashCapabilitiesOnlyReportsProbedFeatures(t *testing.T) {
+	metadata := hostSessionMetadata("bash", false, false)
+	applyHostBashCapabilities(&metadata, shellCapabilityProbe{Readline: true})
+	if !metadata.Capabilities.Readline || metadata.Capabilities.BracketedPaste || metadata.Capabilities.MultilinePaste {
+		t.Fatalf("Bash probed capabilities = %#v", metadata.Capabilities)
+	}
+	if metadata.Enhancement != "native" || metadata.Reason == "" {
+		t.Fatalf("Bash probed metadata = %#v", metadata)
 	}
 }
 
@@ -84,11 +96,12 @@ func TestWaitForTerminalReadyReturnsAfterReadySignal(t *testing.T) {
 		_ = writer.Close()
 	})
 	go func() {
-		_, _ = writer.Write([]byte("ready\n"))
+		_, _ = writer.Write([]byte("ready NCP_READLINE=1 NCP_BLE_SH=1 NCP_BRACKETED_PASTE=1\n"))
 		_ = writer.Close()
 	}()
 
-	if !waitForTerminalReady(reader) {
+	ready, probe := waitForTerminalReady(reader)
+	if !ready || !probe.Readline || !probe.BleSH || !probe.BracketedPaste {
 		t.Fatal("ready signal was not detected")
 	}
 }
@@ -104,7 +117,8 @@ func TestWaitForTerminalReadyHonorsContextCancellation(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if waitForTerminalReady(reader, ctx) {
+	ready, _ := waitForTerminalReady(reader, ctx)
+	if ready {
 		t.Fatal("canceled readiness wait must not report ready")
 	}
 }

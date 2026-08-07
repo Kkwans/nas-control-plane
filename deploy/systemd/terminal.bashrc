@@ -24,8 +24,10 @@ fi
 PS1='\[\e[38;5;25m\]\u@\h\[\e[0m\]:\[\e[38;5;30m\]\w\[\e[0m\]# '
 
 # ble.sh provides interactive syntax highlighting, history search and completion.
-if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
-  source /opt/ncp/share/blesh/ble.sh --attach=none
+_ncp_terminal_blesh=0
+if [[ -r /opt/ncp/share/blesh/ble.sh ]] &&
+  source /opt/ncp/share/blesh/ble.sh --attach=none &&
+  type -t ble-attach >/dev/null 2>&1; then
   ble-face -s command_builtin fg=25,bold
   ble-face -s command_file fg=30,bold
   ble-face -s syntax_varname fg=97
@@ -37,26 +39,32 @@ if [[ -r /opt/ncp/share/blesh/ble.sh ]]; then
   ble-face -s filename_executable fg=28
   ble-face -s varname_array fg=97
 
-  ble-attach
-  # ble.sh 的 emacs keymap 在 ble-attach 时才声明多行选项；必须在
-  # attach 之后覆盖默认英文提示，否则 bleopt 会报 option not found，
-  # 并且后续 keymap 初始化还会覆盖自定义函数。
-  bleopt keymap_emacs_mode_string_multiline=$'\e[1m多行粘贴模式\e[m'
-  function ble/prompt/backslash:keymap:emacs/mode-indicator {
-    ble/prompt/unit/add-hash '$_ble_edit_str'
-    [[ $_ble_edit_str == *$'\n'* ]] || return 0
-    ble/prompt/unit/add-hash '$bleopt_keymap_emacs_mode_string_multiline'
-    local str=$bleopt_keymap_emacs_mode_string_multiline
-    ble/prompt/unit/add-hash '${_ble_edit_arg:+1}${_ble_edit_kbdmacro_record:+1}'
-    if [[ ! ${_ble_edit_arg:+1}${_ble_edit_kbdmacro_record:+1} ]]; then
-      local keybinding_C_m=${_ble_decode_emacs_kmap_[_ble_decode_Ctrl|0x6d]}
-      local keybinding_C_j=${_ble_decode_emacs_kmap_[_ble_decode_Ctrl|0x6a]}
-      [[ $keybinding_C_m == *:ble/widget/accept-single-line-or-newline ]] &&
-        [[ $keybinding_C_j == *:ble/widget/accept-line ]] &&
-        str=${str:+"$str "}$'(\e[35mEnter\e[m 或 \e[35mCtrl+M\e[m：插入换行，\e[35mCtrl+J\e[m：执行)'
-    fi
-    [[ ! $str ]] || ble/prompt/print "$str"
-  }
+  if ble-attach; then
+    _ncp_terminal_blesh=1
+  fi
+  if (( _ncp_terminal_blesh )); then
+    # ble.sh 的 emacs keymap 在 ble-attach 时才声明多行选项；必须在
+    # attach 之后覆盖默认英文提示，否则 bleopt 会报 option not found，
+    # 并且后续 keymap 初始化还会覆盖自定义函数。
+    bleopt keymap_emacs_mode_string_multiline=$'\e[1m多行粘贴模式\e[m'
+    function ble/prompt/backslash:keymap:emacs/mode-indicator {
+      ble/prompt/unit/add-hash '$_ble_edit_str'
+      [[ $_ble_edit_str == *$'\n'* ]] || return 0
+      ble/prompt/unit/add-hash '$bleopt_keymap_emacs_mode_string_multiline'
+      local str=$bleopt_keymap_emacs_mode_string_multiline
+      ble/prompt/unit/add-hash '${_ble_edit_arg:+1}${_ble_edit_kbdmacro_record:+1}'
+      if [[ ! ${_ble_edit_arg:+1}${_ble_edit_kbdmacro_record:+1} ]]; then
+        local keybinding_C_m=${_ble_decode_emacs_kmap_[_ble_decode_Ctrl|0x6d]}
+        local keybinding_C_j=${_ble_decode_emacs_kmap_[_ble_decode_Ctrl|0x6a]}
+        [[ $keybinding_C_m == *:ble/widget/accept-single-line-or-newline ]] &&
+          [[ $keybinding_C_j == *:ble/widget/accept-line ]] &&
+          str=${str:+"$str "}$'(\e[35mEnter\e[m 或 \e[35mCtrl+M\e[m：插入换行，\e[35mCtrl+J\e[m：执行)'
+      fi
+      [[ ! $str ]] || ble/prompt/print "$str"
+    }
+  else
+    bind 'set enable-bracketed-paste on' 2>/dev/null || true
+  fi
 else
   # 没有 ble.sh 时仍显式打开 Bash 的 bracketed paste，避免浏览器粘贴
   # 的 ESC[200~/ESC[201~ 标记被当成普通字符显示。
@@ -66,6 +74,16 @@ fi
 # Signal readiness after the interactive editor has attached. The descriptor is
 # private to the Agent and never becomes part of terminal input or output.
 if [[ ${NCP_TERMINAL_READY_FD:-} == 3 ]]; then
-  printf 'ready\n' >&3 || true
+  _ncp_terminal_readline=0
+  _ncp_terminal_bracketed_paste=0
+  if bind -v >/dev/null 2>&1; then
+    _ncp_terminal_readline=1
+    if bind -v 2>/dev/null | grep -qx 'set enable-bracketed-paste on'; then
+      _ncp_terminal_bracketed_paste=1
+    fi
+  fi
+  printf 'ready NCP_READLINE=%s NCP_BLE_SH=%s NCP_BRACKETED_PASTE=%s\n' \
+    "$_ncp_terminal_readline" "$_ncp_terminal_blesh" "$_ncp_terminal_bracketed_paste" >&3 || true
   exec 3>&-
 fi
+unset _ncp_terminal_readline _ncp_terminal_blesh _ncp_terminal_bracketed_paste

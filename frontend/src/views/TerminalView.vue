@@ -21,6 +21,7 @@ import {
   supportsSafeMultilinePaste,
   terminalShortcuts,
   type TerminalCapabilities,
+  type TerminalCapabilityState,
 } from '@/domain/terminal'
 import { useSystemStore } from '@/stores/system'
 
@@ -60,6 +61,16 @@ const stateLabel = computed(() => ({
 }[state.value]))
 const shellLabel = computed(() => formatTerminalShell(shellName.value))
 const enhancementLabel = computed(() => formatTerminalEnhancement(shellEnhancement.value))
+const editorCapabilityItems = computed(() => {
+  const readlineState = getTerminalCapabilityState(capabilities.value, 'readline')
+  let highlightingState: TerminalCapabilityState = 'unknown'
+  if (shellEnhancement.value === 'blesh' && readlineState !== 'unsupported') highlightingState = 'supported'
+  else if (shellEnhancement.value === 'native' || shellEnhancement.value === 'readline' || shellEnhancement.value === 'unsupported') highlightingState = 'unsupported'
+  return [
+    { key: 'completion', label: '命令补全', state: readlineState },
+    { key: 'highlighting', label: '输入高亮', state: highlightingState },
+  ]
+})
 const capabilityItems = computed(() => [
   { key: 'resize' as const, label: '窗口调整', value: describeTerminalCapability(capabilities.value?.resize) },
   { key: 'readline' as const, label: 'readline', value: describeTerminalCapability(capabilities.value?.readline) },
@@ -76,8 +87,9 @@ const capabilityWarning = computed(() => {
 })
 const enhancementHint = computed(() => {
   if (state.value !== 'connected') return '粘贴：Ctrl+V / ⌘V · 多行粘贴会先确认 · 连接后按真实能力显示 Shell、ANSI 与粘贴行为。'
-  if (shellReason.value) return `${shellReason.value} · ${shellLabel.value} / ${enhancementLabel.value}`
-  return `${shellLabel.value} · ${enhancementLabel.value} · readline ${describeTerminalCapability(capabilities.value?.readline)} · ANSI ${describeTerminalCapability(capabilities.value?.ansiColors)}`
+  const editorSummary = `补全 ${describeTerminalCapabilityState(editorCapabilityItems.value[0]?.state ?? 'unknown')} · 高亮 ${describeTerminalCapabilityState(editorCapabilityItems.value[1]?.state ?? 'unknown')}`
+  if (shellReason.value) return `${shellReason.value} · ${shellLabel.value} / ${enhancementLabel.value} · ${editorSummary}`
+  return `${shellLabel.value} · ${enhancementLabel.value} · ${editorSummary} · ANSI ${describeTerminalCapability(capabilities.value?.ansiColors)}`
 })
 const pendingPasteDescription = computed(() => {
   if (!pendingPaste.value) return ''
@@ -136,7 +148,10 @@ async function connect() {
   terminal.attachCustomKeyEventHandler((event) => {
     if (isTerminalPasteShortcut(event)) return false
     if (isTerminalLiteralNextShortcut(event)) {
-      if (event.type === 'keydown') sendTerminalInput('\u0016')
+      if (event.type === 'keydown') {
+        event.preventDefault()
+        sendTerminalInput('\u0016')
+      }
       return false
     }
     return true
@@ -299,6 +314,12 @@ function sendTerminalInput(data: string | Uint8Array): boolean {
   }
 }
 
+function describeTerminalCapabilityState(state: TerminalCapabilityState): string {
+  if (state === 'supported') return '支持'
+  if (state === 'unsupported') return '不支持'
+  return '未报告'
+}
+
 function failTerminal(message: string) {
   terminalReady = false
   state.value = 'error'
@@ -383,6 +404,9 @@ onBeforeUnmount(close)
           <span class="capability-chip capability-chip--identity"><strong>{{ shellLabel }}</strong><em>{{ enhancementLabel }}</em></span>
           <span v-for="item in capabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${getTerminalCapabilityState(capabilities, item.key)}`]">
             <span>{{ item.label }}</span><em>{{ item.value }}</em>
+          </span>
+          <span v-for="item in editorCapabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${item.state}`]">
+            <span>{{ item.label }}</span><em>{{ describeTerminalCapabilityState(item.state) }}</em>
           </span>
         </div>
         <span v-if="state === 'connected'" class="terminal-focus-state" :class="{ 'terminal-focus-state--active': terminalFocused }" role="status">

@@ -26,19 +26,3 @@ type Message struct {
 	Reason       string
 	Capabilities SessionCapabilities
 }
-
-func sessionCapabilitiesFor(shell, enhancement string) SessionCapabilities {
-	capabilities := SessionCapabilities{
-		Resize:     true,
-		ANSIColors: true,
-	}
-	if shell == "bash" {
-		capabilities.Readline = true
-		capabilities.BracketedPaste = true
-		capabilities.MultilinePaste = true
-	}
-	if enhancement == "blesh" || enhancement == "readline" {
-		capabilities.Readline = true
-	}
-	return capabilities
-}

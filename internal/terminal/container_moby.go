@@ -44,6 +44,12 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
+	var metadata SessionMetadata
+	if filepath.Base(shell) == "bash" {
+		metadata = containerShellMetadataWithProbe(shell, g.probeContainerBashCapabilities(ctx, containerID, shell))
+	} else {
+		metadata = containerShellMetadata(shell)
+	}
 	exec, err := g.client.ExecCreate(ctx, containerID, protectedContainerExecOptionsForShell(rows, cols, shell))
 	if err != nil {
 		return ContainerAttachment{}, err
@@ -55,7 +61,6 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
-	metadata := containerShellMetadata(shell)
 	return ContainerAttachment{
 		ExecID:       exec.ID,
 		Reader:       attachment.Reader,
@@ -112,6 +117,11 @@ func (g *mobyContainerGateway) detectContainerShell(ctx context.Context, contain
 }
 
 func (g *mobyContainerGateway) probeContainerCommand(ctx context.Context, containerID string, command ...string) (bool, error) {
+	available, _, err := g.probeContainerCommandOutput(ctx, containerID, command...)
+	return available, err
+}
+
+func (g *mobyContainerGateway) probeContainerCommandOutput(ctx context.Context, containerID string, command ...string) (bool, []byte, error) {
 	probeContext, cancel := context.WithTimeout(ctx, containerShellProbeTimeout)
 	defer cancel()
 	exec, err := g.client.ExecCreate(probeContext, containerID, client.ExecCreateOptions{
@@ -120,32 +130,39 @@ func (g *mobyContainerGateway) probeContainerCommand(ctx context.Context, contai
 		Cmd:          command,
 	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	attachment, err := g.client.ExecAttach(probeContext, exec.ID, client.ExecAttachOptions{})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer attachment.Close()
-	if _, err := io.Copy(io.Discard, attachment.Reader); err != nil {
-		return false, err
+	output, err := io.ReadAll(io.LimitReader(attachment.Reader, maxCapabilityProbeOutput))
+	if err != nil {
+		return false, nil, err
 	}
 	inspection, err := g.client.ExecInspect(probeContext, exec.ID, client.ExecInspectOptions{})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return inspection.ExitCode == 0, nil
+	return inspection.ExitCode == 0, output, nil
+}
+
+func (g *mobyContainerGateway) probeContainerBashCapabilities(ctx context.Context, containerID, shell string) shellCapabilityProbe {
+	available, output, err := g.probeContainerCommandOutput(ctx, containerID, shell, "--noprofile", "--norc", "-i", "-c", bashCapabilityProbeScript)
+	probe := parseBashCapabilityProbe(output)
+	if err != nil {
+		probe.Err = err
+	} else if !available && !probe.Readline {
+		probe.Err = errors.New("container Bash capability probe failed")
+	}
+	return probe
 }
 
 func containerShellMetadata(shellPath string) SessionMetadata {
 	shell := filepath.Base(shellPath)
 	if shell == "bash" {
-		return SessionMetadata{
-			Shell:        shell,
-			Enhancement:  "readline",
-			Reason:       "容器使用 Bash 内置 readline，不加载主机 ble.sh",
-			Capabilities: sessionCapabilitiesFor(shell, "readline"),
-		}
+		return containerShellMetadataWithProbe(shellPath, shellCapabilityProbe{Err: errors.New("Bash capability probe was not run")})
 	}
 	if shell == "" || shell == "." {
 		shell = "sh"
@@ -156,6 +173,36 @@ func containerShellMetadata(shellPath string) SessionMetadata {
 		Reason:       "容器未发现 Bash，已回退原生 /bin/sh；不具备 readline",
 		Capabilities: sessionCapabilitiesFor(shell, "native"),
 	}
+}
+
+func containerShellMetadataWithProbe(shellPath string, probe shellCapabilityProbe) SessionMetadata {
+	shell := filepath.Base(shellPath)
+	if shell == "" || shell == "." {
+		shell = "sh"
+	}
+	if shell != "bash" {
+		return SessionMetadata{
+			Shell:        shell,
+			Enhancement:  "native",
+			Reason:       "容器未发现 Bash，已回退原生 /bin/sh；不具备 readline",
+			Capabilities: sessionCapabilitiesFor(shell, "native"),
+		}
+	}
+
+	metadata := SessionMetadata{
+		Shell:        shell,
+		Enhancement:  "readline",
+		Reason:       "容器使用 Bash 内置 readline，不加载主机 ble.sh",
+		Capabilities: sessionCapabilitiesForProbe(shell, "readline", probe),
+	}
+	if !probe.Readline {
+		metadata.Enhancement = "native"
+		metadata.Reason = "容器 Bash 未确认 readline，已降级原生 Bash；不伪称补全或历史编辑"
+		metadata.Capabilities = sessionCapabilitiesForProbe(shell, metadata.Enhancement, probe)
+	} else if !probe.BracketedPaste {
+		metadata.Reason += "；未启用 bracketed paste，多行粘贴将按行发送"
+	}
+	return metadata
 }
 
 func (g *mobyContainerGateway) Resize(ctx context.Context, execID string, rows, cols uint16) error {

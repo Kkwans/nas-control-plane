@@ -76,6 +76,9 @@ func TestManagerReturnsActualDimensionsAndSessionMetadata(t *testing.T) {
 			Shell:       "bash",
 			Enhancement: "blesh",
 			Reason:      "ready",
+			Capabilities: SessionCapabilities{
+				Resize: true, Readline: true, BracketedPaste: true, MultilinePaste: true, ANSIColors: true,
+			},
 		},
 	}
 	starter := &fakeStarter{session: session}
