@@ -111,7 +111,15 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	}
 	systemProvider := config.System
 	if systemProvider == nil {
-		systemProvider = NewLiveSystemProvider(system.NewOSEnvironment(), os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"), nil)
+		systemProvider, err = NewLiveSystemProviderWithProxy(
+			system.NewOSEnvironment(),
+			os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"),
+			config.OutboundProxy,
+			nil,
+		)
+		if err != nil {
+			return coded("AGENT_PUBLIC_EGRESS_INITIALIZATION_FAILED", err)
+		}
 	}
 	proxyProvider := config.Proxy
 	if proxyProvider == nil {

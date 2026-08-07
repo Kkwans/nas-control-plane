@@ -952,6 +952,27 @@ func NewPublicEgressDetector(endpoint string) *PublicEgressDetector {
 	return &PublicEgressDetector{Endpoint: strings.TrimSpace(endpoint), Client: &http.Client{Timeout: commandTimeout}}
 }
 
+// NewPublicEgressDetectorWithProxy creates the explicit public-egress probe
+// client with the same deployment-controlled outbound proxy used by the Agent.
+// It does not read ambient HTTP_PROXY variables, so the route remains
+// auditable and isolated from unrelated process configuration.
+func NewPublicEgressDetectorWithProxy(endpoint, proxyAddress string) (*PublicEgressDetector, error) {
+	proxyAddress = strings.TrimSpace(proxyAddress)
+	if proxyAddress == "" {
+		return NewPublicEgressDetector(endpoint), nil
+	}
+	proxyURL, err := url.Parse(proxyAddress)
+	if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
+		return nil, errors.New("PUBLIC_EGRESS_PROXY_INVALID")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(proxyURL)
+	return &PublicEgressDetector{
+		Endpoint: strings.TrimSpace(endpoint),
+		Client:   &http.Client{Transport: transport, Timeout: commandTimeout},
+	}, nil
+}
+
 func NewPublicEgressCapability(endpoint string) PublicEgressCapability {
 	endpoint = strings.TrimSpace(endpoint)
 	if _, err := parseControllerEndpoint(endpoint); err != nil {

@@ -119,13 +119,22 @@ type LiveSystemProvider struct {
 }
 
 func NewLiveSystemProvider(environment system.Environment, egressEndpoint string, dnsController system.DNSChangeController) *LiveSystemProvider {
+	provider, _ := NewLiveSystemProviderWithProxy(environment, egressEndpoint, "", dnsController)
+	return provider
+}
+
+func NewLiveSystemProviderWithProxy(environment system.Environment, egressEndpoint, outboundProxy string, dnsController system.DNSChangeController) (*LiveSystemProvider, error) {
 	if environment == nil {
 		environment = system.NewOSEnvironment()
 	}
+	egressDetector, err := system.NewPublicEgressDetectorWithProxy(egressEndpoint, outboundProxy)
+	if err != nil {
+		return nil, err
+	}
 	return &LiveSystemProvider{
 		Environment: environment, DNSController: dnsController,
-		EgressDetector: system.NewPublicEgressDetector(egressEndpoint), EgressEndpoint: egressEndpoint,
-	}
+		EgressDetector: egressDetector, EgressEndpoint: egressEndpoint,
+	}, nil
 }
 
 func (p *LiveSystemProvider) CollectDNSCapability(ctx context.Context) (system.DNSCapability, error) {

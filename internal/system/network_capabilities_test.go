@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -247,6 +248,32 @@ func TestPublicEgressDetectorSupportsNestedConnectionMetadata(t *testing.T) {
 	value := detector.Detect(context.Background())
 	if value.Status != CapabilityStateAvailable || value.ISP != "Example ISP" || value.ASN != "4809" {
 		t.Fatalf("nested egress metadata = %#v", value)
+	}
+}
+
+func TestPublicEgressDetectorUsesExplicitOutboundProxy(t *testing.T) {
+	proxyRequests := 0
+	proxy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		proxyRequests++
+		if request.URL.Host != "egress.example.test" {
+			t.Fatalf("proxy request URL = %q", request.URL.String())
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"ip":"1.1.1.9","country":"CN"}`))
+	}))
+	t.Cleanup(proxy.Close)
+
+	detector, err := NewPublicEgressDetectorWithProxy("http://egress.example.test/ip", proxy.URL)
+	if err != nil {
+		t.Fatalf("NewPublicEgressDetectorWithProxy() error = %v", err)
+	}
+	value := detector.Detect(context.Background())
+	if value.Status != CapabilityStateAvailable || value.Address != "1.1.1.9" || proxyRequests != 1 {
+		t.Fatalf("proxied egress result = %#v, requests = %d", value, proxyRequests)
+	}
+
+	if _, err := NewPublicEgressDetectorWithProxy("http://egress.example.test/ip", "socks5://127.0.0.1:7890"); err == nil {
+		t.Fatal("unsupported outbound proxy scheme did not fail")
 	}
 }
 
