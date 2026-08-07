@@ -3,6 +3,7 @@ package agentsocket
 import (
 	"context"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -44,9 +45,12 @@ func TestAgentSystemServiceExposesDNSLifecycleAndPublicEgress(t *testing.T) {
 	if err != nil || dns.AsMap()["backend"] != system.DNSBackendSystemdResolved {
 		t.Fatalf("DNS capability = %#v, error = %v", dns.AsMap(), err)
 	}
-	payload, _ := structpb.NewStruct(map[string]any{
-		"interface": "eth0", "nameservers": []string{"1.1.1.1"}, "searchDomains": []string{},
+	payload, err := structpb.NewStruct(map[string]any{
+		"interface": "eth0", "nameservers": []any{"1.1.1.1"}, "searchDomains": []any{},
 	})
+	if err != nil {
+		t.Fatalf("NewStruct() error = %v", err)
+	}
 	preview, err := client.PreviewDNSChange(context.Background(), payload)
 	if err != nil || preview.AsMap()["previewId"] != "preview-1" {
 		t.Fatalf("DNS preview = %#v, error = %v", preview.AsMap(), err)
@@ -66,6 +70,25 @@ func TestAgentSystemServiceExposesDNSLifecycleAndPublicEgress(t *testing.T) {
 	egress, err := client.DetectPublicEgress(context.Background(), &emptypb.Empty{})
 	if err != nil || egress.AsMap()["address"] != "1.1.1.1" || egress.AsMap()["asn"] != "4809" {
 		t.Fatalf("egress result = %#v, error = %v", egress.AsMap(), err)
+	}
+}
+
+func TestDNSChangeRequestStructSerializesStringLists(t *testing.T) {
+	payload, err := dnsChangeRequestStruct(system.DNSChangeRequest{
+		Interface:     "eth0",
+		ConnectionID:  "wired-1",
+		Nameservers:   []string{"240c::6666", "192.168.5.1"},
+		SearchDomains: []string{"lan"},
+	})
+	if err != nil {
+		t.Fatalf("dnsChangeRequestStruct() error = %v", err)
+	}
+	value := payload.AsMap()
+	if !reflect.DeepEqual(value["nameservers"], []any{"240c::6666", "192.168.5.1"}) {
+		t.Fatalf("nameservers = %#v", value["nameservers"])
+	}
+	if !reflect.DeepEqual(value["searchDomains"], []any{"lan"}) {
+		t.Fatalf("searchDomains = %#v", value["searchDomains"])
 	}
 }
 

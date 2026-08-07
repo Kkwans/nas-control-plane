@@ -329,10 +329,7 @@ func PreviewDNSChange(ctx context.Context, socketPath string, request system.DNS
 		return system.DNSChangePreview{}, err
 	}
 	defer connection.Close()
-	payload, err := structpb.NewStruct(map[string]any{
-		"interface": request.Interface, "connectionId": request.ConnectionID,
-		"nameservers": request.Nameservers, "searchDomains": request.SearchDomains,
-	})
+	payload, err := dnsChangeRequestStruct(request)
 	if err != nil {
 		return system.DNSChangePreview{}, coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
@@ -345,6 +342,21 @@ func PreviewDNSChange(ctx context.Context, socketPath string, request system.DNS
 		return system.DNSChangePreview{}, err
 	}
 	return value, nil
+}
+
+func dnsChangeRequestStruct(request system.DNSChangeRequest) (*structpb.Struct, error) {
+	return structpb.NewStruct(map[string]any{
+		"interface": request.Interface, "connectionId": request.ConnectionID,
+		"nameservers": stringSliceValues(request.Nameservers), "searchDomains": stringSliceValues(request.SearchDomains),
+	})
+}
+
+func stringSliceValues(values []string) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
 }
 
 func ConfirmDNSChange(ctx context.Context, socketPath string, request system.DNSChangeConfirmation) (system.DNSChangeResult, error) {
