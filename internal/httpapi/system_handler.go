@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
@@ -52,7 +53,7 @@ func (api *handler) previewDNSChange(response http.ResponseWriter, request *http
 	defer cancel()
 	value, err := client.PreviewDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {
-		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_PREVIEW_FAILED", "DNS 修改无法预览；静态 resolv.conf 仅支持只读。")
+		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_PREVIEW_FAILED", dnsChangeFailureMessage(err, "DNS 修改无法预览。"))
 		return
 	}
 	writeJSON(response, http.StatusOK, value)
@@ -76,7 +77,7 @@ func (api *handler) confirmDNSChange(response http.ResponseWriter, request *http
 	defer cancel()
 	value, err := client.ConfirmDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {
-		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_CONFIRM_FAILED", "DNS 修改未执行或已被拒绝。")
+		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_CONFIRM_FAILED", dnsChangeFailureMessage(err, "DNS 修改未执行或已被拒绝。"))
 		return
 	}
 	writeJSON(response, http.StatusOK, value)
@@ -100,10 +101,25 @@ func (api *handler) rollbackDNSChange(response http.ResponseWriter, request *htt
 	defer cancel()
 	value, err := client.RollbackDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {
-		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_ROLLBACK_FAILED", "DNS 修改回滚失败或已不可用。")
+		api.writeError(response, request, http.StatusConflict, "SYSTEM_DNS_ROLLBACK_FAILED", dnsChangeFailureMessage(err, "DNS 修改回滚失败或已不可用。"))
 		return
 	}
 	writeJSON(response, http.StatusOK, value)
+}
+
+func dnsChangeFailureMessage(err error, fallback string) string {
+	code := ""
+	if err != nil {
+		code = strings.TrimSpace(err.Error())
+	}
+	switch code {
+	case "DNS_BACKEND_READ_ONLY":
+		return "检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；DNS 保持只读。"
+	case "DNS_WRITE_ADAPTER_UNAVAILABLE":
+		return "DNS 后端未提供安全的预览、应用和回滚适配器。"
+	default:
+		return fallback
+	}
 }
 
 func (api *handler) publicEgressCapability(response http.ResponseWriter, request *http.Request) {

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +67,13 @@ func TestDNSValidationRejectsInvalidNameserverAndDomain(t *testing.T) {
 	}
 	if err := validateDNSChangeRequest(system.DNSChangeRequest{Interface: "eth0", Nameservers: []string{"1.1.1.1"}, SearchDomains: []string{"bad/domain"}}); err == nil {
 		t.Fatal("invalid search domain must fail validation")
+	}
+}
+
+func TestDNSFailureMessageExplainsReadOnlyBackend(t *testing.T) {
+	message := dnsChangeFailureMessage(errors.New("DNS_BACKEND_READ_ONLY"), "fallback")
+	if !strings.Contains(message, "/etc/resolv.conf") || !strings.Contains(message, "systemd-resolved") {
+		t.Fatalf("read-only DNS message = %q", message)
 	}
 }
 

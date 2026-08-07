@@ -83,6 +83,8 @@ type NetworkInterface struct {
 	HardwareAddress string           `json:"hardwareAddress"`
 	MTU             int              `json:"mtu"`
 	State           string           `json:"state"`
+	LowerUp         bool             `json:"lowerUp"`
+	LowerUpKnown    bool             `json:"lowerUpKnown"`
 	SpeedMbps       int              `json:"speedMbps"`
 	Duplex          string           `json:"duplex"`
 	Addresses       []NetworkAddress `json:"addresses"`
@@ -297,9 +299,10 @@ func (c *DetailsCollector) collectNetwork(ctx context.Context, result *Details) 
 		result.Warnings = append(result.Warnings, "无法读取网络接口")
 	} else {
 		for _, item := range interfaces {
+			link := readInterfaceLinkState(c.environment, item.Name)
 			current := NetworkInterface{
 				Name: item.Name, HardwareAddress: item.HardwareAddr, MTU: int(item.MTU),
-				State:     firstNonEmpty(readTrimmed(filepath.Join("/sys/class/net", item.Name, "operstate")), "unknown"),
+				State: link.OperState, LowerUp: link.LowerUp, LowerUpKnown: link.LowerUpKnown,
 				SpeedMbps: parseInt(readTrimmed(filepath.Join("/sys/class/net", item.Name, "speed"))),
 				Duplex:    readTrimmed(filepath.Join("/sys/class/net", item.Name, "duplex")),
 				Addresses: []NetworkAddress{},
@@ -346,9 +349,10 @@ func (c *DetailsCollector) collectNetwork(ctx context.Context, result *Details) 
 			Protocol: protocol, Address: connection.Laddr.IP,
 			Port: connection.Laddr.Port, PID: connection.Pid,
 		}
-		enrichListeningPort(&port)
+		enrichListeningPortWithEnvironment(ctx, &port, c.environment)
 		result.Network.ListeningPorts = append(result.Network.ListeningPorts, port)
 	}
+	enrichListeningPortContainers(ctx, c.environment, result.Network.ListeningPorts)
 	sort.Slice(result.Network.ListeningPorts, func(i, j int) bool {
 		return result.Network.ListeningPorts[i].Port < result.Network.ListeningPorts[j].Port
 	})
@@ -383,7 +387,10 @@ func (c *DetailsCollector) collectStorage(ctx context.Context, result *Details) 
 func (c *DetailsCollector) collectCapabilities(ctx context.Context, result *Details) {
 	interfaces := make([]InterfaceSnapshot, 0, len(result.Network.Interfaces))
 	for _, item := range result.Network.Interfaces {
-		current := InterfaceSnapshot{Name: item.Name, State: item.State, Addresses: make([]string, 0, len(item.Addresses))}
+		current := InterfaceSnapshot{
+			Name: item.Name, State: item.State, LowerUp: item.LowerUp,
+			LowerUpKnown: item.LowerUpKnown, Addresses: make([]string, 0, len(item.Addresses)),
+		}
 		for _, address := range item.Addresses {
 			current.Addresses = append(current.Addresses, address.Address)
 		}

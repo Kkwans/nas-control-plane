@@ -28,6 +28,14 @@ func (OSEnvironment) ReadFile(name string) ([]byte, error) {
 	return os.ReadFile(name)
 }
 
+func (OSEnvironment) ReadLink(name string) (string, error) {
+	return os.Readlink(name)
+}
+
+func (OSEnvironment) LookupEnv(key string) (string, bool) {
+	return os.LookupEnv(key)
+}
+
 func (OSEnvironment) PathExists(name string) bool {
 	_, err := os.Stat(name)
 	return err == nil

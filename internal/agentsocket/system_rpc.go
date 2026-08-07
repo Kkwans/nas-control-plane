@@ -132,7 +132,18 @@ func (p *LiveSystemProvider) CollectDNSCapability(ctx context.Context) (system.D
 	if p == nil || p.Environment == nil {
 		return system.DNSCapability{}, errors.New("DNS_SOURCE_UNAVAILABLE")
 	}
-	return system.ProbeDNS(ctx, p.Environment), nil
+	capability := system.ProbeDNS(ctx, p.Environment)
+	// 探测到管理后端并不等于具备安全写入能力。只有显式注入实现了
+	// 预览、确认和回滚契约的控制器时，才向 Console 开放修改入口。
+	if p.DNSController != nil && capability.Detected && capability.Backend != system.DNSBackendStaticResolv {
+		capability.State = system.CapabilityStateAvailable
+		capability.ReadOnly = false
+		capability.CanPreview = true
+		capability.CanConfirm = true
+		capability.CanRollback = true
+		capability.ErrorCode = ""
+	}
+	return capability, nil
 }
 
 func (p *LiveSystemProvider) PreviewDNSChange(ctx context.Context, request system.DNSChangeRequest) (system.DNSChangePreview, error) {
@@ -317,7 +328,7 @@ func PreviewDNSChange(ctx context.Context, socketPath string, request system.DNS
 	}
 	response, err := NewAgentSystemServiceClient(connection).PreviewDNSChange(ctx, payload)
 	if err != nil {
-		return system.DNSChangePreview{}, rpcError(err)
+		return system.DNSChangePreview{}, systemRPCError(err)
 	}
 	var value system.DNSChangePreview
 	if err := decodeDashboardResponse(response, &value); err != nil {
@@ -338,7 +349,7 @@ func ConfirmDNSChange(ctx context.Context, socketPath string, request system.DNS
 	}
 	response, err := NewAgentSystemServiceClient(connection).ConfirmDNSChange(ctx, payload)
 	if err != nil {
-		return system.DNSChangeResult{}, rpcError(err)
+		return system.DNSChangeResult{}, systemRPCError(err)
 	}
 	var value system.DNSChangeResult
 	if err := decodeDashboardResponse(response, &value); err != nil {
@@ -359,7 +370,7 @@ func RollbackDNSChange(ctx context.Context, socketPath string, request system.DN
 	}
 	response, err := NewAgentSystemServiceClient(connection).RollbackDNSChange(ctx, payload)
 	if err != nil {
-		return system.DNSChangeResult{}, rpcError(err)
+		return system.DNSChangeResult{}, systemRPCError(err)
 	}
 	var value system.DNSChangeResult
 	if err := decodeDashboardResponse(response, &value); err != nil {
@@ -417,6 +428,18 @@ func systemErrorCode(err error, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func systemRPCError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch grpcstatus.Convert(err).Message() {
+	case "DNS_BACKEND_READ_ONLY", "DNS_WRITE_ADAPTER_UNAVAILABLE":
+		return coded(grpcstatus.Convert(err).Message(), err)
+	default:
+		return rpcError(err)
+	}
 }
 
 func containsWhitespace(value string) bool {

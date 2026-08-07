@@ -95,6 +95,7 @@ export interface PublicEgressResult {
   country?: string
   region?: string
   isp?: string
+  asn?: string
   checkedAt: string
   detectionSource: string
   errorCode: string
@@ -200,6 +201,8 @@ export interface SystemDetails {
       hardwareAddress: string
       mtu: number
       state: string
+      lowerUp: boolean
+      lowerUpKnown: boolean
       speedMbps: number
       duplex: string
       addresses: Array<{

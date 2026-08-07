@@ -33,6 +33,18 @@ type Environment interface {
 	EffectiveUID() int
 }
 
+// readLinkEnvironment 是可选的 proc 元数据扩展。Environment 保持最小接口，
+// 仅需要读取 /proc/<pid>/exe 的实现才提供它，测试替身可以用 fixture 替换真实符号链接。
+type readLinkEnvironment interface {
+	ReadLink(name string) (string, error)
+}
+
+// lookupEnvironment 是可选的环境变量存在性扩展。它只用于判断受控能力是否已配置，
+// 不会把环境变量的值写入能力快照、RPC 或 HTTP 响应。
+type lookupEnvironment interface {
+	LookupEnv(key string) (string, bool)
+}
+
 // Capabilities 是 OpenAPI 和 Agent RPC 共用的 P0-01 数据模型。
 // 对应能力缺失或无法安全查询时，可选字段为 nil。
 type Capabilities struct {

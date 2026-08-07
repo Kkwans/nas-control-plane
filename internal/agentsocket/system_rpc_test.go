@@ -25,7 +25,7 @@ func TestAgentSystemServiceExposesDNSLifecycleAndPublicEgress(t *testing.T) {
 		confirm:          system.DNSChangeResult{ChangeID: "change-1", Applied: true, RollbackAvailable: true},
 		rollback:         system.DNSChangeResult{ChangeID: "change-1", Applied: false},
 		egressCapability: system.PublicEgressCapability{Configured: true, Status: "not-checked", RequiresUserAction: true},
-		egress:           system.PublicEgressResult{Status: system.CapabilityStateAvailable, Address: "1.1.1.1", CheckedAt: time.Now().UTC()},
+		egress:           system.PublicEgressResult{Status: system.CapabilityStateAvailable, Address: "1.1.1.1", Country: "CN", ISP: "Example ISP", ASN: "4809", CheckedAt: time.Now().UTC()},
 	}))
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
@@ -64,7 +64,7 @@ func TestAgentSystemServiceExposesDNSLifecycleAndPublicEgress(t *testing.T) {
 		t.Fatalf("egress capability = %#v, error = %v", capability.AsMap(), err)
 	}
 	egress, err := client.DetectPublicEgress(context.Background(), &emptypb.Empty{})
-	if err != nil || egress.AsMap()["address"] != "1.1.1.1" {
+	if err != nil || egress.AsMap()["address"] != "1.1.1.1" || egress.AsMap()["asn"] != "4809" {
 		t.Fatalf("egress result = %#v, error = %v", egress.AsMap(), err)
 	}
 }
@@ -77,6 +77,76 @@ func TestAgentSystemServiceRequiresExplicitDNSConfirmation(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestLiveSystemProviderAdvertisesDNSWritesOnlyWithInjectedController(t *testing.T) {
+	environment := &dnsCapabilityEnvironment{
+		files:    map[string][]byte{"/etc/resolv.conf": []byte("nameserver 1.1.1.1\n")},
+		commands: map[string][]byte{"resolvectl status": []byte("Global\n")},
+	}
+	provider := NewLiveSystemProvider(environment, "", nil)
+	capability, err := provider.CollectDNSCapability(context.Background())
+	if err != nil {
+		t.Fatalf("CollectDNSCapability() error = %v", err)
+	}
+	if !capability.ReadOnly || capability.CanPreview || capability.ErrorCode != "DNS_WRITE_ADAPTER_UNAVAILABLE" {
+		t.Fatalf("capability without controller = %#v", capability)
+	}
+
+	provider.DNSController = fakeDNSController{}
+	capability, err = provider.CollectDNSCapability(context.Background())
+	if err != nil {
+		t.Fatalf("CollectDNSCapability() with controller error = %v", err)
+	}
+	if capability.ReadOnly || !capability.CanPreview || !capability.CanConfirm || !capability.CanRollback || capability.ErrorCode != "" {
+		t.Fatalf("capability with controller = %#v", capability)
+	}
+}
+
+type fakeDNSController struct{}
+
+func (fakeDNSController) Preview(context.Context, system.DNSChangeRequest) (system.DNSChangePreview, error) {
+	return system.DNSChangePreview{}, nil
+}
+func (fakeDNSController) Confirm(context.Context, system.DNSChangeConfirmation) (system.DNSChangeResult, error) {
+	return system.DNSChangeResult{}, nil
+}
+func (fakeDNSController) Rollback(context.Context, system.DNSRollbackRequest) (system.DNSChangeResult, error) {
+	return system.DNSChangeResult{}, nil
+}
+
+type dnsCapabilityEnvironment struct {
+	files    map[string][]byte
+	commands map[string][]byte
+}
+
+func (f *dnsCapabilityEnvironment) Architecture() string      { return "arm64" }
+func (f *dnsCapabilityEnvironment) Hostname() (string, error) { return "nas", nil }
+func (f *dnsCapabilityEnvironment) ReadFile(name string) ([]byte, error) {
+	if value, ok := f.files[name]; ok {
+		return append([]byte{}, value...), nil
+	}
+	return nil, context.Canceled
+}
+func (f *dnsCapabilityEnvironment) PathExists(string) bool { return false }
+func (f *dnsCapabilityEnvironment) LookPath(name string) (string, error) {
+	if name == "resolvectl" {
+		return name, nil
+	}
+	return "", context.Canceled
+}
+func (f *dnsCapabilityEnvironment) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	key := name
+	for _, arg := range args {
+		key += " " + arg
+	}
+	if value, ok := f.commands[key]; ok {
+		return append([]byte{}, value...), nil
+	}
+	return nil, context.Canceled
+}
+func (f *dnsCapabilityEnvironment) Glob(string) ([]string, error)        { return nil, nil }
+func (f *dnsCapabilityEnvironment) NetworkInterfaces() ([]string, error) { return nil, nil }
+func (f *dnsCapabilityEnvironment) EffectiveUID() int                    { return 0 }
 
 type fakeSystemProvider struct {
 	dns              system.DNSCapability

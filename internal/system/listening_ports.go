@@ -1,8 +1,8 @@
 package system
 
 import (
+	"context"
 	"encoding/hex"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,8 +11,15 @@ import (
 // enrichListeningPort reads only proc metadata for an already discovered socket.
 // A failed proc read never removes the port: detectionSource/status preserve the evidence boundary.
 func enrichListeningPort(port *ListeningPort) {
+	enrichListeningPortWithEnvironment(context.Background(), port, NewOSEnvironment())
+}
+
+func enrichListeningPortWithEnvironment(ctx context.Context, port *ListeningPort, environment Environment) {
 	if port == nil {
 		return
+	}
+	if environment == nil {
+		environment = NewOSEnvironment()
 	}
 	port.DetectionSources = []string{"gopsutil-connection"}
 	port.DetectionSource = "gopsutil-connection"
@@ -24,17 +31,17 @@ func enrichListeningPort(port *ListeningPort) {
 
 	procRoot := filepath.Join("/proc", intToString(port.PID))
 	metadataRead := 0
-	if value, err := readProcTrimmed(filepath.Join(procRoot, "comm")); err == nil {
+	if value, err := readProcTrimmedFrom(environment, filepath.Join(procRoot, "comm")); err == nil {
 		port.ProcessName = value
 		metadataRead++
 		port.DetectionSources = append(port.DetectionSources, "proc-comm")
 	}
-	if value, err := os.Readlink(filepath.Join(procRoot, "exe")); err == nil {
+	if value, err := readProcLinkFrom(environment, filepath.Join(procRoot, "exe")); err == nil {
 		port.Executable = value
 		metadataRead++
 		port.DetectionSources = append(port.DetectionSources, "proc-exe")
 	}
-	cgroup, cgroupErr := readProcTrimmed(filepath.Join(procRoot, "cgroup"))
+	cgroup, cgroupErr := readProcTrimmedFrom(environment, filepath.Join(procRoot, "cgroup"))
 	if cgroupErr == nil {
 		metadataRead++
 		port.DetectionSources = append(port.DetectionSources, "proc-cgroup")
@@ -43,7 +50,7 @@ func enrichListeningPort(port *ListeningPort) {
 		port.ContainerID = association.ContainerID
 		port.Service = association.Service
 	}
-	cmdline, cmdlineErr := readProcBytes(filepath.Join(procRoot, "cmdline"))
+	cmdline, cmdlineErr := readProcBytesFrom(environment, filepath.Join(procRoot, "cmdline"))
 	if cmdlineErr == nil {
 		metadataRead++
 		port.DetectionSources = append(port.DetectionSources, "proc-cmdline")
@@ -69,6 +76,101 @@ func enrichListeningPort(port *ListeningPort) {
 	}
 	port.DetectionStatus = "complete"
 	port.DetectionErrorCode = ""
+}
+
+func enrichListeningPortContainers(ctx context.Context, environment Environment, ports []ListeningPort) {
+	if environment == nil || len(ports) == 0 {
+		return
+	}
+	containerIDs := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, port := range ports {
+		if port.ContainerID == "" {
+			continue
+		}
+		if _, ok := seen[port.ContainerID]; ok {
+			continue
+		}
+		seen[port.ContainerID] = struct{}{}
+		containerIDs = append(containerIDs, port.ContainerID)
+	}
+	if len(containerIDs) == 0 {
+		return
+	}
+	if _, err := environment.LookPath("docker"); err != nil {
+		markContainerNamesUnavailable(ports)
+		return
+	}
+	output, err := runWithTimeout(ctx, environment, "docker", "ps", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}")
+	if err != nil {
+		markContainerNamesUnavailable(ports)
+		return
+	}
+	names := parseContainerNames(output)
+	for index := range ports {
+		if ports[index].ContainerID == "" {
+			continue
+		}
+		name := lookupContainerName(names, ports[index].ContainerID)
+		if name == "" {
+			markContainerNameUnavailable(&ports[index])
+			continue
+		}
+		ports[index].ContainerName = name
+		ports[index].DetectionSources = appendUniqueString(ports[index].DetectionSources, "docker-cli")
+	}
+}
+
+func parseContainerNames(content []byte) map[string]string {
+	result := map[string]string{}
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		id, name := strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
+		if id != "" && name != "" {
+			result[id] = name
+		}
+	}
+	return result
+}
+
+func lookupContainerName(names map[string]string, containerID string) string {
+	if name := names[containerID]; name != "" {
+		return name
+	}
+	for id, name := range names {
+		if strings.HasPrefix(id, containerID) || strings.HasPrefix(containerID, id) {
+			return name
+		}
+	}
+	return ""
+}
+
+func markContainerNamesUnavailable(ports []ListeningPort) {
+	for index := range ports {
+		if ports[index].ContainerID != "" {
+			markContainerNameUnavailable(&ports[index])
+		}
+	}
+}
+
+func markContainerNameUnavailable(port *ListeningPort) {
+	if port == nil || port.ContainerID == "" || port.ContainerName != "" {
+		return
+	}
+	port.DetectionSources = appendUniqueString(port.DetectionSources, "docker-cli")
+	port.DetectionErrorCode = "LISTENING_PORT_CONTAINER_NAME_UNAVAILABLE"
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, current := range values {
+		if current == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 type processAssociation struct {
@@ -133,7 +235,11 @@ func processServiceName(cmdline, processName string) string {
 }
 
 func readProcTrimmed(path string) (string, error) {
-	value, err := readProcBytes(path)
+	return readProcTrimmedFrom(NewOSEnvironment(), path)
+}
+
+func readProcTrimmedFrom(environment Environment, path string) (string, error) {
+	value, err := readProcBytesFrom(environment, path)
 	if err != nil {
 		return "", err
 	}
@@ -141,11 +247,21 @@ func readProcTrimmed(path string) (string, error) {
 }
 
 func readProcBytes(path string) ([]byte, error) {
-	value, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	return readProcBytesFrom(NewOSEnvironment(), path)
+}
+
+func readProcBytesFrom(environment Environment, path string) ([]byte, error) {
+	if environment == nil {
+		return nil, filepath.ErrBadPattern
 	}
-	return value, nil
+	return environment.ReadFile(path)
+}
+
+func readProcLinkFrom(environment Environment, path string) (string, error) {
+	if source, ok := environment.(readLinkEnvironment); ok {
+		return source.ReadLink(path)
+	}
+	return "", filepath.ErrBadPattern
 }
 
 func intToString(value int32) string {
