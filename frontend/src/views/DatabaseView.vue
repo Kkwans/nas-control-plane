@@ -7,7 +7,6 @@ import {
   ArrowRight,
   CircleAlert,
   Database,
-  FolderKanban,
   HardDrive,
   Info,
   RefreshCw,
@@ -19,6 +18,7 @@ import { ElButton, ElInput, ElMessage, ElTooltip } from 'element-plus'
 import { NcpApiError } from '@/api/system'
 import type { DatabaseDriver, DatabaseSource } from '@/api/database'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import ListIconButton from '@/components/ListIconButton.vue'
 import { databaseProjectKey, useDatabaseStore } from '@/stores/database'
 
 type SourceFilter = 'all' | 'project' | 'system' | 'archived'
@@ -223,11 +223,6 @@ onMounted(() => {
       <code>代码 {{ errorState.code }}</code>
     </div>
 
-    <div class="database-connection-note" role="note">
-      <Info :size="16" aria-hidden="true" />
-      <span><strong>连接说明</strong>打开数据源会先完成认证，再读取对象目录；目录读取成功后才标记为“已连接”。</span>
-    </div>
-
     <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-catalog panel" aria-label="正在发现数据库">
       <div v-for="group in 3" :key="group" class="database-skeleton">
         <header><i class="ncp-skeleton"></i><span class="ncp-skeleton"></span></header>
@@ -235,53 +230,48 @@ onMounted(() => {
       </div>
     </section>
 
-    <section v-else-if="filteredGroups.length" class="database-catalog panel" aria-label="按项目分组的数据库来源">
-      <div class="database-table__head" aria-hidden="true">
-        <span>数据库</span><span>用途模块</span><span>类型</span><span>状态</span><span>连接位置</span><span>操作</span>
+    <section v-else-if="filteredGroups.length" class="database-directory" aria-labelledby="database-directory-title">
+      <div class="section-heading">
+        <div><h2 id="database-directory-title">数据库目录</h2><p><Info :size="14" />进入数据源后会先完成认证，再读取数据表和视图目录</p></div>
       </div>
-      <article v-for="group in filteredGroups" :key="group.key" class="database-group">
-        <header class="database-group__header">
-          <div class="database-group__summary">
-            <span :class="['project-icon', { 'project-icon--system': group.category === 'system' }]" aria-hidden="true"><FolderKanban :size="19" /></span>
-            <div><strong>{{ group.name }}</strong><small>{{ group.sources.length }} 个数据库来源</small></div>
-          </div>
-          <div class="database-group__meta">
-            <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]"><span>{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span></span>
-            <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
-              <button class="archive-button" type="button" @click="toggleArchive(group)">
-                <ArchiveRestore v-if="databaseStore.isProjectArchived(group.key)" :size="16" />
-                <Archive v-else :size="16" />
-                <span>{{ databaseStore.isProjectArchived(group.key) ? '恢复' : '归档' }}</span>
-              </button>
-            </ElTooltip>
-          </div>
-        </header>
-
-        <div class="database-table">
-          <RouterLink
-            v-for="source in group.sources"
-            :key="source.id"
-            class="database-row"
-            :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
-            :aria-label="`进入 ${databaseDisplayName(source, group.name)} 数据库详情`"
-          >
-            <div class="database-identity">
-              <span :class="['database-type-icon', `database-type-icon--${source.driver}`, { 'database-type-icon--system': source.category === 'system' }]" aria-hidden="true">
-                <component :is="driverIcon(source.driver)" :size="19" />
-              </span>
-              <div>
-                <strong>{{ databaseDisplayName(source, group.name) }}</strong>
-                <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
-              </div>
+      <div class="database-catalog panel" aria-label="按项目分组的数据库来源">
+        <article v-for="group in filteredGroups" :key="group.key" class="database-group">
+          <header class="database-group__header">
+            <div class="database-group__title"><h3>{{ group.name }}</h3><span>{{ group.sources.length }}</span></div>
+            <div class="database-group__meta">
+              <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]">{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span>
+              <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
+                <ListIconButton :icon="databaseStore.isProjectArchived(group.key) ? ArchiveRestore : Archive" :label="databaseStore.isProjectArchived(group.key) ? `恢复 ${group.name}` : `归档 ${group.name}`" @click="toggleArchive(group)" />
+              </ElTooltip>
             </div>
-            <div class="database-module database-cell"><small class="database-field-label">用途</small><span>{{ source.module || '未标注用途' }}</span></div>
-            <div class="database-cell"><span :class="['driver-badge', `driver-badge--${source.driver}`]"><small class="database-field-label">类型</small>{{ driverLabel(source.driver) }}</span></div>
-            <div class="database-cell"><span :class="['source-status', `source-status--${sourceStatus(source).tone}`]"><small class="database-field-label">状态</small><strong>{{ sourceStatus(source).label }}</strong><small>{{ sourceStatus(source).detail }}</small></span></div>
-            <code class="database-location database-cell" :title="source.location || '未提供连接位置'"><small class="database-field-label">位置</small><span>{{ source.location || '未提供' }}</span></code>
-            <span class="database-row__affordance" aria-hidden="true"><ArrowRight :size="17" /></span>
-          </RouterLink>
-        </div>
-      </article>
+          </header>
+
+          <div class="database-table">
+            <RouterLink
+              v-for="source in group.sources"
+              :key="source.id"
+              class="database-row"
+              :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
+              :aria-label="`进入 ${databaseDisplayName(source, group.name)} 数据库详情`"
+            >
+              <div class="database-identity">
+                <span :class="['database-type-icon', `database-type-icon--${source.driver}`, { 'database-type-icon--system': source.category === 'system' }]" aria-hidden="true">
+                  <component :is="driverIcon(source.driver)" :size="19" />
+                </span>
+                <div>
+                  <strong>{{ databaseDisplayName(source, group.name) }}</strong>
+                  <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
+                </div>
+              </div>
+              <div class="database-cell"><span :class="['source-status', `source-status--${sourceStatus(source).tone}`]"><small class="database-field-label">状态</small><strong>{{ sourceStatus(source).label }}</strong><small>{{ sourceStatus(source).detail }}</small></span></div>
+              <div class="database-module database-cell"><small class="database-field-label">用途</small><span>{{ source.module || '未标注用途' }}</span></div>
+              <div class="database-cell"><span :class="['driver-badge', `driver-badge--${source.driver}`]"><small class="database-field-label">类型</small>{{ driverLabel(source.driver) }}</span></div>
+              <code class="database-location database-cell" :title="source.location || '未提供连接位置'"><small class="database-field-label">位置</small><span>{{ source.location || '未提供' }}</span></code>
+              <span class="database-row__affordance" aria-hidden="true"><ArrowRight :size="17" /></span>
+            </RouterLink>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section v-else class="empty-panel panel">
@@ -383,25 +373,36 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.database-connection-note {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-  color: var(--ncp-text-subtle);
-  font-size: .74rem;
+.database-directory {
+  display: grid;
+  gap: 10px;
 }
 
-.database-connection-note svg {
+.section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.section-heading p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  color: var(--ncp-text-subtle);
+  font-size: .76rem;
+}
+
+.section-heading p svg {
   flex: 0 0 auto;
   color: var(--ncp-primary-strong);
-}
-
-.database-connection-note strong {
-  margin-right: 6px;
-  color: var(--ncp-text-muted);
-  font-weight: 740;
 }
 
 .database-catalog {
@@ -414,24 +415,24 @@ onMounted(() => {
 
 .database-group__header {
   display: flex;
-  min-height: 60px;
+  min-height: 44px;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 8px 18px;
+  gap: 12px;
+  padding: 0 15px;
   border-bottom: 1px solid var(--ncp-line);
-  background: linear-gradient(120deg, var(--ncp-surface-quiet), var(--ncp-surface));
+  background: var(--ncp-surface-quiet);
 }
 
-.database-group__summary,
+.database-group__title,
 .database-group__meta {
   display: flex;
   min-width: 0;
   align-items: center;
 }
 
-.database-group__summary {
-  gap: 11px;
+.database-group__title {
+  gap: 8px;
 }
 
 .database-group__meta {
@@ -439,7 +440,6 @@ onMounted(() => {
   gap: 10px;
 }
 
-.project-icon,
 .database-type-icon {
   display: grid;
   flex: 0 0 auto;
@@ -447,34 +447,25 @@ onMounted(() => {
   border-radius: var(--ncp-radius-control);
 }
 
-.project-icon {
-  width: 36px;
-  height: 36px;
-  color: var(--ncp-object-project);
-  background: var(--ncp-object-project-soft);
-}
-
-.project-icon--system {
-  color: var(--ncp-object-system);
-  background: var(--ncp-object-system-soft);
-}
-
-.database-group__summary > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.database-group__header strong {
+.database-group__title h3 {
   overflow: hidden;
-  font-size: .94rem;
+  margin: 0;
+  font-size: .82rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.database-group__header small {
+.database-group__title > span {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--ncp-line);
+  border-radius: 7px;
+  background: var(--ncp-surface);
   color: var(--ncp-text-subtle);
-  font-size: .74rem;
+  font-family: var(--ncp-font-mono);
+  font-size: .7rem;
 }
 
 .project-kind,
@@ -500,50 +491,16 @@ onMounted(() => {
   background: var(--ncp-object-system-soft);
 }
 
-.archive-button {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--ncp-control-border);
-  border-radius: var(--ncp-radius-control);
-  background: var(--ncp-control-surface);
-  color: var(--ncp-text-muted);
-  font-size: .76rem;
-  font-weight: 700;
-  transition: border-color var(--ncp-duration-fast) var(--ncp-ease-out), color var(--ncp-duration-fast) var(--ncp-ease-out), background-color var(--ncp-duration-fast) var(--ncp-ease-out);
-}
-
-.archive-button:hover {
-  border-color: var(--ncp-control-border-hover);
-  background: var(--ncp-control-hover);
-  color: var(--ncp-primary-strong);
-}
-
-.database-table__head,
 .database-row {
   display: grid;
-  grid-template-columns: minmax(250px, 1.3fr) minmax(170px, .8fr) 150px 126px minmax(220px, 1.1fr) 56px;
+  grid-template-columns: minmax(250px, 1.5fr) 126px minmax(160px, .8fr) 148px minmax(220px, 1.1fr) 40px;
   align-items: center;
-  gap: 16px;
-  padding-inline: 18px;
-}
-
-.database-table__head {
-  min-height: 44px;
-  background: var(--ncp-table-head);
-  color: var(--ncp-text-subtle);
-  font-size: .72rem;
-  font-weight: 740;
-}
-
-.database-table__head span:not(:first-child) {
-  text-align: center;
+  gap: 12px;
+  padding-inline: 15px;
 }
 
 .database-row {
-  min-height: 76px;
+  min-height: 72px;
   border-top: 1px solid var(--ncp-line);
   color: inherit;
   text-decoration: none;
@@ -554,7 +511,7 @@ onMounted(() => {
 .database-row:hover,
 .database-row:focus-visible {
   background: var(--ncp-table-row-hover);
-  box-shadow: inset 3px 0 0 var(--ncp-primary);
+  box-shadow: inset 2px 0 0 var(--ncp-primary);
 }
 
 .database-row:focus-visible {
@@ -571,8 +528,8 @@ onMounted(() => {
 }
 
 .database-type-icon {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   color: var(--ncp-object-sqlite);
   background: var(--ncp-object-sqlite-soft);
 }
@@ -649,15 +606,11 @@ onMounted(() => {
 }
 
 .source-status {
-  min-height: 26px;
-  padding: 0 9px;
-}
-
-.source-status {
   display: grid;
   min-width: 92px;
   gap: 2px;
-  padding-block: 4px;
+  min-height: 30px;
+  padding: 4px 9px;
   line-height: 1.1;
 }
 
@@ -803,9 +756,8 @@ onMounted(() => {
     overflow-x: auto;
   }
 
-  .database-table__head,
   .database-row {
-    min-width: 1040px;
+    min-width: 980px;
   }
 }
 
@@ -850,7 +802,7 @@ onMounted(() => {
     padding-inline: 14px;
   }
 
-  .database-group__summary {
+  .database-group__title {
     gap: 9px;
   }
 
@@ -864,10 +816,6 @@ onMounted(() => {
 
   .database-table {
     overflow: visible;
-  }
-
-  .database-table__head {
-    display: none;
   }
 
   .database-row {
@@ -919,19 +867,18 @@ onMounted(() => {
   }
 
   .database-row__affordance {
+    display: none;
+  }
+
+  .database-row > .database-cell:nth-child(2) {
     grid-column: 2;
     grid-row: 1;
-    align-self: start;
+    justify-content: flex-end;
   }
 
-  .database-cell:nth-child(3) {
+  .database-row > .database-cell:nth-child(4) {
     grid-column: 1;
     justify-content: flex-start;
-  }
-
-  .database-cell:nth-child(4) {
-    grid-column: 2;
-    justify-content: flex-end;
   }
 
   .database-skeleton > div {
@@ -951,16 +898,6 @@ onMounted(() => {
   .database-error code {
     width: 100%;
     margin-left: 28px;
-  }
-
-  .archive-button {
-    width: 36px;
-    justify-content: center;
-    padding-inline: 0;
-  }
-
-  .archive-button > span {
-    display: none;
   }
 
   .database-row {

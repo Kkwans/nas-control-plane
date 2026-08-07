@@ -328,9 +328,15 @@ function clearError() {
     <template v-else-if="catalog">
       <section class="table-list panel" aria-label="数据表和视图列表">
         <div class="table-list__head">
-          <span>数据表或视图</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>操作</span>
+          <span>数据表或视图</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>详情</span>
         </div>
-        <div v-for="table in tables" :key="`${table.schema}.${table.name}`" class="table-row">
+        <RouterLink
+          v-for="table in tables"
+          :key="`${table.schema}.${table.name}`"
+          class="table-row"
+          :to="{ name: 'database-table', params: { sourceId, table: table.name }, query: { sourceName: source.name, tableName: table.name, schema: table.schema || undefined } }"
+          :aria-label="`打开 ${table.name} ${tableTypeLabel(table)}详情`"
+        >
           <div class="table-name">
             <span :class="['table-name__icon', { 'table-name__icon--view': table.type.toLowerCase() === 'view' }]" aria-hidden="true"><component :is="tableTypeIcon(table)" :size="18" /></span>
             <div>
@@ -347,10 +353,8 @@ function clearError() {
           <span class="table-row__metric"><small>字段</small><Columns3 :size="14" />{{ table.columns.length }}</span>
           <span class="table-row__metric"><small>数据行</small><Rows3 :size="14" />{{ formatNumber(table.rowCount) }}</span>
           <span class="table-row__metric"><small>大小</small><HardDrive :size="14" />{{ formatBytes(table.sizeBytes) }}</span>
-          <RouterLink class="open-button" :to="{ name: 'database-table', params: { sourceId, table: table.name }, query: { sourceName: source.name, tableName: table.name, schema: table.schema || undefined } }">
-            <span>打开</span><ArrowRight :size="16" />
-          </RouterLink>
-        </div>
+          <span class="table-row__affordance" aria-hidden="true"><ArrowRight :size="17" /></span>
+        </RouterLink>
         <div v-if="!tables.length" class="empty-table"><Search :size="22" /><strong>没有匹配的数据表或视图</strong><span>调整搜索词后重试。</span></div>
       </section>
     </template>
@@ -658,12 +662,20 @@ function clearError() {
   border-top: 1px solid var(--ncp-line);
   color: var(--ncp-text-muted);
   font-size: .77rem;
+  text-decoration: none;
+  cursor: pointer;
   transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), box-shadow var(--ncp-duration-fast) var(--ncp-ease-out);
 }
 
-.table-row:hover {
+.table-row:hover,
+.table-row:focus-visible {
   background: var(--ncp-table-row-hover);
   box-shadow: inset 3px 0 0 var(--ncp-primary);
+}
+
+.table-row:focus-visible {
+  outline: 2px solid var(--ncp-primary);
+  outline-offset: -2px;
 }
 
 .table-row > :not(.table-name):not(.table-row--skeleton) {
@@ -789,26 +801,24 @@ function clearError() {
   font-size: .68rem;
 }
 
-.open-button {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 10px;
-  border: 1px solid var(--ncp-primary-border);
-  border-radius: var(--ncp-radius-control);
-  background: var(--ncp-primary-soft);
-  color: var(--ncp-primary-strong);
-  font-size: .75rem;
-  font-weight: 740;
-  transition: background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out), transform var(--ncp-duration-fast) var(--ncp-ease-out);
+.table-row__affordance {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  justify-self: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--ncp-text-subtle);
+  transition: color var(--ncp-duration-fast) var(--ncp-ease-out), background-color var(--ncp-duration-fast) var(--ncp-ease-out), border-color var(--ncp-duration-fast) var(--ncp-ease-out), transform var(--ncp-duration-fast) var(--ncp-ease-out);
 }
 
-.open-button:hover {
-  border-color: var(--ncp-primary);
-  background: var(--ncp-primary-hover);
-  transform: translateY(-1px);
+.table-row:hover .table-row__affordance,
+.table-row:focus-visible .table-row__affordance {
+  border-color: var(--ncp-primary-border);
+  background: var(--ncp-primary-soft);
+  color: var(--ncp-primary-strong);
+  transform: translateX(2px);
 }
 
 .empty-table {
@@ -920,7 +930,7 @@ function clearError() {
     grid-column: 2;
   }
 
-  .open-button {
+  .table-row__affordance {
     grid-column: 2;
     grid-row: 1;
     align-self: start;
