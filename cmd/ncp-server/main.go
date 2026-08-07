@@ -45,6 +45,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, agentProbeErrorCode(err))
 			os.Exit(1)
 		}
+	case "database-key-init":
+		if err := runDatabaseKeyInit(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "NCP_SERVER_DATABASE_KEY_INIT_FAILED")
+			os.Exit(1)
+		}
 	case "serve":
 		if err := runHTTPServer(ctx, os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "NCP_SERVER_HTTP_FAILED")
@@ -54,6 +59,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, "NCP_SERVER_COMMAND_UNKNOWN")
 		os.Exit(1)
 	}
+}
+
+// runDatabaseKeyInit is an explicit installation-time operation. It never
+// prints key material and refuses to replace an existing key ring, so an
+// operator cannot accidentally make saved credentials undecryptable.
+func runDatabaseKeyInit(args []string) error {
+	flags := flag.NewFlagSet("database-key-init", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	path := flags.String("path", "", "数据库凭据密钥环路径")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*path) == "" {
+		return errors.New("database key path is required")
+	}
+	_, err := ncpdatabase.CreateFileKeyProvider(*path)
+	return err
 }
 
 func runAgentProbe(ctx context.Context, args []string, output io.Writer) error {
