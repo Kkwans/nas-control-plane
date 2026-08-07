@@ -392,7 +392,9 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
               <ActionButton variant="secondary" size="sm" icon-only :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :aria-label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')"><span>重启项目</span></ActionButton>
             </ElTooltip>
             <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
-              <ActionButton variant="danger" size="sm" icon-only :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :aria-label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)"><span>删除项目</span></ActionButton>
+              <span class="project-action-tooltip-target">
+                <ActionButton variant="danger" size="sm" icon-only :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :aria-label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)"><span>删除项目</span></ActionButton>
+              </span>
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-row-feedback" role="alert">
@@ -430,7 +432,9 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             <ActionButton variant="danger" size="sm" :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" @click="performProjectAction(project, 'stop')">停止</ActionButton>
             <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" @click="performProjectAction(project, 'restart')">重启</ActionButton>
             <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
-              <ActionButton variant="danger" size="sm" :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" @click="confirmDeleteProject(project)">删除</ActionButton>
+              <span class="project-action-tooltip-target project-action-tooltip-target--mobile">
+                <ActionButton variant="danger" size="sm" :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" @click="confirmDeleteProject(project)">删除</ActionButton>
+              </span>
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-action-errors" role="alert">
@@ -513,6 +517,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .path-cell { overflow: hidden; padding-right: 8px; color: var(--ncp-text-muted); font-family:var(--ncp-font-mono); font-size:.78rem; text-overflow: ellipsis; white-space: nowrap; }
 .project-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .project-actions :deep(.action-button) { width: 40px; min-width: 40px; padding: 0; }
+.project-action-tooltip-target { display: inline-flex; }
+.project-action-tooltip-target--mobile, .project-action-tooltip-target--mobile :deep(.action-button) { width: 100%; }
 .project-row-feedback { grid-column: 1 / -1; align-self: stretch; padding: 8px 10px; border: 1px solid var(--ncp-danger-border); border-radius: 8px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .72rem; }
 .project-row-feedback strong, .project-action-errors strong { font-weight: 760; }
 .project-row-feedback ul, .project-action-errors ul { display: grid; gap: 3px; margin: 4px 0 0; padding-left: 17px; }
