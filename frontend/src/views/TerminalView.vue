@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Container, Plug, Server, SquareTerminal, Trash2, Unplug } from '@lucide/vue'
-import { ElButton, ElOption, ElSelect } from 'element-plus'
+import { CircleHelp, Container, Plug, Server, SquareTerminal, Trash2, Unplug } from '@lucide/vue'
+import { ElButton, ElDialog } from 'element-plus'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import NcpSelect from '@/components/NcpSelect.vue'
 import {
   createTerminalPastePayload,
   describeTerminalCapability,
@@ -36,7 +37,7 @@ const shellEnhancement = ref('')
 const shellReason = ref('')
 const capabilities = ref<TerminalCapabilities | null>(null)
 const statusMessage = ref('')
-const terminalFocused = ref(false)
+const shortcutDialogOpen = ref(false)
 const pendingPaste = ref<PendingPaste | null>(null)
 const pasteConfirmRef = ref<HTMLButtonElement | null>(null)
 const terminalElement = ref<HTMLElement | null>(null)
@@ -50,6 +51,7 @@ let pasteTarget: HTMLElement | null = null
 let terminalReady = false
 
 const containers = computed(() => (systemStore.inventory?.containers ?? []).filter((item) => item.state === 'running'))
+const containerOptions = computed(() => containers.value.map((item) => ({ label: `${item.name} · ${item.image}`, value: item.id })))
 const canConnect = computed(() => target.value === 'host' || Boolean(containerId.value))
 const canClearTerminal = computed(() => state.value === 'connecting' || state.value === 'connected' || state.value === 'error')
 const stateLabel = computed(() => ({
@@ -85,12 +87,6 @@ const capabilityWarning = computed(() => {
   if (unknown.length > 0) return `服务端未完整报告终端能力（${unknown.map((item) => item.label).join('、')}），未报告项按不支持处理。`
   return ''
 })
-const enhancementHint = computed(() => {
-  if (state.value !== 'connected') return '粘贴：Ctrl+V / ⌘V · 多行粘贴会先确认 · 连接后按真实能力显示 Shell、ANSI 与粘贴行为。'
-  const editorSummary = `补全 ${describeTerminalCapabilityState(editorCapabilityItems.value[0]?.state ?? 'unknown')} · 高亮 ${describeTerminalCapabilityState(editorCapabilityItems.value[1]?.state ?? 'unknown')}`
-  if (shellReason.value) return `${shellReason.value} · ${shellLabel.value} / ${enhancementLabel.value} · ${editorSummary}`
-  return `${shellLabel.value} · ${enhancementLabel.value} · ${editorSummary} · ANSI ${describeTerminalCapability(capabilities.value?.ansiColors)}`
-})
 const pendingPasteDescription = computed(() => {
   if (!pendingPaste.value) return ''
   if (pendingPaste.value.safe) return `将把 ${pendingPaste.value.lineCount} 行内容交给当前 Shell 的 bracketed paste 处理。`
@@ -115,7 +111,6 @@ async function connect() {
   shellReason.value = ''
   capabilities.value = null
   pendingPaste.value = null
-  terminalFocused.value = false
   await nextTick()
   const element = terminalElement.value
   if (!element) {
@@ -158,8 +153,6 @@ async function connect() {
   })
   terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
   pasteTarget = element
-  element.addEventListener('focusin', handleTerminalFocus)
-  element.addEventListener('focusout', handleTerminalBlur)
   pasteTarget.addEventListener('paste', handlePaste, true)
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -204,7 +197,7 @@ async function connect() {
         shellEnhancement.value = control.enhancement ?? ''
         shellReason.value = control.reason ?? ''
         capabilities.value = normalizeTerminalCapabilities(control.capabilities)
-        statusMessage.value = capabilityWarning.value || `终端已连接：${shellLabel.value} / ${enhancementLabel.value}`
+        statusMessage.value = capabilityWarning.value
         terminal?.clear()
         scheduleResize()
         terminal?.focus()
@@ -216,7 +209,6 @@ async function connect() {
         handshakeTimer = undefined
         terminalReady = false
         state.value = 'closed'
-        terminalFocused.value = false
         statusMessage.value = '终端会话已由服务端关闭，可重新连接。'
         terminal?.writeln('\r\n\x1b[38;5;214m会话已关闭\x1b[0m')
       }
@@ -234,7 +226,6 @@ async function connect() {
     if (state.value === 'connecting') failTerminal('终端在握手完成前断开。')
     else if (state.value === 'connected') {
       state.value = 'closed'
-      terminalFocused.value = false
       statusMessage.value = '终端连接已断开，可重新连接。'
     }
   }
@@ -268,15 +259,6 @@ function handlePaste(event: ClipboardEvent) {
     return
   }
   sendPastedText(text)
-}
-
-function handleTerminalFocus() {
-  terminalFocused.value = true
-}
-
-function handleTerminalBlur(event: FocusEvent) {
-  if (event.relatedTarget instanceof Node && terminalElement.value?.contains(event.relatedTarget)) return
-  terminalFocused.value = false
 }
 
 function sendPastedText(text: string, bracketedPaste = supportsSafeMultilinePaste(capabilities.value)) {
@@ -323,7 +305,6 @@ function describeTerminalCapabilityState(state: TerminalCapabilityState): string
 function failTerminal(message: string) {
   terminalReady = false
   state.value = 'error'
-  terminalFocused.value = false
   pendingPaste.value = null
   statusMessage.value = message
   terminal?.writeln(`\r\n\x1b[31m${message}\x1b[0m`)
@@ -348,7 +329,6 @@ function scheduleResize() {
 function close() {
   const wasActive = state.value === 'connecting' || state.value === 'connected'
   terminalReady = false
-  terminalFocused.value = false
   pendingPaste.value = null
   shellName.value = ''
   shellEnhancement.value = ''
@@ -362,8 +342,6 @@ function close() {
   window.visualViewport?.removeEventListener('resize', scheduleResize)
   resizeObserver?.disconnect()
   resizeObserver = null
-  pasteTarget?.removeEventListener('focusin', handleTerminalFocus)
-  pasteTarget?.removeEventListener('focusout', handleTerminalBlur)
   pasteTarget?.removeEventListener('paste', handlePaste, true)
   pasteTarget = null
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'close' }))
@@ -384,10 +362,6 @@ onBeforeUnmount(close)
 <template>
   <div class="page workspace-page terminal-page">
     <WorkspaceHeader title="终端" description="连接 NAS Root PTY 或运行中的 Docker 容器" :icon="SquareTerminal" :stats="stats">
-      <template #actions>
-        <ElButton v-if="state !== 'connected'" type="primary" :disabled="!canConnect" :loading="state === 'connecting'" @click="connect"><Plug :size="16" />连接终端</ElButton>
-        <ElButton v-else type="danger" plain @click="close"><Unplug :size="16" />断开连接</ElButton>
-      </template>
     </WorkspaceHeader>
 
     <section class="terminal-toolbar panel">
@@ -395,34 +369,32 @@ onBeforeUnmount(close)
         <button type="button" :class="{ active: target === 'host' }" :disabled="state === 'connected'" @click="target = 'host'"><Server :size="17" /><span><strong>NAS 主机</strong><small>Root Shell</small></span></button>
         <button type="button" :class="{ active: target === 'container' }" :disabled="state === 'connected'" @click="target = 'container'"><Container :size="17" /><span><strong>Docker 容器</strong><small>容器 Shell</small></span></button>
       </div>
-      <ElSelect v-if="target === 'container'" v-model="containerId" filterable :disabled="state === 'connected'" placeholder="搜索并选择运行中的容器">
-        <ElOption v-for="item in containers" :key="item.id" :label="`${item.name} · ${item.image}`" :value="item.id" />
-      </ElSelect>
-      <div class="terminal-toolbar-info">
-        <span class="terminal-hint">{{ enhancementHint }}</span>
-        <div v-if="state === 'connected'" class="terminal-capabilities" aria-label="当前终端能力">
-          <span class="capability-chip capability-chip--identity"><strong>{{ shellLabel }}</strong><em>{{ enhancementLabel }}</em></span>
-          <span v-for="item in capabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${getTerminalCapabilityState(capabilities, item.key)}`]">
-            <span>{{ item.label }}</span><em>{{ item.value }}</em>
-          </span>
-          <span v-for="item in editorCapabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${item.state}`]">
-            <span>{{ item.label }}</span><em>{{ describeTerminalCapabilityState(item.state) }}</em>
-          </span>
-        </div>
-        <span v-if="state === 'connected'" class="terminal-focus-state" :class="{ 'terminal-focus-state--active': terminalFocused }" role="status">
-          {{ terminalFocused ? '输入焦点已就绪' : '终端未聚焦，点击输出区输入' }}
-        </span>
-        <p v-if="capabilityWarning" class="terminal-capability-warning" role="note">{{ capabilityWarning }}</p>
-        <p v-if="statusMessage" class="terminal-live-status" role="status" aria-live="polite">{{ statusMessage }}</p>
+      <NcpSelect v-if="target === 'container'" v-model="containerId" :options="containerOptions" accessible-label="选择运行中的 Docker 容器" filterable :disabled="state === 'connected'" placeholder="搜索并选择运行中的容器" />
+      <p v-if="statusMessage" class="terminal-live-status" role="status" aria-live="polite">{{ statusMessage }}</p>
+      <div class="terminal-toolbar-actions">
+        <ElButton @click="shortcutDialogOpen = true"><CircleHelp :size="16" />快捷键</ElButton>
+        <ElButton v-if="state !== 'connected'" type="primary" :disabled="!canConnect" :loading="state === 'connecting'" @click="connect"><Plug :size="16" />连接终端</ElButton>
+        <ElButton v-else type="danger" plain @click="close"><Unplug :size="16" />断开连接</ElButton>
       </div>
-      <details class="terminal-help">
-        <summary>快捷键与粘贴说明</summary>
-        <p>Ctrl+V / ⌘V 由浏览器 <code>paste</code> 事件读取剪贴板并写入当前 PTY；原 Ctrl+V 的 literal-next 功能改为 Ctrl+Q。多行内容会先确认，能力未报告或不支持时按行发送。</p>
+    </section>
+
+    <ElDialog v-model="shortcutDialogOpen" title="终端快捷键与粘贴" width="min(560px, 92vw)" append-to-body>
+      <div class="terminal-shortcut-dialog">
+        <p>Ctrl+V / ⌘V 会把剪贴板内容写入当前 PTY；原 Ctrl+V 的 literal-next 功能改为 Ctrl+Q。多行内容始终先确认。</p>
         <ul>
           <li v-for="shortcut in terminalShortcuts" :key="shortcut.keys"><kbd>{{ shortcut.keys }}</kbd><span>{{ shortcut.action }}</span></li>
         </ul>
-      </details>
-    </section>
+        <details v-if="state === 'connected'" class="terminal-capability-details">
+          <summary>当前会话能力</summary>
+          <div class="terminal-capabilities" aria-label="当前终端能力">
+            <span class="capability-chip capability-chip--identity"><strong>{{ shellLabel }}</strong><em>{{ enhancementLabel }}</em></span>
+            <span v-for="item in capabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${getTerminalCapabilityState(capabilities, item.key)}`]"><span>{{ item.label }}</span><em>{{ item.value }}</em></span>
+            <span v-for="item in editorCapabilityItems" :key="item.key" :class="['capability-chip', `capability-chip--${item.state}`]"><span>{{ item.label }}</span><em>{{ describeTerminalCapabilityState(item.state) }}</em></span>
+          </div>
+          <p v-if="shellReason">{{ shellReason }}</p>
+        </details>
+      </div>
+    </ElDialog>
 
     <section :class="['terminal-frame', 'panel', { 'terminal-frame--idle': state === 'idle' || state === 'closed' }]" role="region" aria-label="终端会话" :aria-busy="state === 'connecting'">
       <header><span :class="['connection-dot', `connection-dot--${state}`]" aria-hidden="true"></span><strong>{{ target === 'host' ? 'root@DH4300Plus' : containers.find(item => item.id === containerId)?.name || 'container' }}</strong><button v-if="canClearTerminal" class="terminal-clear-button" type="button" aria-label="清空终端内容" title="清空终端内容" @click="clearTerminal"><Trash2 :size="15" /><span>清空内容</span></button><small role="status" aria-live="polite">{{ stateLabel }}</small></header>
@@ -443,4 +415,5 @@ onBeforeUnmount(close)
 .terminal-frame,.terminal-frame--idle{height:clamp(578px,calc(100dvh - 320px),735px);min-height:578px}.terminal-canvas{min-height:0}.terminal-canvas :deep(.xterm-viewport){scrollbar-width:none!important;-ms-overflow-style:none}.terminal-canvas :deep(.xterm-viewport::-webkit-scrollbar){display:none}.terminal-clear-button{display:inline-flex;min-height:30px;align-items:center;gap:7px;margin-left:auto;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font:inherit;font-size:.75rem}.terminal-clear-button:hover,.terminal-clear-button:focus-visible{border-color:var(--ncp-primary);color:var(--ncp-primary-strong);outline:0}.terminal-frame>header small{margin-left:0}@media(max-width:760px){.terminal-frame,.terminal-frame--idle{height:calc(100dvh - 275px);min-height:485px}.terminal-clear-button span{display:none}.terminal-clear-button{padding:0 8px}}
 .terminal-toolbar-info{display:grid;min-width:0;flex:1;gap:6px}.terminal-hint{margin-left:0;overflow:hidden;color:var(--ncp-text-subtle);font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.terminal-capabilities{display:flex;min-width:0;flex-wrap:wrap;gap:5px}.capability-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border:1px solid var(--ncp-line);border-radius:999px;background:#fff;color:var(--ncp-text-muted);font-size:.68rem;line-height:1.2}.capability-chip em{font-style:normal;color:var(--ncp-text-subtle)}.capability-chip--supported{border-color:rgba(35,134,111,.24);background:var(--ncp-success-soft);color:#176c5a}.capability-chip--supported em{color:#23866f}.capability-chip--unsupported{border-color:rgba(201,83,97,.2);background:var(--ncp-danger-soft);color:#9e3948}.capability-chip--unsupported em{color:#c95361}.capability-chip--unknown{border-color:rgba(184,118,34,.22);background:var(--ncp-warning-soft);color:#8c5a18}.capability-chip--unknown em{color:#b87622}.capability-chip--identity{border-color:rgba(52,116,212,.22);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.capability-chip--identity em{color:var(--ncp-primary)}.terminal-focus-state,.terminal-capability-warning,.terminal-live-status{margin:0;color:var(--ncp-text-subtle);font-size:.72rem;line-height:1.4}.terminal-focus-state--active{color:var(--ncp-success-strong)}.terminal-capability-warning{color:#8c5a18}.terminal-live-status{color:var(--ncp-text-muted)}.terminal-help{align-self:flex-start;flex:none;max-width:310px;color:var(--ncp-text-muted);font-size:.74rem}.terminal-help summary{cursor:pointer;padding:8px 6px;border-radius:7px;color:var(--ncp-primary-strong);font-weight:600;list-style-position:inside}.terminal-help summary:focus-visible{outline:2px solid var(--ncp-primary);outline-offset:2px}.terminal-help p{margin:6px 0 8px;line-height:1.5}.terminal-help code{padding:1px 4px;border-radius:4px;background:var(--ncp-surface-quiet);font-family:var(--ncp-font-mono);font-size:.7rem}.terminal-help ul{display:grid;gap:5px;margin:0;padding:0;list-style:none}.terminal-help li{display:flex;align-items:baseline;gap:7px}.terminal-help kbd{flex:none;padding:2px 5px;border:1px solid var(--ncp-line);border-bottom-width:2px;border-radius:4px;background:#fff;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.66rem}.terminal-help li span{line-height:1.35}.paste-confirmation{position:absolute;z-index:5;top:49px;right:0;left:0;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 18px;border-bottom:1px solid rgba(184,118,34,.28);background:linear-gradient(135deg,#fffaf0,#fff);box-shadow:0 10px 22px rgba(85,65,32,.12)}.paste-confirmation-copy{min-width:0}.paste-confirmation-copy strong{display:block;color:#6d4815;font-size:.86rem}.paste-confirmation-copy p{margin:4px 0 0;color:#8c6b36;font-size:.75rem;line-height:1.45}.paste-confirmation-actions{display:flex;flex:none;gap:8px}.paste-confirmation-actions button{min-height:34px;padding:0 12px;border-radius:7px;font:inherit;font-size:.74rem;cursor:pointer}.paste-confirmation-primary{border:1px solid var(--ncp-primary);background:var(--ncp-primary);color:#fff}.paste-confirmation-primary:hover,.paste-confirmation-primary:focus-visible{background:var(--ncp-primary-strong)}.paste-confirmation-secondary{border:1px solid var(--ncp-line);background:#fff;color:var(--ncp-text-muted)}.paste-confirmation-secondary:hover,.paste-confirmation-secondary:focus-visible{border-color:var(--ncp-primary);color:var(--ncp-primary-strong)}.paste-confirmation-actions button:focus-visible{outline:2px solid var(--ncp-primary);outline-offset:2px}.terminal-canvas :deep(.xterm-viewport){overflow-y:scroll!important;scrollbar-width:none!important;-ms-overflow-style:none;touch-action:pan-y;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}.terminal-canvas :deep(.xterm-viewport)::-webkit-scrollbar{display:none;width:0;height:0}.terminal-canvas :deep(.xterm-helper-textarea):focus{outline:0}@media(max-width:900px){.terminal-toolbar{align-items:stretch;flex-wrap:wrap}.terminal-toolbar-info{order:3;flex-basis:100%}.terminal-help{margin-left:auto}}@media(max-width:760px){.terminal-toolbar-info{order:initial}.terminal-help{max-width:none;margin-left:0}.paste-confirmation{align-items:stretch;flex-direction:column;gap:10px}.paste-confirmation-actions{justify-content:flex-end}.terminal-hint{white-space:normal}}
 .terminal-canvas :deep(.xterm-scrollable-element > .scrollbar){display:none!important}
+.terminal-toolbar-actions{display:flex;flex:0 0 auto;align-items:center;gap:8px;margin-left:auto}.terminal-toolbar-actions :deep(.el-button){margin-left:0}.terminal-toolbar>.terminal-live-status{overflow:hidden;max-width:340px;margin:0;color:var(--ncp-warning-strong);font-size:.72rem;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}.terminal-shortcut-dialog{display:grid;gap:16px}.terminal-shortcut-dialog>p{margin:0;color:var(--ncp-text-muted);font-size:.8rem;line-height:1.65}.terminal-shortcut-dialog>ul{display:grid;gap:0;margin:0;padding:0;overflow:hidden;border:1px solid var(--ncp-line);border-radius:12px;list-style:none}.terminal-shortcut-dialog>ul li{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:14px;min-height:46px;padding:8px 13px;border-bottom:1px solid var(--ncp-line)}.terminal-shortcut-dialog>ul li:last-child{border-bottom:0}.terminal-shortcut-dialog kbd{width:max-content;padding:3px 7px;border:1px solid var(--ncp-line-strong);border-bottom-width:2px;border-radius:6px;background:var(--ncp-surface-quiet);color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.7rem}.terminal-shortcut-dialog li span{color:var(--ncp-text-muted);font-size:.76rem;line-height:1.4}.terminal-capability-details{overflow:hidden;border:1px solid var(--ncp-line);border-radius:12px}.terminal-capability-details summary{min-height:42px;padding:0 13px;cursor:pointer;color:var(--ncp-primary-strong);font-size:.76rem;font-weight:720;line-height:42px}.terminal-capability-details .terminal-capabilities{padding:0 13px 12px}.terminal-capability-details>p{margin:0;padding:0 13px 12px;color:var(--ncp-text-subtle);font-size:.72rem;line-height:1.45}@media(max-width:760px){.terminal-toolbar-actions{width:100%;margin-left:0}.terminal-toolbar-actions :deep(.el-button){flex:1}.terminal-toolbar>.terminal-live-status{max-width:none;white-space:normal}.terminal-shortcut-dialog>ul li{grid-template-columns:1fr;gap:5px}}
 </style>
