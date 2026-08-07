@@ -37,6 +37,7 @@
 | `Ctrl+U` | 删除光标前的整段输入 |
 | `Ctrl+W` | 删除光标前的一个单词 |
 | `Ctrl+D` | 删除光标下字符；空输入时结束 Shell |
+| `PageUp` / `PageDown` | 在 xterm 滚动缓冲中向上或向下翻页；滚动条本身保持隐藏 |
 
 ## `started` 能力字段
 
@@ -54,6 +55,21 @@
 | `ansiColors` | 是否支持 ANSI 颜色输出 |
 
 主机终端会按实际探测结果报告 Bash、readline 和 ble.sh。容器终端先探测可用的 Bash/readline，失败时降级到 `sh`；容器没有安装主机的 `ble.sh` 时不会伪称具备该能力。
+
+## 主机与容器能力矩阵
+
+下表是能力含义，不是对每台机器的静态承诺；连接后以 `started.capabilities`、`enhancement` 和 `reason` 为准。`readline` 代表当前 Shell 已确认具备行编辑、历史和基础补全；输入高亮只在 ble.sh 实际加载成功时标记支持。
+
+| 目标与探测结果 | Shell / enhancement | 补全与历史编辑 | 输入高亮 | bracketed / 多行粘贴 | 降级说明 |
+| --- | --- | --- | --- | --- | --- |
+| 主机 Bash + ble.sh 加载成功 | `bash` / `blesh` | 支持 | 支持 | 按能力字段确认 | 探测或初始化失败时回退 `native` |
+| 主机 Bash，无 ble.sh | `bash` / `native` | 仅在 `readline=true` 时支持 | 不支持 | 仅在两个粘贴字段都为 `true` 时安全交给 Shell，否则按行发送 | `reason` 说明 ble.sh 缺失或不可用 |
+| 主机无 Bash | `sh` / `native` | 不支持 | 不支持 | 不支持，确认后按行发送 | 回退 `/bin/sh` |
+| 容器 Bash + readline/bracketed paste 探测通过 | `bash` / `readline` | 支持 | 不支持 | 支持 | 不加载主机 ble.sh |
+| 容器 Bash 探测未确认 readline 或 bracketed paste | `bash` / `native`，或 `readline` 且粘贴字段为 `false` | 按 `readline` 字段显示 | 不支持 | 不支持时确认后按行发送 | `reason` 明确记录探测或配置降级 |
+| 容器仅提供 `sh` | `sh` / `native` | 不支持 | 不支持 | 不支持，确认后按行发送 | 不启动 Bash 或 ble.sh |
+
+能力字段的 `false` 是服务端确认不支持；旧 Agent 完全省略字段时，界面显示“未报告”，按不安全粘贴路径处理，不把缺省当成支持。
 
 ## 终端显示和会话边界
 
