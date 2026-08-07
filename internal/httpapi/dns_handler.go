@@ -9,9 +9,6 @@ import (
 )
 
 func validateDNSChangeRequest(request system.DNSChangeRequest) error {
-	if strings.TrimSpace(request.Interface) == "" && strings.TrimSpace(request.ConnectionID) == "" {
-		return errors.New("必须指定目标网卡或 NetworkManager connectionId。")
-	}
 	if len(request.Nameservers) == 0 || len(request.Nameservers) > 6 {
 		return errors.New("nameservers 必须包含 1 到 6 个 IP 地址。")
 	}

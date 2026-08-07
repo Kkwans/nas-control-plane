@@ -111,11 +111,19 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	}
 	systemProvider := config.System
 	if systemProvider == nil {
+		systemEnvironment := system.NewOSEnvironment()
+		var dnsController system.DNSChangeController
+		if dnsCapability := system.ProbeDNS(ctx, systemEnvironment); dnsCapability.Backend == system.DNSBackendStaticResolv {
+			staticController, controllerErr := system.NewStaticResolvDNSController("/etc/resolv.conf", "/var/lib/ncp/dns")
+			if controllerErr == nil {
+				dnsController = staticController
+			}
+		}
 		systemProvider, err = NewLiveSystemProviderWithProxy(
-			system.NewOSEnvironment(),
+			systemEnvironment,
 			os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"),
 			config.OutboundProxy,
-			nil,
+			dnsController,
 		)
 		if err != nil {
 			return coded("AGENT_PUBLIC_EGRESS_INITIALIZATION_FAILED", err)

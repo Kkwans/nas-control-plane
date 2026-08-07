@@ -14,15 +14,19 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
-func TestDNSHandlerRequiresTargetAndDoesNotBypassPreview(t *testing.T) {
-	agent := &systemHTTPAgent{fakeAgentClient: &fakeAgentClient{}, dns: system.DNSCapability{Backend: system.DNSBackendStaticResolv, ReadOnly: true}}
+func TestDNSHandlerAllowsStaticBackendWithoutNetworkTargetAndRequiresConfirmation(t *testing.T) {
+	agent := &systemHTTPAgent{
+		fakeAgentClient: &fakeAgentClient{},
+		dns:             system.DNSCapability{Backend: system.DNSBackendStaticResolv, CanPreview: true},
+		preview:         system.DNSChangePreview{PreviewID: "p1", Backend: system.DNSBackendStaticResolv, RequiresConfirm: true},
+	}
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Second}
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/preview", bytes.NewBufferString(`{"nameservers":["1.1.1.1"]}`))
 	response := httptest.NewRecorder()
 	api.previewDNSChange(response, request)
-	if response.Code != http.StatusBadRequest || agent.previewCalled {
-		t.Fatalf("preview without target status=%d called=%t body=%s", response.Code, agent.previewCalled, response.Body.String())
+	if response.Code != http.StatusOK || !agent.previewCalled {
+		t.Fatalf("static preview without network target status=%d called=%t body=%s", response.Code, agent.previewCalled, response.Body.String())
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/confirm", bytes.NewBufferString(`{"previewId":"p1","confirmed":false}`))
@@ -74,6 +78,13 @@ func TestDNSFailureMessageExplainsReadOnlyBackend(t *testing.T) {
 	message := dnsChangeFailureMessage(errors.New("DNS_BACKEND_READ_ONLY"), "fallback")
 	if !strings.Contains(message, "/etc/resolv.conf") || !strings.Contains(message, "systemd-resolved") {
 		t.Fatalf("read-only DNS message = %q", message)
+	}
+}
+
+func TestDNSFailureMessageExplainsConcurrentChange(t *testing.T) {
+	message := dnsChangeFailureMessage(errors.New("DNS_SOURCE_CHANGED"), "fallback")
+	if !strings.Contains(message, "其他进程") || !strings.Contains(message, "取消") {
+		t.Fatalf("concurrent DNS message = %q", message)
 	}
 }
 

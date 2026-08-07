@@ -736,7 +736,7 @@ func readFileSafe(environment Environment, path string) []byte {
 }
 
 // DNSCapability 描述可读取、可预览、可确认和可回滚的能力边界。
-// static-resolv-conf 永远 ReadOnly，CanPreview/CanConfirm/CanRollback 均为 false。
+// 只有 Agent 显式注入带备份和回滚能力的控制器后才开放写入。
 type DNSCapability struct {
 	Backend         string   `json:"backend"`
 	Detected        bool     `json:"detected"`

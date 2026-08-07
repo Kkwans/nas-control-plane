@@ -144,7 +144,7 @@ func (p *LiveSystemProvider) CollectDNSCapability(ctx context.Context) (system.D
 	capability := system.ProbeDNS(ctx, p.Environment)
 	// 探测到管理后端并不等于具备安全写入能力。只有显式注入实现了
 	// 预览、确认和回滚契约的控制器时，才向 Console 开放修改入口。
-	if p.DNSController != nil && capability.Detected && capability.Backend != system.DNSBackendStaticResolv {
+	if p.DNSController != nil && capability.Detected {
 		capability.State = system.CapabilityStateAvailable
 		capability.ReadOnly = false
 		capability.CanPreview = true

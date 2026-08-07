@@ -117,6 +117,18 @@ func dnsChangeFailureMessage(err error, fallback string) string {
 		return "检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；DNS 保持只读。"
 	case "DNS_WRITE_ADAPTER_UNAVAILABLE":
 		return "DNS 后端未提供安全的预览、应用和回滚适配器。"
+	case "DNS_PREVIEW_NOT_FOUND", "DNS_PREVIEW_EXPIRED":
+		return "DNS 修改预览已失效，请重新预览后再确认。"
+	case "DNS_SOURCE_CHANGED":
+		return "DNS 配置已被其他进程修改，为避免覆盖新配置，本次操作已取消。"
+	case "DNS_STATIC_FILE_UNSAFE":
+		return "当前 DNS 配置不是可安全管理的普通文件，NCP 已拒绝写入。"
+	case "DNS_BACKUP_FAILED", "DNS_BACKUP_INVALID", "DNS_CHANGE_RECORD_FAILED":
+		return "DNS 配置备份或回滚记录不可用，NCP 未继续修改。"
+	case "DNS_APPLY_FAILED", "DNS_APPLY_VERIFICATION_FAILED":
+		return "DNS 配置应用或校验失败；NCP 已保留修改前备份。"
+	case "DNS_ROLLBACK_FAILED", "DNS_ROLLBACK_VERIFICATION_FAILED":
+		return "DNS 配置回滚或回滚校验失败，请检查 Root Agent 日志和备份。"
 	default:
 		return fallback
 	}
