@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Boxes, Box, ChevronRight, ExternalLink, FileText, Images, LoaderCircle, Play, RotateCcw, Search, Square } from '@lucide/vue'
+import { Boxes, Box, ExternalLink, FileText, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElDrawer, ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
-import { NcpApiError, requestContainerAction, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
+import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
@@ -33,6 +33,7 @@ const containerStateFilter = ref<ContainerStateFilter>('all')
 const activeView = ref<DockerViewMode>('projects')
 const actionPending = ref<string | null>(null)
 const projectActionPending = ref<{ projectId: string; action: ContainerAction } | null>(null)
+const projectDeletePending = ref<string | null>(null)
 const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
 const actionError = ref<string | null>(null)
 const logOpen = ref(false)
@@ -64,6 +65,7 @@ const inventoryUnavailable = computed(() => !inventory.value && systemStore.conn
 const effectiveActionPending = computed(() => {
   if (actionPending.value) return actionPending.value
   if (projectActionPending.value) return `project:${projectActionPending.value.projectId}:${projectActionPending.value.action}`
+  if (projectDeletePending.value) return `project:${projectDeletePending.value}:delete`
   return null
 })
 const selectedProject = computed(() => allProjects.value.find((project) => project.id === route.query.project) ?? null)
@@ -112,10 +114,17 @@ function projectErrorsFor(projectId: string) {
   return projectActionErrors.value[projectId] ?? []
 }
 function projectActionDisabled(project: DockerProject, action: ContainerAction) {
-  if (Boolean(actionPending.value) || Boolean(projectActionPending.value) || project.containerCount === 0) return true
+  if (Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value) || project.containerCount === 0) return true
   if (action === 'start') return project.state === 'running'
   if (action === 'stop') return project.state === 'stopped'
   return project.runningCount === 0
+}
+function projectDeleteDisabledReason(project: DockerProject) {
+  if (project.kind !== 'compose') return '独立容器是虚拟分组，不能作为项目删除；请在容器列表中单独管理。'
+  if (project.name.toLowerCase() === 'nas-control-plane') return 'NCP 自身项目受保护，不能从当前控制台删除。'
+  if (project.state !== 'stopped' || project.runningCount > 0) return '项目仍在运行，请先停止全部容器。'
+  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return '其他 Docker 操作正在执行，请稍后重试。'
+  return ''
 }
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof NcpApiError ? error.message : fallback
@@ -167,7 +176,7 @@ async function updateSelectedProject(projectId: string | null) {
   await router.replace({ query: queryParameters })
 }
 async function performAction(containerId: string, action: ContainerAction) {
-  if (actionPending.value || projectActionPending.value) return
+  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
   actionPending.value = `${containerId}:${action}`
   actionError.value = null
   try {
@@ -180,7 +189,7 @@ async function performAction(containerId: string, action: ContainerAction) {
   }
 }
 async function performProjectAction(project: DockerProject, action: ContainerAction) {
-  if (actionPending.value || projectActionPending.value) return
+  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
   const containers = containersFor(project.id)
   const targets = action === 'start'
     ? containers.filter((container) => container.state !== 'running')
@@ -238,6 +247,35 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
     actionError.value = errorMessage(error, `项目${actionLabel(action)}失败，请稍后重试。`)
   } finally {
     projectActionPending.value = null
+  }
+}
+async function confirmDeleteProject(project: DockerProject) {
+  const disabledReason = projectDeleteDisabledReason(project)
+  if (disabledReason) {
+    ElMessage.info(disabledReason)
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将删除项目“${project.name}”的已停止容器及 UGREEN 项目注册记录。镜像、卷、Compose 文件和工作目录不会删除。`,
+      '确认删除 Docker 项目',
+      { confirmButtonText: '删除项目', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  projectDeletePending.value = project.id
+  actionError.value = null
+  try {
+    await deleteDockerProject(project)
+    if (selectedProject.value?.id === project.id) await updateSelectedProject(null)
+    await systemStore.refresh({ inventory: true })
+    ElMessage.success(`项目“${project.name}”已删除；镜像、卷和配置文件均已保留。`)
+  } catch (error) {
+    const message = errorMessage(error, '项目删除失败，未确认的资源不会继续删除。')
+    actionError.value = message
+    ElMessage.error(message)
+    try { await systemStore.refresh({ inventory: true }) } catch { /* 页面错误区保留原始失败信息 */ }
+  } finally {
+    projectDeletePending.value = null
   }
 }
 function performSelectedProjectAction(action: ContainerAction) {
@@ -344,16 +382,16 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           </ElTooltip>
           <div class="project-actions" @click.stop>
             <ElTooltip content="启动项目" placement="top">
-              <ActionButton variant="ghost" size="sm" :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :aria-label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')"><span class="sr-only">启动项目</span></ActionButton>
+              <ActionButton variant="ghost" size="sm" icon-only :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :aria-label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')"><span>启动项目</span></ActionButton>
             </ElTooltip>
             <ElTooltip content="停止项目" placement="top">
-              <ActionButton variant="danger" size="sm" :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :aria-label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')"><span class="sr-only">停止项目</span></ActionButton>
+              <ActionButton variant="danger" size="sm" icon-only :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :aria-label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')"><span>停止项目</span></ActionButton>
             </ElTooltip>
             <ElTooltip content="重启项目" placement="top">
-              <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :aria-label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')"><span class="sr-only">重启项目</span></ActionButton>
+              <ActionButton variant="secondary" size="sm" icon-only :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :aria-label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')"><span>重启项目</span></ActionButton>
             </ElTooltip>
-            <ElTooltip content="查看项目详情" placement="top">
-              <ActionButton variant="ghost" size="sm" :icon="ChevronRight" :aria-label="`查看项目 ${project.name} 详情`" @click="updateSelectedProject(project.id)"><span class="sr-only">查看项目详情</span></ActionButton>
+            <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
+              <ActionButton variant="danger" size="sm" icon-only :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :aria-label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)"><span>删除项目</span></ActionButton>
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-row-feedback" role="alert">
@@ -373,7 +411,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       </section>
 
       <section v-if="activeView === 'projects'" class="docker-mobile-list" aria-label="Docker 项目列表">
-        <article v-for="project in pagedProjects" :key="project.id" class="mobile-project panel interactive-surface">
+        <article v-for="project in pagedProjects" :key="project.id" class="mobile-project panel interactive-surface" @click="updateSelectedProject(project.id)">
           <header>
             <div class="project-name">
               <span><Boxes :size="18" /></span>
@@ -386,11 +424,13 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             <div><dt>公开端口</dt><dd>{{ portsFor(project.id).join('、') || '无' }}</dd></div>
             <div><dt>工作目录</dt><dd :title="project.workingDirectory">{{ project.workingDirectory || '自动发现' }}</dd></div>
           </dl>
-          <div class="mobile-project-actions">
+          <div class="mobile-project-actions" @click.stop>
             <ActionButton variant="ghost" size="sm" :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" @click="performProjectAction(project, 'start')">启动</ActionButton>
             <ActionButton variant="danger" size="sm" :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" @click="performProjectAction(project, 'stop')">停止</ActionButton>
             <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" @click="performProjectAction(project, 'restart')">重启</ActionButton>
-            <ActionButton variant="ghost" size="sm" :icon="ChevronRight" @click="updateSelectedProject(project.id)">详情</ActionButton>
+            <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
+              <ActionButton variant="danger" size="sm" :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" @click="confirmDeleteProject(project)">删除</ActionButton>
+            </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-action-errors" role="alert">
             <strong>部分容器操作失败</strong>

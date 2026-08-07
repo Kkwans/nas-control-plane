@@ -100,6 +100,7 @@ func runAgentServer(ctx context.Context, args []string) error {
 	socketPath := flags.String("socket-path", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径；仅 P0 终端实测可覆写")
 	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 Agent 服务")
 	outboundProxy := flags.String("outbound-proxy", "", "Docker Hub 标签查询使用的宿主机 HTTP 代理")
+	composeRegistryPath := flags.String("compose-registry-path", docker.DefaultUGREENComposeRegistryPath, "UGREEN Docker Compose 注册表数据库路径")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -113,10 +114,11 @@ func runAgentServer(ctx context.Context, args []string) error {
 		return err
 	}
 	return agentsocket.Serve(ctx, agentsocket.SocketConfig{
-		SocketPath:        *socketPath,
-		SocketGroup:       *socketGroup,
-		EnableTerminalPOC: *terminalPOC,
-		OutboundProxy:     *outboundProxy,
+		SocketPath:          *socketPath,
+		SocketGroup:         *socketGroup,
+		EnableTerminalPOC:   *terminalPOC,
+		OutboundProxy:       *outboundProxy,
+		ComposeRegistryPath: *composeRegistryPath,
 	})
 }
 

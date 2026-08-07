@@ -1091,6 +1091,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/compose/projects/{projectID}:
+    delete:
+      operationId: deleteComposeDockerProject
+      summary: 删除已停止的 UGREEN Compose 项目
+      description: Root Agent 从实时 Docker 清单解析全部容器，并按 UGREEN 注册表中的 name、path、app_id 精确删除记录；保留镜像、卷、Compose 文件和工作目录。NCP 自身项目及独立容器虚拟组受保护。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerProjectDeleteRequest'
+      responses:
+        '200':
+          description: 项目容器和精确注册记录已删除
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerProjectDeleteResult'
+        '400':
+          description: 项目标识无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 实时 Docker 清单中不存在该项目
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 项目运行中、受保护、注册记录不匹配或删除未完整完成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/hub/search:
     get:
       operationId: searchDockerHub

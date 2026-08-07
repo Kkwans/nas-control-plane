@@ -37,21 +37,22 @@ const (
 var BuildVersion = "dev"
 
 type SocketConfig struct {
-	SocketPath        string
-	SocketGroup       string
-	SocketMode        os.FileMode
-	EnableTerminalPOC bool
-	TerminalManager   *terminal.Manager
-	DashboardProvider DashboardProvider
-	DockerControl     DockerControlProvider
-	DockerLogs        DockerLogsProvider
-	DockerImages      DockerImageProvider
-	OutboundProxy     string
-	Compose           ComposeProvider
-	Database          DatabaseProvider
-	Journal           JournalProvider
-	System            SystemProvider
-	Proxy             ProxyProvider
+	SocketPath          string
+	SocketGroup         string
+	SocketMode          os.FileMode
+	EnableTerminalPOC   bool
+	TerminalManager     *terminal.Manager
+	DashboardProvider   DashboardProvider
+	DockerControl       DockerControlProvider
+	DockerLogs          DockerLogsProvider
+	DockerImages        DockerImageProvider
+	OutboundProxy       string
+	ComposeRegistryPath string
+	Compose             ComposeProvider
+	Database            DatabaseProvider
+	Journal             JournalProvider
+	System              SystemProvider
+	Proxy               ProxyProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -69,10 +70,18 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	}
 	dockerControl := config.DockerControl
 	if dockerControl == nil {
-		dockerControl, err = docker.NewLiveContainerController()
+		controller, controllerErr := docker.NewLiveContainerController()
+		err = controllerErr
 		if err != nil {
 			return coded("AGENT_DOCKER_CONTROL_INITIALIZATION_FAILED", err)
 		}
+		if registryPath := strings.TrimSpace(config.ComposeRegistryPath); registryPath != "" {
+			if !filepath.IsAbs(registryPath) || filepath.Clean(registryPath) != registryPath {
+				return coded("AGENT_DOCKER_REGISTRY_PATH_INVALID", errors.New("compose registry path must be a clean absolute path"))
+			}
+			controller.SetComposeRegistryPath(registryPath)
+		}
+		dockerControl = controller
 	}
 	dockerLogs := config.DockerLogs
 	if dockerLogs == nil {

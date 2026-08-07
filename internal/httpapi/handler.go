@@ -347,6 +347,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/containers", api.createDockerContainer)
 			protected.Post("/docker/projects/{projectID}/actions/{action}", api.controlStandaloneProject)
 			protected.Post("/docker/compose/projects/{projectID}/actions/{action}", api.controlComposeProject)
+			protected.Delete("/docker/compose/projects/{projectID}", api.deleteDockerProject)
 			protected.Post("/docker/compose/config/read", api.readComposeConfig)
 			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
 			protected.Get("/docker/compose/drafts", api.composeDraft)

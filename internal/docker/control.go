@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,15 +61,25 @@ type ContainerControlGateway interface {
 }
 
 type ContainerController struct {
-	gateway ContainerControlGateway
-	timeout time.Duration
+	gateway             ContainerControlGateway
+	timeout             time.Duration
+	composeRegistryPath string
 }
 
 func NewContainerController(gateway ContainerControlGateway) *ContainerController {
 	if gateway == nil {
 		gateway = unavailableContainerControlGateway{}
 	}
-	return &ContainerController{gateway: gateway, timeout: containerControlTimeout}
+	return &ContainerController{gateway: gateway, timeout: containerControlTimeout, composeRegistryPath: DefaultUGREENComposeRegistryPath}
+}
+
+func (c *ContainerController) SetComposeRegistryPath(path string) {
+	if c == nil {
+		return
+	}
+	if path = strings.TrimSpace(path); path != "" {
+		c.composeRegistryPath = filepath.Clean(path)
+	}
 }
 
 func NewLiveContainerController() (*ContainerController, error) {

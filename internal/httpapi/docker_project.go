@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
@@ -18,6 +19,10 @@ type DockerProjectAgentClient interface {
 	ControlStandaloneProject(context.Context, string, docker.ProjectActionRequest) (docker.ProjectActionResult, error)
 }
 
+type DockerProjectDeleteAgentClient interface {
+	DeleteDockerProject(context.Context, string, docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error)
+}
+
 type DockerImageBatchAgentClient interface {
 	RemoveDockerImages(context.Context, string, docker.ImageRemoveBatchRequest) (docker.ImageRemoveBatchResult, error)
 }
@@ -30,6 +35,10 @@ func (socketAgentClient) ControlStandaloneProject(ctx context.Context, socketPat
 	return agentsocket.ControlStandaloneProject(ctx, socketPath, request)
 }
 
+func (socketAgentClient) DeleteDockerProject(ctx context.Context, socketPath string, request docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error) {
+	return agentsocket.DeleteDockerProject(ctx, socketPath, request)
+}
+
 func (socketAgentClient) RemoveDockerImages(ctx context.Context, socketPath string, request docker.ImageRemoveBatchRequest) (docker.ImageRemoveBatchResult, error) {
 	return agentsocket.RemoveDockerImages(ctx, socketPath, request)
 }
@@ -38,15 +47,12 @@ func (socketAgentClient) ControlComposeProject(ctx context.Context, socketPath s
 	return agentsocket.ControlComposeProject(ctx, socketPath, request)
 }
 
-// controlStandaloneProject is intentionally not registered here. The main
-// handler owns the public route table; it can register this method once the
-// project action contract is added to OpenAPI.
 func (api *handler) controlStandaloneProject(response http.ResponseWriter, request *http.Request) {
 	var input docker.ProjectActionRequest
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	if projectID := strings.TrimSpace(chi.URLParam(request, "projectID")); projectID != "" {
+	if projectID := dockerProjectIDParam(request); projectID != "" {
 		input.ProjectID = projectID
 	}
 	if actionValue := strings.TrimSpace(chi.URLParam(request, "action")); actionValue != "" {
@@ -92,7 +98,7 @@ func (api *handler) controlComposeProject(response http.ResponseWriter, request 
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	if projectID := strings.TrimSpace(chi.URLParam(request, "projectID")); projectID != "" {
+	if projectID := dockerProjectIDParam(request); projectID != "" {
 		input.ProjectID = projectID
 	}
 	if actionValue := strings.TrimSpace(chi.URLParam(request, "action")); actionValue != "" {
@@ -129,6 +135,62 @@ func (api *handler) controlComposeProject(response http.ResponseWriter, request 
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+// deleteDockerProject validates the public project identity. The Root Agent,
+// rather than the browser, resolves the current containers and the exact
+// UGREEN registry key before any mutation.
+func (api *handler) deleteDockerProject(response http.ResponseWriter, request *http.Request) {
+	var input docker.ProjectDeleteRequest
+	if !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	if projectID := dockerProjectIDParam(request); projectID != "" {
+		input.ProjectID = projectID
+	}
+	input.Kind = docker.ProjectKindCompose
+	input, err := input.Normalize()
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_PROJECT_DELETE_INVALID", "Docker 项目删除参数无效。")
+		return
+	}
+	client, ok := api.agent.(DockerProjectDeleteAgentClient)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Root Agent 尚未提供 Docker 项目删除能力。")
+		return
+	}
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+	result, err := client.DeleteDockerProject(requestContext, api.agentSocketPath, input)
+	if err != nil {
+		code := agentsocket.ErrorCode(err)
+		switch code {
+		case "DOCKER_PROJECT_DELETE_INVALID":
+			api.writeError(response, request, http.StatusBadRequest, code, "Docker 项目删除参数无效。")
+		case "DOCKER_PROJECT_DELETE_RUNNING":
+			api.writeError(response, request, http.StatusConflict, code, "项目仍有运行中的容器，停止后才能删除。")
+		case "DOCKER_PROJECT_DELETE_PROTECTED":
+			api.writeError(response, request, http.StatusConflict, code, "该项目受保护，NCP 自身项目和独立容器虚拟组不能删除。")
+		case "DOCKER_PROJECT_DELETE_REGISTRY_NOT_FOUND":
+			api.writeError(response, request, http.StatusConflict, code, "未找到精确匹配的 UGREEN Compose 注册记录，已拒绝删除。")
+		case "DOCKER_PROJECT_DELETE_NOT_FOUND":
+			api.writeError(response, request, http.StatusNotFound, code, "当前 Docker 清单中已找不到该 Compose 项目，请刷新后重试。")
+		case "DOCKER_PROJECT_DELETE_FAILED", "DOCKER_PROJECT_DELETE_INSPECT_FAILED", "DOCKER_PROJECT_DELETE_INVENTORY_FAILED", "DOCKER_PROJECT_DELETE_REGISTRY_FAILED", "DOCKER_PROJECT_DELETE_REGISTRY_BACKUP_FAILED", "DOCKER_PROJECT_DELETE_INTEGRITY_FAILED", "DOCKER_PROJECT_DELETE_ROLLBACK_FAILED":
+			api.writeError(response, request, http.StatusConflict, code, "Docker 项目删除未完成，请检查逐容器结果和注册表状态。")
+		default:
+			api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Docker 项目删除暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func dockerProjectIDParam(request *http.Request) string {
+	value := strings.TrimSpace(chi.URLParam(request, "projectID"))
+	if decoded, err := url.PathUnescape(value); err == nil {
+		return strings.TrimSpace(decoded)
+	}
+	return value
 }
 
 // removeDockerImages is likewise a Docker-specific handler ready for public

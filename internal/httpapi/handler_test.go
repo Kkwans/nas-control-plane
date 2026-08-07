@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,6 +239,62 @@ func TestContainerActionRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestCreateDockerContainerUsesStructuredAgentRequest(t *testing.T) {
+	agent := &fakeAgentClient{createResult: docker.ContainerCreateResult{
+		ContainerID: "created-123", Name: "redis-cache", Image: "redis:8-alpine",
+		State: "stopped", Created: true, RunContainer: false,
+	}}
+	handler := NewHandler(Config{
+		Agent: agent, AgentSocketPath: "/run/ncp/test.sock", AgentTimeout: time.Second,
+		RequestID: func() string { return "req-container-create" },
+	})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/docker/containers", strings.NewReader(`{
+		"image":"redis:8-alpine","name":"redis-cache","command":["redis-server","--appendonly","yes"],"runContainer":false
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusCreated, response.Body.String())
+	}
+	if agent.createRequest.Image != "redis:8-alpine" || len(agent.createRequest.Command) != 3 || agent.createRequest.Command[0] != "redis-server" {
+		t.Fatalf("create request = %#v", agent.createRequest)
+	}
+	if agent.socketPath != "/run/ncp/test.sock" || !agent.deadlineObserved {
+		t.Fatalf("agent call = socket %q deadline=%v", agent.socketPath, agent.deadlineObserved)
+	}
+}
+
+func TestDeleteDockerProjectUsesPathIdentityAndRegistryName(t *testing.T) {
+	agent := &fakeAgentClient{deleteResult: docker.ProjectDeleteResult{
+		ProjectID: "compose:demo", Kind: docker.ProjectKindCompose, Completed: true,
+		RegistryDeleted: true, Containers: []docker.ProjectDeleteContainerResult{},
+	}}
+	handler := NewHandler(Config{
+		Agent: agent, AgentSocketPath: "/run/ncp/test.sock", AgentTimeout: time.Second,
+		RequestID: func() string { return "req-project-delete" },
+	})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/docker/compose/projects/compose%3Ademo", strings.NewReader(`{
+		"projectId":"compose:forged","kind":"standalone","registryName":"demo"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if agent.deleteRequest.ProjectID != "compose:demo" || agent.deleteRequest.Kind != docker.ProjectKindCompose || agent.deleteRequest.RegistryName != "demo" {
+		t.Fatalf("delete request = %#v", agent.deleteRequest)
+	}
+	if !agent.deadlineObserved {
+		t.Fatal("项目删除 Agent 调用必须带有超时 Deadline")
+	}
+}
+
 func TestContainerLogsUsesDefaultTailAndReturnsEntries(t *testing.T) {
 	agent := &fakeAgentClient{logsResult: docker.ContainerLogsResult{
 		ContainerID: "abc123",
@@ -303,6 +360,12 @@ type fakeAgentClient struct {
 	actionResult     docker.ContainerActionResult
 	actionErr        error
 	actionRequest    docker.ContainerActionRequest
+	createResult     docker.ContainerCreateResult
+	createErr        error
+	createRequest    docker.ContainerCreateRequest
+	deleteResult     docker.ProjectDeleteResult
+	deleteErr        error
+	deleteRequest    docker.ProjectDeleteRequest
 	logsResult       docker.ContainerLogsResult
 	logsErr          error
 	logsRequest      docker.ContainerLogsRequest
@@ -347,6 +410,20 @@ func (f *fakeAgentClient) ControlContainer(ctx context.Context, socketPath strin
 	f.actionRequest = request
 	_, f.deadlineObserved = ctx.Deadline()
 	return f.actionResult, f.actionErr
+}
+
+func (f *fakeAgentClient) CreateDockerContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
+	f.socketPath = socketPath
+	f.createRequest = request
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.createResult, f.createErr
+}
+
+func (f *fakeAgentClient) DeleteDockerProject(ctx context.Context, socketPath string, request docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error) {
+	f.socketPath = socketPath
+	f.deleteRequest = request
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.deleteResult, f.deleteErr
 }
 
 func (f *fakeAgentClient) ReadContainerLogs(ctx context.Context, socketPath string, request docker.ContainerLogsRequest) (docker.ContainerLogsResult, error) {

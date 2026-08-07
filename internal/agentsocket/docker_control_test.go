@@ -154,6 +154,54 @@ func TestAgentDockerControlServiceReturnsComposeLifecycleState(t *testing.T) {
 	}
 }
 
+func TestAgentDockerControlServiceCreatesContainerFromStructuredRequest(t *testing.T) {
+	provider := &fakeDockerControlProvider{createResult: docker.ContainerCreateResult{
+		ContainerID: "created", Name: "demo", Image: "alpine:3.21", State: "stopped", Created: true,
+	}}
+	service := newDockerControlService(provider)
+	request, err := structpb.NewStruct(map[string]any{
+		"image": "alpine:3.21", "name": "demo", "command": []any{"/bin/echo", "ready"},
+		"run_container": false,
+	})
+	if err != nil {
+		t.Fatalf("NewStruct() error = %v", err)
+	}
+	response, err := service.CreateContainer(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+	if provider.createRequest.Image != "alpine:3.21" || provider.createRequest.Name != "demo" || provider.createRequest.RunContainer {
+		t.Fatalf("provider request = %#v", provider.createRequest)
+	}
+	if response.AsMap()["containerId"] != "created" || response.AsMap()["started"] != false {
+		t.Fatalf("response = %#v", response.AsMap())
+	}
+}
+
+func TestAgentDockerControlServiceDeletesProjectFromTrustedIdentity(t *testing.T) {
+	provider := &fakeDockerControlProvider{deleteResult: docker.ProjectDeleteResult{
+		ProjectID: "compose:demo", Kind: docker.ProjectKindCompose, Completed: true, RegistryDeleted: true,
+		Containers: []docker.ProjectDeleteContainerResult{{ContainerID: "one", Deleted: true, Success: true}},
+	}}
+	service := newDockerControlService(provider)
+	request, err := structpb.NewStruct(map[string]any{
+		"project_id": "compose:demo", "kind": "compose", "registry_name": "demo",
+	})
+	if err != nil {
+		t.Fatalf("NewStruct() error = %v", err)
+	}
+	response, err := service.DeleteProject(context.Background(), request)
+	if err != nil {
+		t.Fatalf("DeleteProject() error = %v", err)
+	}
+	if provider.deleteRequest.RegistryName != "demo" || provider.deleteRequest.ProjectID != "compose:demo" {
+		t.Fatalf("provider request = %#v", provider.deleteRequest)
+	}
+	if response.AsMap()["registryDeleted"] != true || response.AsMap()["completed"] != true {
+		t.Fatalf("response = %#v", response.AsMap())
+	}
+}
+
 type fakeDockerControlProvider struct {
 	request        docker.ContainerActionRequest
 	result         docker.ContainerActionResult
@@ -161,6 +209,12 @@ type fakeDockerControlProvider struct {
 	projectRequest docker.ProjectActionRequest
 	projectResult  docker.ProjectActionResult
 	projectErr     error
+	createRequest  docker.ContainerCreateRequest
+	createResult   docker.ContainerCreateResult
+	createErr      error
+	deleteRequest  docker.ProjectDeleteRequest
+	deleteResult   docker.ProjectDeleteResult
+	deleteErr      error
 }
 
 func (f *fakeDockerControlProvider) Control(_ context.Context, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
@@ -177,6 +231,22 @@ func (f *fakeDockerControlProvider) ControlStandaloneProject(_ context.Context, 
 		return docker.ProjectActionResult{}, f.projectErr
 	}
 	return f.projectResult, nil
+}
+
+func (f *fakeDockerControlProvider) CreateContainer(_ context.Context, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
+	f.createRequest = request
+	if f.createErr != nil {
+		return docker.ContainerCreateResult{}, f.createErr
+	}
+	return f.createResult, nil
+}
+
+func (f *fakeDockerControlProvider) DeleteProject(_ context.Context, request docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error) {
+	f.deleteRequest = request
+	if f.deleteErr != nil {
+		return docker.ProjectDeleteResult{}, f.deleteErr
+	}
+	return f.deleteResult, nil
 }
 
 type fakeComposeLifecycleProvider struct {
