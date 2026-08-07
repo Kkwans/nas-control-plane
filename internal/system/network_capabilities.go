@@ -1229,6 +1229,12 @@ func readInterfaceLinkState(environment Environment, name string) interfaceLinkS
 		environment = NewOSEnvironment()
 	}
 	operState := firstNonEmpty(readEnvironmentTrimmed(environment, filepath.Join("/sys/class/net", name, "operstate")), "unknown")
+	carrier := readEnvironmentTrimmed(environment, filepath.Join("/sys/class/net", name, "carrier"))
+	if carrier == "1" || carrier == "0" {
+		return interfaceLinkState{
+			OperState: strings.ToLower(operState), LowerUp: carrier == "1", LowerUpKnown: true,
+		}
+	}
 	flags, err := environment.ReadFile(filepath.Join("/sys/class/net", name, "flags"))
 	if err != nil {
 		return interfaceLinkState{OperState: strings.ToLower(operState)}

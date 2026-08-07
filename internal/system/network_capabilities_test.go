@@ -45,6 +45,30 @@ func TestReadInterfaceLinkStateParsesLowerUpFixture(t *testing.T) {
 	}
 }
 
+func TestReadInterfaceLinkStateUsesCarrierWhenSysfsFlagsOmitLowerUp(t *testing.T) {
+	environment := &networkCapabilityEnvironment{files: map[string][]byte{
+		"/sys/class/net/eth0/operstate": []byte("up\n"),
+		"/sys/class/net/eth0/carrier":   []byte("1\n"),
+		"/sys/class/net/eth0/flags":     []byte("0x1003\n"),
+	}}
+	value := readInterfaceLinkState(environment, "eth0")
+	if value.OperState != "up" || !value.LowerUp || !value.LowerUpKnown {
+		t.Fatalf("carrier-backed link fixture = %#v, want a confirmed lower link", value)
+	}
+}
+
+func TestReadInterfaceLinkStateUsesCarrierForUnknownOverlayOperstate(t *testing.T) {
+	environment := &networkCapabilityEnvironment{files: map[string][]byte{
+		"/sys/class/net/tailscale0/operstate": []byte("unknown\n"),
+		"/sys/class/net/tailscale0/carrier":   []byte("1\n"),
+		"/sys/class/net/tailscale0/flags":     []byte("0x1091\n"),
+	}}
+	value := readInterfaceLinkState(environment, "tailscale0")
+	if value.OperState != "unknown" || !value.LowerUp || !value.LowerUpKnown {
+		t.Fatalf("overlay carrier fixture = %#v, want a confirmed lower link", value)
+	}
+}
+
 func TestProbeTailscaleCombinesLowerUpAndOperstate(t *testing.T) {
 	environment := &networkCapabilityEnvironment{
 		executables: map[string]bool{"tailscale": true},
