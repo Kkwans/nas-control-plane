@@ -758,7 +758,21 @@ export async function requestPublicEgressCapability(fetcher: typeof fetch = fetc
 }
 
 export async function detectPublicEgress(fetcher: typeof fetch = fetch): Promise<PublicEgressResult> {
-  return requestJson('/api/v1/system/public-egress/detect', { method: 'POST' }, isPublicEgressResult, fetcher, 'PUBLIC_EGRESS_RESPONSE_INVALID')
+  const response = await fetcher('/api/v1/system/public-egress/detect', requestOptions({ method: 'POST' }))
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw new NcpApiError('PUBLIC_EGRESS_RESPONSE_INVALID', '公网出口检测返回了无法识别的数据。')
+  }
+  // A configured probe can legitimately return an explicit unavailable
+  // result with HTTP 503. Preserve its stable errorCode instead of replacing
+  // it with a generic service-unavailable message.
+  if (isPublicEgressResult(payload)) return payload
+  if (!response.ok && isApiErrorResponse(payload)) {
+    throw new NcpApiError(payload.code, payload.message, payload.requestId)
+  }
+  throw new NcpApiError('PUBLIC_EGRESS_RESPONSE_INVALID', '公网出口检测返回了无法识别的数据。')
 }
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {

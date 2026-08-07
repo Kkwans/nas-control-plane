@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createDockerContainer,
+  detectPublicEgress,
   deleteDockerProject,
   loginRoot,
   pullDockerImage,
@@ -99,6 +100,19 @@ describe('NCP API client', () => {
     await expect(requestSystemSummary(fetcher)).rejects.toMatchObject({
       code: 'SYSTEM_SUMMARY_UNAVAILABLE',
       requestId: 'req-test',
+    })
+  })
+
+  it('preserves explicit public-egress diagnostics returned with HTTP 503', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: 'unavailable', address: '', checkedAt: '0001-01-01T00:00:00Z',
+        detectionSource: 'deployment-config', errorCode: 'PUBLIC_EGRESS_ENDPOINT_UNAVAILABLE',
+      }), { status: 503, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    await expect(detectPublicEgress(fetcher)).resolves.toMatchObject({
+      status: 'unavailable', errorCode: 'PUBLIC_EGRESS_ENDPOINT_UNAVAILABLE',
     })
   })
 

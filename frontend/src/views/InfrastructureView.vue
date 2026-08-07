@@ -22,6 +22,7 @@ import {
   confirmDNSChange,
   detectPublicEgress,
   previewDNSChange,
+  requestDNSCapability,
   requestSystemDetails,
   rollbackDNSChange,
   type DNSCapability,
@@ -37,6 +38,7 @@ type DetailTab = 'overview' | 'network' | 'storage' | 'services'
 
 const systemStore = useSystemStore()
 const details = ref<SystemDetails | null>(null)
+const dnsCapability = ref<DNSCapability | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
 const activeTab = ref<DetailTab>('overview')
@@ -46,8 +48,9 @@ const dnsChangeId = ref('')
 const dnsMessage = ref('')
 const publicEgressResult = ref<PublicEgressResult | null>(null)
 const publicEgressMessage = ref('')
+const publicEgressLoading = ref(false)
 
-const dnsDetails = computed<DNSCapability>(() => details.value?.dns ?? {
+const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
   canPreview: false, canConfirm: false, canRollback: false, nameservers: [],
   detectionSource: '', errorCode: '',
@@ -129,10 +132,14 @@ async function loadDetails() {
   loading.value = true
   errorMessage.value = ''
   try {
-    details.value = await requestSystemDetails()
+    const [systemDetails, liveDNSCapability] = await Promise.all([
+      requestSystemDetails(),
+      requestDNSCapability().catch(() => null),
+    ])
+    details.value = systemDetails
+    dnsCapability.value = liveDNSCapability
     dnsDraft.value = dnsDetails.value.nameservers.join(', ')
     dnsPreview.value = null
-    dnsChangeId.value = ''
     dnsMessage.value = ''
     publicEgressResult.value = null
     publicEgressMessage.value = ''
@@ -181,7 +188,8 @@ async function rollbackDNS() {
   try {
     const result = await rollbackDNSChange(dnsChangeId.value)
     await loadDetails()
-    dnsMessage.value = result.applied ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
+    dnsChangeId.value = ''
+    dnsMessage.value = !result.applied && !result.rollbackAvailable ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
   } catch (error) {
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 回滚失败。'
   }
@@ -193,11 +201,15 @@ async function checkPublicEgress() {
     return
   }
   publicEgressMessage.value = ''
+  publicEgressLoading.value = true
   try {
     publicEgressResult.value = await detectPublicEgress()
-    if (publicEgressResult.value.errorCode) publicEgressMessage.value = publicEgressResult.value.errorCode
+    if (publicEgressResult.value.errorCode) publicEgressMessage.value = publicEgressErrorMessage(publicEgressResult.value.errorCode)
   } catch (error) {
-    publicEgressMessage.value = error instanceof Error ? error.message : '公网出口检测失败。'
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+    publicEgressMessage.value = code ? publicEgressErrorMessage(code) : error instanceof Error ? error.message : '公网出口检测失败。'
+  } finally {
+    publicEgressLoading.value = false
   }
 }
 
@@ -320,10 +332,22 @@ function tailscaleEvidenceLabel() {
 }
 
 function dnsCapabilityExplanation() {
+  if (!dnsDetails.value.readOnly && dnsDetails.value.backend === 'static-resolv-conf') return '修改前自动备份，确认后原子应用；若配置未被其他进程改动，可一键回滚。'
   if (dnsDetails.value.errorCode === 'DNS_BACKEND_READ_ONLY') return '检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；保持只读。'
   if (dnsDetails.value.errorCode === 'DNS_WRITE_ADAPTER_UNAVAILABLE') return '检测到 DNS 后端，但未接入安全的预览、应用和回滚适配器；保持只读。'
   if (dnsDetails.value.readOnly) return '当前 DNS 后端只提供读取能力；NCP 不会直接覆盖 /etc/resolv.conf。'
   return dnsDetails.value.detectionSource || 'DNS 能力未报告'
+}
+
+function publicEgressErrorMessage(code: string) {
+  switch (code) {
+    case 'PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED': return '尚未配置公网出口检测端点。'
+    case 'PUBLIC_EGRESS_ENDPOINT_INVALID': return '公网出口检测端点配置无效。'
+    case 'PUBLIC_EGRESS_ENDPOINT_UNAVAILABLE': return 'Root Agent 无法连接公网出口检测端点，请检查 Mihomo 出站代理。'
+    case 'PUBLIC_EGRESS_RESPONSE_INVALID': return '检测端点没有返回有效的公网 IP。'
+    case 'PUBLIC_EGRESS_CHECK_CANCELED': return '公网出口检测已取消。'
+    default: return '公网出口检测失败，请稍后重试。'
+  }
 }
 
 function publicEgressAddressLabel() {
@@ -488,6 +512,10 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
             <template v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly">
               <label class="dns-management__input"><span>DNS 服务器</span><input v-model="dnsDraft" type="text" placeholder="例如 223.5.5.5, 1.1.1.1" /></label>
               <div class="dns-management__actions"><button type="button" class="text-button" @click="previewDNS">预览修改</button><button v-if="dnsPreview" type="button" class="text-button text-button--primary" @click="confirmDNS">确认应用</button><button v-if="dnsChangeId" type="button" class="text-button" @click="rollbackDNS">回滚</button></div>
+              <div v-if="dnsPreview" class="dns-preview" aria-label="DNS 修改预览">
+                <div><span>当前</span><strong>{{ dnsPreview.before.nameservers.join('、') || '未配置' }}</strong></div>
+                <div><span>应用后</span><strong>{{ dnsPreview.after.nameservers.join('、') || '未配置' }}</strong></div>
+              </div>
             </template>
             <small v-if="dnsMessage" class="dns-management__message" role="status">{{ dnsMessage }}</small>
           </div>
@@ -496,22 +524,30 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         <article class="panel detail-card">
           <header class="detail-card__header type-site"><Router :size="20" /><div><h2>代理状态</h2><p>基于配置、进程、网卡和环境的证据扫描</p></div></header>
           <div class="proxy-summary">
-            <span :class="{ active: details.proxy.mihomo.detected }"><i></i>{{ proxyStateLabel(details.proxy.mihomo.state, details.proxy.mihomo.detected) }}</span>
-            <strong>{{ details.proxy.mihomo.detected ? 'Mihomo / Clash' : '未发现 Mihomo / Clash' }}</strong>
-            <p>{{ details.proxy.mihomo.detail || '当前未取得更多服务信息' }}</p>
-            <div class="proxy-facts">
+            <div class="proxy-identity">
+              <span :class="['proxy-state', { active: details.proxy.mihomo.detected }]"><i></i>{{ proxyStateLabel(details.proxy.mihomo.state, details.proxy.mihomo.detected) }}</span>
+              <div><strong>{{ details.proxy.mihomo.detected ? 'Mihomo / Clash' : '未发现 Mihomo / Clash' }}</strong><p>{{ details.proxy.mihomo.detail || '当前未取得更多服务信息' }}</p></div>
+            </div>
+            <div class="proxy-facts proxy-facts--primary">
               <div><small>Tailscale Overlay</small><strong>{{ tailscaleStatusLabel() }}</strong><code :title="tailscaleEvidenceLabel()">{{ tailscaleDetails.overlayIps.join('、') || tailscaleEvidenceLabel() }}</code></div>
               <div><small>公网出口 IP</small><strong>{{ publicEgressAddressLabel() }}</strong><code>{{ publicEgressDetails.configured ? '与 Overlay IP 分开检测' : '未配置探针，不以 Overlay IP 代替' }}</code></div>
               <div><small>出口国家 / 地区</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.country || publicEgressResult?.region) }}</strong><code>{{ publicEgressResult?.country && publicEgressResult?.region ? `${publicEgressResult.country} · ${publicEgressResult.region}` : publicEgressResult ? '探针未返回完整地域信息' : '手动检测后显示' }}</code></div>
               <div><small>出口 ISP / ASN</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.isp) }}</strong><code>{{ publicEgressResult ? (publicEgressResult?.asn || 'ASN 未返回') : '手动检测后显示' }}</code></div>
-              <div><small>Controller 健康</small><strong>{{ mihomoControllerHealth() }}</strong><code>{{ mihomoController?.endpoint || '端点未确认' }}</code></div>
-              <div><small>连接能力</small><strong>{{ hasMihomoOperation('connections') ? 'API 已确认' : '未确认' }}</strong><code>{{ mihomoController?.authRequired ? '需要认证' : '受控读取能力' }}</code></div>
-              <div><small>节点 / 代理组</small><strong>{{ hasMihomoOperation('proxies') ? '读取 API 已确认' : '未确认' }}</strong><code>切换操作尚未经过安全能力确认</code></div>
-              <div><small>规则能力</small><strong>{{ mihomoRulesStatus() }}</strong><code>{{ mihomoRulesReadable ? '当前仅证明读取' : '写入、备份、校验、回滚未开放' }}</code></div>
             </div>
-            <small>{{ mihomoRulesReadable ? '已确认控制器可读取规则，但当前没有域名规则写入、应用前备份、校验和回滚契约。' : '规则 API 未确认；进程和 Docker 容器分流没有可靠归属证据，当前不开放。' }}</small>
-            <button v-if="publicEgressDetails.configured" type="button" class="text-button text-button--primary" @click="checkPublicEgress">检测公网出口</button>
-            <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
+            <div class="proxy-actions">
+              <button v-if="publicEgressDetails.configured" type="button" class="text-button text-button--primary" :disabled="publicEgressLoading" @click="checkPublicEgress"><Activity :size="14" />{{ publicEgressLoading ? '检测中…' : '检测公网出口' }}</button>
+              <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
+            </div>
+            <details class="proxy-capabilities">
+              <summary>控制器与分流能力 <span>展开技术明细</span></summary>
+              <div class="proxy-facts proxy-facts--capabilities">
+                <div><small>Controller 健康</small><strong>{{ mihomoControllerHealth() }}</strong><code>{{ mihomoController?.endpoint || '端点未确认' }}</code></div>
+                <div><small>连接能力</small><strong>{{ hasMihomoOperation('connections') ? 'API 已确认' : '未确认' }}</strong><code>{{ mihomoController?.authRequired ? '需要认证' : '受控读取能力' }}</code></div>
+                <div><small>节点 / 代理组</small><strong>{{ hasMihomoOperation('proxies') ? '读取 API 已确认' : '未确认' }}</strong><code>切换操作需经过写入安全确认</code></div>
+                <div><small>规则能力</small><strong>{{ mihomoRulesStatus() }}</strong><code>{{ mihomoRulesReadable ? '当前仅证明读取' : '写入、备份、校验、回滚未开放' }}</code></div>
+              </div>
+              <p>{{ mihomoRulesReadable ? '已确认控制器可读取规则；域名规则写入将在具备应用前备份、校验和回滚契约后开放。' : '规则 API 未确认；进程和 Docker 容器分流没有可靠归属证据，当前不开放。' }}</p>
+            </details>
           </div>
         </article>
 
@@ -615,4 +651,6 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 .dns-management{display:grid;gap:10px;padding:0 18px 18px;border-top:1px solid var(--ncp-line)}.dns-management__state{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:14px}.dns-management__state small,.dns-management__message{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input{display:grid;gap:5px}.dns-management__input span{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input input{min-height:36px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text);font:inherit;font-size:.76rem;outline:none}.dns-management__input input:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}.dns-management__actions{display:flex;flex-wrap:wrap;gap:7px}.text-button{min-height:32px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.72rem;font-weight:700;cursor:pointer}.text-button:hover,.text-button:focus-visible{border-color:var(--ncp-primary-border);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);outline:none}.text-button--primary{border-color:var(--ncp-primary);background:var(--ncp-primary);color:#fff}.text-button--primary:hover,.text-button--primary:focus-visible{background:var(--ncp-primary-strong);color:#fff}.proxy-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.proxy-facts>div{display:grid;min-width:0;gap:3px;padding:10px;border:1px solid var(--ncp-line);border-radius:9px;background:var(--ncp-surface-quiet)}.proxy-facts small{color:var(--ncp-text-subtle);font-size:.68rem}.proxy-facts strong{overflow:hidden;font-family:var(--ncp-font-latin);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.proxy-facts code{overflow:hidden;color:var(--ncp-text-muted);font-family:var(--ncp-font-latin);font-size:.7rem;letter-spacing:0;text-overflow:ellipsis;white-space:nowrap}.proxy-message{color:var(--ncp-warning-strong);font-size:.7rem}.proxy-rules-card{overflow:hidden}.proxy-rules-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 18px}.proxy-rules-grid>div{display:grid;gap:4px;padding:13px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-rules-grid strong{font-size:.78rem}.proxy-rules-grid span{width:max-content;padding:3px 6px;border-radius:5px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.68rem;font-weight:700}.proxy-rules-grid small,.proxy-rules-note{color:var(--ncp-text-subtle);font-size:.7rem;line-height:1.45}.proxy-rules-note{margin:0;padding:0 18px 17px}
 @media(max-width:760px){.dns-management__state{align-items:flex-start;flex-direction:column;gap:5px}.proxy-facts,.proxy-rules-grid{grid-template-columns:1fr}}
 .overview-facts{grid-auto-rows:minmax(82px,1fr);align-items:stretch}.overview-facts>div{display:grid;align-content:center}.proxy-facts>div{min-height:68px;align-content:center}.port-service{overflow:hidden;font-family:var(--ncp-font-latin)!important;text-overflow:ellipsis;white-space:nowrap}
+.network-layout{align-items:start}.network-layout>.detail-card{align-self:start}.dns-management{padding-top:14px}.dns-management__state{align-items:flex-start;padding-top:0}.dns-management__state small{max-width:68%;line-height:1.55;text-align:right}.dns-management__input input{min-height:40px;border-color:var(--ncp-line-strong);border-radius:10px;font-size:.8rem}.dns-management__actions{align-items:center}.dns-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-line)}.dns-preview>div{display:grid;min-width:0;gap:4px;padding:10px 12px;background:var(--ncp-surface-quiet)}.dns-preview span{color:var(--ncp-text-subtle);font-size:.68rem}.dns-preview strong{overflow:hidden;font-family:var(--ncp-font-mono);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.proxy-summary{gap:14px}.proxy-identity{display:flex;align-items:center;gap:12px}.proxy-identity>div{display:grid;min-width:0;gap:2px}.proxy-identity p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.proxy-state{display:inline-flex;width:max-content;flex:0 0 auto;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--ncp-neutral-border);border-radius:999px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.72rem;font-weight:750}.proxy-state.active{border-color:var(--ncp-success-border);background:var(--ncp-success-soft);color:var(--ncp-success-strong)}.proxy-state i{width:7px;height:7px;border-radius:50%;background:currentColor}.proxy-facts--primary>div{min-height:76px;padding:12px}.proxy-facts--primary strong{font-size:.84rem}.proxy-actions{display:flex;min-height:34px;align-items:center;gap:10px}.proxy-actions .text-button{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:7px}.proxy-actions .text-button:disabled{cursor:wait;opacity:.64}.proxy-message{line-height:1.45}.proxy-capabilities{overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-capabilities>summary{display:flex;min-height:42px;align-items:center;gap:9px;padding:0 12px;cursor:pointer;color:var(--ncp-text-muted);font-size:.73rem;font-weight:750;list-style:none}.proxy-capabilities>summary::-webkit-details-marker{display:none}.proxy-capabilities>summary::before{content:'+';display:grid;width:20px;height:20px;place-items:center;border:1px solid var(--ncp-line-strong);border-radius:6px;background:var(--ncp-surface);color:var(--ncp-primary-strong);font-size:.9rem}.proxy-capabilities[open]>summary::before{content:'−'}.proxy-capabilities>summary span{margin-left:auto;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:600}.proxy-capabilities .proxy-facts{padding:0 10px 10px}.proxy-capabilities>p{margin:0;padding:0 12px 12px;color:var(--ncp-text-subtle);font-size:.69rem;line-height:1.5}.proxy-facts--capabilities>div{background:var(--ncp-surface)}
+@media(max-width:760px){.dns-management__state small{max-width:none;text-align:left}.dns-preview{grid-template-columns:1fr}.proxy-identity{align-items:flex-start;flex-direction:column;gap:8px}.proxy-actions{align-items:flex-start;flex-direction:column}.proxy-capabilities .proxy-facts{grid-template-columns:1fr}}
 </style>
