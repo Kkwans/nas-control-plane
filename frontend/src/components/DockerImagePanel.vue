@@ -505,22 +505,22 @@ onMounted(() => {
         <button :class="{ active: mode === 'downloads' }" type="button" @click="mode = 'downloads'"><Download :size="17" />下载任务 <span>{{ activePullCount }}</span></button>
       </nav>
       <div v-if="mode === 'local'" class="mode-actions">
-        <ElInput :model-value="query" clearable placeholder="搜索镜像名称、标签或 ID" @update:model-value="emit('update:query', String($event))">
+        <ElInput :model-value="query" clearable aria-label="搜索本地镜像" placeholder="搜索镜像名称、标签或 ID" @update:model-value="emit('update:query', String($event))">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
         <span v-if="selectedImageCount" class="selection-count">已选 {{ selectedImageCount }} 个</span>
         <ActionButton v-if="selectedImageCount" variant="danger" size="sm" :icon="Trash2" :loading="bulkRemovePending" @click="confirmRemoveSelected">批量删除</ActionButton>
-        <ElTooltip content="刷新本地镜像"><button class="icon-button" type="button" :disabled="loading" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="17" /></button></ElTooltip>
+        <ElTooltip content="刷新本地镜像"><button class="icon-button" type="button" :disabled="loading" aria-label="刷新本地镜像" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="17" /></button></ElTooltip>
       </div>
       <form v-else-if="mode === 'hub'" class="hub-search" @submit.prevent="runHubSearch(1)">
-        <ElInput v-model="hubQuery" clearable placeholder="搜索 Docker Hub 镜像，例如 nginx、postgres">
+        <ElInput v-model="hubQuery" clearable aria-label="搜索 Docker Hub 镜像" placeholder="搜索 Docker Hub 镜像，例如 nginx、postgres">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
         <NcpSelect v-model="hubSort" :options="hubSortOptions" accessible-label="搜索结果排序" @update:model-value="repositories.length && runHubSearch(1)" />
         <button class="primary-button" type="submit" :disabled="!hubQuery.trim() || hubLoading">搜索镜像</button>
       </form>
       <div v-else class="mode-actions download-mode-actions">
-        <ElInput v-model="downloadQuery" clearable placeholder="搜索镜像或任务消息">
+        <ElInput v-model="downloadQuery" clearable aria-label="搜索镜像下载任务" placeholder="搜索镜像或任务消息">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
         <NcpSelect v-model="downloadStatus" :options="downloadStatusOptions" accessible-label="下载任务状态" />

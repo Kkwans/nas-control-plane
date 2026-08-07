@@ -168,7 +168,7 @@ function entryContext(entry: LogEntry) {
       </div>
       <div class="log-tools">
         <ListPageSizeControl list-key="logs.events" />
-        <ElInput v-model="query" clearable placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
+        <ElInput v-model="query" clearable aria-label="搜索日志消息或服务" placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
         <label class="follow-switch"><component :is="following ? Play : CirclePause" :size="16" /><span>实时跟随</span><ElSwitch v-model="following" /></label>
         <ElButton class="log-refresh-button" :loading="loading" title="刷新当前日志" @click="refreshLogs"><RefreshCw :size="16" />刷新</ElButton>
       </div>
