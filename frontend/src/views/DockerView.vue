@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Boxes, Box, ExternalLink, FileText, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
-import { ElDrawer, ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
+import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
+import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
+import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
 import ComposeEditorDrawer from '@/components/ComposeEditorDrawer.vue'
@@ -475,13 +476,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
     />
     <ComposeEditorDrawer v-model="composeEditorOpen" :project="selectedProject" />
 
-    <ElDrawer v-model="logOpen" :title="`${logContainerName} · 容器日志`" size="min(760px, 100%)" append-to-body>
-      <div v-if="logLoading" class="log-loading"><LoaderCircle class="spin" :size="18" />正在读取日志</div>
-      <ol v-else-if="logs?.entries.length" class="log-list">
-        <li v-for="(entry, index) in logs.entries" :key="index"><span :class="`log-stream--${entry.stream}`">{{ entry.stream }}</span><code>{{ entry.message }}</code></li>
-      </ol>
-      <div v-else class="log-empty"><FileText :size="24" /><span>当前没有可显示的日志。</span></div>
-    </ElDrawer>
+    <ContainerLogDrawer v-model="logOpen" :container-name="logContainerName" :loading="logLoading" :logs="logs" />
   </div>
 </template>
 
@@ -528,13 +523,6 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .resource-pagination button:disabled { cursor:not-allowed; opacity:.42; }
 .resource-pagination strong { min-width:62px; color:var(--ncp-text); text-align:center; }
 .docker-mobile-list { display: none; }
-.log-loading { display: flex; align-items: center; gap: 8px; color: var(--ncp-text-muted); font-size: .75rem; }
-.log-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; }
-.log-list li { display: grid; grid-template-columns: 48px minmax(0,1fr); gap: 9px; padding: 6px 0; border-bottom: 1px solid var(--ncp-line); font-size: .67rem; line-height: 1.5; }
-.log-list code { overflow-wrap: anywhere; white-space: pre-wrap; font-family: 'JetBrains Mono Variable', monospace; }
-.log-list span { font-family: 'JetBrains Mono Variable', monospace; font-size: .57rem; font-weight: 700; }
-.log-stream--stdout { color: var(--ncp-primary-strong); }.log-stream--stderr { color: var(--ncp-danger-strong); }
-.log-empty { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 8px; color: var(--ncp-text-subtle); font-size: .72rem; }
 .mobile-project-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .mobile-project-actions :deep(.action-button) { width: 100%; }
 .project-action-errors { padding: 9px 10px; border: 1px solid var(--ncp-danger-border); border-radius: 9px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .7rem; }

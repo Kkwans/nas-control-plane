@@ -2824,8 +2824,10 @@ components:
             $ref: '#/components/schemas/ContainerLogEntry'
     ContainerLogEntry:
       type: object
-      required: [stream, message]
+      required: [timestamp, level, stream, message]
       properties:
+        timestamp: { type: string, format: date-time }
+        level: { type: string, enum: [error, warning, info, debug] }
         stream:
           type: string
           enum: [stdout, stderr]
