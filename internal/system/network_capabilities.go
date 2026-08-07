@@ -1041,6 +1041,9 @@ func parsePublicEgressResponse(content []byte) (address, country, region, isp st
 			country = firstPublicEgressMetadata(value, "country", "countryCode", "国家", "国家代码")
 			region = firstPublicEgressMetadata(value, "region", "regionName", "地区", "区域")
 			isp = firstPublicEgressMetadata(value, "isp", "org", "provider", "运营商")
+			if isp == "" {
+				isp = nestedPublicEgressMetadata(value, "connection", "isp", "org")
+			}
 			return ip.String(), country, region, isp
 		}
 	}
@@ -1052,7 +1055,18 @@ func parsePublicEgressASN(content []byte) string {
 	if json.Unmarshal(content, &value) != nil {
 		return ""
 	}
-	return firstPublicEgressMetadata(value, "asn", "ASN", "asNumber", "as", "自治系统", "自治系统号")
+	if asn := firstPublicEgressMetadata(value, "asn", "ASN", "asNumber", "as", "自治系统", "自治系统号"); asn != "" {
+		return asn
+	}
+	return nestedPublicEgressMetadata(value, "connection", "asn")
+}
+
+func nestedPublicEgressMetadata(value map[string]any, objectKey string, keys ...string) string {
+	nested, ok := value[objectKey].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return firstPublicEgressMetadata(nested, keys...)
 }
 
 func firstPublicEgressMetadata(value map[string]any, keys ...string) string {

@@ -214,6 +214,18 @@ func TestPublicEgressDetectorPreservesCountryISPAndASNMetadata(t *testing.T) {
 	}
 }
 
+func TestPublicEgressDetectorSupportsNestedConnectionMetadata(t *testing.T) {
+	detector := NewPublicEgressDetector("https://egress.example.test/ip")
+	detector.Client = &http.Client{Transport: fakeRoundTripper{result: HTTPProbeResult{
+		StatusCode: http.StatusOK,
+		Body:       []byte(`{"ip":"1.1.1.9","country":"CN","region":"Shanghai","connection":{"isp":"Example ISP","asn":4809}}`),
+	}}}
+	value := detector.Detect(context.Background())
+	if value.Status != CapabilityStateAvailable || value.ISP != "Example ISP" || value.ASN != "4809" {
+		t.Fatalf("nested egress metadata = %#v", value)
+	}
+}
+
 func TestListeningPortAlwaysCarriesDetectionSourceWhenPIDUnavailable(t *testing.T) {
 	value := ListeningPort{Protocol: "tcp", Address: "0.0.0.0", Port: 8080}
 	enrichListeningPort(&value)

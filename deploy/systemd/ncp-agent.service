@@ -7,6 +7,7 @@ After=local-fs.target
 Type=simple
 User=root
 Group=root
+Environment=NCP_PUBLIC_EGRESS_ENDPOINT=https://ipwho.is/
 RuntimeDirectory=ncp
 RuntimeDirectoryMode=0750
 # Server 容器绑定的是该目录。重启 Agent 时必须保留目录 inode，
