@@ -1,21 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   Activity,
   AlertTriangle,
   Boxes,
-  CheckCircle2,
   Cpu,
   Database,
   Gauge,
   HardDrive,
   MemoryStick,
   Network,
-  RefreshCw,
   Route,
   Router,
   Server,
-  ShieldCheck,
   Waypoints,
   Wifi,
 } from '@lucide/vue'
@@ -29,6 +26,7 @@ import {
   rollbackDNSChange,
   type DNSCapability,
   type DNSChangePreview,
+  type MihomoCapability,
   type PublicEgressResult,
   type SystemDetails,
   type TailscaleCapability,
@@ -78,13 +76,18 @@ const headerStats = computed<WorkspaceStat[]>(() => [
 ])
 
 const networkInterfaces = computed(() => details.value?.network.interfaces ?? [])
-const primaryInterfaces = computed(() => networkInterfaces.value
-  .filter((item) => item.name !== 'lo' && !isVirtualInterface(item.name))
-  .sort((left, right) => Number(right.state === 'up') - Number(left.state === 'up'))
-  .slice(0, 4))
+const primaryInterfaces = computed(() => {
+  const candidates = networkInterfaces.value.filter((item) => item.name !== 'lo' && !isVirtualInterface(item.name))
+  const tailscale = candidates.filter((item) => /^tailscale/i.test(item.name))
+  const physical = candidates
+    .filter((item) => !/^tailscale/i.test(item.name))
+    .sort((left, right) => Number(interfaceIsOnline(right)) - Number(interfaceIsOnline(left)))
+  const reserved = Math.min(tailscale.length, 1)
+  return [...physical.slice(0, 4 - reserved), ...tailscale.slice(0, reserved)]
+})
 const primaryInterfaceNames = computed(() => new Set(primaryInterfaces.value.map((item) => item.name)))
 const secondaryInterfaces = computed(() => networkInterfaces.value.filter((item) => !primaryInterfaceNames.value.has(item.name)))
-const activeInterfaceCount = computed(() => networkInterfaces.value.filter((item) => item.name !== 'lo' && item.state === 'up').length)
+const activeInterfaceCount = computed(() => networkInterfaces.value.filter((item) => item.name !== 'lo' && interfaceIsOnline(item)).length)
 const volumeMounts = computed(() => (details.value?.storage.mounts ?? []).filter((item) => item.path === '/' || item.path.startsWith('/volume')))
 const auxiliaryMounts = computed(() => (details.value?.storage.mounts ?? []).filter((item) => !volumeMounts.value.some((volume) => volume.path === item.path)))
 const volumeTotalBytes = computed(() => volumeMounts.value.reduce((total, item) => total + item.totalBytes, 0))
@@ -93,17 +96,15 @@ const volumeUsedPercent = computed(() => volumeTotalBytes.value ? volumeUsedByte
 const physicalDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !/^(loop|zram|mmcblk\d+boot)/i.test(item.name)))
 const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !physicalDisks.value.some((disk) => disk.name === item.name)))
 const listeningPortGroups = computed(() => {
-  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; services: Array<{ label: string; detail: string }> }>()
+  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; owners: Array<{ label: string; detail: string }> }>()
   for (const item of details.value?.network.listeningPorts ?? []) {
     const key = `${item.protocol}:${item.port}`
-    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], services: [] }
+    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], owners: [] }
     if (item.address && !group.addresses.includes(item.address)) group.addresses.push(item.address)
     if (item.pid && !group.pids.includes(item.pid)) group.pids.push(item.pid)
-    const label = item.service || item.containerName || item.systemdUnit || item.processName || item.executable
-    const detail = [item.containerName, item.systemdUnit, item.processName, item.executable]
-      .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index && value !== label)
-      .join(' · ')
-    if (label && !group.services.some((service) => service.label === label)) group.services.push({ label, detail })
+    for (const owner of listeningPortOwners(item)) {
+      if (!group.owners.some((current) => current.label === owner.label && current.detail === owner.detail)) group.owners.push(owner)
+    }
     groups.set(key, group)
   }
   return [...groups.values()].sort((left, right) => left.port - right.port)
@@ -117,6 +118,12 @@ const capabilityItems = computed(() => [
   { name: '数据卷', enabled: Boolean(systemStore.capabilities?.dataVolumes?.length), detail: systemStore.capabilities?.dataVolumes?.join('、') || '未发现', icon: HardDrive, type: 'storage' },
   { name: '网络接口', enabled: Boolean(systemStore.capabilities?.networkInterfaces?.length), detail: `${systemStore.capabilities?.networkInterfaces?.length ?? 0} 个接口`, icon: Network, type: 'network' },
 ])
+
+const mihomoCapability = computed<MihomoCapability | null>(() => details.value?.proxy.mihomoCapability ?? null)
+const mihomoController = computed(() => mihomoCapability.value?.controller ?? null)
+const mihomoOperations = computed(() => mihomoController.value?.operations ?? [])
+const mihomoRulesEvidence = computed(() => mihomoCapability.value?.evidence.find((item) => item.source === 'controller-api' && item.detail === '/rules'))
+const mihomoRulesReadable = computed(() => mihomoRulesEvidence.value?.status === 'reachable')
 
 async function loadDetails() {
   loading.value = true
@@ -194,6 +201,10 @@ async function checkPublicEgress() {
   }
 }
 
+function handleManualRefresh() {
+  void loadDetails()
+}
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '—'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -219,7 +230,17 @@ function formatTemperature(value: number) {
 }
 
 function isVirtualInterface(name: string) {
-  return /^(br-|docker|veth|virbr|tun|tap|tailscale)/i.test(name)
+  return /^(br-|docker|veth|virbr|tun|tap)/i.test(name)
+}
+
+function interfaceIsOnline(item: SystemDetails['network']['interfaces'][number]) {
+  if (item.lowerUpKnown === true) return item.lowerUp === true && (!item.state || item.state === 'up' || item.state === 'unknown')
+  return item.state === 'up'
+}
+
+function interfaceStateLabel(item: SystemDetails['network']['interfaces'][number]) {
+  if (interfaceIsOnline(item) && /^tailscale/i.test(item.name)) return 'Overlay 可用'
+  return interfaceIsOnline(item) ? '已连接' : '未连接'
 }
 
 function interfaceAddress(item: SystemDetails['network']['interfaces'][number]) {
@@ -232,6 +253,88 @@ function interfaceKind(name: string) {
   if (/^(tun|tap)/i.test(name)) return '代理虚拟接口'
   if (name === 'lo') return '本机回环'
   return '主机网络接口'
+}
+
+function listeningPortOwners(item: SystemDetails['network']['listeningPorts'][number]) {
+  if (item.containerName) {
+    return [{ label: item.containerName, detail: item.processName ? `Docker 容器 · ${item.processName}` : 'Docker 容器' }]
+  }
+  if (item.containerId) {
+    return [{ label: shortIdentifier(item.containerId), detail: `Docker 容器名未知 · ${portDetectionReason(item)}` }]
+  }
+  if (item.systemdUnit) {
+    return [{ label: item.systemdUnit.replace(/\.service$/, ''), detail: item.processName ? `系统服务 · ${item.processName}` : 'systemd 服务' }]
+  }
+  if (item.processName) return [{ label: item.processName, detail: item.service && item.service !== item.processName ? item.service : '进程' }]
+  if (item.executable) return [{ label: item.executable, detail: '可执行文件' }]
+  return [{ label: item.pid > 0 ? `PID ${item.pid}` : '未知监听者', detail: portDetectionReason(item) }]
+}
+
+function shortIdentifier(value: string) {
+  return value.length > 12 ? value.slice(0, 12) : value
+}
+
+function portDetectionReason(item: SystemDetails['network']['listeningPorts'][number]) {
+  switch (item.detectionErrorCode) {
+    case 'LISTENING_PORT_PID_UNAVAILABLE': return 'PID 不可用'
+    case 'LISTENING_PORT_CONTAINER_NAME_UNAVAILABLE': return 'Docker CLI 未返回容器名称'
+    case 'LISTENING_PORT_PROCESS_METADATA_UNAVAILABLE': return 'proc 元数据不可读'
+    case 'LISTENING_PORT_PROCESS_METADATA_EMPTY': return 'proc 元数据为空'
+    case 'LISTENING_PORT_PROCESS_METADATA_PARTIAL': return 'proc 元数据不完整'
+    default: return item.detectionErrorCode || '映射原因未知'
+  }
+}
+
+function hasMihomoOperation(operation: string) {
+  return mihomoOperations.value.includes(operation)
+}
+
+function mihomoControllerHealth() {
+  if (!mihomoController.value?.detected) return '未确认'
+  if (mihomoController.value.authRequired) return mihomoController.value.tokenConfigured ? '认证未通过' : '需要认证'
+  return mihomoController.value.reachable ? '已连接' : '不可达'
+}
+
+function mihomoRulesStatus() {
+  if (mihomoRulesReadable.value) return '读取 API 已确认'
+  return '未确认'
+}
+
+function tailscaleStatusLabel() {
+  if (tailscaleDetails.value.reachable) return 'Overlay 已连接'
+  if (!tailscaleDetails.value.detected) return '未发现 Tailscale'
+  if (/stopped|needslogin|nostate/i.test(tailscaleDetails.value.backendState)) return '控制面未运行或需要登录'
+  if (!tailscaleDetails.value.online) return '节点未在线'
+  if (!tailscaleDetails.value.overlayIps.length) return '未取得 Overlay IP'
+  if (tailscaleDetails.value.linkState === 'down') return '主机链路未建立'
+  return '证据不足，未判定为已连接'
+}
+
+function tailscaleEvidenceLabel() {
+  const parts = [
+    tailscaleDetails.value.backendState ? `控制面 ${tailscaleDetails.value.backendState}` : '',
+    tailscaleDetails.value.linkState ? `链路 ${tailscaleDetails.value.linkState}` : '',
+    tailscaleDetails.value.heartbeatState ? `心跳 ${tailscaleDetails.value.heartbeatState}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || '未取得控制面、链路或心跳证据'
+}
+
+function dnsCapabilityExplanation() {
+  if (dnsDetails.value.errorCode === 'DNS_BACKEND_READ_ONLY') return '检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；保持只读。'
+  if (dnsDetails.value.errorCode === 'DNS_WRITE_ADAPTER_UNAVAILABLE') return '检测到 DNS 后端，但未接入安全的预览、应用和回滚适配器；保持只读。'
+  if (dnsDetails.value.readOnly) return '当前 DNS 后端只提供读取能力；NCP 不会直接覆盖 /etc/resolv.conf。'
+  return dnsDetails.value.detectionSource || 'DNS 能力未报告'
+}
+
+function publicEgressAddressLabel() {
+  if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '待手动检测' : '未配置探针'
+  return publicEgressResult.value.address || '探针未返回公网 IP'
+}
+
+function publicEgressMetadataLabel(value: string | undefined) {
+  if (value) return value
+  if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '手动检测后显示' : '未配置探针'
+  return '探针未返回'
 }
 
 function proxyStateLabel(value: string, detected: boolean) {
@@ -250,7 +353,12 @@ function formatTime(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
 
-onMounted(loadDetails)
+onMounted(() => {
+  void loadDetails()
+  window.addEventListener('ncp:manual-refresh', handleManualRefresh)
+})
+
+onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleManualRefresh))
 </script>
 
 <template>
@@ -270,10 +378,6 @@ onMounted(loadDetails)
               {{ tab.label }}
             </button>
           </nav>
-          <div class="collection-meta">
-            <span class="collection-time">原采集于 {{ formatTime(details?.collectedAt ?? '') }}</span>
-            <el-button class="system-refresh" :loading="loading" @click="loadDetails"><RefreshCw :size="16" /><span>刷新</span></el-button>
-          </div>
         </div>
       </template>
     </WorkspaceHeader>
@@ -314,7 +418,7 @@ onMounted(loadDetails)
           <div><span>系统架构</span><strong>{{ details.device.architecture || '不可用' }}</strong></div>
           <div><span>运行时间</span><strong>{{ formatDuration(details.device.uptimeSeconds) }}</strong></div>
           <div><span>运行进程</span><strong>{{ details.device.processCount.toLocaleString('zh-CN') }}</strong></div>
-          <div class="overview-fact--cgroup"><span>资源隔离（cgroup）</span><strong>{{ details.device.cgroupVersion || '不可用' }}</strong><small>Linux 控制组版本，用于统计与限制进程资源</small></div>
+          <div class="overview-fact--cgroup"><span>资源控制（cgroup）</span><strong>{{ details.device.cgroupVersion || '不可用' }}</strong><small>{{ details.device.cgroupVersion === 'v2' ? 'v2 使用统一层级和控制器接口，负责统计、限制与委派进程资源。' : 'Linux 控制组用于统计和限制进程资源；当前版本决定可用的控制器接口。' }}</small></div>
         </article>
 
         <article class="panel overview-section overview-section--processor">
@@ -345,10 +449,10 @@ onMounted(loadDetails)
         </article>
 
         <article class="panel detail-card network-layout__full">
-          <header class="detail-card__header type-network"><Network :size="20" /><div><h2>主要网络连接</h2><p>只展示影响 NAS 联网的真实接口；Docker 和代理虚拟接口收进下方明细</p></div></header>
+          <header class="detail-card__header type-site"><Network :size="20" /><div><h2>主要网络连接</h2><p>展示主机和 Tailscale Overlay 接口；Docker 等内部接口收进下方明细</p></div></header>
           <div v-if="primaryInterfaces.length" class="primary-interface-list">
             <div v-for="item in primaryInterfaces" :key="item.name" class="primary-interface-row">
-              <span class="primary-interface-row__status" :class="{ online: item.state === 'up' }"><i></i>{{ item.state === 'up' ? '已连接' : '未连接' }}</span>
+              <span class="primary-interface-row__status" :class="{ online: interfaceIsOnline(item) }"><i></i>{{ interfaceStateLabel(item) }}</span>
               <div class="primary-interface-row__name"><strong>{{ item.name }}</strong><small>{{ interfaceKind(item.name) }}</small></div>
               <div><span>IP 地址</span><strong>{{ interfaceAddress(item) ? `${interfaceAddress(item)?.address}/${interfaceAddress(item)?.prefixLength}` : '未分配' }}</strong></div>
               <div><span>链路</span><strong>{{ item.speedMbps > 0 ? `${item.speedMbps} Mbps` : '速率未知' }}<template v-if="item.duplex"> · {{ item.duplex }}</template></strong></div>
@@ -360,7 +464,7 @@ onMounted(loadDetails)
             <div class="network-details__list">
               <div v-for="item in secondaryInterfaces" :key="item.name" class="network-detail-row">
                 <div><strong>{{ item.name }}</strong><small>{{ interfaceKind(item.name) }}</small></div>
-                <span :class="{ 'is-online': item.state === 'up' }">{{ item.state === 'up' ? '已连接' : '未连接' }}</span>
+                <span :class="{ 'is-online': interfaceIsOnline(item) }">{{ interfaceStateLabel(item) }}</span>
                 <span>{{ item.addresses.length }} 个地址</span>
                 <code>{{ item.hardwareAddress || '无 MAC' }}</code>
               </div>
@@ -369,7 +473,7 @@ onMounted(loadDetails)
         </article>
 
         <article class="panel detail-card">
-          <header class="detail-card__header type-network"><Route :size="20" /><div><h2>路由与 DNS</h2><p>默认网关和解析服务</p></div></header>
+          <header class="detail-card__header type-site"><Route :size="20" /><div><h2>路由与 DNS</h2><p>默认网关和解析服务</p></div></header>
           <dl class="definition-grid">
             <div class="definition-grid__wide"><dt>默认网关</dt><dd>{{ details.network.gateway || '未发现' }}</dd></div>
             <div class="definition-grid__wide"><dt>DNS</dt><dd>{{ details.network.dnsServers.join('、') || '未发现' }}</dd></div>
@@ -379,9 +483,9 @@ onMounted(loadDetails)
           <div class="dns-management">
             <div class="dns-management__state">
               <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
-              <small>{{ dnsDetails.readOnly ? '当前使用静态 /etc/resolv.conf，NCP 不会直接覆盖它。' : dnsDetails.detectionSource || 'DNS 能力未报告' }}</small>
+              <small>{{ dnsCapabilityExplanation() }}</small>
             </div>
-            <template v-if="dnsDetails.canPreview && dnsDetails.canConfirm && !dnsDetails.readOnly">
+            <template v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly">
               <label class="dns-management__input"><span>DNS 服务器</span><input v-model="dnsDraft" type="text" placeholder="例如 223.5.5.5, 1.1.1.1" /></label>
               <div class="dns-management__actions"><button type="button" class="text-button" @click="previewDNS">预览修改</button><button v-if="dnsPreview" type="button" class="text-button text-button--primary" @click="confirmDNS">确认应用</button><button v-if="dnsChangeId" type="button" class="text-button" @click="rollbackDNS">回滚</button></div>
             </template>
@@ -396,23 +500,19 @@ onMounted(loadDetails)
             <strong>{{ details.proxy.mihomo.detected ? 'Mihomo / Clash' : '未发现 Mihomo / Clash' }}</strong>
             <p>{{ details.proxy.mihomo.detail || '当前未取得更多服务信息' }}</p>
             <div class="proxy-facts">
-              <div><small>Tailscale Overlay</small><strong>{{ tailscaleDetails.reachable ? '已连接' : tailscaleDetails.detected ? '已发现，链路未确认' : '未发现' }}</strong><code>{{ tailscaleDetails.overlayIps.join('、') || '无 Overlay IP' }}</code></div>
-              <div><small>公网出口</small><strong>{{ publicEgressResult?.address || (publicEgressDetails.configured ? '待手动检测' : '未配置探针') }}</strong><code>{{ publicEgressResult?.country || publicEgressResult?.region || '不把 Tailscale IP 当公网 IP' }}</code></div>
+              <div><small>Tailscale Overlay</small><strong>{{ tailscaleStatusLabel() }}</strong><code :title="tailscaleEvidenceLabel()">{{ tailscaleDetails.overlayIps.join('、') || tailscaleEvidenceLabel() }}</code></div>
+              <div><small>公网出口 IP</small><strong>{{ publicEgressAddressLabel() }}</strong><code>{{ publicEgressDetails.configured ? '与 Overlay IP 分开检测' : '未配置探针，不以 Overlay IP 代替' }}</code></div>
+              <div><small>出口国家 / 地区</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.country || publicEgressResult?.region) }}</strong><code>{{ publicEgressResult?.country && publicEgressResult?.region ? `${publicEgressResult.country} · ${publicEgressResult.region}` : publicEgressResult ? '探针未返回完整地域信息' : '手动检测后显示' }}</code></div>
+              <div><small>出口 ISP / ASN</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.isp) }}</strong><code>{{ publicEgressResult ? (publicEgressResult?.asn || 'ASN 未返回') : '手动检测后显示' }}</code></div>
+              <div><small>Controller 健康</small><strong>{{ mihomoControllerHealth() }}</strong><code>{{ mihomoController?.endpoint || '端点未确认' }}</code></div>
+              <div><small>连接能力</small><strong>{{ hasMihomoOperation('connections') ? 'API 已确认' : '未确认' }}</strong><code>{{ mihomoController?.authRequired ? '需要认证' : '受控读取能力' }}</code></div>
+              <div><small>节点 / 代理组</small><strong>{{ hasMihomoOperation('proxies') ? '读取 API 已确认' : '未确认' }}</strong><code>切换操作尚未经过安全能力确认</code></div>
+              <div><small>规则能力</small><strong>{{ mihomoRulesStatus() }}</strong><code>{{ mihomoRulesReadable ? '当前仅证明读取' : '写入、备份、校验、回滚未开放' }}</code></div>
             </div>
-            <small>{{ details.proxy.mihomoCapability?.controller.operations?.length ? `已开放：${details.proxy.mihomoCapability.controller.operations.join('、')}` : '当前只提供进程与控制器状态；域名、进程和容器分流规则未开放。' }}</small>
+            <small>{{ mihomoRulesReadable ? '已确认控制器可读取规则，但当前没有域名规则写入、应用前备份、校验和回滚契约。' : '规则 API 未确认；进程和 Docker 容器分流没有可靠归属证据，当前不开放。' }}</small>
             <button v-if="publicEgressDetails.configured" type="button" class="text-button text-button--primary" @click="checkPublicEgress">检测公网出口</button>
             <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
           </div>
-        </article>
-
-        <article class="panel detail-card proxy-rules-card network-layout__full">
-          <header class="detail-card__header type-site"><ShieldCheck :size="20" /><div><h2>代理分流能力</h2><p>只在控制器真实开放对应 API 时提供管理入口</p></div></header>
-          <div class="proxy-rules-grid">
-            <div><strong>域名规则</strong><span>未开放</span><small>当前 Agent 不读取或修改 Mihomo 配置文件。</small></div>
-            <div><strong>应用进程规则</strong><span>未开放</span><small>没有可靠的进程级流量归属接口，不显示猜测结果。</small></div>
-            <div><strong>Docker 容器规则</strong><span>未开放</span><small>容器网络命名空间与控制器规则尚未建立安全映射。</small></div>
-          </div>
-          <p class="proxy-rules-note">可用的控制器操作：{{ details.proxy.mihomoCapability?.controller.operations?.join('、') || '无' }}。后续只有完成能力探测、规则校验和回滚设计后，才会开放修改。</p>
         </article>
 
         <details class="panel network-details ports-disclosure network-layout__full">
@@ -422,7 +522,7 @@ onMounted(loadDetails)
           </summary>
             <div v-if="listeningPortGroups.length" class="port-grid">
             <span v-for="item in listeningPortGroups" :key="`${item.protocol}-${item.port}`">
-              <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-if="item.services.length" :title="item.services.map((service) => service.detail ? `${service.label} · ${service.detail}` : service.label).join('、')">应用 {{ item.services.map((service) => service.label).join('、') }}</em><em v-else-if="item.pids.length">PID {{ item.pids.join('、') }}</em>
+              <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-for="owner in item.owners" :key="`${owner.label}-${owner.detail}`" class="port-service" :title="`${owner.label} · ${owner.detail}`">{{ owner.label }} · {{ owner.detail }}</em><em v-if="!item.owners.length && item.pids.length" class="port-service">PID {{ item.pids.join('、') }} · 未知原因</em>
             </span>
           </div>
           <div v-else class="inline-empty">未取得监听服务信息。</div>
@@ -512,6 +612,7 @@ onMounted(loadDetails)
 @media(max-width:760px){.system-tabs-toolbar{align-items:stretch;flex-direction:column;gap:9px}.system-tabs-toolbar .detail-tabs{width:100%;flex:none}.collection-meta{justify-content:space-between}.overview-section--processor,.overview-section--resources{grid-column:1/-1}.network-summary-grid,.storage-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.primary-interface-list{padding-inline:15px}.primary-interface-row{grid-template-columns:1fr 1fr;gap:9px;padding-block:12px}.primary-interface-row__status{grid-column:1/-1}.primary-interface-row>div:last-child{grid-column:auto}.network-detail-row{grid-template-columns:minmax(0,1fr) auto}.network-detail-row>span:nth-child(3){display:none}.network-detail-row code{grid-column:1/-1}.volume-list,.disk-list{padding-inline:15px}.volume-row{grid-template-columns:1fr;gap:8px;padding-block:12px}.volume-row__usage{grid-template-columns:minmax(100px,1fr) auto}.volume-row__usage .meter{grid-column:1/-1}.disk-row{grid-template-columns:30px minmax(0,1fr) auto}.disk-health{grid-column:2/-1}.port-grid{grid-template-columns:repeat(2,minmax(0,1fr));padding-inline:15px}.evidence-disclosure>summary{padding-inline:15px}.evidence-table>div{padding-inline:15px}}
 @media(max-width:520px){.collection-time{display:inline-flex;font-size:.7rem}.collection-meta{width:100%}.collection-meta .system-refresh{min-width:76px}.processor-facts{grid-template-columns:1fr}.resource-summary{grid-template-columns:1fr}.network-summary-grid,.storage-summary-grid{grid-template-columns:1fr}.network-summary-card,.storage-summary-card{padding:13px}.network-details summary,.storage-details summary{padding-inline:15px}.network-detail-row{padding-inline:15px}.port-grid{grid-template-columns:1fr}.storage-details__list>div{grid-template-columns:1fr auto;padding-inline:15px}.storage-details__list>div span:last-child{grid-column:2;grid-row:1}.disk-row__size{font-size:.7rem}}
 .ports-disclosure{overflow:hidden}.ports-disclosure>summary{min-height:76px;background:linear-gradient(120deg,var(--ncp-surface),var(--ncp-surface-quiet))}.ports-disclosure__title{display:flex!important;align-items:center;gap:10px;margin-left:0!important}.ports-disclosure__title>svg{box-sizing:content-box;padding:9px;border-radius:11px;background:var(--ncp-object-network-soft);color:var(--ncp-object-network)}.ports-disclosure__title>span{display:grid;gap:2px}.ports-disclosure__title strong{color:var(--ncp-text);font-size:.9rem}.ports-disclosure__title small{color:var(--ncp-text-subtle);font-size:.72rem;font-weight:500}.overview-fact--cgroup small{margin-top:4px;color:var(--ncp-text-subtle);font-size:.66rem;line-height:1.35}
-.dns-management{display:grid;gap:10px;padding:0 18px 18px;border-top:1px solid var(--ncp-line)}.dns-management__state{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:14px}.dns-management__state small,.dns-management__message{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input{display:grid;gap:5px}.dns-management__input span{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input input{min-height:36px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text);font:inherit;font-size:.76rem;outline:none}.dns-management__input input:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}.dns-management__actions{display:flex;flex-wrap:wrap;gap:7px}.text-button{min-height:32px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.72rem;font-weight:700;cursor:pointer}.text-button:hover,.text-button:focus-visible{border-color:var(--ncp-primary-border);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);outline:none}.text-button--primary{border-color:var(--ncp-primary);background:var(--ncp-primary);color:#fff}.text-button--primary:hover,.text-button--primary:focus-visible{background:var(--ncp-primary-strong);color:#fff}.proxy-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.proxy-facts>div{display:grid;min-width:0;gap:3px;padding:10px;border:1px solid var(--ncp-line);border-radius:9px;background:var(--ncp-surface-quiet)}.proxy-facts small{color:var(--ncp-text-subtle);font-size:.68rem}.proxy-facts strong{overflow:hidden;font-family:var(--ncp-font-latin);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.proxy-facts code{overflow:hidden;color:var(--ncp-text-muted);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.proxy-message{color:var(--ncp-warning-strong);font-size:.7rem}.proxy-rules-card{overflow:hidden}.proxy-rules-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 18px}.proxy-rules-grid>div{display:grid;gap:4px;padding:13px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-rules-grid strong{font-size:.78rem}.proxy-rules-grid span{width:max-content;padding:3px 6px;border-radius:5px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.68rem;font-weight:700}.proxy-rules-grid small,.proxy-rules-note{color:var(--ncp-text-subtle);font-size:.7rem;line-height:1.45}.proxy-rules-note{margin:0;padding:0 18px 17px}
+.dns-management{display:grid;gap:10px;padding:0 18px 18px;border-top:1px solid var(--ncp-line)}.dns-management__state{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:14px}.dns-management__state small,.dns-management__message{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input{display:grid;gap:5px}.dns-management__input span{color:var(--ncp-text-subtle);font-size:.7rem}.dns-management__input input{min-height:36px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text);font:inherit;font-size:.76rem;outline:none}.dns-management__input input:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}.dns-management__actions{display:flex;flex-wrap:wrap;gap:7px}.text-button{min-height:32px;padding:0 10px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.72rem;font-weight:700;cursor:pointer}.text-button:hover,.text-button:focus-visible{border-color:var(--ncp-primary-border);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);outline:none}.text-button--primary{border-color:var(--ncp-primary);background:var(--ncp-primary);color:#fff}.text-button--primary:hover,.text-button--primary:focus-visible{background:var(--ncp-primary-strong);color:#fff}.proxy-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.proxy-facts>div{display:grid;min-width:0;gap:3px;padding:10px;border:1px solid var(--ncp-line);border-radius:9px;background:var(--ncp-surface-quiet)}.proxy-facts small{color:var(--ncp-text-subtle);font-size:.68rem}.proxy-facts strong{overflow:hidden;font-family:var(--ncp-font-latin);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.proxy-facts code{overflow:hidden;color:var(--ncp-text-muted);font-family:var(--ncp-font-latin);font-size:.7rem;letter-spacing:0;text-overflow:ellipsis;white-space:nowrap}.proxy-message{color:var(--ncp-warning-strong);font-size:.7rem}.proxy-rules-card{overflow:hidden}.proxy-rules-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 18px}.proxy-rules-grid>div{display:grid;gap:4px;padding:13px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-rules-grid strong{font-size:.78rem}.proxy-rules-grid span{width:max-content;padding:3px 6px;border-radius:5px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.68rem;font-weight:700}.proxy-rules-grid small,.proxy-rules-note{color:var(--ncp-text-subtle);font-size:.7rem;line-height:1.45}.proxy-rules-note{margin:0;padding:0 18px 17px}
 @media(max-width:760px){.dns-management__state{align-items:flex-start;flex-direction:column;gap:5px}.proxy-facts,.proxy-rules-grid{grid-template-columns:1fr}}
+.overview-facts{grid-auto-rows:minmax(82px,1fr);align-items:stretch}.overview-facts>div{display:grid;align-content:center}.proxy-facts>div{min-height:68px;align-content:center}.port-service{overflow:hidden;font-family:var(--ncp-font-latin)!important;text-overflow:ellipsis;white-space:nowrap}
 </style>

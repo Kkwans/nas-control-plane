@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
           <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${realtimeState}`">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
-          <ElTooltip v-if="liveDataActive" content="立即刷新数据" placement="bottom">
+          <ElTooltip v-if="liveDataActive || route.meta.manualRefresh === true" content="立即刷新数据" placement="bottom">
             <button class="refresh-button" type="button" :disabled="isRefreshing" aria-label="立即刷新数据" @click="emit('refresh')">
               <RefreshCw :class="{ spin: isRefreshing }" :size="18" aria-hidden="true" /><span>刷新</span>
             </button>
