@@ -117,6 +117,12 @@ func dnsChangeFailureMessage(err error, fallback string) string {
 		return "检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；DNS 保持只读。"
 	case "DNS_WRITE_ADAPTER_UNAVAILABLE":
 		return "DNS 后端未提供安全的预览、应用和回滚适配器。"
+	case "UGOS_DNS_SOCKET_UNAVAILABLE", "UGOS_DNS_READ_FAILED", "UGOS_DNS_CONFIG_INVALID":
+		return "UGOS 网络服务暂不可用或返回了无法识别的配置；NCP 未修改 DNS。"
+	case "DNS_NAMESERVERS_INVALID":
+		return "请输入 1 至 6 个有效且不重复的 IPv4 或 IPv6 DNS 地址。"
+	case "DNS_SEARCH_DOMAINS_UNSUPPORTED":
+		return "UGOS 网络服务当前只支持修改 DNS 服务器，不支持在此修改搜索域。"
 	case "DNS_PREVIEW_NOT_FOUND", "DNS_PREVIEW_EXPIRED":
 		return "DNS 修改预览已失效，请重新预览后再确认。"
 	case "DNS_SOURCE_CHANGED":

@@ -3,6 +3,7 @@ package agentsocket
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
@@ -443,12 +444,11 @@ func systemRPCError(err error) error {
 	if err == nil {
 		return nil
 	}
-	switch grpcstatus.Convert(err).Message() {
-	case "DNS_BACKEND_READ_ONLY", "DNS_WRITE_ADAPTER_UNAVAILABLE":
-		return coded(grpcstatus.Convert(err).Message(), err)
-	default:
-		return rpcError(err)
+	message := grpcstatus.Convert(err).Message()
+	if strings.HasPrefix(message, "DNS_") || strings.HasPrefix(message, "UGOS_DNS_") {
+		return coded(message, err)
 	}
+	return rpcError(err)
 }
 
 func containsWhitespace(value string) bool {

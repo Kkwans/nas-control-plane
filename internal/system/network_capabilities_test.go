@@ -209,6 +209,20 @@ func TestProbeDNSMarksStaticResolvConfReadOnly(t *testing.T) {
 	}
 }
 
+func TestProbeDNSPrefersUGOSNetworkService(t *testing.T) {
+	environment := &networkCapabilityEnvironment{
+		files:    map[string][]byte{"/etc/resolv.conf": []byte("nameserver 192.168.5.1\n")},
+		existing: map[string]bool{UGOSNetworkSocketPath: true},
+	}
+	value := ProbeDNS(context.Background(), environment)
+	if value.Backend != DNSBackendUGOSNetwork || value.DetectionSource != "ugos-net-serv" || !value.ReadOnly {
+		t.Fatalf("UGOS DNS capability = %#v", value)
+	}
+	if value.ErrorCode != "DNS_WRITE_ADAPTER_UNAVAILABLE" || value.Nameservers[0] != "192.168.5.1" {
+		t.Fatalf("UGOS DNS capability details = %#v", value)
+	}
+}
+
 func TestPublicEgressDetectorReturnsExplicitUnavailableAndRejectsOverlay(t *testing.T) {
 	missing := NewPublicEgressDetector("").Detect(context.Background())
 	if missing.Status != CapabilityStateUnavailable || missing.ErrorCode != "PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED" {

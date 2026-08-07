@@ -39,7 +39,9 @@ const (
 	DNSBackendSystemdResolved = "systemd-resolved"
 	DNSBackendNetworkManager  = "networkmanager"
 	DNSBackendStaticResolv    = "static-resolv-conf"
+	DNSBackendUGOSNetwork     = "ugos-network-service"
 	DNSBackendUnknown         = "unknown"
+	UGOSNetworkSocketPath     = "/run/ugreen/grpc/net_serv_grpc.sock"
 )
 
 type MihomoOperation string
@@ -771,6 +773,15 @@ func ProbeDNS(ctx context.Context, environment Environment) DNSCapability {
 		result.CanRead = true
 	} else {
 		result.ErrorCode = "DNS_SOURCE_UNAVAILABLE"
+	}
+	if environment.PathExists(UGOSNetworkSocketPath) {
+		result.Backend = DNSBackendUGOSNetwork
+		result.Detected = true
+		result.State = CapabilityStateReadOnly
+		result.ReadOnly = true
+		result.DetectionSource = "ugos-net-serv"
+		result.ErrorCode = "DNS_WRITE_ADAPTER_UNAVAILABLE"
+		return result
 	}
 
 	if _, lookPathErr := environment.LookPath("resolvectl"); lookPathErr == nil {

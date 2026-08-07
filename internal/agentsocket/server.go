@@ -113,7 +113,13 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	if systemProvider == nil {
 		systemEnvironment := system.NewOSEnvironment()
 		var dnsController system.DNSChangeController
-		if dnsCapability := system.ProbeDNS(ctx, systemEnvironment); dnsCapability.Backend == system.DNSBackendStaticResolv {
+		dnsCapability := system.ProbeDNS(ctx, systemEnvironment)
+		if dnsCapability.Backend == system.DNSBackendUGOSNetwork {
+			ugosController, controllerErr := system.NewUGOSNetworkDNSController(system.UGOSNetworkSocketPath, "/var/lib/ncp/dns")
+			if controllerErr == nil {
+				dnsController = ugosController
+			}
+		} else if dnsCapability.Backend == system.DNSBackendStaticResolv {
 			staticController, controllerErr := system.NewStaticResolvDNSController("/etc/resolv.conf", "/var/lib/ncp/dns")
 			if controllerErr == nil {
 				dnsController = staticController
