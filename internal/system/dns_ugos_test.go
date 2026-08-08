@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 type fakeUGOSDNSClient struct {
 	config   []byte
 	setCalls int
+	setError error
 }
 
 func (c *fakeUGOSDNSClient) GetGeneralConfig(context.Context) ([]byte, error) {
@@ -18,9 +20,57 @@ func (c *fakeUGOSDNSClient) GetGeneralConfig(context.Context) ([]byte, error) {
 }
 
 func (c *fakeUGOSDNSClient) SetGeneralConfig(_ context.Context, config []byte) error {
+	if c.setError != nil {
+		c.setCalls++
+		return c.setError
+	}
 	c.config = append([]byte(nil), config...)
 	c.setCalls++
 	return nil
+}
+
+func TestParseUGOSSingleBool(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		want    bool
+		wantErr string
+	}{
+		{name: "accepted", content: []byte{0x08, 0x01}, want: true},
+		{name: "rejected default", content: nil, want: false},
+		{name: "rejected explicit", content: []byte{0x08, 0x00}, want: false},
+		{name: "malformed", content: []byte{0x08}, wantErr: "UGOS_DNS_RESPONSE_INVALID"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseUGOSSingleBool(test.content)
+			if test.wantErr != "" {
+				if err == nil || err.Error() != test.wantErr {
+					t.Fatalf("parseUGOSSingleBool() error = %v", err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("parseUGOSSingleBool() = %v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestUGOSNetworkDNSControllerReportsVendorRejection(t *testing.T) {
+	client := &fakeUGOSDNSClient{
+		config:   makeUGOSTestConfig([]string{"192.168.5.1"}, true),
+		setError: errors.New("UGOS_DNS_APPLY_REJECTED"),
+	}
+	controller := newUGOSNetworkDNSController(client, t.TempDir())
+	preview, err := controller.Preview(context.Background(), DNSChangeRequest{Nameservers: []string{"1.1.1.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Confirm(context.Background(), DNSChangeConfirmation{PreviewID: preview.PreviewID, Confirmed: true})
+	if err == nil || err.Error() != "UGOS_DNS_APPLY_REJECTED" || result.ErrorCode != "UGOS_DNS_APPLY_REJECTED" || client.setCalls != 1 {
+		t.Fatalf("confirm = %#v, error = %v, set calls = %d", result, err, client.setCalls)
+	}
 }
 
 func TestUGOSNetworkDNSControllerPreviewConfirmAndRollback(t *testing.T) {

@@ -115,7 +115,10 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		var dnsController system.DNSChangeController
 		var dnsControllerFactory func() (system.DNSChangeController, error)
 		dnsCapability := system.ProbeDNS(ctx, systemEnvironment)
-		if dnsCapability.Backend == system.DNSBackendUGOSNetwork {
+		// The vendor socket being readable does not prove that SetGeneralConfig is
+		// accepted. Keep UGOS DNS read-only unless an operator has explicitly
+		// confirmed the authenticated write channel for this firmware.
+		if dnsCapability.Backend == system.DNSBackendUGOSNetwork && strings.EqualFold(strings.TrimSpace(os.Getenv("NCP_ENABLE_UGOS_DNS_WRITE")), "true") {
 			dnsControllerFactory = func() (system.DNSChangeController, error) {
 				return system.NewUGOSNetworkDNSController(system.UGOSNetworkSocketPath, "/var/lib/ncp/dns")
 			}

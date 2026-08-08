@@ -390,6 +390,7 @@ function dnsCapabilityExplanation() {
   if (!dnsDetails.value.readOnly && dnsDetails.value.backend === 'ugos-network-service') return '通过 UGOS 官方网络服务预览和应用；修改前保存完整配置，且支持并发变更保护与一键回滚。'
   if (!dnsDetails.value.readOnly && dnsDetails.value.backend === 'static-resolv-conf') return '修改前自动备份，确认后原子应用；若配置未被其他进程改动，可一键回滚。'
   if (dnsDetails.value.errorCode === 'DNS_BACKEND_READ_ONLY') return '检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；保持只读。'
+  if (dnsDetails.value.errorCode === 'UGOS_DNS_WRITE_UNCONFIRMED') return '已检测到 UGOS 网络服务，但当前固件拒绝了受控写入；为避免伪成功，DNS 保持只读，请在 UGOS 网络设置中修改。'
   if (dnsDetails.value.errorCode === 'DNS_WRITE_ADAPTER_UNAVAILABLE') return '检测到 DNS 后端，但未接入安全的预览、应用和回滚适配器；保持只读。'
   if (dnsDetails.value.readOnly) return '当前 DNS 后端只提供读取能力；NCP 不会直接覆盖 /etc/resolv.conf。'
   return dnsDetails.value.detectionSource || 'DNS 能力未报告'

@@ -825,7 +825,7 @@ func ProbeDNS(ctx context.Context, environment Environment) DNSCapability {
 		result.State = CapabilityStateReadOnly
 		result.ReadOnly = true
 		result.DetectionSource = "ugos-net-serv"
-		result.ErrorCode = "DNS_WRITE_ADAPTER_UNAVAILABLE"
+		result.ErrorCode = "UGOS_DNS_WRITE_UNCONFIRMED"
 		return result
 	}
 
@@ -941,11 +941,21 @@ func NewReadOnlyDNSController(capability DNSCapability) *ReadOnlyDNSController {
 	return &ReadOnlyDNSController{Capability: capability}
 }
 
-func (c *ReadOnlyDNSController) Preview(context.Context, DNSChangeRequest) (DNSChangePreview, error) {
-	code := "DNS_WRITE_ADAPTER_UNAVAILABLE"
-	if c != nil && c.Capability.ReadOnly {
-		code = "DNS_BACKEND_READ_ONLY"
+func (c *ReadOnlyDNSController) rejectionCode() string {
+	if c == nil {
+		return "DNS_WRITE_ADAPTER_UNAVAILABLE"
 	}
+	if code := strings.TrimSpace(c.Capability.ErrorCode); code != "" {
+		return code
+	}
+	if c.Capability.ReadOnly {
+		return "DNS_BACKEND_READ_ONLY"
+	}
+	return "DNS_WRITE_ADAPTER_UNAVAILABLE"
+}
+
+func (c *ReadOnlyDNSController) Preview(context.Context, DNSChangeRequest) (DNSChangePreview, error) {
+	code := c.rejectionCode()
 	backend := ""
 	if c != nil {
 		backend = c.Capability.Backend
@@ -954,10 +964,7 @@ func (c *ReadOnlyDNSController) Preview(context.Context, DNSChangeRequest) (DNSC
 }
 
 func (c *ReadOnlyDNSController) Confirm(context.Context, DNSChangeConfirmation) (DNSChangeResult, error) {
-	code := "DNS_WRITE_ADAPTER_UNAVAILABLE"
-	if c != nil && c.Capability.ReadOnly {
-		code = "DNS_BACKEND_READ_ONLY"
-	}
+	code := c.rejectionCode()
 	backend := ""
 	if c != nil {
 		backend = c.Capability.Backend
@@ -966,10 +973,7 @@ func (c *ReadOnlyDNSController) Confirm(context.Context, DNSChangeConfirmation) 
 }
 
 func (c *ReadOnlyDNSController) Rollback(context.Context, DNSRollbackRequest) (DNSChangeResult, error) {
-	code := "DNS_WRITE_ADAPTER_UNAVAILABLE"
-	if c != nil && c.Capability.ReadOnly {
-		code = "DNS_BACKEND_READ_ONLY"
-	}
+	code := c.rejectionCode()
 	backend := ""
 	if c != nil {
 		backend = c.Capability.Backend

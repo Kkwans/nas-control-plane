@@ -81,8 +81,18 @@ func (c liveUGOSDNSClient) GetGeneralConfig(ctx context.Context) ([]byte, error)
 }
 
 func (c liveUGOSDNSClient) SetGeneralConfig(ctx context.Context, config []byte) error {
-	_, err := c.invoke(ctx, ugosSetGeneralConfigRPC, config)
-	return err
+	response, err := c.invoke(ctx, ugosSetGeneralConfigRPC, config)
+	if err != nil {
+		return err
+	}
+	applied, err := parseUGOSSingleBool(response)
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return errors.New("UGOS_DNS_APPLY_REJECTED")
+	}
+	return nil
 }
 
 type ugosDNSPreview struct {
@@ -247,8 +257,8 @@ func (c *UGOSNetworkDNSController) Confirm(ctx context.Context, confirmation DNS
 		return result, err
 	}
 	if err := c.client.SetGeneralConfig(ctx, preview.after); err != nil {
-		result.ErrorCode = "DNS_APPLY_FAILED"
-		return result, errors.New(result.ErrorCode)
+		result.ErrorCode = errorCode(err)
+		return result, err
 	}
 	verified, err := c.client.GetGeneralConfig(ctx)
 	if err != nil {
@@ -312,8 +322,8 @@ func (c *UGOSNetworkDNSController) Rollback(ctx context.Context, request DNSRoll
 		return result, errors.New(result.ErrorCode)
 	}
 	if err := c.client.SetGeneralConfig(ctx, backup); err != nil {
-		result.ErrorCode = "DNS_ROLLBACK_FAILED"
-		return result, errors.New(result.ErrorCode)
+		result.ErrorCode = errorCode(err)
+		return result, err
 	}
 	verified, err := c.client.GetGeneralConfig(ctx)
 	if err != nil || contentHash(verified) != change.beforeHash {
@@ -439,6 +449,35 @@ func parseUGOSDNSConfig(config []byte) ([]string, bool, error) {
 		general = general[tagLength+valueLength:]
 	}
 	return nameservers, manual, nil
+}
+
+// parseUGOSSingleBool decodes ugidl.common.SingleBool. A protobuf message with
+// the default false value is encoded as an empty payload, so absence of field 1
+// is a valid rejection rather than a successful empty response.
+func parseUGOSSingleBool(content []byte) (bool, error) {
+	result := false
+	for len(content) > 0 {
+		number, kind, tagLength := protowire.ConsumeTag(content)
+		if tagLength < 0 {
+			return false, errors.New("UGOS_DNS_RESPONSE_INVALID")
+		}
+		valueLength := protowire.ConsumeFieldValue(number, kind, content[tagLength:])
+		if valueLength < 0 {
+			return false, errors.New("UGOS_DNS_RESPONSE_INVALID")
+		}
+		if number == 1 {
+			if kind != protowire.VarintType {
+				return false, errors.New("UGOS_DNS_RESPONSE_INVALID")
+			}
+			value, consumed := protowire.ConsumeVarint(content[tagLength : tagLength+valueLength])
+			if consumed < 0 {
+				return false, errors.New("UGOS_DNS_RESPONSE_INVALID")
+			}
+			result = value != 0
+		}
+		content = content[tagLength+valueLength:]
+	}
+	return result, nil
 }
 
 func rewriteUGOSDNSConfig(config []byte, nameservers []string) ([]byte, error) {

@@ -252,8 +252,20 @@ func TestProbeDNSPrefersUGOSNetworkService(t *testing.T) {
 	if value.Backend != DNSBackendUGOSNetwork || value.DetectionSource != "ugos-net-serv" || !value.ReadOnly {
 		t.Fatalf("UGOS DNS capability = %#v", value)
 	}
-	if value.ErrorCode != "DNS_WRITE_ADAPTER_UNAVAILABLE" || value.Nameservers[0] != "192.168.5.1" {
+	if value.ErrorCode != "UGOS_DNS_WRITE_UNCONFIRMED" || value.Nameservers[0] != "192.168.5.1" {
 		t.Fatalf("UGOS DNS capability details = %#v", value)
+	}
+}
+
+func TestReadOnlyDNSControllerPreservesCapabilityError(t *testing.T) {
+	controller := NewReadOnlyDNSController(DNSCapability{
+		Backend:   DNSBackendUGOSNetwork,
+		ReadOnly:  true,
+		ErrorCode: "UGOS_DNS_WRITE_UNCONFIRMED",
+	})
+	preview, err := controller.Preview(context.Background(), DNSChangeRequest{})
+	if err == nil || err.Error() != "UGOS_DNS_WRITE_UNCONFIRMED" || preview.ErrorCode != "UGOS_DNS_WRITE_UNCONFIRMED" {
+		t.Fatalf("preview = %#v, error = %v", preview, err)
 	}
 }
 
