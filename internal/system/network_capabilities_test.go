@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProbeTailscaleRequiresCLIOverlayAndLinkHeartbeat(t *testing.T) {
@@ -166,13 +167,14 @@ func TestProbeMihomoReportsOnlyConfirmedControllerReadCapabilities(t *testing.T)
 		files: map[string][]byte{"/proc/42/comm": []byte("mihomo\n")},
 		httpResults: map[string]HTTPProbeResult{
 			"http://127.0.0.1:19091/version":     {StatusCode: http.StatusOK, Body: []byte(`{"version":"1.0.0"}`)},
+			"http://127.0.0.1:19091/traffic":     {StatusCode: http.StatusOK},
 			"http://127.0.0.1:19091/connections": {StatusCode: http.StatusOK, Body: []byte(`{"connections":[]}`)},
 			"http://127.0.0.1:19091/proxies":     {StatusCode: http.StatusOK, Body: []byte(`{"proxies":{}}`)},
 			"http://127.0.0.1:19091/rules":       {StatusCode: http.StatusOK, Body: []byte(`{"rules":[]}`)},
 		},
 	}
 	value := ProbeMihomo(context.Background(), environment, "http://127.0.0.1:19091")
-	if !containsString(value.Controller.Operations, string(MihomoOperationConnections)) || !containsString(value.Controller.Operations, string(MihomoOperationProxies)) {
+	if !containsString(value.Controller.Operations, string(MihomoOperationTraffic)) || !containsString(value.Controller.Operations, string(MihomoOperationConnections)) || !containsString(value.Controller.Operations, string(MihomoOperationProxies)) {
 		t.Fatalf("confirmed operations = %#v", value.Controller.Operations)
 	}
 	if containsString(value.Controller.Operations, string(MihomoOperationSelectProxy)) {
@@ -183,6 +185,24 @@ func TestProbeMihomoReportsOnlyConfirmedControllerReadCapabilities(t *testing.T)
 	}
 	if containsString(value.Controller.Operations, "rules") {
 		t.Fatal("rules must not be advertised as a writable operation")
+	}
+}
+
+func TestOSEnvironmentMihomoStatusProbeDoesNotWaitForStreamingBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusOK)
+		response.(http.Flusher).Flush()
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	started := time.Now()
+	statusCode, err := (OSEnvironment{}).HTTPGetStatusWithToken(context.Background(), server.URL, "")
+	if err != nil || statusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, error = %v", statusCode, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("stream status probe waited for body: %s", elapsed)
 	}
 }
 

@@ -561,11 +561,20 @@ func probeMihomoControllerOperations(ctx context.Context, environment Environmen
 	if result == nil {
 		return
 	}
+	// /traffic is a streaming endpoint. Confirm it from the HTTP status and
+	// close the stream immediately instead of waiting for a body that never ends.
+	if statusCode, err := probeMihomoHTTPStatusWithToken(ctx, environment, joinControllerPath(endpoint, "/traffic"), token); err == nil {
+		result.Evidence = append(result.Evidence, CapabilityEvidence{
+			Source: "controller-api", Status: httpStatusEvidence(statusCode), Detail: "/traffic",
+		})
+		if statusCode >= 200 && statusCode < 300 {
+			result.Controller.Operations = appendUniqueOperation(result.Controller.Operations, MihomoOperationTraffic)
+		}
+	}
 	for _, item := range []struct {
 		operation MihomoOperation
 		path      string
 	}{
-		{operation: MihomoOperationTraffic, path: "/traffic"},
 		{operation: MihomoOperationConnections, path: "/connections"},
 		{operation: MihomoOperationProxies, path: "/proxies"},
 	} {
@@ -727,6 +736,10 @@ type authenticatedHTTPProbeEnvironment interface {
 	HTTPGetWithToken(context.Context, string, string) (HTTPProbeResult, error)
 }
 
+type authenticatedHTTPStatusProbeEnvironment interface {
+	HTTPGetStatusWithToken(context.Context, string, string) (int, error)
+}
+
 func probeMihomoHTTP(ctx context.Context, environment Environment, endpoint string) (HTTPProbeResult, error) {
 	return probeMihomoHTTPWithToken(ctx, environment, endpoint, configuredMihomoToken(environment))
 }
@@ -736,6 +749,14 @@ func probeMihomoHTTPWithToken(ctx context.Context, environment Environment, endp
 		return source.HTTPGetWithToken(ctx, endpoint, strings.TrimSpace(token))
 	}
 	return probeHTTP(ctx, environment, endpoint)
+}
+
+func probeMihomoHTTPStatusWithToken(ctx context.Context, environment Environment, endpoint, token string) (int, error) {
+	if source, ok := environment.(authenticatedHTTPStatusProbeEnvironment); ok {
+		return source.HTTPGetStatusWithToken(ctx, endpoint, strings.TrimSpace(token))
+	}
+	probe, err := probeMihomoHTTPWithToken(ctx, environment, endpoint, token)
+	return probe.StatusCode, err
 }
 
 func runWithTimeout(ctx context.Context, environment Environment, name string, args ...string) ([]byte, error) {
@@ -1248,6 +1269,23 @@ func (OSEnvironment) HTTPGet(ctx context.Context, endpoint string) (HTTPProbeRes
 
 func (OSEnvironment) HTTPGetWithToken(ctx context.Context, endpoint, token string) (HTTPProbeResult, error) {
 	return (OSEnvironment{}).httpGet(ctx, endpoint, token)
+}
+
+func (OSEnvironment) HTTPGetStatusWithToken(ctx context.Context, endpoint, token string) (int, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Accept", "application/json")
+	if strings.TrimSpace(token) != "" {
+		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	response, err := (&http.Client{Timeout: mihomoHTTPTimeout}).Do(request)
+	if err != nil {
+		return 0, err
+	}
+	_ = response.Body.Close()
+	return response.StatusCode, nil
 }
 
 func (OSEnvironment) httpGet(ctx context.Context, endpoint, token string) (HTTPProbeResult, error) {
