@@ -28,6 +28,8 @@ const (
 	defaultRealtimeInterval             = 5 * time.Second
 	defaultDatabaseTimeout              = 20 * time.Second
 	defaultDockerImageTimeout           = 10 * time.Minute
+	defaultPublicEgressTimeout          = 15 * time.Second
+	defaultProxyInspectionTimeout       = 20 * time.Second
 )
 
 type AgentClient interface {
@@ -332,6 +334,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/system/public-egress/detect", api.detectPublicEgress)
 			protected.Get("/proxy/mihomo/capability", api.mihomoCapability)
 			protected.Post("/proxy/mihomo/invoke", api.invokeMihomo)
+			protected.Post("/proxy/mihomo/inspect", api.inspectMihomo)
 			protected.Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
 			protected.Get("/logs", api.logs)

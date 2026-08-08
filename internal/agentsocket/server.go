@@ -137,11 +137,20 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	}
 	proxyProvider := config.Proxy
 	if proxyProvider == nil {
+		configPath := strings.TrimSpace(os.Getenv("NCP_MIHOMO_CONFIG_PATH"))
 		endpoint := strings.TrimSpace(os.Getenv("NCP_MIHOMO_CONTROLLER_ENDPOINT"))
 		if endpoint == "" {
 			endpoint = strings.TrimSpace(os.Getenv("MIHOMO_CONTROLLER_ENDPOINT"))
 		}
-		if endpoint != "" {
+		if configPath != "" {
+			proxyProvider, err = NewLiveProxyProviderFromConfig(
+				system.NewOSEnvironment(), configPath, endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"),
+				os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"), config.OutboundProxy,
+			)
+			if err != nil {
+				return coded("AGENT_MIHOMO_INITIALIZATION_FAILED", err)
+			}
+		} else if endpoint != "" {
 			proxyProvider, err = NewLiveProxyProvider(system.NewOSEnvironment(), endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"))
 			if err != nil {
 				return coded("AGENT_MIHOMO_INITIALIZATION_FAILED", err)

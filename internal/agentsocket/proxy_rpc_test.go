@@ -25,7 +25,8 @@ func TestAgentProxyServiceAllowsOnlyCapabilityAndAllowlistedOperation(t *testing
 			},
 			Evidence: []system.CapabilityEvidence{}, Warnings: []system.ProbeWarning{},
 		},
-		result: system.MihomoInvokeResult{Operation: system.MihomoOperationVersion, StatusCode: 200, Data: []byte(`{"version":"1.0.0"}`)},
+		result:     system.MihomoInvokeResult{Operation: system.MihomoOperationVersion, StatusCode: 200, Data: []byte(`{"version":"1.0.0"}`)},
+		inspection: system.MihomoInspection{Status: system.CapabilityStateAvailable, LocalProxy: system.MihomoLocalProxy{Address: "http://127.0.0.1:7890", Mode: "rule"}},
 	}))
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
@@ -48,6 +49,11 @@ func TestAgentProxyServiceAllowsOnlyCapabilityAndAllowlistedOperation(t *testing
 	if err != nil || result.AsMap()["statusCode"] != float64(200) {
 		t.Fatalf("invoke result = %#v, error = %v", result.AsMap(), err)
 	}
+	inspectionRequest, _ := structpb.NewStruct(map[string]any{"force": true})
+	inspection, err := client.InspectMihomo(context.Background(), inspectionRequest)
+	if err != nil || inspection.AsMap()["status"] != system.CapabilityStateAvailable {
+		t.Fatalf("inspection = %#v, error = %v", inspection.AsMap(), err)
+	}
 	invalid, _ := structpb.NewStruct(map[string]any{"operation": "read-config", "group": "", "proxy": ""})
 	if _, err := client.InvokeMihomo(context.Background(), invalid); err == nil {
 		t.Fatal("unsupported operation must fail")
@@ -57,6 +63,7 @@ func TestAgentProxyServiceAllowsOnlyCapabilityAndAllowlistedOperation(t *testing
 type fakeProxyProvider struct {
 	capability system.MihomoCapability
 	result     system.MihomoInvokeResult
+	inspection system.MihomoInspection
 	err        error
 }
 
@@ -65,4 +72,7 @@ func (f fakeProxyProvider) ProbeMihomo(context.Context) (system.MihomoCapability
 }
 func (f fakeProxyProvider) InvokeMihomo(context.Context, system.MihomoInvokeRequest) (system.MihomoInvokeResult, error) {
 	return f.result, f.err
+}
+func (f fakeProxyProvider) InspectMihomo(context.Context, bool) (system.MihomoInspection, error) {
+	return f.inspection, f.err
 }

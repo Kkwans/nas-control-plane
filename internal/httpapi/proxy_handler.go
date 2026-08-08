@@ -10,6 +10,7 @@ import (
 type ProxyControlAgentClient interface {
 	ProbeMihomo(context.Context, string) (system.MihomoCapability, error)
 	InvokeMihomo(context.Context, string, system.MihomoInvokeRequest) (system.MihomoInvokeResult, error)
+	InspectMihomo(context.Context, string, bool) (system.MihomoInspection, error)
 }
 
 func (api *handler) mihomoCapability(response http.ResponseWriter, request *http.Request) {
@@ -18,7 +19,7 @@ func (api *handler) mihomoCapability(response http.ResponseWriter, request *http
 		api.writeError(response, request, http.StatusServiceUnavailable, "PROXY_MIHOMO_UNAVAILABLE", "Mihomo 能力暂未接入 Root Agent。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultProxyInspectionTimeout)
 	defer cancel()
 	value, err := client.ProbeMihomo(requestContext, api.agentSocketPath)
 	if err != nil {
@@ -43,11 +44,31 @@ func (api *handler) invokeMihomo(response http.ResponseWriter, request *http.Req
 		api.writeError(response, request, http.StatusBadRequest, "PROXY_MIHOMO_REQUEST_INVALID", "Mihomo 操作不受支持或参数无效。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultProxyInspectionTimeout)
 	defer cancel()
 	value, err := client.InvokeMihomo(requestContext, api.agentSocketPath, input)
 	if err != nil {
 		api.writeError(response, request, http.StatusConflict, "PROXY_MIHOMO_INVOKE_FAILED", "Mihomo 受控调用失败。")
+		return
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func (api *handler) inspectMihomo(response http.ResponseWriter, request *http.Request) {
+	client, ok := api.agent.(ProxyControlAgentClient)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "PROXY_MIHOMO_UNAVAILABLE", "Mihomo 综合检查暂未接入 Root Agent。")
+		return
+	}
+	input := system.MihomoInspectionRequest{}
+	if request.ContentLength != 0 && !api.decodeControlBody(response, request, &input) {
+		return
+	}
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultProxyInspectionTimeout)
+	defer cancel()
+	value, err := client.InspectMihomo(requestContext, api.agentSocketPath, input.Force)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "PROXY_MIHOMO_INSPECTION_UNAVAILABLE", "Mihomo 链路检查暂不可用。")
 		return
 	}
 	writeJSON(response, http.StatusOK, value)

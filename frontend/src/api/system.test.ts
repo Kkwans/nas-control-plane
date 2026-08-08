@@ -14,6 +14,7 @@ import {
   requestDockerHubTags,
   requestJobs,
   requestSystemSummary,
+  inspectMihomo,
 } from './system'
 
 describe('NCP API client', () => {
@@ -115,6 +116,31 @@ describe('NCP API client', () => {
     await expect(detectPublicEgress(fetcher)).resolves.toMatchObject({
       status: 'unavailable', errorCode: 'PUBLIC_EGRESS_ENDPOINT_UNAVAILABLE',
     })
+  })
+
+  it('requests a safe Mihomo route inspection without controller credentials', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      status: 'available',
+      capability: {
+        detected: true, state: 'available', processName: 'mihomo', executable: '/usr/bin/mihomo', version: '1.19.27',
+        controller: { detected: true, endpoint: 'http://127.0.0.1:9091', reachable: true, authRequired: false, tokenConfigured: false, operations: ['version', 'proxies'], detectionSource: 'deployment-config' },
+        evidence: [], warnings: [],
+      },
+      localProxy: { address: 'http://127.0.0.1:7890', mode: 'rule' },
+      strategy: { group: '节点选择', selectedNode: '上海-01', nodeType: 'trojan', provider: 'provider-a' },
+      node: { server: 'node.example.test', port: 443, resolvedIp: '203.0.113.10', country: '中国', region: '上海', isp: 'Example ISP', asn: 'AS4809' },
+      publicEgress: { status: 'available', address: '198.51.100.20', country: '中国', region: '上海', isp: 'Example ISP', asn: 'AS4809', checkedAt: '2026-08-08T12:00:00Z', detectionSource: 'deployment-config', errorCode: '' },
+      checkedAt: '2026-08-08T12:00:00Z', expiresAt: '2026-08-08T12:01:00Z', errorCode: '',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(inspectMihomo(true, fetcher)).resolves.toMatchObject({
+      strategy: { selectedNode: '上海-01' }, publicEgress: { address: '198.51.100.20' },
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/proxy/mihomo/inspect',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ force: true }) }),
+    )
+    expect(fetcher.mock.calls[0]?.[1]?.body).not.toContain('secret')
   })
 
   it('posts an explicit container lifecycle action with same-origin credentials', async () => {

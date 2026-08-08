@@ -891,6 +891,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/proxy/mihomo/inspect:
+    post:
+      operationId: inspectMihomoRoute
+      summary: 检查 Mihomo 当前节点与公网出口链路
+      description: Root Agent 只返回安全节点字段和出口元数据，不返回控制器密钥、节点凭据、订阅地址或完整配置。
+      tags: [proxy]
+      security: [{RootSession: []}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MihomoInspectionRequest'
+      responses:
+        '200':
+          description: Mihomo 路由与出口检查结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MihomoInspection'
+        '503':
+          description: Root Agent 或 Mihomo 检查能力不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/system/events:
     get:
       operationId: streamSystemEvents
@@ -3078,6 +3104,48 @@ components:
         operation: { type: string }
         statusCode: { type: integer, minimum: 100, maximum: 599 }
         data: {}
+    MihomoInspectionRequest:
+      type: object
+      properties:
+        force: { type: boolean, default: false }
+    MihomoLocalProxy:
+      type: object
+      required: [address, mode]
+      properties:
+        address: { type: string, description: 本机代理监听地址 }
+        mode: { type: string }
+    MihomoStrategySelection:
+      type: object
+      required: [group, selectedNode, nodeType, provider]
+      properties:
+        group: { type: string }
+        selectedNode: { type: string }
+        nodeType: { type: string }
+        provider: { type: string, description: 本地 provider 名称，不是订阅地址 }
+    MihomoNodeInspection:
+      type: object
+      required: [server, port, resolvedIp, country, region, isp, asn]
+      properties:
+        server: { type: string }
+        port: { type: integer, minimum: 0, maximum: 65535 }
+        resolvedIp: { type: string }
+        country: { type: string }
+        region: { type: string }
+        isp: { type: string }
+        asn: { type: string }
+    MihomoInspection:
+      type: object
+      required: [status, capability, localProxy, strategy, node, publicEgress, checkedAt, expiresAt, errorCode]
+      properties:
+        status: { type: string }
+        capability: { $ref: '#/components/schemas/MihomoCapability' }
+        localProxy: { $ref: '#/components/schemas/MihomoLocalProxy' }
+        strategy: { $ref: '#/components/schemas/MihomoStrategySelection' }
+        node: { $ref: '#/components/schemas/MihomoNodeInspection' }
+        publicEgress: { $ref: '#/components/schemas/PublicEgressResult' }
+        checkedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        errorCode: { type: string }
     DNSCapability:
       type: object
       required: [backend, detected, state, readOnly, canRead, canPreview, canConfirm, canRollback, nameservers, detectionSource, errorCode]

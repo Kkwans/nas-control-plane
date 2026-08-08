@@ -38,3 +38,7 @@ func (socketAgentClient) ProbeMihomo(ctx context.Context, socketPath string) (sy
 func (socketAgentClient) InvokeMihomo(ctx context.Context, socketPath string, request system.MihomoInvokeRequest) (system.MihomoInvokeResult, error) {
 	return agentsocket.InvokeMihomo(ctx, socketPath, request)
 }
+
+func (socketAgentClient) InspectMihomo(ctx context.Context, socketPath string, force bool) (system.MihomoInspection, error) {
+	return agentsocket.InspectMihomo(ctx, socketPath, force)
+}

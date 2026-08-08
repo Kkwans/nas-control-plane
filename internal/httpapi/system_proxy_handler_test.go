@@ -65,6 +65,24 @@ func TestMihomoHandlerRejectsRawOrUnsupportedOperation(t *testing.T) {
 	}
 }
 
+func TestMihomoInspectionHandlerForwardsForceAndReturnsSafeChain(t *testing.T) {
+	agent := &systemHTTPAgent{fakeAgentClient: &fakeAgentClient{}, inspection: system.MihomoInspection{
+		Status:     system.CapabilityStateAvailable,
+		LocalProxy: system.MihomoLocalProxy{Address: "http://127.0.0.1:7890", Mode: "rule"},
+		Strategy:   system.MihomoStrategySelection{Group: "节点选择", SelectedNode: "上海-01", NodeType: "ss", Provider: "provider-a"},
+	}}
+	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Second}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/mihomo/inspect", bytes.NewBufferString(`{"force":true}`))
+	response := httptest.NewRecorder()
+	api.inspectMihomo(response, request)
+	if response.Code != http.StatusOK || !agent.inspectionCalled || !agent.inspectionForce {
+		t.Fatalf("inspection status=%d called=%t force=%t body=%s", response.Code, agent.inspectionCalled, agent.inspectionForce, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "secret") || !strings.Contains(response.Body.String(), "上海-01") {
+		t.Fatalf("inspection response=%s", response.Body.String())
+	}
+}
+
 func TestDNSValidationRejectsInvalidNameserverAndDomain(t *testing.T) {
 	if err := validateDNSChangeRequest(system.DNSChangeRequest{Interface: "eth0", Nameservers: []string{"not-an-ip"}}); err == nil {
 		t.Fatal("invalid nameserver must fail validation")
@@ -90,18 +108,21 @@ func TestDNSFailureMessageExplainsConcurrentChange(t *testing.T) {
 
 type systemHTTPAgent struct {
 	*fakeAgentClient
-	dns           system.DNSCapability
-	preview       system.DNSChangePreview
-	confirm       system.DNSChangeResult
-	rollback      system.DNSChangeResult
-	egressCap     system.PublicEgressCapability
-	egress        system.PublicEgressResult
-	mihomo        system.MihomoCapability
-	mihomoResult  system.MihomoInvokeResult
-	previewCalled bool
-	confirmCalled bool
-	egressCalled  bool
-	invokeCalled  bool
+	dns              system.DNSCapability
+	preview          system.DNSChangePreview
+	confirm          system.DNSChangeResult
+	rollback         system.DNSChangeResult
+	egressCap        system.PublicEgressCapability
+	egress           system.PublicEgressResult
+	mihomo           system.MihomoCapability
+	mihomoResult     system.MihomoInvokeResult
+	inspection       system.MihomoInspection
+	previewCalled    bool
+	confirmCalled    bool
+	egressCalled     bool
+	invokeCalled     bool
+	inspectionCalled bool
+	inspectionForce  bool
 }
 
 func (f *systemHTTPAgent) CollectDNSCapability(context.Context, string) (system.DNSCapability, error) {
@@ -131,6 +152,11 @@ func (f *systemHTTPAgent) ProbeMihomo(context.Context, string) (system.MihomoCap
 func (f *systemHTTPAgent) InvokeMihomo(context.Context, string, system.MihomoInvokeRequest) (system.MihomoInvokeResult, error) {
 	f.invokeCalled = true
 	return f.mihomoResult, nil
+}
+func (f *systemHTTPAgent) InspectMihomo(_ context.Context, _ string, force bool) (system.MihomoInspection, error) {
+	f.inspectionCalled = true
+	f.inspectionForce = force
+	return f.inspection, nil
 }
 
 // Keep this adapter tied to the existing AgentClient test fake; it does not alter production interfaces.

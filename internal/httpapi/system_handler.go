@@ -163,7 +163,7 @@ func (api *handler) detectPublicEgress(response http.ResponseWriter, request *ht
 		api.writeError(response, request, http.StatusServiceUnavailable, "PUBLIC_EGRESS_UNAVAILABLE", "公网出口检测暂未接入 Root Agent。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultPublicEgressTimeout)
 	defer cancel()
 	value, err := client.DetectPublicEgress(requestContext, api.agentSocketPath)
 	if err != nil {

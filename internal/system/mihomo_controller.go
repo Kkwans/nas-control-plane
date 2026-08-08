@@ -39,7 +39,7 @@ func NewMihomoControllerClient(endpoint, token string) (*MihomoControllerClient,
 	return &MihomoControllerClient{
 		Endpoint: strings.TrimRight(endpoint, "/"),
 		Token:    token,
-		Client:   &http.Client{Timeout: commandTimeout},
+		Client:   &http.Client{Timeout: mihomoHTTPTimeout},
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func (c *MihomoControllerClient) Invoke(ctx context.Context, request MihomoInvok
 	}
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: commandTimeout}
+		client = &http.Client{Timeout: mihomoHTTPTimeout}
 	}
 	response, err := client.Do(requestHTTP)
 	if err != nil {

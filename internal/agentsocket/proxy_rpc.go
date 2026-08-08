@@ -17,11 +17,13 @@ const (
 	AgentProxyServiceGetMihomoCapabilityFullMethod = "/ncp.agent.v1.AgentProxyService/GetMihomoCapability"
 	AgentProxyServiceGetMihomoCapabilityMethod     = AgentProxyServiceGetMihomoCapabilityFullMethod
 	AgentProxyServiceInvokeMihomoFullMethod        = "/ncp.agent.v1.AgentProxyService/InvokeMihomo"
+	AgentProxyServiceInspectMihomoFullMethod       = "/ncp.agent.v1.AgentProxyService/InspectMihomo"
 )
 
 type AgentProxyServiceClient interface {
 	GetMihomoCapability(context.Context, *emptypb.Empty, ...grpc.CallOption) (*structpb.Struct, error)
 	InvokeMihomo(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+	InspectMihomo(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
 type agentProxyServiceClient struct {
@@ -48,9 +50,18 @@ func (c *agentProxyServiceClient) InvokeMihomo(ctx context.Context, in *structpb
 	return response, nil
 }
 
+func (c *agentProxyServiceClient) InspectMihomo(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := c.connection.Invoke(ctx, AgentProxyServiceInspectMihomoFullMethod, in, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 type AgentProxyServiceServer interface {
 	GetMihomoCapability(context.Context, *emptypb.Empty) (*structpb.Struct, error)
 	InvokeMihomo(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	InspectMihomo(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func RegisterAgentProxyServiceServer(server grpc.ServiceRegistrar, implementation AgentProxyServiceServer) {
@@ -60,6 +71,7 @@ func RegisterAgentProxyServiceServer(server grpc.ServiceRegistrar, implementatio
 type ProxyProvider interface {
 	ProbeMihomo(context.Context) (system.MihomoCapability, error)
 	InvokeMihomo(context.Context, system.MihomoInvokeRequest) (system.MihomoInvokeResult, error)
+	InspectMihomo(context.Context, bool) (system.MihomoInspection, error)
 }
 
 // LiveProxyProvider 保持 Mihomo controller endpoint/token 在 Agent 内部；RPC 与 HTTP
@@ -67,7 +79,16 @@ type ProxyProvider interface {
 type LiveProxyProvider struct {
 	Environment system.Environment
 	Controller  *system.MihomoControllerClient
+	Inspector   *system.MihomoInspector
 	Endpoint    string
+}
+
+func NewLiveProxyProviderFromConfig(environment system.Environment, configPath, endpoint, token, egressEndpoint, outboundProxy string) (*LiveProxyProvider, error) {
+	inspector, err := system.NewMihomoInspector(environment, configPath, endpoint, token, egressEndpoint, outboundProxy)
+	if err != nil {
+		return nil, err
+	}
+	return &LiveProxyProvider{Environment: environment, Inspector: inspector}, nil
 }
 
 func NewLiveProxyProvider(environment system.Environment, endpoint, token string) (*LiveProxyProvider, error) {
@@ -85,14 +106,30 @@ func (p *LiveProxyProvider) ProbeMihomo(ctx context.Context) (system.MihomoCapab
 	if p == nil || p.Environment == nil {
 		return system.MihomoCapability{}, errors.New("MIHOMO_CONTROLLER_UNAVAILABLE")
 	}
+	if p.Inspector != nil {
+		return p.Inspector.Probe(ctx), nil
+	}
 	return system.ProbeMihomo(ctx, p.Environment, p.Endpoint), nil
 }
 
 func (p *LiveProxyProvider) InvokeMihomo(ctx context.Context, request system.MihomoInvokeRequest) (system.MihomoInvokeResult, error) {
-	if p == nil || p.Controller == nil {
+	if p == nil {
+		return system.MihomoInvokeResult{}, errors.New("MIHOMO_CONTROLLER_UNAVAILABLE")
+	}
+	if p.Inspector != nil {
+		return p.Inspector.Invoke(ctx, request)
+	}
+	if p.Controller == nil {
 		return system.MihomoInvokeResult{}, errors.New("MIHOMO_CONTROLLER_UNAVAILABLE")
 	}
 	return p.Controller.Invoke(ctx, request)
+}
+
+func (p *LiveProxyProvider) InspectMihomo(ctx context.Context, force bool) (system.MihomoInspection, error) {
+	if p == nil || p.Inspector == nil {
+		return system.MihomoInspection{}, errors.New("MIHOMO_INSPECTOR_UNAVAILABLE")
+	}
+	return p.Inspector.Inspect(ctx, force), nil
 }
 
 type proxyService struct {
@@ -136,6 +173,24 @@ func (s *proxyService) InvokeMihomo(ctx context.Context, request *structpb.Struc
 		return nil, grpcstatus.Error(codes.FailedPrecondition, proxyErrorCode(err))
 	}
 	return dashboardStruct(value, "AGENT_MIHOMO_INVOKE_RESPONSE_INVALID")
+}
+
+func (s *proxyService) InspectMihomo(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	if s.provider == nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_MIHOMO_UNAVAILABLE")
+	}
+	input := system.MihomoInspectionRequest{}
+	if request != nil && decodeDashboardResponse(request, &input) != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "AGENT_MIHOMO_REQUEST_INVALID")
+	}
+	value, err := s.provider.InspectMihomo(ctx, input.Force)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Unavailable, proxyErrorCode(err))
+	}
+	return dashboardStruct(value, "AGENT_MIHOMO_INSPECTION_RESPONSE_INVALID")
 }
 
 func ProbeMihomo(ctx context.Context, socketPath string) (system.MihomoCapability, error) {
@@ -195,6 +250,27 @@ func InvokeMihomo(ctx context.Context, socketPath string, request system.MihomoI
 	return value, nil
 }
 
+func InspectMihomo(ctx context.Context, socketPath string, force bool) (system.MihomoInspection, error) {
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return system.MihomoInspection{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"force": force})
+	if err != nil {
+		return system.MihomoInspection{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentProxyServiceClient(connection).InspectMihomo(ctx, payload)
+	if err != nil {
+		return system.MihomoInspection{}, rpcError(err)
+	}
+	var value system.MihomoInspection
+	if err := decodeDashboardResponse(response, &value); err != nil {
+		return system.MihomoInspection{}, err
+	}
+	return value, nil
+}
+
 func proxyErrorCode(err error) string {
 	if err == nil {
 		return "AGENT_MIHOMO_INVOKE_FAILED"
@@ -235,11 +311,27 @@ func agentProxyServiceInvokeMihomoHandler(server any, ctx context.Context, decod
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentProxyServiceInspectMihomoHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(structpb.Struct)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return server.(AgentProxyServiceServer).InspectMihomo(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: server, FullMethod: AgentProxyServiceInspectMihomoFullMethod}
+	handler := func(ctx context.Context, request any) (any, error) {
+		return server.(AgentProxyServiceServer).InspectMihomo(ctx, request.(*structpb.Struct))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
 var agentProxyServiceDescription = grpc.ServiceDesc{
 	ServiceName: agentProxyServiceName,
 	HandlerType: (*AgentProxyServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{MethodName: "GetMihomoCapability", Handler: agentProxyServiceGetMihomoCapabilityHandler},
 		{MethodName: "InvokeMihomo", Handler: agentProxyServiceInvokeMihomoHandler},
+		{MethodName: "InspectMihomo", Handler: agentProxyServiceInspectMihomoHandler},
 	},
 }

@@ -173,7 +173,7 @@ func (p *Probe) Collect(ctx context.Context) (Capabilities, error) {
 	}
 
 	capabilities.Tailscale = ProbeTailscale(ctx, p.environment, interfaceSnapshots(p.environment))
-	capabilities.Mihomo = ProbeMihomo(ctx, p.environment)
+	capabilities.Mihomo = ProbeConfiguredMihomo(ctx, p.environment)
 	capabilities.DNS = ProbeDNS(ctx, p.environment)
 	capabilities.PublicEgress = NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"))
 

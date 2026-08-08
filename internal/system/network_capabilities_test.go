@@ -186,6 +186,20 @@ func TestProbeMihomoReportsOnlyConfirmedControllerReadCapabilities(t *testing.T)
 	}
 }
 
+func TestProbeMihomoRejectsHTMLPageThatOnlyReturnsHTTP200(t *testing.T) {
+	environment := &networkCapabilityEnvironment{
+		globs: map[string][]string{"/proc/[0-9]*/comm": {"/proc/42/comm"}},
+		files: map[string][]byte{"/proc/42/comm": []byte("mihomo\n")},
+		httpResults: map[string]HTTPProbeResult{
+			"http://127.0.0.1:9090/version": {StatusCode: http.StatusOK, Body: []byte(`<!doctype html><title>MetaCubeXD</title>`)},
+		},
+	}
+	value := ProbeMihomo(context.Background(), environment, "http://127.0.0.1:9090")
+	if value.Controller.Reachable || value.Controller.Detected || value.Version != "" {
+		t.Fatalf("HTML controller response must be rejected: %#v", value)
+	}
+}
+
 func TestProbeDNSMarksStaticResolvConfReadOnly(t *testing.T) {
 	environment := &networkCapabilityEnvironment{
 		files: map[string][]byte{"/etc/resolv.conf": []byte("nameserver 192.0.2.1\nnameserver 1.1.1.1\n")},

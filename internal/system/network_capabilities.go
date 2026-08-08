@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	publicEgressHTTPTimeout = 15 * time.Second
+	mihomoHTTPTimeout       = 20 * time.Second
+
 	CapabilityStateAvailable   = "available"
 	CapabilityStateUnavailable = "unavailable"
 	CapabilityStateDegraded    = "degraded"
@@ -454,8 +457,25 @@ func normalizeIP(address string) string {
 	return ""
 }
 
-// ProbeMihomo 只探测进程和控制器的 allowlisted 只读端点，不读取配置文件，也不记录密钥。
+// ProbeMihomo only probes process evidence and explicitly supplied or
+// deployment-configured controller endpoints.
 func ProbeMihomo(ctx context.Context, environment Environment, endpoints ...string) MihomoCapability {
+	return probeMihomoWithToken(ctx, environment, configuredMihomoToken(environment), endpoints...)
+}
+
+func ProbeConfiguredMihomo(ctx context.Context, environment Environment) MihomoCapability {
+	if environment == nil {
+		environment = NewOSEnvironment()
+	}
+	if path := configuredMihomoConfigPath(environment); path != "" {
+		if runtime, err := loadMihomoRuntimeConfig(environment, path); err == nil {
+			return probeMihomoWithToken(ctx, environment, runtime.ControllerToken, runtime.ControllerEndpoint)
+		}
+	}
+	return ProbeMihomo(ctx, environment)
+}
+
+func probeMihomoWithToken(ctx context.Context, environment Environment, token string, endpoints ...string) MihomoCapability {
 	result := MihomoCapability{
 		State:      CapabilityStateNotFound,
 		Controller: MihomoControllerCapability{Operations: []string{}},
@@ -492,8 +512,15 @@ func ProbeMihomo(ctx context.Context, environment Environment, endpoints ...stri
 	}
 
 	for _, endpoint := range normalizedMihomoEndpoints(endpoints) {
-		probe, err := probeMihomoHTTP(ctx, environment, joinControllerPath(endpoint, "/version"))
+		probe, err := probeMihomoHTTPWithToken(ctx, environment, joinControllerPath(endpoint, "/version"), token)
 		if err != nil {
+			continue
+		}
+		version := parseMihomoVersion(probe.Body)
+		if probe.StatusCode >= 200 && probe.StatusCode < 300 && version == "" {
+			result.Evidence = append(result.Evidence, CapabilityEvidence{
+				Source: "controller-api", Status: "invalid-response", Detail: "/version",
+			})
 			continue
 		}
 		result.Controller.Endpoint = redactControllerEndpoint(endpoint)
@@ -504,16 +531,14 @@ func ProbeMihomo(ctx context.Context, environment Environment, endpoints ...stri
 			result.Controller.AuthRequired = true
 			result.Controller.Reachable = true
 		}
-		result.Controller.TokenConfigured = controllerTokenConfiguredFor(environment)
+		result.Controller.TokenConfigured = strings.TrimSpace(token) != ""
 		result.Controller.Operations = confirmedMihomoOperations(result.Controller.Reachable, result.Controller.AuthRequired)
-		if version := parseMihomoVersion(probe.Body); version != "" {
-			result.Version = version
-		}
+		result.Version = version
 		result.Evidence = append(result.Evidence, CapabilityEvidence{
 			Source: "controller-api", Status: httpStatusEvidence(probe.StatusCode), Detail: "/version",
 		})
 		if result.Controller.Reachable && !result.Controller.AuthRequired {
-			probeMihomoControllerOperations(ctx, environment, endpoint, &result)
+			probeMihomoControllerOperations(ctx, environment, endpoint, token, &result)
 		}
 		break
 	}
@@ -532,7 +557,7 @@ func confirmedMihomoOperations(reachable, authRequired bool) []string {
 	return []string{string(MihomoOperationVersion), string(MihomoOperationHealth)}
 }
 
-func probeMihomoControllerOperations(ctx context.Context, environment Environment, endpoint string, result *MihomoCapability) {
+func probeMihomoControllerOperations(ctx context.Context, environment Environment, endpoint, token string, result *MihomoCapability) {
 	if result == nil {
 		return
 	}
@@ -544,7 +569,7 @@ func probeMihomoControllerOperations(ctx context.Context, environment Environmen
 		{operation: MihomoOperationConnections, path: "/connections"},
 		{operation: MihomoOperationProxies, path: "/proxies"},
 	} {
-		probe, err := probeMihomoHTTP(ctx, environment, joinControllerPath(endpoint, item.path))
+		probe, err := probeMihomoHTTPWithToken(ctx, environment, joinControllerPath(endpoint, item.path), token)
 		if err != nil {
 			continue
 		}
@@ -557,7 +582,7 @@ func probeMihomoControllerOperations(ctx context.Context, environment Environmen
 	}
 	// /rules is evidence only. There is no safe read/write/backup/rollback
 	// contract in the current controller client, so it is never an operation.
-	if probe, err := probeMihomoHTTP(ctx, environment, joinControllerPath(endpoint, "/rules")); err == nil {
+	if probe, err := probeMihomoHTTPWithToken(ctx, environment, joinControllerPath(endpoint, "/rules"), token); err == nil {
 		result.Evidence = append(result.Evidence, CapabilityEvidence{
 			Source: "controller-api", Status: httpStatusEvidence(probe.StatusCode), Detail: "/rules",
 		})
@@ -587,11 +612,6 @@ func parseMihomoVersion(content []byte) string {
 func normalizedMihomoEndpoints(endpoints []string) []string {
 	if len(endpoints) == 0 {
 		endpoints = append(endpoints, configuredMihomoEndpoint())
-		endpoints = append(endpoints,
-			"http://127.0.0.1:9090",
-			"http://127.0.0.1:9097",
-			"http://127.0.0.1:9095",
-		)
 	}
 	seen := map[string]struct{}{}
 	result := make([]string, 0, len(endpoints))
@@ -708,8 +728,12 @@ type authenticatedHTTPProbeEnvironment interface {
 }
 
 func probeMihomoHTTP(ctx context.Context, environment Environment, endpoint string) (HTTPProbeResult, error) {
+	return probeMihomoHTTPWithToken(ctx, environment, endpoint, configuredMihomoToken(environment))
+}
+
+func probeMihomoHTTPWithToken(ctx context.Context, environment Environment, endpoint, token string) (HTTPProbeResult, error) {
 	if source, ok := environment.(authenticatedHTTPProbeEnvironment); ok {
-		return source.HTTPGetWithToken(ctx, endpoint, configuredMihomoToken(environment))
+		return source.HTTPGetWithToken(ctx, endpoint, strings.TrimSpace(token))
 	}
 	return probeHTTP(ctx, environment, endpoint)
 }
@@ -960,7 +984,7 @@ type PublicEgressDetector struct {
 }
 
 func NewPublicEgressDetector(endpoint string) *PublicEgressDetector {
-	return &PublicEgressDetector{Endpoint: strings.TrimSpace(endpoint), Client: &http.Client{Timeout: commandTimeout}}
+	return &PublicEgressDetector{Endpoint: strings.TrimSpace(endpoint), Client: &http.Client{Timeout: publicEgressHTTPTimeout}}
 }
 
 // NewPublicEgressDetectorWithProxy creates the explicit public-egress probe
@@ -980,7 +1004,7 @@ func NewPublicEgressDetectorWithProxy(endpoint, proxyAddress string) (*PublicEgr
 	transport.Proxy = http.ProxyURL(proxyURL)
 	return &PublicEgressDetector{
 		Endpoint: strings.TrimSpace(endpoint),
-		Client:   &http.Client{Transport: transport, Timeout: commandTimeout},
+		Client:   &http.Client{Transport: transport, Timeout: publicEgressHTTPTimeout},
 	}, nil
 }
 
@@ -1018,9 +1042,47 @@ func (d *PublicEgressDetector) Detect(ctx context.Context) PublicEgressResult {
 		result.ErrorCode = "PUBLIC_EGRESS_CHECK_CANCELED"
 		return result
 	}
+	return d.detectEndpoint(ctx, endpoint, "deployment-config")
+}
+
+// LookupAddress uses the configured metadata endpoint to describe a resolved
+// proxy node IP. The request still travels through the explicitly configured
+// local proxy, while the target address is supplied as an escaped path segment.
+func (d *PublicEgressDetector) LookupAddress(ctx context.Context, address string) PublicEgressResult {
+	result := PublicEgressResult{Status: CapabilityStateUnavailable, DetectionSource: "node-metadata"}
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if !isPublicUnicast(ip) {
+		result.ErrorCode = "MIHOMO_NODE_ADDRESS_INVALID"
+		return result
+	}
+	if d == nil || strings.TrimSpace(d.Endpoint) == "" {
+		result.ErrorCode = "PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED"
+		return result
+	}
+	endpoint, err := parseControllerEndpoint(d.Endpoint)
+	if err != nil {
+		result.ErrorCode = "PUBLIC_EGRESS_ENDPOINT_INVALID"
+		return result
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + url.PathEscape(ip.String())
+	endpoint.RawQuery = ""
+	endpoint.Fragment = ""
+	return d.detectEndpoint(ctx, endpoint, "node-metadata")
+}
+
+func (d *PublicEgressDetector) detectEndpoint(ctx context.Context, endpoint *url.URL, source string) PublicEgressResult {
+	result := PublicEgressResult{Status: CapabilityStateUnavailable, DetectionSource: source}
+	if d == nil || endpoint == nil {
+		result.ErrorCode = "PUBLIC_EGRESS_ENDPOINT_INVALID"
+		return result
+	}
+	if err := ctx.Err(); err != nil {
+		result.ErrorCode = "PUBLIC_EGRESS_CHECK_CANCELED"
+		return result
+	}
 	client := d.Client
 	if client == nil {
-		client = &http.Client{Timeout: commandTimeout}
+		client = &http.Client{Timeout: publicEgressHTTPTimeout}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -1197,7 +1259,7 @@ func (OSEnvironment) httpGet(ctx context.Context, endpoint, token string) (HTTPP
 	if strings.TrimSpace(token) != "" {
 		request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
-	response, err := (&http.Client{Timeout: commandTimeout}).Do(request)
+	response, err := (&http.Client{Timeout: mihomoHTTPTimeout}).Do(request)
 	if err != nil {
 		return HTTPProbeResult{}, err
 	}

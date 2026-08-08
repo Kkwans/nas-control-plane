@@ -101,6 +101,34 @@ export interface PublicEgressResult {
   errorCode: string
 }
 
+export interface MihomoInspection {
+  status: string
+  capability: MihomoCapability
+  localProxy: {
+    address: string
+    mode: string
+  }
+  strategy: {
+    group: string
+    selectedNode: string
+    nodeType: string
+    provider: string
+  }
+  node: {
+    server: string
+    port: number
+    resolvedIp: string
+    country: string
+    region: string
+    isp: string
+    asn: string
+  }
+  publicEgress: PublicEgressResult
+  checkedAt: string
+  expiresAt: string
+  errorCode: string
+}
+
 export interface RootUser {
   id: number
   username: string
@@ -791,6 +819,16 @@ export async function invokeMihomo(
   return requestJson('/api/v1/proxy/mihomo/invoke', jsonRequest(input), isMihomoInvokeResult, fetcher, 'PROXY_MIHOMO_RESPONSE_INVALID')
 }
 
+export async function inspectMihomo(force = false, fetcher: typeof fetch = fetch): Promise<MihomoInspection> {
+  return requestJson(
+    '/api/v1/proxy/mihomo/inspect',
+    jsonRequest({ force }),
+    isMihomoInspection,
+    fetcher,
+    'PROXY_MIHOMO_INSPECTION_RESPONSE_INVALID',
+  )
+}
+
 export async function requestPublicEgressCapability(fetcher: typeof fetch = fetch): Promise<PublicEgressCapability> {
   return requestJson('/api/v1/system/public-egress/capability', {}, isPublicEgressCapability, fetcher, 'PUBLIC_EGRESS_RESPONSE_INVALID')
 }
@@ -1408,8 +1446,37 @@ function isPublicEgressResult(value: unknown): value is PublicEgressResult {
     (value.country === undefined || typeof value.country === 'string') &&
     (value.region === undefined || typeof value.region === 'string') &&
     (value.isp === undefined || typeof value.isp === 'string') &&
+    (value.asn === undefined || typeof value.asn === 'string') &&
     typeof value.checkedAt === 'string' &&
     typeof value.detectionSource === 'string' &&
+    typeof value.errorCode === 'string'
+  )
+}
+
+function isMihomoInspection(value: unknown): value is MihomoInspection {
+  return (
+    isRecord(value) &&
+    typeof value.status === 'string' &&
+    isMihomoCapability(value.capability) &&
+    isRecord(value.localProxy) &&
+    typeof value.localProxy.address === 'string' &&
+    typeof value.localProxy.mode === 'string' &&
+    isRecord(value.strategy) &&
+    typeof value.strategy.group === 'string' &&
+    typeof value.strategy.selectedNode === 'string' &&
+    typeof value.strategy.nodeType === 'string' &&
+    typeof value.strategy.provider === 'string' &&
+    isRecord(value.node) &&
+    typeof value.node.server === 'string' &&
+    typeof value.node.port === 'number' &&
+    typeof value.node.resolvedIp === 'string' &&
+    typeof value.node.country === 'string' &&
+    typeof value.node.region === 'string' &&
+    typeof value.node.isp === 'string' &&
+    typeof value.node.asn === 'string' &&
+    isPublicEgressResult(value.publicEgress) &&
+    typeof value.checkedAt === 'string' &&
+    typeof value.expiresAt === 'string' &&
     typeof value.errorCode === 'string'
   )
 }

@@ -20,11 +20,12 @@ import {
 } from '@lucide/vue'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import {
   confirmDNSChange,
-  detectPublicEgress,
+  inspectMihomo,
   previewDNSChange,
   requestDNSCapability,
   requestSystemDetails,
@@ -32,7 +33,7 @@ import {
   type DNSCapability,
   type DNSChangePreview,
   type MihomoCapability,
-  type PublicEgressResult,
+  type MihomoInspection,
   type SystemDetails,
   type TailscaleCapability,
 } from '@/api/system'
@@ -50,7 +51,7 @@ const dnsDraft = ref('')
 const dnsPreview = ref<DNSChangePreview | null>(null)
 const dnsChangeId = ref('')
 const dnsMessage = ref('')
-const publicEgressResult = ref<PublicEgressResult | null>(null)
+const mihomoInspection = ref<MihomoInspection | null>(null)
 const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
 const listenerQuery = ref('')
@@ -76,6 +77,7 @@ const publicEgressDetails = computed(() => details.value?.publicEgress ?? {
   configured: false, status: 'unavailable', endpoint: '', requiresUserAction: true,
   detectionSource: '', errorCode: 'PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED',
 })
+const publicEgressResult = computed(() => mihomoInspection.value?.publicEgress ?? null)
 
 const tabs: Array<{ id: DetailTab; label: string; icon: typeof Server }> = [
   { id: 'overview', label: '设备概览', icon: Server },
@@ -152,7 +154,7 @@ const capabilityItems = computed(() => [
   { name: '网络接口', enabled: Boolean(systemStore.capabilities?.networkInterfaces?.length), detail: `${systemStore.capabilities?.networkInterfaces?.length ?? 0} 个接口`, icon: Network, type: 'network' },
 ])
 
-const mihomoCapability = computed<MihomoCapability | null>(() => details.value?.proxy.mihomoCapability ?? null)
+const mihomoCapability = computed<MihomoCapability | null>(() => mihomoInspection.value?.capability ?? details.value?.proxy.mihomoCapability ?? null)
 const mihomoController = computed(() => mihomoCapability.value?.controller ?? null)
 const mihomoOperations = computed(() => mihomoController.value?.operations ?? [])
 const mihomoRulesEvidence = computed(() => mihomoCapability.value?.evidence.find((item) => item.source === 'controller-api' && item.detail === '/rules'))
@@ -171,8 +173,9 @@ async function loadDetails() {
     dnsDraft.value = dnsDetails.value.nameservers.join(', ')
     dnsPreview.value = null
     dnsMessage.value = ''
-    publicEgressResult.value = null
+    mihomoInspection.value = null
     publicEgressMessage.value = ''
+    void checkMihomo(false)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '系统详情暂不可用'
   } finally {
@@ -225,19 +228,16 @@ async function rollbackDNS() {
   }
 }
 
-async function checkPublicEgress() {
-  if (!publicEgressDetails.value.configured) {
-    publicEgressMessage.value = '未配置公网出口探针；不会把 Tailscale Overlay IP 当作公网 IP。'
-    return
-  }
+async function checkMihomo(force: boolean) {
+  if (publicEgressLoading.value) return
   publicEgressMessage.value = ''
   publicEgressLoading.value = true
   try {
-    publicEgressResult.value = await detectPublicEgress()
-    if (publicEgressResult.value.errorCode) publicEgressMessage.value = publicEgressErrorMessage(publicEgressResult.value.errorCode)
+    mihomoInspection.value = await inspectMihomo(force)
+    if (mihomoInspection.value.errorCode) publicEgressMessage.value = mihomoInspectionErrorMessage(mihomoInspection.value.errorCode)
   } catch (error) {
     const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
-    publicEgressMessage.value = code ? publicEgressErrorMessage(code) : error instanceof Error ? error.message : '公网出口检测失败。'
+    publicEgressMessage.value = code ? mihomoInspectionErrorMessage(code) : error instanceof Error ? error.message : '代理链路检查失败。'
   } finally {
     publicEgressLoading.value = false
   }
@@ -381,6 +381,17 @@ function publicEgressErrorMessage(code: string) {
   }
 }
 
+function mihomoInspectionErrorMessage(code: string) {
+  switch (code) {
+    case 'MIHOMO_CONTROLLER_UNAVAILABLE': return 'Mihomo Controller 当前不可达，已保留进程和配置检测结果。'
+    case 'MIHOMO_PROXIES_UNAVAILABLE': return 'Controller 可达，但未能读取当前策略组与节点。'
+    case 'MIHOMO_STRATEGY_UNAVAILABLE': return '未能从 Controller 响应中确定当前策略组。'
+    case 'MIHOMO_NODE_ADDRESS_UNRESOLVED': return '已识别当前节点，但节点服务器地址暂时无法解析。'
+    case 'PROXY_MIHOMO_INSPECTION_UNAVAILABLE': return 'Root Agent 暂未提供代理链路检查能力。'
+    default: return publicEgressErrorMessage(code)
+  }
+}
+
 function publicEgressAddressLabel() {
   if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '待手动检测' : '未配置探针'
   return publicEgressResult.value.address || '探针未返回公网 IP'
@@ -390,6 +401,25 @@ function publicEgressMetadataLabel(value: string | undefined) {
   if (value) return value
   if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '手动检测后显示' : '未配置探针'
   return '探针未返回'
+}
+
+function mihomoModeLabel(value: string | undefined) {
+  if (value === 'rule') return '规则模式'
+  if (value === 'global') return '全局模式'
+  if (value === 'direct') return '直连模式'
+  return '模式未确认'
+}
+
+function nodeLocationLabel() {
+  const node = mihomoInspection.value?.node
+  if (!node) return '等待检查'
+  return [node.country, node.region].filter(Boolean).join(' · ') || '地区未返回'
+}
+
+function egressLocationLabel() {
+  const value = publicEgressResult.value
+  if (!value) return '等待检查'
+  return [value.country, value.region].filter(Boolean).join(' · ') || '地区未返回'
 }
 
 function proxyStateLabel(value: string, detected: boolean) {
@@ -561,7 +591,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         </article>
 
         <article class="panel detail-card">
-          <header class="detail-card__header type-site"><Route :size="20" /><div><h2>路由与 DNS</h2><p>默认网关和解析服务</p></div></header>
+          <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="Route" />
           <dl class="definition-grid">
             <div class="definition-grid__wide"><dt>默认网关</dt><dd>{{ details.network.gateway || '未发现' }}</dd></div>
             <div class="definition-grid__wide"><dt>DNS</dt><dd>{{ details.network.dnsServers.join('、') || '未发现' }}</dd></div>
@@ -585,23 +615,50 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
           </div>
         </article>
 
-        <article class="panel detail-card">
-          <header class="detail-card__header type-site"><Router :size="20" /><div><h2>代理状态</h2><p>基于配置、进程、网卡和环境的证据扫描</p></div></header>
+        <article class="panel detail-card proxy-workspace">
+          <SectionHeader class="detail-card__section-header" title="代理链路" description="区分 Overlay、本地代理、当前节点和真实公网出口" :icon="Router">
+            <template #actions>
+              <ActionButton size="sm" :icon="Activity" :loading="publicEgressLoading" @click="checkMihomo(true)">刷新链路</ActionButton>
+            </template>
+          </SectionHeader>
           <div class="proxy-summary">
             <div class="proxy-identity">
               <span :class="['proxy-state', { active: details.proxy.mihomo.detected }]"><i></i>{{ proxyStateLabel(details.proxy.mihomo.state, details.proxy.mihomo.detected) }}</span>
-              <div><strong>{{ details.proxy.mihomo.detected ? 'Mihomo / Clash' : '未发现 Mihomo / Clash' }}</strong><p>{{ details.proxy.mihomo.detail || '当前未取得更多服务信息' }}</p></div>
+              <div><strong>{{ details.proxy.mihomo.detected ? `Mihomo ${mihomoCapability?.version || ''}` : '未发现 Mihomo / Clash' }}</strong><p>{{ publicEgressLoading ? '正在读取 Controller、当前节点与公网出口…' : `最近检查 ${mihomoInspection ? formatTime(mihomoInspection.checkedAt) : '尚未完成'}` }}</p></div>
             </div>
-            <div class="proxy-facts proxy-facts--primary">
-              <div><small>Tailscale Overlay</small><strong>{{ tailscaleStatusLabel() }}</strong><code :title="tailscaleEvidenceLabel()">{{ tailscaleDetails.overlayIps.join('、') || tailscaleEvidenceLabel() }}</code></div>
-              <div><small>公网出口 IP</small><strong>{{ publicEgressAddressLabel() }}</strong><code>{{ publicEgressDetails.configured ? '与 Overlay IP 分开检测' : '未配置探针，不以 Overlay IP 代替' }}</code></div>
-              <div><small>出口国家 / 地区</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.country || publicEgressResult?.region) }}</strong><code>{{ publicEgressResult?.country && publicEgressResult?.region ? `${publicEgressResult.country} · ${publicEgressResult.region}` : publicEgressResult ? '探针未返回完整地域信息' : '手动检测后显示' }}</code></div>
-              <div><small>出口 ISP / ASN</small><strong>{{ publicEgressMetadataLabel(publicEgressResult?.isp) }}</strong><code>{{ publicEgressResult ? (publicEgressResult?.asn || 'ASN 未返回') : '手动检测后显示' }}</code></div>
+            <div class="proxy-overlay-note">
+              <span>Tailscale Overlay</span>
+              <strong>{{ tailscaleStatusLabel() }}</strong>
+              <code :title="tailscaleEvidenceLabel()">{{ tailscaleDetails.overlayIps.join('、') || tailscaleEvidenceLabel() }}</code>
             </div>
-            <div class="proxy-actions">
-              <button v-if="publicEgressDetails.configured" type="button" class="text-button text-button--primary" :disabled="publicEgressLoading" @click="checkPublicEgress"><Activity :size="14" />{{ publicEgressLoading ? '检测中…' : '检测公网出口' }}</button>
-              <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
+            <div class="proxy-route-chain" aria-label="当前代理链路">
+              <div class="proxy-route-node">
+                <small>NAS 主机</small>
+                <strong>{{ details.device.hostname || '本机' }}</strong>
+                <code>发起连接</code>
+              </div>
+              <div class="proxy-route-node">
+                <small>本地 Mihomo</small>
+                <strong>{{ mihomoInspection?.localProxy.address || '监听地址待确认' }}</strong>
+                <code>{{ mihomoModeLabel(mihomoInspection?.localProxy.mode) }}</code>
+              </div>
+              <div class="proxy-route-node">
+                <small>策略组 / 当前节点</small>
+                <strong>{{ mihomoInspection?.strategy.selectedNode || '节点待确认' }}</strong>
+                <code>{{ mihomoInspection?.strategy.group || '策略组待确认' }}<template v-if="mihomoInspection?.strategy.provider"> · {{ mihomoInspection.strategy.provider }}</template></code>
+              </div>
+              <div class="proxy-route-node">
+                <small>节点服务器</small>
+                <strong>{{ mihomoInspection?.node.server ? `${mihomoInspection.node.server}:${mihomoInspection.node.port}` : '服务器待确认' }}</strong>
+                <code>{{ mihomoInspection?.node.resolvedIp || 'IP 待解析' }} · {{ nodeLocationLabel() }}</code>
+              </div>
+              <div class="proxy-route-node proxy-route-node--egress">
+                <small>公网出口</small>
+                <strong>{{ publicEgressAddressLabel() }}</strong>
+                <code>{{ egressLocationLabel() }}<template v-if="publicEgressResult?.isp"> · {{ publicEgressResult.isp }}</template><template v-if="publicEgressResult?.asn"> · {{ publicEgressResult.asn }}</template></code>
+              </div>
             </div>
+            <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
             <details class="proxy-capabilities">
               <summary>控制器与分流能力 <span>展开技术明细</span></summary>
               <div class="proxy-facts proxy-facts--capabilities">
@@ -909,6 +966,138 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   font-size: .67rem;
 }
 
+.network-layout .detail-card__section-header :deep(.section-header__icon) {
+  border-color: color-mix(in srgb, var(--ncp-object-network) 20%, var(--ncp-line));
+  background: var(--ncp-object-network-soft);
+  color: var(--ncp-object-network);
+}
+
+.proxy-workspace {
+  align-self: start;
+}
+
+.proxy-overlay-note {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--ncp-line);
+  border-radius: 10px;
+  background: var(--ncp-surface-quiet);
+}
+
+.proxy-overlay-note span {
+  color: var(--ncp-text-subtle);
+  font-size: .68rem;
+}
+
+.proxy-overlay-note strong {
+  color: var(--ncp-success-strong);
+  font-size: .76rem;
+  text-align: right;
+}
+
+.proxy-overlay-note code {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  color: var(--ncp-text-muted);
+  font-family: var(--ncp-font-mono);
+  font-size: .7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-route-chain {
+  display: grid;
+  counter-reset: proxy-route;
+  gap: 9px;
+}
+
+.proxy-route-node {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  counter-increment: proxy-route;
+  gap: 3px;
+  padding: 11px 13px 11px 48px;
+  border: 1px solid var(--ncp-line);
+  border-radius: 11px;
+  background: var(--ncp-surface);
+  box-shadow: 0 1px 2px rgb(20 42 73 / 3%);
+}
+
+.proxy-route-node::before {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--ncp-primary-border);
+  border-radius: 8px;
+  background: var(--ncp-primary-soft);
+  color: var(--ncp-primary-strong);
+  content: counter(proxy-route);
+  font-family: var(--ncp-font-mono);
+  font-size: .68rem;
+  font-weight: 750;
+  transform: translateY(-50%);
+}
+
+.proxy-route-node:not(:last-child)::after {
+  position: absolute;
+  bottom: -10px;
+  left: 25px;
+  width: 1px;
+  height: 9px;
+  background: var(--ncp-primary-border);
+  content: '';
+}
+
+.proxy-route-node--egress {
+  border-color: var(--ncp-success-border);
+  background: linear-gradient(135deg, var(--ncp-surface), var(--ncp-success-soft));
+}
+
+.proxy-route-node--egress::before {
+  border-color: var(--ncp-success-border);
+  background: var(--ncp-success-soft);
+  color: var(--ncp-success-strong);
+}
+
+.proxy-route-node small {
+  color: var(--ncp-text-subtle);
+  font-size: .67rem;
+}
+
+.proxy-route-node strong,
+.proxy-route-node code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-route-node strong {
+  color: var(--ncp-text);
+  font-size: .8rem;
+}
+
+.proxy-route-node code {
+  color: var(--ncp-text-muted);
+  font-family: var(--ncp-font-mono);
+  font-size: .69rem;
+}
+
+.proxy-message {
+  padding: 9px 11px;
+  border: 1px solid var(--ncp-warning-border);
+  border-radius: 9px;
+  background: var(--ncp-warning-soft);
+}
+
 @media (max-width: 1480px) {
   .port-grid {
     grid-template-columns: 1fr;
@@ -959,6 +1148,10 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 
   .port-card__fact {
     grid-column: 2;
+  }
+
+  .proxy-route-node {
+    padding-right: 10px;
   }
 }
 

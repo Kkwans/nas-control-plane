@@ -408,7 +408,7 @@ func (c *DetailsCollector) collectCapabilities(ctx context.Context, result *Deta
 		interfaces = interfaceSnapshots(c.environment)
 	}
 	result.Tailscale = ProbeTailscale(ctx, c.environment, interfaces)
-	result.Proxy.MihomoCapability = ProbeMihomo(ctx, c.environment)
+	result.Proxy.MihomoCapability = ProbeConfiguredMihomo(ctx, c.environment)
 	result.DNS = ProbeDNS(ctx, c.environment)
 	result.Network.DNSServers = append([]string{}, result.DNS.Nameservers...)
 	result.PublicEgress = NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"))
