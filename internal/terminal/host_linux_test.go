@@ -74,7 +74,7 @@ func TestHostSessionMetadataReportsNoEnhancementForSh(t *testing.T) {
 
 func TestHostPTYSupportsResizeCtrlCAndTermination(t *testing.T) {
 	manager := NewManager(NewHostStarter(), nil, 1)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	result, err := RunPOC(ctx, manager, TargetHost)

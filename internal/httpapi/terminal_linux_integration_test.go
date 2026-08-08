@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -19,9 +21,16 @@ import (
 )
 
 func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	socketPath := filepath.Join(t.TempDir(), "agent.sock")
+	// Unix socket paths are limited to roughly 108 bytes on Linux. Keep the
+	// integration socket short even when Go uses a long GOTMPDIR build path.
+	socketDirectory, err := os.MkdirTemp("/tmp", "ncp-ws-")
+	if err != nil {
+		t.Fatalf("create terminal socket directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
+	socketPath := filepath.Join(socketDirectory, "agent.sock")
 	manager := terminal.NewManager(terminal.NewHostStarter(), nil, 1)
 	agentErrors := make(chan error, 1)
 	go func() {
@@ -31,15 +40,22 @@ func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
 			TerminalManager:   manager,
 		})
 	}()
+	agentStopped := false
 	t.Cleanup(func() {
 		cancel()
+		if agentStopped {
+			return
+		}
 		select {
 		case <-agentErrors:
 		case <-time.After(time.Second):
 			t.Error("terminal Agent did not stop")
 		}
 	})
-	waitForUnixSocket(t, ctx, socketPath)
+	if err := waitForUnixSocket(ctx, socketPath, agentErrors); err != nil {
+		agentStopped = true
+		t.Fatalf("wait for agent socket: %v", err)
+	}
 
 	server := httptest.NewServer(NewHandler(Config{
 		AgentSocketPath:    socketPath,
@@ -54,9 +70,13 @@ func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
 	sendTerminalControl(t, ctx, connection, terminalControl{Type: "resize", Rows: 34, Cols: 120})
 	writeTerminalBinary(t, ctx, connection, []byte("stty size\n"))
 	readTerminalMarker(t, ctx, connection, "34 120")
-	writeTerminalBinary(t, ctx, connection, []byte("sleep 30\n"))
-	time.Sleep(100 * time.Millisecond)
+	writeTerminalBinary(t, ctx, connection, []byte("printf 'NCP_P0_WS_INTERRUPT_READY\\n'; sleep 30\n"))
+	readTerminalMarker(t, ctx, connection, "NCP_P0_WS_INTERRUPT_READY")
+	time.Sleep(250 * time.Millisecond)
 	writeTerminalBinary(t, ctx, connection, []byte{3})
+	// ble.sh/readline redraws the prompt after SIGINT. Waiting for that redraw
+	// keeps the fixed verification command from being consumed by the transition.
+	time.Sleep(250 * time.Millisecond)
 	writeTerminalBinary(t, ctx, connection, []byte("printf 'NCP_P0_WS_CTRL_C_OK\\n'\n"))
 	readTerminalMarker(t, ctx, connection, "NCP_P0_WS_CTRL_C_OK")
 	if err := connection.Close(websocket.StatusNormalClosure, "done"); err != nil {
@@ -68,17 +88,21 @@ func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
 	readStartedControl(t, ctx, secondConnection)
 }
 
-func waitForUnixSocket(t *testing.T, ctx context.Context, socketPath string) {
-	t.Helper()
+func waitForUnixSocket(ctx context.Context, socketPath string, agentErrors <-chan error) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if _, err := os.Stat(socketPath); err == nil {
-			return
+			return nil
 		}
 		select {
+		case err := <-agentErrors:
+			if err == nil {
+				return errors.New("terminal Agent exited before creating its socket")
+			}
+			return fmt.Errorf("terminal Agent exited before creating its socket: %w: %v", err, errors.Unwrap(err))
 		case <-ctx.Done():
-			t.Fatalf("wait for agent socket: %v", ctx.Err())
+			return ctx.Err()
 		case <-ticker.C:
 		}
 	}

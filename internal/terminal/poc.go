@@ -15,6 +15,7 @@ const (
 	pocResizeRows  = 34
 	pocResizeCols  = 120
 	pocOutputChunk = 16 * 1024
+	pocSettleDelay = 250 * time.Millisecond
 )
 
 func NewPOCManager() (*Manager, error) {
@@ -73,13 +74,22 @@ func RunPOC(ctx context.Context, manager *Manager, target Target) (POCResult, er
 	}
 	result.Resize = true
 
-	if err := manager.Write(opened.ID, []byte("sleep 30\n")); err != nil {
+	if err := manager.Write(opened.ID, []byte("printf 'NCP_P0_INTERRUPT_READY\\n'; sleep 30\n")); err != nil {
+		return POCResult{}, err
+	}
+	if err := waitForTerminalMarker(ctx, output, "NCP_P0_INTERRUPT_READY"); err != nil {
 		return POCResult{}, err
 	}
 	if err := waitForTerminalSettle(ctx); err != nil {
 		return POCResult{}, err
 	}
 	if err := manager.Write(opened.ID, []byte{3}); err != nil {
+		return POCResult{}, err
+	}
+	// Interactive editors such as ble.sh redraw the prompt after SIGINT. Give
+	// the PTY a short settle window before sending the next fixed command so
+	// those bytes cannot be consumed by the interrupt/redraw transition.
+	if err := waitForTerminalSettle(ctx); err != nil {
 		return POCResult{}, err
 	}
 	if err := manager.Write(opened.ID, []byte("printf 'NCP_P0_CTRL_C_OK\\n'\n")); err != nil {
@@ -153,7 +163,7 @@ func waitForTerminalMarker(ctx context.Context, results <-chan terminalReadResul
 }
 
 func waitForTerminalSettle(ctx context.Context) error {
-	timer := time.NewTimer(100 * time.Millisecond)
+	timer := time.NewTimer(pocSettleDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

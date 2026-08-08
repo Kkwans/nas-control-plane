@@ -62,6 +62,8 @@ func (s *transcriptSession) Write(input []byte) (int, error) {
 		s.mu.Lock()
 		s.outputs <- []byte("34 120\n")
 		s.mu.Unlock()
+	case strings.Contains(text, "NCP_P0_INTERRUPT_READY"):
+		s.outputs <- []byte("NCP_P0_INTERRUPT_READY\n")
 	case len(input) == 1 && input[0] == 3:
 	case strings.Contains(text, "NCP_P0_CTRL_C_OK"):
 		s.outputs <- []byte("NCP_P0_CTRL_C_OK\n")
