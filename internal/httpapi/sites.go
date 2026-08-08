@@ -120,7 +120,7 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 	limiter := make(chan struct{}, 6)
 	var group sync.WaitGroup
 	for index, site := range candidates {
-		if site.Source == "manual" || hasExplicitSiteLabel(inventory.Containers, site.ProjectID) {
+		if siteCanSkipWebProbe(site, inventory.Containers) {
 			outcomes <- probeOutcome{index: index, ok: true}
 			continue
 		}
@@ -166,6 +166,15 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 		result = append(result, site)
 	}
 	return result
+}
+
+func siteCanSkipWebProbe(site Site, containers []docker.InventoryContainer) bool {
+	if site.Source == "manual" {
+		return true
+	}
+	// Host-network entries are port-specific. A project-level label on one UI
+	// container must not allow unrelated JSON backends from the same project.
+	return !strings.Contains(site.ID, "@") && hasExplicitSiteLabel(containers, site.ProjectID)
 }
 
 func hasExplicitSiteLabel(containers []docker.InventoryContainer, projectID string) bool {

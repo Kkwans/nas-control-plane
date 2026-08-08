@@ -29,6 +29,7 @@ func TestDiscoveredSitesCreatesIndependentHostNetworkEntries(t *testing.T) {
 		Projects: []docker.Project{{ID: "compose:film-forest", Name: "film-forest", State: "running"}},
 		Containers: []docker.InventoryContainer{{
 			ID: "client-ui", ProjectID: "compose:film-forest", ProjectName: "film-forest", State: "running",
+			Labels: map[string]string{"com.ncp.site.name": "影视森林"},
 		}},
 	}
 	hostCandidates := []docker.HostSiteCandidate{
