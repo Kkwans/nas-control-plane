@@ -113,27 +113,32 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	if systemProvider == nil {
 		systemEnvironment := system.NewOSEnvironment()
 		var dnsController system.DNSChangeController
+		var dnsControllerFactory func() (system.DNSChangeController, error)
 		dnsCapability := system.ProbeDNS(ctx, systemEnvironment)
 		if dnsCapability.Backend == system.DNSBackendUGOSNetwork {
-			ugosController, controllerErr := system.NewUGOSNetworkDNSController(system.UGOSNetworkSocketPath, "/var/lib/ncp/dns")
-			if controllerErr == nil {
-				dnsController = ugosController
+			dnsControllerFactory = func() (system.DNSChangeController, error) {
+				return system.NewUGOSNetworkDNSController(system.UGOSNetworkSocketPath, "/var/lib/ncp/dns")
 			}
 		} else if dnsCapability.Backend == system.DNSBackendStaticResolv {
-			staticController, controllerErr := system.NewStaticResolvDNSController("/etc/resolv.conf", "/var/lib/ncp/dns")
-			if controllerErr == nil {
-				dnsController = staticController
+			dnsControllerFactory = func() (system.DNSChangeController, error) {
+				return system.NewStaticResolvDNSController("/etc/resolv.conf", "/var/lib/ncp/dns")
 			}
 		}
-		systemProvider, err = NewLiveSystemProviderWithProxy(
+		if dnsControllerFactory != nil {
+			dnsController, _ = dnsControllerFactory()
+		}
+		liveSystemProvider, providerErr := NewLiveSystemProviderWithProxy(
 			systemEnvironment,
 			os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"),
 			config.OutboundProxy,
 			dnsController,
 		)
+		err = providerErr
 		if err != nil {
 			return coded("AGENT_PUBLIC_EGRESS_INITIALIZATION_FAILED", err)
 		}
+		liveSystemProvider.SetDNSControllerFactory(dnsControllerFactory)
+		systemProvider = liveSystemProvider
 	}
 	proxyProvider := config.Proxy
 	if proxyProvider == nil {

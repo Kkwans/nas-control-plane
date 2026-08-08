@@ -2,6 +2,7 @@ package agentsocket
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -122,6 +123,31 @@ func TestLiveSystemProviderAdvertisesDNSWritesOnlyWithInjectedController(t *test
 	}
 	if capability.ReadOnly || !capability.CanPreview || !capability.CanConfirm || !capability.CanRollback || capability.ErrorCode != "" {
 		t.Fatalf("capability with controller = %#v", capability)
+	}
+}
+
+func TestLiveSystemProviderRetriesTransientDNSControllerInitialization(t *testing.T) {
+	environment := &dnsCapabilityEnvironment{
+		files:    map[string][]byte{"/etc/resolv.conf": []byte("nameserver 1.1.1.1\n")},
+		commands: map[string][]byte{"resolvectl status": []byte("Global\n")},
+	}
+	provider := NewLiveSystemProvider(environment, "", nil)
+	attempts := 0
+	provider.SetDNSControllerFactory(func() (system.DNSChangeController, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("vendor service is starting")
+		}
+		return fakeDNSController{}, nil
+	})
+
+	first, err := provider.CollectDNSCapability(context.Background())
+	if err != nil || !first.ReadOnly || attempts != 1 {
+		t.Fatalf("first capability = %#v, attempts = %d, error = %v", first, attempts, err)
+	}
+	second, err := provider.CollectDNSCapability(context.Background())
+	if err != nil || second.ReadOnly || !second.CanPreview || attempts != 2 {
+		t.Fatalf("second capability = %#v, attempts = %d, error = %v", second, attempts, err)
 	}
 }
 

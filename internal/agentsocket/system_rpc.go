@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc"
@@ -117,11 +118,23 @@ type LiveSystemProvider struct {
 	DNSController  system.DNSChangeController
 	EgressDetector *system.PublicEgressDetector
 	EgressEndpoint string
+
+	dnsMu                sync.Mutex
+	dnsControllerFactory func() (system.DNSChangeController, error)
 }
 
 func NewLiveSystemProvider(environment system.Environment, egressEndpoint string, dnsController system.DNSChangeController) *LiveSystemProvider {
 	provider, _ := NewLiveSystemProviderWithProxy(environment, egressEndpoint, "", dnsController)
 	return provider
+}
+
+func (p *LiveSystemProvider) SetDNSControllerFactory(factory func() (system.DNSChangeController, error)) {
+	if p == nil {
+		return
+	}
+	p.dnsMu.Lock()
+	p.dnsControllerFactory = factory
+	p.dnsMu.Unlock()
 }
 
 func NewLiveSystemProviderWithProxy(environment system.Environment, egressEndpoint, outboundProxy string, dnsController system.DNSChangeController) (*LiveSystemProvider, error) {
@@ -145,7 +158,7 @@ func (p *LiveSystemProvider) CollectDNSCapability(ctx context.Context) (system.D
 	capability := system.ProbeDNS(ctx, p.Environment)
 	// 探测到管理后端并不等于具备安全写入能力。只有显式注入实现了
 	// 预览、确认和回滚契约的控制器时，才向 Console 开放修改入口。
-	if p.DNSController != nil && capability.Detected {
+	if p.resolveDNSController() != nil && capability.Detected {
 		capability.State = system.CapabilityStateAvailable
 		capability.ReadOnly = false
 		capability.CanPreview = true
@@ -172,14 +185,34 @@ func (p *LiveSystemProvider) RollbackDNSChange(ctx context.Context, request syst
 }
 
 func (p *LiveSystemProvider) dnsController(ctx context.Context) system.DNSChangeController {
-	if p != nil && p.DNSController != nil {
-		return p.DNSController
+	if controller := p.resolveDNSController(); controller != nil {
+		return controller
 	}
 	capability := system.DNSCapability{Backend: system.DNSBackendUnknown}
 	if p != nil && p.Environment != nil {
 		capability = system.ProbeDNS(ctx, p.Environment)
 	}
 	return system.NewReadOnlyDNSController(capability)
+}
+
+func (p *LiveSystemProvider) resolveDNSController() system.DNSChangeController {
+	if p == nil {
+		return nil
+	}
+	p.dnsMu.Lock()
+	defer p.dnsMu.Unlock()
+	if p.DNSController != nil {
+		return p.DNSController
+	}
+	if p.dnsControllerFactory == nil {
+		return nil
+	}
+	controller, err := p.dnsControllerFactory()
+	if err != nil || controller == nil {
+		return nil
+	}
+	p.DNSController = controller
+	return controller
 }
 
 func (p *LiveSystemProvider) GetPublicEgressCapability(context.Context) (system.PublicEgressCapability, error) {
