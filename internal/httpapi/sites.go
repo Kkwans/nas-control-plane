@@ -133,7 +133,7 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 				probeContext, cancel := context.WithTimeout(ctx, 4*time.Second)
 				probe, err := prober.ProbeWeb(probeContext, api.agentSocketPath, fmt.Sprintf("http://127.0.0.1:%d/", port))
 				cancel()
-				if err == nil && probe.StatusCode >= 200 && probe.StatusCode < 500 {
+				if err == nil && acceptableWebProbe(probe) {
 					outcomes <- probeOutcome{index: index, probe: probe, port: port, ok: true}
 					return
 				}
@@ -166,6 +166,17 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 		result = append(result, site)
 	}
 	return result
+}
+
+func acceptableWebProbe(probe agentsocket.WebProbeResult) bool {
+	if probe.StatusCode < http.StatusOK || probe.StatusCode >= http.StatusBadRequest {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(probe.ContentType))
+	return strings.Contains(contentType, "text/html") ||
+		strings.Contains(contentType, "application/xhtml+xml") ||
+		strings.TrimSpace(probe.Title) != "" ||
+		strings.TrimSpace(probe.IconURL) != ""
 }
 
 func siteCanSkipWebProbe(site Site, containers []docker.InventoryContainer) bool {

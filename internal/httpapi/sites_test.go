@@ -41,6 +41,8 @@ func TestDiscoveredSitesCreatesIndependentHostNetworkEntries(t *testing.T) {
 	agent := &siteProbeAgent{fakeAgentClient: &fakeAgentClient{}, probes: map[string]agentsocket.WebProbeResult{
 		"3000": {URL: "http://127.0.0.1:3000/", Title: "影视森林 - 影视资源聚合平台", ContentType: "text/html", StatusCode: 200},
 		"3001": {URL: "http://127.0.0.1:3001/", Title: "影视森林 - 管理后台", ContentType: "text/html", StatusCode: 200},
+		"8080": {URL: "http://127.0.0.1:8080/", Title: "Whitelabel Error Page", ContentType: "text/html", StatusCode: 404},
+		"8081": {URL: "http://127.0.0.1:8081/", ContentType: "application/json", StatusCode: 200},
 	}}
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock"}
 
