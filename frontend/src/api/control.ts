@@ -167,8 +167,8 @@ export function requestSites(): Promise<SiteListResponse> {
   }))
 }
 
-export function updateSite(projectId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
-  return request(`/api/v1/sites/${encodeURIComponent(projectId)}`, { method: 'PUT', body: JSON.stringify(input) })
+export function updateSite(siteId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'PUT', body: JSON.stringify(input) })
 }
 
 export function createSite(input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
@@ -197,8 +197,8 @@ export function deleteSiteIcon(siteId: string): Promise<void> {
   return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, { method: 'DELETE' })
 }
 
-export function recordSiteVisit(projectId: string): Promise<{ projectId: string; lastVisitedAt: string }> {
-  return request(`/api/v1/sites/${encodeURIComponent(projectId)}/visit`, { method: 'POST' })
+export function recordSiteVisit(siteId: string): Promise<{ siteId: string; lastVisitedAt: string }> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/visit`, { method: 'POST' })
 }
 
 export function requestComposeDraft(projectId: string, configPath: string): Promise<ComposeDraft> {

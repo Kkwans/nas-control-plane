@@ -76,9 +76,17 @@ func (api *handler) sites(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusInternalServerError, "SITES_READ_FAILED", "站点资料读取失败。")
 		return
 	}
+	hostCandidates := make([]docker.HostSiteCandidate, 0)
+	if discovery, ok := api.agent.(HostSiteDiscoveryAgentClient); ok {
+		discoveryContext, cancel := context.WithTimeout(request.Context(), 8*time.Second)
+		if candidates, discoveryErr := discovery.DiscoverHostSiteCandidates(discoveryContext, api.agentSocketPath); discoveryErr == nil {
+			hostCandidates = candidates
+		}
+		cancel()
+	}
 	writeJSON(response, http.StatusOK, SiteListResponse{
 		CollectedAt: inventory.CollectedAt,
-		Sites:       api.discoveredSites(request.Context(), requestHostName(request), inventory, profiles),
+		Sites:       api.discoveredSites(request.Context(), requestHostName(request), inventory, profiles, hostCandidates),
 	})
 }
 
@@ -90,8 +98,8 @@ func requestHostName(request *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
-func (api *handler) discoveredSites(ctx context.Context, publicHost string, inventory docker.Inventory, profiles []controlstore.SiteProfile) []Site {
-	candidates := mergeSites(inventory, profiles)
+func (api *handler) discoveredSites(ctx context.Context, publicHost string, inventory docker.Inventory, profiles []controlstore.SiteProfile, hostCandidates []docker.HostSiteCandidate) []Site {
+	candidates := mergeSites(inventory, profiles, hostCandidates)
 	prober, canProbe := api.agent.(WebProbeAgentClient)
 	if !canProbe {
 		result := candidates[:0]
@@ -147,7 +155,7 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 		}
 		if outcome.port > 0 {
 			site.PrimaryPort = outcome.port
-			if outcome.probe.Title != "" && site.Source == "auto" {
+			if outcome.probe.Title != "" && (site.Source == "auto" || site.Source == "built-in") {
 				site.Name = outcome.probe.Title
 			}
 			site.LaunchURL = publicSiteURL(publicHost, outcome.port, outcome.probe.URL)
@@ -426,60 +434,68 @@ func (api *handler) recordSiteVisit(response http.ResponseWriter, request *http.
 		api.writeError(response, request, http.StatusServiceUnavailable, "SITES_UNAVAILABLE", "站点资料暂不可用。")
 		return
 	}
-	projectID := siteProjectID(request)
-	visitedAt, err := api.controlStore.RecordSiteVisit(request.Context(), projectID)
+	siteID := siteProjectID(request)
+	visitedAt, err := api.controlStore.RecordSiteVisit(request.Context(), siteID)
 	if err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "SITE_VISIT_INVALID", "站点访问记录保存失败。")
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
-		"projectId":     projectID,
+		"siteId":        siteID,
 		"lastVisitedAt": visitedAt,
 	})
 }
 
 func siteProjectID(request *http.Request) string {
-	projectID := chi.URLParam(request, "projectID")
+	projectID := chi.URLParam(request, "siteID")
 	if decodedProjectID, err := url.PathUnescape(projectID); err == nil {
 		return decodedProjectID
 	}
 	return projectID
 }
 
-func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile) []Site {
+func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile, hostCandidates []docker.HostSiteCandidate) []Site {
 	profileByProject := make(map[string]controlstore.SiteProfile, len(profiles))
 	for _, profile := range profiles {
 		profileByProject[profile.ProjectID] = profile
 	}
-	result := make([]Site, 0, len(inventory.Projects))
+	hostPortsByProject := make(map[string][]int)
+	for _, candidate := range hostCandidates {
+		for _, port := range candidate.Ports {
+			if port > 0 && port <= 65535 && likelyHTTPPort(port) && !containsPort(hostPortsByProject[candidate.ProjectID], port) {
+				hostPortsByProject[candidate.ProjectID] = append(hostPortsByProject[candidate.ProjectID], port)
+			}
+		}
+	}
+	for projectID := range hostPortsByProject {
+		sort.Ints(hostPortsByProject[projectID])
+	}
+
+	result := make([]Site, 0, len(inventory.Projects)+len(hostCandidates))
 	for _, project := range inventory.Projects {
 		ports := sitePorts(inventory.Containers, project.ID)
-		if len(ports) == 0 {
-			continue
-		}
-		site := Site{
-			ID:          project.ID,
-			ProjectID:   project.ID,
-			Name:        project.Name,
-			Description: defaultSiteDescription(project),
-			Category:    inferSiteCategory(project.Name),
-			State:       project.State,
-			PrimaryPort: ports[0],
-			Ports:       ports,
-			Source:      "auto",
-		}
-		applySiteProfile(&site, siteProfileFromLabels(inventory.Containers, project.ID), "labels")
-		if profile, ok := builtInSiteProfile(project.Name); ok {
-			applySiteProfile(&site, profile, "built-in")
-		}
-		if profile, ok := profileByProject[project.ID]; ok {
-			if profile.Ignored {
-				continue
+		if len(ports) > 0 {
+			site, ignored := mergedProjectSite(project, project.ID, ports, inventory.Containers, profileByProject, project.ID)
+			if !ignored {
+				result = append(result, site)
 			}
-			applySiteProfile(&site, profile, "edited")
 			delete(profileByProject, project.ID)
 		}
-		result = append(result, site)
+		hostPorts := hostPortsByProject[project.ID]
+		for index, port := range hostPorts {
+			siteID := siteEntryID(project.ID, port)
+			profileID := siteID
+			if _, exists := profileByProject[siteID]; !exists && index == 0 && len(ports) == 0 {
+				if _, legacyExists := profileByProject[project.ID]; legacyExists {
+					profileID = project.ID
+				}
+			}
+			site, ignored := mergedProjectSite(project, siteID, []int{port}, inventory.Containers, profileByProject, profileID)
+			if !ignored {
+				result = append(result, site)
+			}
+			delete(profileByProject, profileID)
+		}
 	}
 	for _, profile := range profileByProject {
 		if profile.Source != "manual" || profile.Ignored {
@@ -534,6 +550,35 @@ func mergeSites(inventory docker.Inventory, profiles []controlstore.SiteProfile)
 		return strings.ToLower(result[left].Name) < strings.ToLower(result[right].Name)
 	})
 	return result
+}
+
+func mergedProjectSite(project docker.Project, siteID string, ports []int, containers []docker.InventoryContainer, profiles map[string]controlstore.SiteProfile, profileID string) (Site, bool) {
+	site := Site{
+		ID:          siteID,
+		ProjectID:   project.ID,
+		Name:        project.Name,
+		Description: defaultSiteDescription(project),
+		Category:    inferSiteCategory(project.Name),
+		State:       project.State,
+		PrimaryPort: ports[0],
+		Ports:       ports,
+		Source:      "auto",
+	}
+	applySiteProfile(&site, siteProfileFromLabels(containers, project.ID), "labels")
+	if profile, ok := builtInSiteProfile(project.Name); ok {
+		applySiteProfile(&site, profile, "built-in")
+	}
+	if profile, ok := profiles[profileID]; ok {
+		if profile.Ignored {
+			return Site{}, true
+		}
+		applySiteProfile(&site, profile, "edited")
+	}
+	return site, false
+}
+
+func siteEntryID(projectID string, port int) string {
+	return projectID + "@" + strconv.Itoa(port)
 }
 
 func applySiteProfile(site *Site, profile controlstore.SiteProfile, source string) {

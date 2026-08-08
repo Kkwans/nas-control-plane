@@ -45,6 +45,10 @@ type WebProbeAgentClient interface {
 	ProbeWeb(context.Context, string, string) (agentsocket.WebProbeResult, error)
 }
 
+type HostSiteDiscoveryAgentClient interface {
+	DiscoverHostSiteCandidates(context.Context, string) ([]docker.HostSiteCandidate, error)
+}
+
 type DatabaseAgentClient interface {
 	DiscoverDatabases(context.Context, string) (ncpdatabase.Discovery, error)
 	CatalogDatabase(context.Context, string, ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error)
@@ -177,6 +181,10 @@ func (socketAgentClient) CollectDockerInventory(ctx context.Context, socketPath 
 
 func (socketAgentClient) ProbeWeb(ctx context.Context, socketPath string, targetURL string) (agentsocket.WebProbeResult, error) {
 	return agentsocket.ProbeWeb(ctx, socketPath, targetURL)
+}
+
+func (socketAgentClient) DiscoverHostSiteCandidates(ctx context.Context, socketPath string) ([]docker.HostSiteCandidate, error) {
+	return agentsocket.DiscoverHostSiteCandidates(ctx, socketPath)
 }
 
 func (socketAgentClient) ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
@@ -368,14 +376,14 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/services", api.services)
 			protected.Get("/sites", api.sites)
 			protected.Post("/sites", api.createSite)
-			protected.Put("/sites/{projectID}", api.updateSite)
-			protected.Delete("/sites/{projectID}", api.deleteSite)
-			protected.Post("/sites/{projectID}/visit", api.recordSiteVisit)
-			protected.Post("/sites/{projectID}/icon", api.uploadSiteIcon)
-			protected.Get("/sites/{projectID}/icon", api.siteIcon)
-			protected.Delete("/sites/{projectID}/icon", api.deleteSiteIcon)
+			protected.Put("/sites/{siteID}", api.updateSite)
+			protected.Delete("/sites/{siteID}", api.deleteSite)
+			protected.Post("/sites/{siteID}/visit", api.recordSiteVisit)
+			protected.Post("/sites/{siteID}/icon", api.uploadSiteIcon)
+			protected.Get("/sites/{siteID}/icon", api.siteIcon)
+			protected.Delete("/sites/{siteID}/icon", api.deleteSiteIcon)
 			protected.Get("/sites/ignored", api.ignoredSites)
-			protected.Post("/sites/{projectID}/restore", api.restoreSite)
+			protected.Post("/sites/{siteID}/restore", api.restoreSite)
 			protected.Get("/databases/discovery", api.databaseDiscovery)
 			protected.Post("/databases/connect", api.databaseConnect)
 			protected.Post("/databases/test-connection", api.databaseTestConnection)

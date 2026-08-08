@@ -1455,14 +1455,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/sites/{projectID}:
+  /api/v1/sites/{siteID}:
     put:
       operationId: updateSiteProfile
-      summary: Update editable metadata for one discovered NAS website
+      summary: Update editable metadata for one discovered NAS website entry
       tags: [sites]
       security: [{RootSession: []}]
       parameters:
-        - name: projectID
+        - name: siteID
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
@@ -1485,14 +1485,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/v1/sites/{projectID}/visit:
+  /api/v1/sites/{siteID}/visit:
     post:
       operationId: recordSiteVisit
       summary: Record a site launch for recent-access ordering
       tags: [sites]
       security: [{RootSession: []}]
       parameters:
-        - name: projectID
+        - name: siteID
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
@@ -1504,7 +1504,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SiteVisitResponse'
         '400':
-          description: Invalid project identifier
+          description: Invalid site entry identifier
           content:
             application/json:
               schema:
@@ -1915,12 +1915,8 @@ components:
               temperatureCelsius: { type: number, format: double }
     SiteProfileInput:
       type: object
-      required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
+      required: [name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
       properties:
-        projectId:
-          type: string
-          minLength: 1
-          maxLength: 256
         name:
           type: string
           minLength: 1
@@ -1953,9 +1949,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/SiteProfileInput'
         - type: object
-          required: [id, state, ports, source, lastVisitedAt]
+          required: [id, projectId, state, ports, source, lastVisitedAt]
           properties:
             id: { type: string }
+            projectId: { type: string }
             state: { type: string }
             ports:
               type: array
@@ -1981,9 +1978,9 @@ components:
             $ref: '#/components/schemas/Site'
     SiteVisitResponse:
       type: object
-      required: [projectId, lastVisitedAt]
+      required: [siteId, lastVisitedAt]
       properties:
-        projectId:
+        siteId:
           type: string
         lastVisitedAt:
           type: string

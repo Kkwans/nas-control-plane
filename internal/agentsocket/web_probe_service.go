@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"golang.org/x/net/html"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -27,10 +29,12 @@ type WebProbeResult struct {
 }
 
 type webProbeService struct {
-	client *http.Client
+	client    *http.Client
+	hostSites *docker.HostSiteCandidateCollector
 }
 
 func newWebProbeService() *webProbeService {
+	hostSites, _ := docker.NewLiveHostSiteCandidateCollector()
 	return &webProbeService{client: &http.Client{
 		Timeout: 3 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
@@ -39,7 +43,30 @@ func newWebProbeService() *webProbeService {
 			}
 			return validateLocalProbeURL(request.URL)
 		},
-	}}
+	}, hostSites: hostSites}
+}
+
+func (service *webProbeService) DiscoverHostSites(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+	if service.hostSites == nil {
+		return nil, status.Error(codes.Unavailable, "host site discovery is unavailable")
+	}
+	candidates, err := service.hostSites.Collect(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "host site discovery failed")
+	}
+	items := make([]any, 0, len(candidates))
+	for _, candidate := range candidates {
+		ports := make([]any, 0, len(candidate.Ports))
+		for _, port := range candidate.Ports {
+			ports = append(ports, port)
+		}
+		items = append(items, map[string]any{
+			"projectId":   candidate.ProjectID,
+			"containerId": candidate.ContainerID,
+			"ports":       ports,
+		})
+	}
+	return structpb.NewStruct(map[string]any{"candidates": items})
 }
 
 func (service *webProbeService) Probe(ctx context.Context, input *structpb.Struct) (*structpb.Struct, error) {

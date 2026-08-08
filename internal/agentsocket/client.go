@@ -148,6 +148,31 @@ func ProbeWeb(ctx context.Context, socketPath string, targetURL string) (WebProb
 	}, nil
 }
 
+func DiscoverHostSiteCandidates(ctx context.Context, socketPath string) ([]docker.HostSiteCandidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, contextError(err)
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer connection.Close()
+	response, err := NewAgentWebProbeServiceClient(connection).DiscoverHostSites(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	items := response.AsMap()["candidates"]
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return nil, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	var result []docker.HostSiteCandidate
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	return result, nil
+}
+
 func ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
 	if err := request.Validate(); err != nil {
 		return docker.ContainerActionResult{}, err

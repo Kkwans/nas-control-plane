@@ -39,8 +39,8 @@ export const useSitesStore = defineStore('sites', () => {
     }
   }
 
-  async function save(projectId: string, input: SiteProfileInput) {
-    await updateSite(projectId, input)
+  async function save(siteId: string, input: SiteProfileInput) {
+    await updateSite(siteId, input)
     await refresh()
   }
 
@@ -81,9 +81,9 @@ export const useSitesStore = defineStore('sites', () => {
     await refresh()
   }
 
-  async function visit(projectId: string) {
-    const result = await recordSiteVisit(projectId)
-    const site = sites.value.find((item) => item.projectId === projectId)
+  async function visit(siteId: string) {
+    const result = await recordSiteVisit(siteId)
+    const site = sites.value.find((item) => item.id === siteId)
     if (site) site.lastVisitedAt = result.lastVisitedAt
   }
 

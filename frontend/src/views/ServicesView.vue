@@ -137,7 +137,7 @@ function siteLaunchable(site: Site) {
 const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 
 function trackVisit(site: Site) {
-  void sitesStore.visit(site.projectId)
+  void sitesStore.visit(site.id)
 }
 
 function siteTone(state: Site['state']) {
@@ -196,7 +196,7 @@ async function saveSite() {
   }
   saving.value = true
   try {
-    if (selectedSite.value) await sitesStore.save(selectedSite.value.projectId, draft.value)
+    if (selectedSite.value) await sitesStore.save(selectedSite.value.id, draft.value)
     else await sitesStore.create(draft.value, pendingIcon.value)
     editOpen.value = false
     resetPendingIcon()
@@ -272,7 +272,7 @@ async function toggleFavorite(site: Site) {
   if (favoritePending.value) return
   favoritePending.value = site.id
   try {
-    await sitesStore.save(site.projectId, profileFor(site, { favorite: !site.favorite }))
+    await sitesStore.save(site.id, profileFor(site, { favorite: !site.favorite }))
   } catch {
     ElMessage.error('收藏状态保存失败')
   } finally {
