@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElInput, ElTooltip } from 'element-plus'
 import {
   Activity,
   AlertTriangle,
@@ -12,12 +13,15 @@ import {
   Network,
   Route,
   Router,
+  Search,
   Server,
   Waypoints,
   Wifi,
 } from '@lucide/vue'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import NcpSelect from '@/components/NcpSelect.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 import {
   confirmDNSChange,
   detectPublicEgress,
@@ -49,6 +53,14 @@ const dnsMessage = ref('')
 const publicEgressResult = ref<PublicEgressResult | null>(null)
 const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
+const listenerQuery = ref('')
+const listenerProtocol = ref('all')
+
+const listenerProtocolOptions = [
+  { label: '全部协议', value: 'all' },
+  { label: 'TCP', value: 'tcp' },
+  { label: 'UDP', value: 'udp' },
+]
 
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
@@ -96,21 +108,39 @@ const auxiliaryMounts = computed(() => (details.value?.storage.mounts ?? []).fil
 const volumeTotalBytes = computed(() => volumeMounts.value.reduce((total, item) => total + item.totalBytes, 0))
 const volumeUsedBytes = computed(() => volumeMounts.value.reduce((total, item) => total + item.usedBytes, 0))
 const volumeUsedPercent = computed(() => volumeTotalBytes.value ? volumeUsedBytes.value / volumeTotalBytes.value * 100 : 0)
-const physicalDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !/^(loop|zram|mmcblk\d+boot)/i.test(item.name)))
-const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => !physicalDisks.value.some((disk) => disk.name === item.name)))
+const physicalDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => (
+  item.kind ? item.kind === 'physical' : /^(sd[a-z]|hd[a-z]|nvme\d+n\d+)$/i.test(item.name)
+)))
+const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => (
+  !/^md\d+$/i.test(item.name) && !physicalDisks.value.some((disk) => disk.name === item.name)
+)))
 const listeningPortGroups = computed(() => {
-  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; owners: Array<{ label: string; detail: string }> }>()
+  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; owners: Array<{ label: string; detail: string }>; sources: string[] }>()
   for (const item of details.value?.network.listeningPorts ?? []) {
     const key = `${item.protocol}:${item.port}`
-    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], owners: [] }
+    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], owners: [], sources: [] }
     if (item.address && !group.addresses.includes(item.address)) group.addresses.push(item.address)
     if (item.pid && !group.pids.includes(item.pid)) group.pids.push(item.pid)
+    for (const source of [...(item.detectionSources ?? []), item.detectionSource ?? ''].filter(Boolean)) {
+      if (!group.sources.includes(source)) group.sources.push(source)
+    }
     for (const owner of listeningPortOwners(item)) {
       if (!group.owners.some((current) => current.label === owner.label && current.detail === owner.detail)) group.owners.push(owner)
     }
     groups.set(key, group)
   }
   return [...groups.values()].sort((left, right) => left.port - right.port)
+})
+const filteredListeningPortGroups = computed(() => {
+  const query = listenerQuery.value.trim().toLocaleLowerCase('zh-CN')
+  return listeningPortGroups.value.filter((item) => {
+    if (listenerProtocol.value !== 'all' && item.protocol.toLowerCase() !== listenerProtocol.value) return false
+    if (!query) return true
+    return [
+      String(item.port), item.protocol, ...item.addresses, ...item.sources,
+      ...item.owners.flatMap((owner) => [owner.label, owner.detail]),
+    ].some((value) => value.toLocaleLowerCase('zh-CN').includes(query))
+  })
 })
 
 const capabilityItems = computed(() => [
@@ -372,6 +402,39 @@ function diskKind(rotational: boolean) {
   return rotational ? '机械硬盘' : '固态 / 闪存'
 }
 
+function blockDeviceKindLabel(disk: SystemDetails['storage']['disks'][number]) {
+  switch (disk.kind) {
+    case 'physical': return disk.rotational ? '机械数据盘' : '固态数据盘'
+    case 'emmc': return '系统 eMMC'
+    case 'emmc-boot': return 'eMMC 启动区'
+    case 'compressed-memory': return '压缩内存交换设备'
+    case 'virtual': return '系统虚拟设备'
+    default: return diskKind(disk.rotational)
+  }
+}
+
+function blockDeviceDescription(disk: SystemDetails['storage']['disks'][number]) {
+  return disk.description || `${blockDeviceKindLabel(disk)}，用途由系统管理`
+}
+
+function blockDeviceTransport(disk: SystemDetails['storage']['disks'][number]) {
+  if (!disk.transport) return '接口未知'
+  if (disk.transport === 'memory') return '内存'
+  if (disk.transport === 'emmc') return 'eMMC'
+  if (disk.transport === 'block') return '块设备'
+  return disk.transport.toUpperCase()
+}
+
+function listeningSourceLabel(sources: string[]) {
+  const labels = sources.map((source) => {
+    if (/docker/i.test(source)) return 'Docker 容器映射'
+    if (/systemd|proc|cgroup/i.test(source)) return '进程与系统服务'
+    if (/gopsutil|connection|socket/i.test(source)) return '系统连接表'
+    return source
+  }).filter(Boolean)
+  return [...new Set(labels)].join('、') || '系统监听信息'
+}
+
 function formatTime(value: string) {
   if (!value) return '—'
   const date = new Date(value)
@@ -557,10 +620,45 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
             <span class="ports-disclosure__title"><Gauge :size="19" /><span><strong>监听服务</strong><small>按端口合并显示，仅在需要排查入口时展开</small></span></span>
             <span>{{ listeningPortGroups.length }} 个端口</span>
           </summary>
-            <div v-if="listeningPortGroups.length" class="port-grid">
-            <span v-for="item in listeningPortGroups" :key="`${item.protocol}-${item.port}`">
-              <b>{{ item.port }}</b><small>{{ item.protocol.toUpperCase() }} · {{ item.addresses.join('、') || '*' }}</small><em v-for="owner in item.owners" :key="`${owner.label}-${owner.detail}`" class="port-service" :title="`${owner.label} · ${owner.detail}`">{{ owner.label }} · {{ owner.detail }}</em><em v-if="!item.owners.length && item.pids.length" class="port-service">PID {{ item.pids.join('、') }} · 未知原因</em>
-            </span>
+          <div v-if="listeningPortGroups.length" class="port-workspace">
+            <div class="port-toolbar">
+              <ElInput v-model="listenerQuery" clearable aria-label="搜索监听服务" placeholder="搜索端口、进程、容器或地址">
+                <template #prefix><Search :size="16" /></template>
+              </ElInput>
+              <NcpSelect v-model="listenerProtocol" :options="listenerProtocolOptions" accessible-label="筛选监听协议" />
+            </div>
+            <div v-if="filteredListeningPortGroups.length" class="port-grid">
+              <article v-for="item in filteredListeningPortGroups" :key="`${item.protocol}-${item.port}`" class="port-card">
+                <div class="port-card__endpoint">
+                  <b>{{ item.port }}</b>
+                  <span>{{ item.protocol.toUpperCase() }}</span>
+                </div>
+                <div class="port-card__fact">
+                  <small>进程 / 服务 / 容器</small>
+                  <ElTooltip
+                    :content="item.owners.map((owner) => `${owner.label} · ${owner.detail}`).join('；') || `PID ${item.pids.join('、') || '未知'}`"
+                    placement="top"
+                    :show-after="350"
+                  >
+                    <strong>{{ item.owners.map((owner) => owner.label).join('、') || (item.pids.length ? `PID ${item.pids.join('、')}` : '未识别') }}</strong>
+                  </ElTooltip>
+                  <span>{{ item.owners.map((owner) => owner.detail).join('、') || '未取得进程归属' }}</span>
+                </div>
+                <div class="port-card__fact">
+                  <small>监听地址</small>
+                  <ElTooltip :content="item.addresses.join('、') || '*'" placement="top" :show-after="350">
+                    <code>{{ item.addresses.join('、') || '*' }}</code>
+                  </ElTooltip>
+                  <span>{{ item.addresses.some((address) => /^(0\.0\.0\.0|::|\[::\])/.test(address)) ? '所有网络接口' : '指定网络接口' }}</span>
+                </div>
+                <div class="port-card__fact">
+                  <small>识别来源</small>
+                  <strong>{{ listeningSourceLabel(item.sources) }}</strong>
+                  <span>{{ item.sources.length ? '已合并多来源证据' : '由 Root Agent 采集' }}</span>
+                </div>
+              </article>
+            </div>
+            <div v-else class="inline-empty">没有符合当前搜索和协议条件的监听服务。</div>
           </div>
           <div v-else class="inline-empty">未取得监听服务信息。</div>
         </details>
@@ -574,7 +672,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         </article>
 
         <article class="panel detail-card storage-layout__full">
-          <header class="detail-card__header type-storage"><HardDrive :size="20" /><div><h2>存储卷</h2><p>仅展示用户真正关心的根目录和 /volume 数据卷；系统镜像挂载点收进明细</p></div></header>
+          <SectionHeader class="detail-card__section-header" title="存储卷" description="仅展示系统根目录和 /volume 数据卷；系统镜像挂载点收进明细" :icon="HardDrive" />
           <div class="volume-list">
             <div v-for="mount in volumeMounts" :key="mount.path" class="volume-row">
               <div class="volume-row__name"><strong>{{ mount.path === '/' ? '系统根目录' : mount.path }}</strong><small>{{ mount.filesystem || '未知文件系统' }} · {{ mount.device || '未知设备' }}</small></div>
@@ -589,21 +687,30 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         </article>
 
         <article class="panel detail-card">
-          <header class="detail-card__header type-storage"><Database :size="20" /><div><h2>物理磁盘</h2><p>只展示可识别的物理设备，zram、启动分区等不再占据主视图</p></div></header>
+          <SectionHeader class="detail-card__section-header" title="物理磁盘" description="只展示可独立更换的数据盘；RAID、系统 eMMC 与内存设备不混入此处" :icon="Database" />
           <div v-if="physicalDisks.length" class="disk-list">
             <div v-for="disk in physicalDisks" :key="disk.name" class="disk-row">
               <span class="disk-row__icon"><HardDrive :size="16" /></span>
-              <div><strong>{{ disk.name }}</strong><small>{{ disk.model || '型号未知' }} · {{ diskKind(disk.rotational) }}</small></div>
+              <div><strong>{{ disk.name }}</strong><small>{{ disk.model || '型号未知' }} · {{ blockDeviceKindLabel(disk) }} · {{ blockDeviceTransport(disk) }}</small></div>
               <span class="disk-row__size">{{ formatBytes(disk.sizeBytes) }}</span>
               <span :class="['disk-health', { unknown: !disk.health || disk.health === 'unknown' }]">{{ disk.health && disk.health !== 'unknown' ? disk.health : '健康状态未知' }}</span>
             </div>
           </div>
           <div v-else class="inline-empty">系统未暴露物理磁盘信息。</div>
-          <details v-if="auxiliaryDisks.length" class="storage-details"><summary>查看辅助设备 <span>{{ auxiliaryDisks.length }} 个</span></summary><div class="storage-details__list"><div v-for="disk in auxiliaryDisks" :key="disk.name"><strong>{{ disk.name }}</strong><span>{{ diskKind(disk.rotational) }}</span><span>{{ formatBytes(disk.sizeBytes) }}</span></div></div></details>
+          <details v-if="auxiliaryDisks.length" class="storage-details">
+            <summary>查看系统与内存设备 <span>{{ auxiliaryDisks.length }} 个，均不是数据盘</span></summary>
+            <div class="storage-details__list storage-details__list--devices">
+              <div v-for="disk in auxiliaryDisks" :key="disk.name">
+                <span class="auxiliary-device__identity"><strong>{{ disk.name }}</strong><small>{{ blockDeviceKindLabel(disk) }} · {{ blockDeviceTransport(disk) }}</small></span>
+                <ElTooltip :content="blockDeviceDescription(disk)" placement="top" :show-after="350"><span class="auxiliary-device__description">{{ blockDeviceDescription(disk) }}</span></ElTooltip>
+                <span>{{ formatBytes(disk.sizeBytes) }}</span>
+              </div>
+            </div>
+          </details>
         </article>
 
         <article class="panel detail-card">
-          <header class="detail-card__header type-system"><Boxes :size="20" /><div><h2>存储阵列</h2><p>阵列级别、状态与成员设备</p></div></header>
+          <SectionHeader class="detail-card__section-header" title="存储阵列" description="阵列级别、运行状态与成员设备；md1、md2 只在这里展示" :icon="Boxes" />
           <div v-if="details.storage.raid.length" class="compact-list">
             <div v-for="raid in details.storage.raid" :key="raid.name">
               <span><strong>{{ raid.name }}</strong><small>{{ raid.level || '级别未知' }}</small></span>
@@ -617,7 +724,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 
       <section v-else class="services-layout">
         <article class="panel detail-card services-layout__full">
-          <header class="detail-card__header type-system"><Waypoints :size="20" /><div><h2>控制链路</h2><p>Web 控制台至 Root Agent 的真实请求路径</p></div></header>
+          <SectionHeader class="detail-card__section-header" title="控制链路" description="Web 控制台至 Root Agent 的真实请求路径" :icon="Waypoints" />
           <ol class="control-chain">
             <li v-for="(node, index) in details.control.nodes" :key="node.id">
               <span class="control-chain__index">{{ index + 1 }}</span>
@@ -654,4 +761,214 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 .overview-facts{grid-auto-rows:minmax(82px,1fr);align-items:stretch}.overview-facts>div{display:grid;align-content:center}.proxy-facts>div{min-height:68px;align-content:center}.port-service{overflow:hidden;font-family:var(--ncp-font-latin)!important;text-overflow:ellipsis;white-space:nowrap}
 .network-layout{align-items:start}.network-layout>.detail-card{align-self:start}.dns-management{padding-top:14px}.dns-management__state{align-items:flex-start;padding-top:0}.dns-management__state small{max-width:68%;line-height:1.55;text-align:right}.dns-management__input input{min-height:40px;border-color:var(--ncp-line-strong);border-radius:10px;font-size:.8rem}.dns-management__actions{align-items:center}.dns-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-line)}.dns-preview>div{display:grid;min-width:0;gap:4px;padding:10px 12px;background:var(--ncp-surface-quiet)}.dns-preview span{color:var(--ncp-text-subtle);font-size:.68rem}.dns-preview strong{overflow:hidden;font-family:var(--ncp-font-mono);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.proxy-summary{gap:14px}.proxy-identity{display:flex;align-items:center;gap:12px}.proxy-identity>div{display:grid;min-width:0;gap:2px}.proxy-identity p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.proxy-state{display:inline-flex;width:max-content;flex:0 0 auto;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--ncp-neutral-border);border-radius:999px;background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.72rem;font-weight:750}.proxy-state.active{border-color:var(--ncp-success-border);background:var(--ncp-success-soft);color:var(--ncp-success-strong)}.proxy-state i{width:7px;height:7px;border-radius:50%;background:currentColor}.proxy-facts--primary>div{min-height:76px;padding:12px}.proxy-facts--primary strong{font-size:.84rem}.proxy-actions{display:flex;min-height:34px;align-items:center;gap:10px}.proxy-actions .text-button{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:7px}.proxy-actions .text-button:disabled{cursor:wait;opacity:.64}.proxy-message{line-height:1.45}.proxy-capabilities{overflow:hidden;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.proxy-capabilities>summary{display:flex;min-height:42px;align-items:center;gap:9px;padding:0 12px;cursor:pointer;color:var(--ncp-text-muted);font-size:.73rem;font-weight:750;list-style:none}.proxy-capabilities>summary::-webkit-details-marker{display:none}.proxy-capabilities>summary::before{content:'+';display:grid;width:20px;height:20px;place-items:center;border:1px solid var(--ncp-line-strong);border-radius:6px;background:var(--ncp-surface);color:var(--ncp-primary-strong);font-size:.9rem}.proxy-capabilities[open]>summary::before{content:'−'}.proxy-capabilities>summary span{margin-left:auto;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:600}.proxy-capabilities .proxy-facts{padding:0 10px 10px}.proxy-capabilities>p{margin:0;padding:0 12px 12px;color:var(--ncp-text-subtle);font-size:.69rem;line-height:1.5}.proxy-facts--capabilities>div{background:var(--ncp-surface)}
 @media(max-width:760px){.dns-management__state small{max-width:none;text-align:left}.dns-preview{grid-template-columns:1fr}.proxy-identity{align-items:flex-start;flex-direction:column;gap:8px}.proxy-actions{align-items:flex-start;flex-direction:column}.proxy-capabilities .proxy-facts{grid-template-columns:1fr}}
+
+.detail-card__section-header {
+  padding: 17px 18px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: linear-gradient(120deg, var(--ncp-surface), var(--ncp-surface-quiet));
+}
+
+.detail-card__section-header :deep(.section-header__icon) {
+  border-color: color-mix(in srgb, var(--ncp-object-storage) 20%, var(--ncp-line));
+  background: var(--ncp-object-storage-soft);
+  color: var(--ncp-object-storage);
+}
+
+.services-layout .detail-card__section-header :deep(.section-header__icon) {
+  border-color: color-mix(in srgb, var(--ncp-object-system) 20%, var(--ncp-line));
+  background: var(--ncp-object-system-soft);
+  color: var(--ncp-object-system);
+}
+
+.port-workspace {
+  border-top: 1px solid var(--ncp-line);
+}
+
+.port-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 420px) 160px;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: var(--ncp-surface);
+}
+
+.port-toolbar :deep(.el-input__wrapper) {
+  min-height: var(--ncp-control-height);
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-control-surface);
+  box-shadow: 0 0 0 1px var(--ncp-control-border) inset;
+}
+
+.port-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 18px 18px;
+  background: var(--ncp-surface-quiet);
+}
+
+.port-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 72px minmax(150px, 1.3fr) minmax(130px, 1fr) minmax(120px, .9fr);
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--ncp-line);
+  border-radius: 12px;
+  background: var(--ncp-surface);
+  box-shadow: 0 1px 2px rgb(20 42 73 / 3%);
+  transition: border-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast);
+}
+
+.port-card:hover {
+  border-color: var(--ncp-primary-border);
+  box-shadow: var(--ncp-shadow-control);
+  transform: translateY(-1px);
+}
+
+.port-card__endpoint {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 5px;
+}
+
+.port-card__endpoint b {
+  color: var(--ncp-object-network);
+  font-family: var(--ncp-font-mono);
+  font-size: 1rem;
+}
+
+.port-card__endpoint span {
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--ncp-object-network-soft);
+  color: var(--ncp-object-network);
+  font-family: var(--ncp-font-mono);
+  font-size: .65rem;
+  font-weight: 750;
+}
+
+.port-card__fact {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.port-card__fact small,
+.port-card__fact span {
+  overflow: hidden;
+  color: var(--ncp-text-subtle);
+  font-size: .68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-card__fact strong,
+.port-card__fact code {
+  display: block;
+  overflow: hidden;
+  color: var(--ncp-text);
+  font-family: var(--ncp-font-latin);
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.port-card__fact code {
+  color: var(--ncp-text-muted);
+  font-family: var(--ncp-font-mono);
+  font-size: .72rem;
+  font-weight: 600;
+}
+
+.storage-details__list--devices > div {
+  grid-template-columns: minmax(140px, .8fr) minmax(220px, 1.5fr) 90px;
+}
+
+.auxiliary-device__identity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.auxiliary-device__identity strong,
+.auxiliary-device__identity small,
+.auxiliary-device__description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auxiliary-device__identity small {
+  color: var(--ncp-text-subtle);
+  font-size: .67rem;
+}
+
+@media (max-width: 1480px) {
+  .port-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .port-toolbar {
+    grid-template-columns: minmax(0, 1fr) 140px;
+    padding-inline: 15px;
+  }
+
+  .port-grid {
+    grid-template-columns: 1fr;
+    padding-inline: 15px;
+  }
+
+  .port-card {
+    grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .port-card__fact:last-child {
+    grid-column: 2 / -1;
+  }
+
+  .storage-details__list--devices > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .auxiliary-device__description {
+    grid-column: 1 / -1;
+    grid-row: auto !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .detail-card__section-header {
+    padding-inline: 15px;
+  }
+
+  .port-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .port-card {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .port-card__fact {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .port-card {
+    transition: none;
+  }
+
+  .port-card:hover {
+    transform: none;
+  }
+}
 </style>

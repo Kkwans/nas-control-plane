@@ -2290,6 +2290,10 @@ components:
               model: { type: string }
               sizeBytes: { type: integer, minimum: 0 }
               rotational: { type: boolean }
+              kind: { type: string, enum: [physical, emmc, emmc-boot, compressed-memory, virtual] }
+              role: { type: string, enum: [data, system, boot, swap, virtual] }
+              transport: { type: string }
+              description: { type: string }
               health: { type: string }
               temperatureCelsius: { type: number }
         raid:

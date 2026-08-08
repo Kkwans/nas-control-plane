@@ -251,6 +251,10 @@ export interface SystemDetails {
       model: string
       sizeBytes: number
       rotational: boolean
+      kind: 'physical' | 'emmc' | 'emmc-boot' | 'compressed-memory' | 'virtual'
+      role: 'data' | 'system' | 'boot' | 'swap' | 'virtual'
+      transport: string
+      description: string
       health: string
       temperatureCelsius: number
     }>

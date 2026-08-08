@@ -141,6 +141,10 @@ type PhysicalDiskDetails struct {
 	Model              string  `json:"model"`
 	SizeBytes          uint64  `json:"sizeBytes"`
 	Rotational         bool    `json:"rotational"`
+	Kind               string  `json:"kind"`
+	Role               string  `json:"role"`
+	Transport          string  `json:"transport"`
+	Description        string  `json:"description"`
 	Health             string  `json:"health"`
 	TemperatureCelsius float64 `json:"temperatureCelsius"`
 }
@@ -380,7 +384,11 @@ func (c *DetailsCollector) collectStorage(ctx context.Context, result *Details) 
 			})
 		}
 	}
-	result.Storage.Disks = collectPhysicalDisks()
+	devices, devicesErr := collectBlockDevices(ctx, c.environment)
+	if devicesErr != nil {
+		result.Warnings = append(result.Warnings, "无法读取完整块设备分类")
+	}
+	result.Storage.Disks = devices
 	result.Storage.RAID = collectRAID()
 }
 
@@ -510,25 +518,6 @@ func collectDNS() []string {
 		if len(fields) == 2 && fields[0] == "nameserver" {
 			result = append(result, fields[1])
 		}
-	}
-	return result
-}
-
-func collectPhysicalDisks() []PhysicalDiskDetails {
-	paths, _ := filepath.Glob("/sys/block/*")
-	result := []PhysicalDiskDetails{}
-	for _, path := range paths {
-		name := filepath.Base(path)
-		if strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "ram") || strings.HasPrefix(name, "dm-") {
-			continue
-		}
-		sectors, _ := strconv.ParseUint(readTrimmed(filepath.Join(path, "size")), 10, 64)
-		result = append(result, PhysicalDiskDetails{
-			Name: name, Model: readTrimmed(filepath.Join(path, "device/model")),
-			SizeBytes:  sectors * 512,
-			Rotational: readTrimmed(filepath.Join(path, "queue/rotational")) == "1",
-			Health:     "unknown",
-		})
 	}
 	return result
 }
