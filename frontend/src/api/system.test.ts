@@ -8,6 +8,7 @@ import {
   pullDockerImage,
   requestCapabilities,
   requestContainerAction,
+  requestContainerDetails,
   requestContainerLogs,
   requestDockerImages,
   requestDockerHubTags,
@@ -131,6 +132,23 @@ describe('NCP API client', () => {
     expect(fetcher).toHaveBeenCalledWith(
       '/api/v1/docker/containers/abc123/actions/restart',
       expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+    )
+  })
+
+  it('reads the safe container detail endpoint', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: 'abc123', name: 'web', image: 'demo:latest', state: 'running', health: 'healthy',
+      healthFailingStreak: 0, exitCode: 0, restartCount: 1, oomKilled: false,
+      restartMaximumRetries: 0, autoRemove: false, privileged: false, readonlyRootfs: false,
+      nanoCpus: 0, memoryBytes: 0, ports: [], mounts: [], networks: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(requestContainerDetails('abc123', fetcher)).resolves.toMatchObject({
+      id: 'abc123', image: 'demo:latest', health: 'healthy',
+    })
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/docker/containers/abc123',
+      expect.objectContaining({ credentials: 'same-origin' }),
     )
   })
 

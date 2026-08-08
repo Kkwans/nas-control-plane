@@ -1545,6 +1545,36 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/{containerID}:
+    get:
+      operationId: getDockerContainerDetails
+      summary: Read a safe Docker container detail view
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: containerID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Operational details without environment variables, labels, credentials, or raw command
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContainerDetails'
+        '404':
+          description: Container no longer exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Root Agent or Docker Engine is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/containers/{containerID}/logs:
     get:
       operationId: getDockerContainerLogs
@@ -2770,6 +2800,11 @@ components:
         createdAt:
           type: string
           format: date-time
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        exitCode: { type: integer }
+        restartCount: { type: integer, minimum: 0 }
+        health: { type: string, enum: [none, starting, healthy, unhealthy] }
         ports:
           type: array
           items:
@@ -2811,6 +2846,61 @@ components:
           type: string
           enum: [start, stop, restart]
         state: { type: string }
+    ContainerMountDetails:
+      type: object
+      required: [type, destination, readOnly]
+      properties:
+        type: { type: string }
+        name: { type: string }
+        source: { type: string }
+        destination: { type: string }
+        driver: { type: string }
+        readOnly: { type: boolean }
+    ContainerNetworkDetails:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        ipAddress: { type: string }
+        gateway: { type: string }
+        ipv6Address: { type: string }
+        macAddress: { type: string }
+    ContainerDetails:
+      type: object
+      description: Safe operational view. Environment, labels, credentials, health output and raw command are intentionally excluded.
+      required: [id, name, image, state, healthFailingStreak, exitCode, restartCount, oomKilled, restartMaximumRetries, autoRemove, privileged, readonlyRootfs, nanoCpus, memoryBytes, ports, mounts, networks]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        image: { type: string }
+        state: { type: string }
+        health: { type: string, enum: [none, starting, healthy, unhealthy] }
+        healthFailingStreak: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        exitCode: { type: integer }
+        restartCount: { type: integer, minimum: 0 }
+        oomKilled: { type: boolean }
+        platform: { type: string }
+        driver: { type: string }
+        networkMode: { type: string }
+        restartPolicy: { type: string }
+        restartMaximumRetries: { type: integer, minimum: 0 }
+        autoRemove: { type: boolean }
+        privileged: { type: boolean }
+        readonlyRootfs: { type: boolean }
+        nanoCpus: { type: integer, minimum: 0 }
+        memoryBytes: { type: integer, minimum: 0 }
+        ports:
+          type: array
+          items: { $ref: '#/components/schemas/PortMapping' }
+        mounts:
+          type: array
+          items: { $ref: '#/components/schemas/ContainerMountDetails' }
+        networks:
+          type: array
+          items: { $ref: '#/components/schemas/ContainerNetworkDetails' }
     ContainerLogsResult:
       type: object
       required: [containerId, tail, collectedAt, entries]

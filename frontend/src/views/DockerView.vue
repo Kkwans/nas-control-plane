@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
-import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
+import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
@@ -43,6 +43,8 @@ const logOpen = ref(false)
 const logLoading = ref(false)
 const logContainerName = ref('')
 const logs = ref<ContainerLogsResult | null>(null)
+const containerDetails = ref<ContainerDetails | null>(null)
+const containerDrawerError = ref('')
 const composeEditorOpen = ref(false)
 const projectPage = ref(1)
 const { pageSize: projectPageSize } = useListPreference('docker.projects')
@@ -299,18 +301,22 @@ async function confirmDeleteProject(project: DockerProject) {
 function performSelectedProjectAction(action: ContainerAction) {
   if (selectedProject.value) void performProjectAction(selectedProject.value, action)
 }
-async function openLogs(container: { id: string; name: string }) {
+async function openContainerDetails(container: { id: string; name: string }) {
   logOpen.value = true
   logLoading.value = true
   logContainerName.value = container.name
   logs.value = null
-  try {
-    logs.value = await requestContainerLogs(container.id, 200)
-  } catch (error) {
-    actionError.value = errorMessage(error, '容器日志读取失败。')
-  } finally {
-    logLoading.value = false
-  }
+  containerDetails.value = null
+  containerDrawerError.value = ''
+  const [detailsResult, logsResult] = await Promise.allSettled([
+    requestContainerDetails(container.id),
+    requestContainerLogs(container.id, 200),
+  ])
+  if (detailsResult.status === 'fulfilled') containerDetails.value = detailsResult.value
+  else containerDrawerError.value = errorMessage(detailsResult.reason, '容器详情读取失败。')
+  if (logsResult.status === 'fulfilled') logs.value = logsResult.value
+  else containerDrawerError.value = [containerDrawerError.value, errorMessage(logsResult.reason, '容器日志读取失败。')].filter(Boolean).join(' ')
+  logLoading.value = false
 }
 
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
@@ -477,7 +483,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         :action-pending="effectiveActionPending"
         :page-size="containerPageSize"
         @action="performAction"
-        @logs="openLogs"
+        @details="openContainerDetails"
       />
     </template>
 
@@ -492,13 +498,13 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       :project-action-errors="projectErrorsFor(selectedProject?.id ?? '')"
       :container-action-error="selectedProjectContainerActionError"
       @action="performDetailAction"
-      @logs="openLogs"
+      @details="openContainerDetails"
       @compose="composeEditorOpen = true"
       @project-action="performSelectedProjectAction"
     />
     <ComposeEditorDrawer v-model="composeEditorOpen" :project="selectedProject" />
 
-    <ContainerLogDrawer v-model="logOpen" :container-name="logContainerName" :loading="logLoading" :logs="logs" />
+    <ContainerLogDrawer v-model="logOpen" :container-name="logContainerName" :loading="logLoading" :details="containerDetails" :logs="logs" :error="containerDrawerError" />
   </div>
 </template>
 

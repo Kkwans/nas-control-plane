@@ -7,7 +7,7 @@ import {
   CircleStop,
   Code2,
   FileCode2,
-  FileText,
+  Info,
   Folder,
   Image,
   LoaderCircle,
@@ -18,6 +18,7 @@ import { ElDrawer, ElTooltip } from 'element-plus'
 
 import ActionButton from '@/components/ActionButton.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import { dockerContainerStateDetail, dockerContainerStateLabel, dockerContainerTimingLabel } from '@/domain/docker'
 import { projectStateTone } from '@/domain/overview'
 import type { ContainerAction, DockerInventory, DockerProject } from '@/api/system'
 
@@ -45,7 +46,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   action: [containerId: string, action: ContainerAction]
-  logs: [container: { id: string; name: string }]
+  details: [container: { id: string; name: string }]
   compose: []
   'project-action': [action: ContainerAction]
 }>()
@@ -74,13 +75,6 @@ function projectActionDisabled(action: ContainerAction) {
   const runningCount = props.containers.filter((container) => container.state === 'running').length
   if (action === 'start') return runningCount === props.containers.length
   return runningCount === 0
-}
-
-function containerStateLabel(state: string) {
-  if (state === 'running') return '运行中'
-  if (state === 'exited') return '已退出'
-  if (state === 'created') return '已创建'
-  return state || '未知'
 }
 
 function formatTime(value: string) {
@@ -171,10 +165,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
             <div class="container-card__top">
               <div class="container-card__name">
                 <span><Boxes :size="17" /></span>
-                <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
+                <div><strong>{{ container.name }}</strong><small>{{ dockerContainerTimingLabel(container) }}</small></div>
               </div>
               <span :class="['container-card__state', { 'container-card__state--running': container.state === 'running' }]">
-                {{ containerStateLabel(container.state) }}
+                {{ dockerContainerStateLabel(container.state) }} · {{ dockerContainerStateDetail(container) }}
               </span>
             </div>
             <dl>
@@ -202,9 +196,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
                   <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip content="查看 Docker 容器日志（stdout/stderr）">
-                <button class="operation-button" type="button" :aria-label="`查看 ${container.name} 日志`" @click="emit('logs', container)">
-                  <FileText :size="17" />
+              <ElTooltip content="查看容器详情与日志">
+                <button class="operation-button" type="button" :aria-label="`查看 ${container.name} 详情与日志`" @click="emit('details', container)">
+                  <Info :size="17" />
                 </button>
               </ElTooltip>
             </div>

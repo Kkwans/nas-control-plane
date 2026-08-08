@@ -363,6 +363,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/jobs/{jobID}/cancel", api.cancelJob)
 			protected.Delete("/jobs/{jobID}", api.deleteJob)
 			protected.Post("/docker/containers/{containerID}/actions/{action}", api.containerAction)
+			protected.Get("/docker/containers/{containerID}", api.dockerContainerDetails)
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
 			protected.Get("/sites", api.sites)

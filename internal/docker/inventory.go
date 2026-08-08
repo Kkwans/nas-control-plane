@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -44,17 +45,22 @@ type EngineInfo struct {
 }
 
 type InventoryContainer struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	State       string            `json:"state"`
-	Status      string            `json:"status"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	Labels      map[string]string `json:"-"`
-	Ports       []PortMapping     `json:"ports"`
-	ProjectID   string            `json:"projectId"`
-	ProjectName string            `json:"projectName"`
-	ServiceName string            `json:"serviceName"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Image        string            `json:"image"`
+	State        string            `json:"state"`
+	Status       string            `json:"status"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	StartedAt    *time.Time        `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time        `json:"finishedAt,omitempty"`
+	ExitCode     int               `json:"exitCode"`
+	RestartCount int               `json:"restartCount"`
+	Health       string            `json:"health,omitempty"`
+	Labels       map[string]string `json:"-"`
+	Ports        []PortMapping     `json:"ports"`
+	ProjectID    string            `json:"projectId"`
+	ProjectName  string            `json:"projectName"`
+	ServiceName  string            `json:"serviceName"`
 }
 
 type PortMapping struct {
@@ -297,7 +303,54 @@ func (g *mobyInventoryGateway) ListInventoryContainers(ctx context.Context) ([]I
 			Ports:     ports,
 		})
 	}
+	if err := g.enrichInventoryContainers(ctx, result); err != nil {
+		return nil, err
+	}
 	return result, nil
+}
+
+func (g *mobyInventoryGateway) enrichInventoryContainers(ctx context.Context, containers []InventoryContainer) error {
+	if len(containers) == 0 {
+		return nil
+	}
+	const maxInspectConcurrency = 8
+	jobs := make(chan int)
+	workerCount := min(maxInspectConcurrency, len(containers))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				response, err := g.client.ContainerInspect(ctx, containers[index].ID, client.ContainerInspectOptions{})
+				if err != nil {
+					continue
+				}
+				inspect := response.Container
+				containers[index].RestartCount = inspect.RestartCount
+				if inspect.State == nil {
+					continue
+				}
+				containers[index].StartedAt = parseDockerTimestamp(inspect.State.StartedAt)
+				containers[index].FinishedAt = parseDockerTimestamp(inspect.State.FinishedAt)
+				containers[index].ExitCode = inspect.State.ExitCode
+				if inspect.State.Health != nil {
+					containers[index].Health = string(inspect.State.Health.Status)
+				}
+			}
+		}()
+	}
+sendJobs:
+	for index := range containers {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			break sendJobs
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	return ctx.Err()
 }
 
 type unavailableInventoryGateway struct{}

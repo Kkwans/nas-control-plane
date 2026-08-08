@@ -68,6 +68,25 @@ func TestAgentDockerControlServiceRejectsInvalidAction(t *testing.T) {
 	}
 }
 
+func TestAgentDockerControlServiceReturnsSafeContainerDetails(t *testing.T) {
+	provider := &fakeDockerControlProvider{detailsResult: docker.ContainerDetails{
+		ID: "abc123", Name: "web", Image: "demo:latest", State: "running", Health: "healthy",
+		Ports: []docker.PortMapping{}, Mounts: []docker.ContainerMountDetails{}, Networks: []docker.ContainerNetworkDetails{},
+	}}
+	service := newDockerControlService(provider)
+	request, err := structpb.NewStruct(map[string]any{"container_id": "abc123"})
+	if err != nil {
+		t.Fatalf("NewStruct() error = %v", err)
+	}
+	response, err := service.InspectContainer(context.Background(), request)
+	if err != nil {
+		t.Fatalf("InspectContainer() error = %v", err)
+	}
+	if provider.detailsContainerID != "abc123" || response.AsMap()["image"] != "demo:latest" {
+		t.Fatalf("response = %#v, provider id = %q", response.AsMap(), provider.detailsContainerID)
+	}
+}
+
 func TestAgentDockerControlServiceReturnsStandaloneProjectItems(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -203,18 +222,21 @@ func TestAgentDockerControlServiceDeletesProjectFromTrustedIdentity(t *testing.T
 }
 
 type fakeDockerControlProvider struct {
-	request        docker.ContainerActionRequest
-	result         docker.ContainerActionResult
-	controlErr     error
-	projectRequest docker.ProjectActionRequest
-	projectResult  docker.ProjectActionResult
-	projectErr     error
-	createRequest  docker.ContainerCreateRequest
-	createResult   docker.ContainerCreateResult
-	createErr      error
-	deleteRequest  docker.ProjectDeleteRequest
-	deleteResult   docker.ProjectDeleteResult
-	deleteErr      error
+	request            docker.ContainerActionRequest
+	result             docker.ContainerActionResult
+	controlErr         error
+	projectRequest     docker.ProjectActionRequest
+	projectResult      docker.ProjectActionResult
+	projectErr         error
+	createRequest      docker.ContainerCreateRequest
+	createResult       docker.ContainerCreateResult
+	createErr          error
+	deleteRequest      docker.ProjectDeleteRequest
+	deleteResult       docker.ProjectDeleteResult
+	deleteErr          error
+	detailsContainerID string
+	detailsResult      docker.ContainerDetails
+	detailsErr         error
 }
 
 func (f *fakeDockerControlProvider) Control(_ context.Context, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
@@ -247,6 +269,14 @@ func (f *fakeDockerControlProvider) DeleteProject(_ context.Context, request doc
 		return docker.ProjectDeleteResult{}, f.deleteErr
 	}
 	return f.deleteResult, nil
+}
+
+func (f *fakeDockerControlProvider) InspectDetails(_ context.Context, containerID string) (docker.ContainerDetails, error) {
+	f.detailsContainerID = containerID
+	if f.detailsErr != nil {
+		return docker.ContainerDetails{}, f.detailsErr
+	}
+	return f.detailsResult, nil
 }
 
 type fakeComposeLifecycleProvider struct {

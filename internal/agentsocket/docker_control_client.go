@@ -144,6 +144,40 @@ func CreateContainer(ctx context.Context, socketPath string, request docker.Cont
 	return CreateDockerContainer(ctx, socketPath, request)
 }
 
+func InspectDockerContainer(ctx context.Context, socketPath string, containerID string) (docker.ContainerDetails, error) {
+	containerID = strings.TrimSpace(containerID)
+	if containerID == "" {
+		return docker.ContainerDetails{}, docker.InvalidContainerDetailsError()
+	}
+	if err := ctx.Err(); err != nil {
+		return docker.ContainerDetails{}, contextError(err)
+	}
+	if err := ensureDockerAgentProtocol(ctx, socketPath); err != nil {
+		return docker.ContainerDetails{}, err
+	}
+	connection, err := dialSocket(socketPath)
+	if err != nil {
+		return docker.ContainerDetails{}, err
+	}
+	defer connection.Close()
+	payload, err := structpb.NewStruct(map[string]any{"container_id": containerID})
+	if err != nil {
+		return docker.ContainerDetails{}, coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	response, err := NewAgentDockerControlServiceClient(connection).InspectContainer(ctx, payload)
+	if err != nil {
+		return docker.ContainerDetails{}, dockerRPCError(err)
+	}
+	var result docker.ContainerDetails
+	if err := decodeDashboardResponse(response, &result); err != nil {
+		return docker.ContainerDetails{}, err
+	}
+	if result.ID == "" || result.Name == "" || result.State == "" || result.Ports == nil || result.Mounts == nil || result.Networks == nil {
+		return docker.ContainerDetails{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("container details result is incomplete"))
+	}
+	return result, nil
+}
+
 func containerCreatePayload(spec docker.ContainerCreateSpec) (*structpb.Struct, error) {
 	mounts := make([]any, 0, len(spec.Mounts))
 	for _, value := range spec.Mounts {
@@ -231,6 +265,7 @@ func dockerRPCError(err error) error {
 	message := status.Convert(err).Message()
 	switch message {
 	case "DOCKER_PROJECT_ACTION_INVALID", "DOCKER_PROJECT_ACTION_FAILED",
+		"DOCKER_CONTAINER_DETAILS_INVALID", "DOCKER_CONTAINER_DETAILS_UNAVAILABLE", "DOCKER_CONTAINER_NOT_FOUND",
 		"DOCKER_CONTAINER_CREATE_INVALID", "DOCKER_CONTAINER_CREATE_FAILED", "DOCKER_CONTAINER_START_FAILED",
 		"DOCKER_CONTAINER_INSPECT_FAILED", "DOCKER_CONTAINER_CREATE_CLEANUP_FAILED", "DOCKER_CONTAINER_CREATE_UNAVAILABLE",
 		"DOCKER_PROJECT_DELETE_INVALID", "DOCKER_PROJECT_DELETE_PROTECTED", "DOCKER_PROJECT_DELETE_RUNNING",

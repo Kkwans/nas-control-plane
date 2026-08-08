@@ -20,6 +20,10 @@ type DockerProjectAgentClient interface {
 	ControlStandaloneProject(context.Context, string, docker.ProjectActionRequest) (docker.ProjectActionResult, error)
 }
 
+type DockerContainerDetailsAgentClient interface {
+	InspectDockerContainer(context.Context, string, string) (docker.ContainerDetails, error)
+}
+
 type DockerProjectDeleteAgentClient interface {
 	DeleteDockerProject(context.Context, string, docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error)
 }
@@ -34,6 +38,41 @@ type ComposeProjectAgentClient interface {
 
 func (socketAgentClient) ControlStandaloneProject(ctx context.Context, socketPath string, request docker.ProjectActionRequest) (docker.ProjectActionResult, error) {
 	return agentsocket.ControlStandaloneProject(ctx, socketPath, request)
+}
+
+func (socketAgentClient) InspectDockerContainer(ctx context.Context, socketPath string, containerID string) (docker.ContainerDetails, error) {
+	return agentsocket.InspectDockerContainer(ctx, socketPath, containerID)
+}
+
+func (api *handler) dockerContainerDetails(response http.ResponseWriter, request *http.Request) {
+	containerID := strings.TrimSpace(chi.URLParam(request, "containerID"))
+	if containerID == "" {
+		api.writeError(response, request, http.StatusBadRequest, "DOCKER_CONTAINER_DETAILS_INVALID", "容器标识无效。")
+		return
+	}
+	client, ok := api.agent.(DockerContainerDetailsAgentClient)
+	if !ok {
+		api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_DETAILS_UNAVAILABLE", "Root Agent 尚未提供容器详情能力。")
+		return
+	}
+	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	defer cancel()
+	details, err := client.InspectDockerContainer(requestContext, api.agentSocketPath, containerID)
+	if err != nil {
+		code := agentsocket.ErrorCode(err)
+		switch code {
+		case "DOCKER_CONTAINER_NOT_FOUND":
+			api.writeError(response, request, http.StatusNotFound, code, "目标容器不存在或已被移除。")
+		case "AGENT_RPC_TIMEOUT":
+			api.writeError(response, request, http.StatusGatewayTimeout, code, "读取容器详情超时，请稍后重试。")
+		case "AGENT_PROTOCOL_MISMATCH":
+			api.writeError(response, request, http.StatusConflict, code, "Root Agent 与 NCP Server 版本不一致，请同步更新后重试。")
+		default:
+			api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_DETAILS_UNAVAILABLE", "容器详情暂不可用，请检查 Root Agent 与 Docker Engine 状态。")
+		}
+		return
+	}
+	writeJSON(response, http.StatusOK, details)
 }
 
 func (socketAgentClient) DeleteDockerProject(ctx context.Context, socketPath string, request docker.ProjectDeleteRequest) (docker.ProjectDeleteResult, error) {

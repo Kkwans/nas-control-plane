@@ -16,6 +16,7 @@ const (
 	AgentDockerControlServiceControlComposeProjectMethod    = "/ncp.agent.v1.AgentDockerControlService/ControlComposeProject"
 	AgentDockerControlServiceCreateContainerMethod          = "/ncp.agent.v1.AgentDockerControlService/CreateContainer"
 	AgentDockerControlServiceDeleteProjectMethod            = "/ncp.agent.v1.AgentDockerControlService/DeleteProject"
+	AgentDockerControlServiceInspectContainerMethod         = "/ncp.agent.v1.AgentDockerControlService/InspectContainer"
 )
 
 type AgentDockerControlServiceClient interface {
@@ -28,6 +29,7 @@ type AgentDockerControlServiceExtendedClient interface {
 	AgentDockerControlServiceClient
 	CreateContainer(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 	DeleteProject(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+	InspectContainer(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
 type agentDockerControlServiceClient struct {
@@ -78,6 +80,14 @@ func (c *agentDockerControlServiceClient) DeleteProject(ctx context.Context, in 
 	return response, nil
 }
 
+func (c *agentDockerControlServiceClient) InspectContainer(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := c.connection.Invoke(ctx, AgentDockerControlServiceInspectContainerMethod, in, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 type AgentDockerControlServiceServer interface {
 	ControlContainer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ControlStandaloneProject(context.Context, *structpb.Struct) (*structpb.Struct, error)
@@ -92,6 +102,10 @@ type AgentDockerContainerCreateServiceServer interface {
 
 type AgentDockerProjectDeleteServiceServer interface {
 	DeleteProject(context.Context, *structpb.Struct) (*structpb.Struct, error)
+}
+
+type AgentDockerContainerDetailsServiceServer interface {
+	InspectContainer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func RegisterAgentDockerControlServiceServer(server grpc.ServiceRegistrar, implementation AgentDockerControlServiceServer) {
@@ -181,6 +195,25 @@ func agentDockerControlServiceDeleteProjectHandler(server any, ctx context.Conte
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentDockerControlServiceInspectContainerHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(structpb.Struct)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	implementation, ok := server.(AgentDockerContainerDetailsServiceServer)
+	if !ok {
+		return nil, grpcstatus.Error(codes.Unimplemented, "AGENT_DOCKER_DETAILS_UNAVAILABLE")
+	}
+	if interceptor == nil {
+		return implementation.InspectContainer(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: server, FullMethod: AgentDockerControlServiceInspectContainerMethod}
+	handler := func(ctx context.Context, request any) (any, error) {
+		return implementation.InspectContainer(ctx, request.(*structpb.Struct))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
 var agentDockerControlServiceDescription = grpc.ServiceDesc{
 	ServiceName: agentDockerControlServiceName,
 	HandlerType: (*AgentDockerControlServiceServer)(nil),
@@ -199,5 +232,8 @@ var agentDockerControlServiceDescription = grpc.ServiceDesc{
 	}, {
 		MethodName: "DeleteProject",
 		Handler:    agentDockerControlServiceDeleteProjectHandler,
+	}, {
+		MethodName: "InspectContainer",
+		Handler:    agentDockerControlServiceInspectContainerHandler,
 	}},
 }

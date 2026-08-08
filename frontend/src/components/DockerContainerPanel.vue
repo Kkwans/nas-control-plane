@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { FileText, Play, RotateCcw, Square, Box } from '@lucide/vue'
+import { Info, Play, RotateCcw, Square, Box } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
 import type { ContainerAction, DockerInventory } from '@/api/system'
 import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import StatusPill from '@/components/StatusPill.vue'
-import { formatDockerContainerStatus } from '@/domain/docker'
+import { dockerContainerStateDetail, dockerContainerStateLabel, dockerContainerTimingLabel } from '@/domain/docker'
 
 type DockerContainer = DockerInventory['containers'][number]
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
@@ -22,7 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   action: [containerId: string, action: ContainerAction]
-  logs: [container: { id: string; name: string }]
+  details: [container: { id: string; name: string }]
 }>()
 
 const filteredContainers = computed(() => {
@@ -68,6 +68,12 @@ function publicPorts(container: DockerContainer) {
 function pending(containerId: string, action: ContainerAction) {
   return props.actionPending === `${containerId}:${action}`
 }
+
+function stateTone(container: DockerContainer) {
+  if (container.state === 'running') return container.health === 'unhealthy' ? 'attention' : 'healthy'
+  if (container.state === 'dead') return 'attention'
+  return 'pending'
+}
 </script>
 
 <template>
@@ -78,9 +84,9 @@ function pending(containerId: string, action: ContainerAction) {
     <div v-for="container in pagedContainers" :key="container.id" class="container-row">
       <div class="container-name">
         <span><Box :size="18" /></span>
-        <div><strong>{{ container.name }}</strong><small>{{ container.id.slice(0, 12) }}</small></div>
+        <div><strong>{{ container.name }}</strong><small :title="dockerContainerTimingLabel(container)">{{ dockerContainerTimingLabel(container) }}</small></div>
       </div>
-      <div class="container-state"><StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" /><small class="status-detail" :title="container.status">{{ formatDockerContainerStatus(container.status) }}</small></div>
+      <div class="container-state"><StatusPill :label="dockerContainerStateLabel(container.state)" :tone="stateTone(container)" /><small class="status-detail">{{ dockerContainerStateDetail(container) }}</small></div>
       <span class="cell-ellipsis">{{ container.projectName || '独立容器' }}</span>
       <span class="cell-ellipsis mono">{{ container.image }}</span>
       <div class="port-list">
@@ -97,8 +103,8 @@ function pending(containerId: string, action: ContainerAction) {
         <ElTooltip content="重启容器" placement="top">
           <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
         </ElTooltip>
-        <ElTooltip content="查看容器日志" placement="top">
-          <ListIconButton :icon="FileText" label="查看容器日志" @click="emit('logs', container)" />
+        <ElTooltip content="查看容器详情与日志" placement="top">
+          <ListIconButton :icon="Info" label="查看容器详情与日志" @click="emit('details', container)" />
         </ElTooltip>
       </div>
     </div>
@@ -118,20 +124,20 @@ function pending(containerId: string, action: ContainerAction) {
       <header>
         <div class="container-name">
           <span><Box :size="18" /></span>
-          <div><strong>{{ container.name }}</strong><small>{{ container.projectName || '独立容器' }}</small></div>
+          <div><strong>{{ container.name }}</strong><small>{{ dockerContainerTimingLabel(container) }}</small></div>
         </div>
-        <StatusPill :label="container.state === 'running' ? '运行中' : '已停止'" :tone="container.state === 'running' ? 'healthy' : 'pending'" />
+        <StatusPill :label="dockerContainerStateLabel(container.state)" :tone="stateTone(container)" />
       </header>
       <dl>
         <div><dt>镜像</dt><dd>{{ container.image }}</dd></div>
-        <div><dt>状态</dt><dd :title="container.status">{{ formatDockerContainerStatus(container.status) }}</dd></div>
+        <div><dt>状态</dt><dd>{{ dockerContainerStateDetail(container) }}</dd></div>
         <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.publicPort).join('、') || '无' }}</dd></div>
       </dl>
       <div class="mobile-actions">
         <button v-if="container.state !== 'running'" type="button" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'start')"><Play :size="16" />启动</button>
         <button v-else class="danger" type="button" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'stop')"><Square :size="15" />停止</button>
         <button type="button" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')"><RotateCcw :size="16" />重启</button>
-        <button type="button" @click="emit('logs', container)"><FileText :size="16" />日志</button>
+        <button type="button" @click="emit('details', container)"><Info :size="16" />详情</button>
       </div>
     </article>
     <p v-if="!filteredContainers.length" class="table-empty panel">没有匹配的 Docker 容器。</p>

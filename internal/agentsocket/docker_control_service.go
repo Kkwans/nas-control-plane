@@ -30,6 +30,10 @@ type DockerContainerCreateProvider interface {
 	CreateContainer(context.Context, docker.ContainerCreateRequest) (docker.ContainerCreateResult, error)
 }
 
+type DockerContainerDetailsProvider interface {
+	InspectDetails(context.Context, string) (docker.ContainerDetails, error)
+}
+
 type dockerControlService struct {
 	provider        DockerControlProvider
 	composeProvider ComposeProvider
@@ -168,6 +172,38 @@ func (s *dockerControlService) CreateContainer(ctx context.Context, request *str
 		}
 	}
 	return dashboardStruct(result, "AGENT_DOCKER_CONTROL_RESPONSE_INVALID")
+}
+
+func (s *dockerControlService) InspectContainer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+	}
+	provider, ok := s.provider.(DockerContainerDetailsProvider)
+	if !ok {
+		return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_CONTAINER_DETAILS_UNAVAILABLE")
+	}
+	containerID, err := requiredString(request, "container_id")
+	if err != nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "DOCKER_CONTAINER_DETAILS_INVALID")
+	}
+	result, err := provider.InspectDetails(ctx, containerID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, grpcstatus.Error(codes.DeadlineExceeded, "AGENT_RPC_TIMEOUT")
+		}
+		switch docker.ErrorCode(err) {
+		case "DOCKER_CONTAINER_DETAILS_INVALID":
+			return nil, grpcstatus.Error(codes.InvalidArgument, "DOCKER_CONTAINER_DETAILS_INVALID")
+		case "DOCKER_CONTAINER_NOT_FOUND":
+			return nil, grpcstatus.Error(codes.NotFound, "DOCKER_CONTAINER_NOT_FOUND")
+		default:
+			return nil, grpcstatus.Error(codes.Unavailable, "DOCKER_CONTAINER_DETAILS_UNAVAILABLE")
+		}
+	}
+	return dashboardStruct(result, "AGENT_DOCKER_DETAILS_RESPONSE_INVALID")
 }
 
 func decodeContainerActionRequest(request *structpb.Struct) (docker.ContainerActionRequest, error) {

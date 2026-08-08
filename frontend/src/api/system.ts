@@ -349,6 +349,11 @@ export interface DockerInventory {
     state: string
     status: string
     createdAt: string
+    startedAt?: string
+    finishedAt?: string
+    exitCode?: number
+    restartCount?: number
+    health?: 'none' | 'starting' | 'healthy' | 'unhealthy'
     ports: Array<{
       hostIp: string
       privatePort: number
@@ -381,6 +386,34 @@ export interface ContainerActionResult {
   name: string
   action: ContainerAction
   state: string
+}
+
+export interface ContainerDetails {
+  id: string
+  name: string
+  image: string
+  state: string
+  health?: 'none' | 'starting' | 'healthy' | 'unhealthy'
+  healthFailingStreak: number
+  createdAt?: string
+  startedAt?: string
+  finishedAt?: string
+  exitCode: number
+  restartCount: number
+  oomKilled: boolean
+  platform?: string
+  driver?: string
+  networkMode?: string
+  restartPolicy?: string
+  restartMaximumRetries: number
+  autoRemove: boolean
+  privileged: boolean
+  readonlyRootfs: boolean
+  nanoCpus: number
+  memoryBytes: number
+  ports: Array<{ hostIp: string; privatePort: number; publicPort: number; protocol: string }>
+  mounts: Array<{ type: string; name?: string; source?: string; destination: string; driver?: string; readOnly: boolean }>
+  networks: Array<{ name: string; ipAddress?: string; gateway?: string; ipv6Address?: string; macAddress?: string }>
 }
 
 export interface ContainerLogEntry {
@@ -821,6 +854,19 @@ export async function requestContainerAction(
     isContainerActionResult,
     fetcher,
     'DOCKER_CONTAINER_ACTION_RESPONSE_INVALID',
+  )
+}
+
+export async function requestContainerDetails(
+  containerId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<ContainerDetails> {
+  return requestJson(
+    `/api/v1/docker/containers/${encodeURIComponent(containerId)}`,
+    {},
+    isContainerDetails,
+    fetcher,
+    'DOCKER_CONTAINER_DETAILS_RESPONSE_INVALID',
   )
 }
 
@@ -1523,6 +1569,29 @@ function isContainerActionResult(value: unknown): value is ContainerActionResult
     typeof value.name === 'string' &&
     (value.action === 'start' || value.action === 'stop' || value.action === 'restart') &&
     typeof value.state === 'string'
+  )
+}
+
+function isContainerDetails(value: unknown): value is ContainerDetails {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.image === 'string' &&
+    typeof value.state === 'string' &&
+    typeof value.healthFailingStreak === 'number' &&
+    typeof value.exitCode === 'number' &&
+    typeof value.restartCount === 'number' &&
+    typeof value.oomKilled === 'boolean' &&
+    typeof value.restartMaximumRetries === 'number' &&
+    typeof value.autoRemove === 'boolean' &&
+    typeof value.privileged === 'boolean' &&
+    typeof value.readonlyRootfs === 'boolean' &&
+    typeof value.nanoCpus === 'number' &&
+    typeof value.memoryBytes === 'number' &&
+    Array.isArray(value.ports) &&
+    Array.isArray(value.mounts) &&
+    Array.isArray(value.networks)
   )
 }
 

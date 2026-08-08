@@ -295,6 +295,27 @@ func TestContainerActionRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestContainerDetailsUseSafeRootAgentEndpoint(t *testing.T) {
+	agent := &fakeAgentClient{containerDetails: docker.ContainerDetails{
+		ID: "abc123", Name: "web", Image: "demo:latest", State: "running",
+		Ports: []docker.PortMapping{}, Mounts: []docker.ContainerMountDetails{}, Networks: []docker.ContainerNetworkDetails{},
+	}}
+	handler := NewHandler(Config{
+		Agent: agent, AgentSocketPath: "/run/ncp/test.sock", AgentTimeout: time.Second,
+		RequestID: func() string { return "req-container-details" },
+	})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/docker/containers/abc123", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if agent.detailsContainerID != "abc123" || agent.socketPath != "/run/ncp/test.sock" {
+		t.Fatalf("details request id=%q socket=%q", agent.detailsContainerID, agent.socketPath)
+	}
+}
+
 func TestCreateDockerContainerUsesStructuredAgentRequest(t *testing.T) {
 	agent := &fakeAgentClient{createResult: docker.ContainerCreateResult{
 		ContainerID: "created-123", Name: "redis-cache", Image: "redis:8-alpine",
@@ -428,6 +449,9 @@ type fakeAgentClient struct {
 	composeActionResult  ncpcompose.LifecycleResult
 	composeActionErr     error
 	composeActionRequest ncpcompose.LifecycleRequest
+	containerDetails     docker.ContainerDetails
+	containerDetailsErr  error
+	detailsContainerID   string
 	logsResult           docker.ContainerLogsResult
 	logsErr              error
 	logsRequest          docker.ContainerLogsRequest
@@ -499,6 +523,13 @@ func (f *fakeAgentClient) ControlComposeProject(ctx context.Context, socketPath 
 		f.deadlineRemaining = time.Until(deadline)
 	}
 	return f.composeActionResult, f.composeActionErr
+}
+
+func (f *fakeAgentClient) InspectDockerContainer(ctx context.Context, socketPath string, containerID string) (docker.ContainerDetails, error) {
+	f.socketPath = socketPath
+	f.detailsContainerID = containerID
+	_, f.deadlineObserved = ctx.Deadline()
+	return f.containerDetails, f.containerDetailsErr
 }
 
 func (f *fakeAgentClient) CreateDockerContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {
