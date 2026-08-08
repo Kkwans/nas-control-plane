@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElInput, ElTooltip } from 'element-plus'
+import { ElDialog, ElInput, ElTooltip } from 'element-plus'
 import {
   Activity,
   AlertTriangle,
@@ -11,6 +11,7 @@ import {
   HardDrive,
   MemoryStick,
   Network,
+  Pencil,
   Route,
   Router,
   Search,
@@ -51,6 +52,8 @@ const dnsDraft = ref('')
 const dnsPreview = ref<DNSChangePreview | null>(null)
 const dnsChangeId = ref('')
 const dnsMessage = ref('')
+const dnsDialogOpen = ref(false)
+const dnsPending = ref(false)
 const mihomoInspection = ref<MihomoInspection | null>(null)
 const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
@@ -188,36 +191,44 @@ function dnsServersFromDraft() {
 }
 
 async function previewDNS() {
-  if (!dnsDetails.value.canPreview || dnsDetails.value.readOnly) return
+  if (!dnsDetails.value.canPreview || dnsDetails.value.readOnly || dnsPending.value) return
   const nameservers = dnsServersFromDraft()
   if (!nameservers.length) {
     dnsMessage.value = '至少填写一个 DNS 地址。'
     return
   }
   dnsMessage.value = ''
+  dnsPending.value = true
   try {
     dnsPreview.value = await previewDNSChange({ nameservers })
     dnsMessage.value = dnsPreview.value.requiresConfirm ? '预览已生成，确认后才会应用。' : '当前后端不要求二次确认。'
   } catch (error) {
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 预览失败。'
+  } finally {
+    dnsPending.value = false
   }
 }
 
 async function confirmDNS() {
-  if (!dnsPreview.value) return
+  if (!dnsPreview.value || dnsPending.value) return
+  const previewId = dnsPreview.value.previewId
+  dnsPending.value = true
   try {
-    const result = await confirmDNSChange({ previewId: dnsPreview.value.previewId, confirmed: true })
+    const result = await confirmDNSChange({ previewId, confirmed: true })
     const rollbackId = result.applied && result.rollbackAvailable ? result.changeId : ''
     await loadDetails()
     dnsChangeId.value = rollbackId
     dnsMessage.value = result.applied ? 'DNS 已应用。' : `DNS 未应用（${result.errorCode || '未知原因'}）。`
   } catch (error) {
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 应用失败。'
+  } finally {
+    dnsPending.value = false
   }
 }
 
 async function rollbackDNS() {
-  if (!dnsChangeId.value) return
+  if (!dnsChangeId.value || dnsPending.value) return
+  dnsPending.value = true
   try {
     const result = await rollbackDNSChange(dnsChangeId.value)
     await loadDetails()
@@ -225,7 +236,21 @@ async function rollbackDNS() {
     dnsMessage.value = !result.applied && !result.rollbackAvailable ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
   } catch (error) {
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 回滚失败。'
+  } finally {
+    dnsPending.value = false
   }
+}
+
+function openDNSEditor() {
+  dnsDraft.value = dnsDetails.value.nameservers.join(', ')
+  dnsPreview.value = null
+  dnsMessage.value = ''
+  dnsDialogOpen.value = true
+}
+
+function invalidateDNSPreview() {
+  dnsPreview.value = null
+  dnsMessage.value = ''
 }
 
 async function checkMihomo(force: boolean) {
@@ -395,12 +420,6 @@ function mihomoInspectionErrorMessage(code: string) {
 function publicEgressAddressLabel() {
   if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '待手动检测' : '未配置探针'
   return publicEgressResult.value.address || '探针未返回公网 IP'
-}
-
-function publicEgressMetadataLabel(value: string | undefined) {
-  if (value) return value
-  if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '手动检测后显示' : '未配置探针'
-  return '探针未返回'
 }
 
 function mihomoModeLabel(value: string | undefined) {
@@ -591,7 +610,16 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         </article>
 
         <article class="panel detail-card">
-          <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="Route" />
+          <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="Route">
+            <template #actions>
+              <ActionButton
+                v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly"
+                size="sm"
+                :icon="Pencil"
+                @click="openDNSEditor"
+              >编辑 DNS</ActionButton>
+            </template>
+          </SectionHeader>
           <dl class="definition-grid">
             <div class="definition-grid__wide"><dt>默认网关</dt><dd>{{ details.network.gateway || '未发现' }}</dd></div>
             <div class="definition-grid__wide"><dt>DNS</dt><dd>{{ details.network.dnsServers.join('、') || '未发现' }}</dd></div>
@@ -603,15 +631,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
               <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
               <small>{{ dnsCapabilityExplanation() }}</small>
             </div>
-            <template v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly">
-              <label class="dns-management__input"><span>DNS 服务器</span><input v-model="dnsDraft" type="text" placeholder="例如 223.5.5.5, 1.1.1.1" /></label>
-              <div class="dns-management__actions"><button type="button" class="text-button" @click="previewDNS">预览修改</button><button v-if="dnsPreview" type="button" class="text-button text-button--primary" @click="confirmDNS">确认应用</button><button v-if="dnsChangeId" type="button" class="text-button" @click="rollbackDNS">回滚</button></div>
-              <div v-if="dnsPreview" class="dns-preview" aria-label="DNS 修改预览">
-                <div><span>当前</span><strong>{{ dnsPreview.before.nameservers.join('、') || '未配置' }}</strong></div>
-                <div><span>应用后</span><strong>{{ dnsPreview.after.nameservers.join('、') || '未配置' }}</strong></div>
-              </div>
-            </template>
-            <small v-if="dnsMessage" class="dns-management__message" role="status">{{ dnsMessage }}</small>
+            <div class="dns-current-value"><span>当前解析服务器</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
           </div>
         </article>
 
@@ -802,6 +822,40 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         </article>
       </section>
     </template>
+
+    <ElDialog
+      v-model="dnsDialogOpen"
+      class="dns-editor-dialog"
+      title="编辑 DNS 服务器"
+      width="min(580px, calc(100vw - 28px))"
+      append-to-body
+      destroy-on-close
+      :close-on-click-modal="!dnsPending"
+      :close-on-press-escape="!dnsPending"
+      :show-close="!dnsPending"
+    >
+      <div class="dns-editor">
+        <div class="dns-editor__notice"><Route :size="18" /><span><strong>安全修改</strong><small>先生成差异预览，确认后才调用 UGOS 网络服务；应用前保存完整配置，可立即回滚。</small></span></div>
+        <label class="dns-editor__field">
+          <span>DNS 服务器</span>
+          <ElInput v-model="dnsDraft" placeholder="例如 223.5.5.5, 1.1.1.1" clearable @input="invalidateDNSPreview" />
+          <small>支持 IPv4 或 IPv6，多个地址可用逗号或空格分隔。</small>
+        </label>
+        <div v-if="dnsPreview" class="dns-preview" aria-label="DNS 修改预览">
+          <div><span>当前配置</span><strong>{{ dnsPreview.before.nameservers.join('、') || '未配置' }}</strong></div>
+          <div><span>应用后</span><strong>{{ dnsPreview.after.nameservers.join('、') || '未配置' }}</strong></div>
+        </div>
+        <p v-if="dnsMessage" class="dns-editor__message" role="status">{{ dnsMessage }}</p>
+      </div>
+      <template #footer>
+        <div class="dns-editor__footer">
+          <ActionButton :disabled="dnsPending" @click="dnsDialogOpen = false">取消</ActionButton>
+          <ActionButton v-if="dnsChangeId" variant="danger" :loading="dnsPending" @click="rollbackDNS">回滚上次修改</ActionButton>
+          <ActionButton v-if="!dnsPreview" variant="primary" :loading="dnsPending" @click="previewDNS">预览修改</ActionButton>
+          <ActionButton v-else variant="primary" :loading="dnsPending" @click="confirmDNS">确认应用</ActionButton>
+        </div>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -970,6 +1024,150 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   border-color: color-mix(in srgb, var(--ncp-object-network) 20%, var(--ncp-line));
   background: var(--ncp-object-network-soft);
   color: var(--ncp-object-network);
+}
+
+.dns-management {
+  gap: 12px;
+}
+
+.dns-management__state {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.dns-management__state small {
+  max-width: none;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.dns-current-value {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 12px 13px;
+  border: 1px solid var(--ncp-line);
+  border-radius: 10px;
+  background: var(--ncp-surface-quiet);
+}
+
+.dns-current-value span {
+  color: var(--ncp-text-subtle);
+  font-size: .68rem;
+}
+
+.dns-current-value code {
+  overflow-wrap: anywhere;
+  color: var(--ncp-text);
+  font-family: var(--ncp-font-mono);
+  font-size: .76rem;
+  line-height: 1.5;
+}
+
+:global(.dns-editor-dialog.el-dialog) {
+  overflow: hidden;
+  border: 1px solid var(--ncp-line);
+  border-radius: 16px;
+  background: var(--ncp-surface);
+  box-shadow: var(--ncp-shadow-overlay);
+}
+
+:global(.dns-editor-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--ncp-line);
+}
+
+:global(.dns-editor-dialog .el-dialog__title) {
+  color: var(--ncp-text);
+  font-size: 1.02rem;
+  font-weight: 750;
+}
+
+:global(.dns-editor-dialog .el-dialog__body) {
+  padding: 20px 22px;
+}
+
+:global(.dns-editor-dialog .el-dialog__footer) {
+  padding: 15px 22px;
+  border-top: 1px solid var(--ncp-line);
+  background: var(--ncp-surface-quiet);
+}
+
+.dns-editor {
+  display: grid;
+  gap: 16px;
+}
+
+.dns-editor__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 13px;
+  border: 1px solid var(--ncp-primary-border);
+  border-radius: 11px;
+  background: var(--ncp-primary-soft);
+  color: var(--ncp-primary-strong);
+}
+
+.dns-editor__notice > span {
+  display: grid;
+  gap: 3px;
+}
+
+.dns-editor__notice strong {
+  font-size: .8rem;
+}
+
+.dns-editor__notice small {
+  color: var(--ncp-text-muted);
+  font-size: .71rem;
+  line-height: 1.5;
+}
+
+.dns-editor__field {
+  display: grid;
+  gap: 7px;
+}
+
+.dns-editor__field > span {
+  color: var(--ncp-text);
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.dns-editor__field > small {
+  color: var(--ncp-text-subtle);
+  font-size: .69rem;
+}
+
+.dns-editor__field :deep(.el-input__wrapper) {
+  min-height: 42px;
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-control-surface);
+  box-shadow: 0 0 0 1px var(--ncp-control-border) inset;
+}
+
+.dns-editor__field :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px var(--ncp-primary) inset, 0 0 0 3px var(--ncp-focus-ring);
+}
+
+.dns-editor__message {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--ncp-neutral-soft);
+  color: var(--ncp-text-muted);
+  font-size: .72rem;
+  line-height: 1.5;
+}
+
+.dns-editor__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
 }
 
 .proxy-workspace {

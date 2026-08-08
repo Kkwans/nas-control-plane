@@ -3150,7 +3150,7 @@ components:
       type: object
       required: [backend, detected, state, readOnly, canRead, canPreview, canConfirm, canRollback, nameservers, detectionSource, errorCode]
       properties:
-        backend: { type: string, enum: [systemd-resolved, networkmanager, static-resolv-conf, unknown] }
+        backend: { type: string, enum: [systemd-resolved, networkmanager, static-resolv-conf, ugos-network-service, unknown] }
         detected: { type: boolean }
         state: { type: string }
         readOnly: { type: boolean }
@@ -3171,7 +3171,10 @@ components:
           type: array
           minItems: 1
           maxItems: 6
-          items: { type: string, format: ipv4 }
+          items:
+            oneOf:
+              - { type: string, format: ipv4 }
+              - { type: string, format: ipv6 }
         searchDomains:
           type: array
           maxItems: 8
