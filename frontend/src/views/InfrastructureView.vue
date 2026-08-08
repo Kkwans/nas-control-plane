@@ -670,7 +670,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
               <div class="proxy-route-node">
                 <small>节点服务器</small>
                 <strong>{{ mihomoInspection?.node.server ? `${mihomoInspection.node.server}:${mihomoInspection.node.port}` : '服务器待确认' }}</strong>
-                <code>{{ mihomoInspection?.node.resolvedIp || 'IP 待解析' }} · {{ nodeLocationLabel() }}</code>
+                <code>{{ mihomoInspection?.node.resolvedIp || (mihomoInspection?.node.server ? '节点域名由 Mihomo 解析' : 'IP 未确认') }} · {{ nodeLocationLabel() }}</code>
               </div>
               <div class="proxy-route-node proxy-route-node--egress">
                 <small>公网出口</small>
