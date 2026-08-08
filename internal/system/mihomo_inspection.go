@@ -399,13 +399,17 @@ func (i *MihomoInspector) Inspect(ctx context.Context, force bool) MihomoInspect
 		result.ErrorCode = "MIHOMO_PROXIES_UNAVAILABLE"
 		return i.storeMihomoInspection(result)
 	}
-	selection, err := parseMihomoStrategy(proxies.Data, i.runtime.Nodes)
+	// Proxy providers are refreshed by Mihomo independently from the Agent.
+	// Re-read only the safe node metadata before resolving the live selection so
+	// renamed quota/status nodes do not outlive the Agent's startup snapshot.
+	runtimeNodes := i.currentMihomoRuntimeNodes()
+	selection, err := parseMihomoStrategy(proxies.Data, runtimeNodes)
 	if err != nil {
 		result.ErrorCode = err.Error()
 		return i.storeMihomoInspection(result)
 	}
 	result.Strategy = selection
-	node, nodeFound := i.runtime.Nodes[selection.SelectedNode]
+	node, nodeFound := runtimeNodes[selection.SelectedNode]
 	if nodeFound {
 		result.Node.Server = node.Server
 		result.Node.Port = node.Port
@@ -438,6 +442,17 @@ func (i *MihomoInspector) Inspect(ctx context.Context, force bool) MihomoInspect
 		result.ErrorCode = firstNonEmpty(result.PublicEgress.ErrorCode, "PUBLIC_EGRESS_UNAVAILABLE")
 	}
 	return i.storeMihomoInspection(result)
+}
+
+func (i *MihomoInspector) currentMihomoRuntimeNodes() map[string]mihomoRuntimeNode {
+	if i == nil {
+		return nil
+	}
+	refreshed, err := loadMihomoRuntimeConfig(i.environment, i.runtime.ConfigPath)
+	if err == nil {
+		return refreshed.Nodes
+	}
+	return i.runtime.Nodes
 }
 
 func (i *MihomoInspector) storeMihomoInspection(value MihomoInspection) MihomoInspection {

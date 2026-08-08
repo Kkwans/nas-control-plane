@@ -75,6 +75,46 @@ func TestParseMihomoStrategyResolvesSelectedProviderNode(t *testing.T) {
 	}
 }
 
+func TestCurrentMihomoRuntimeNodesRefreshesProviderMetadata(t *testing.T) {
+	environment := &networkCapabilityEnvironment{files: map[string][]byte{
+		"/config/config.yaml": []byte(`
+external-controller: 0.0.0.0:9091
+mixed-port: 7890
+proxy-providers:
+  provider-a:
+    type: file
+    path: ./providers/provider-a.yaml
+`),
+		"/config/providers/provider-a.yaml": []byte(`
+proxies:
+  - name: remaining-100
+    type: vless
+    server: old.example.test
+    port: 443
+`),
+	}}
+	cached, err := loadMihomoRuntimeConfig(environment, "/config/config.yaml")
+	if err != nil {
+		t.Fatalf("loadMihomoRuntimeConfig() error = %v", err)
+	}
+	inspector := &MihomoInspector{environment: environment, runtime: cached}
+	environment.files["/config/providers/provider-a.yaml"] = []byte(`
+proxies:
+  - name: remaining-99
+    type: vless
+    server: current.example.test
+    port: 8443
+`)
+
+	nodes := inspector.currentMihomoRuntimeNodes()
+	if nodes["remaining-99"].Server != "current.example.test" || nodes["remaining-99"].Port != 8443 {
+		t.Fatalf("current nodes = %#v", nodes)
+	}
+	if _, exists := nodes["remaining-100"]; exists {
+		t.Fatalf("stale provider node remained after refresh: %#v", nodes)
+	}
+}
+
 func TestLocalMihomoControllerEndpointRejectsMissingPort(t *testing.T) {
 	if _, err := localMihomoControllerEndpoint("http://127.0.0.1"); err == nil {
 		t.Fatal("controller endpoint without explicit port must fail")
