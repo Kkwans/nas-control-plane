@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -110,11 +111,23 @@ func (c *ContainerController) Control(ctx context.Context, request ContainerActi
 		err = c.gateway.RestartContainer(operationContext, request.ContainerID)
 	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return ContainerActionResult{}, err
+		}
+		if errdefs.IsNotFound(err) {
+			return ContainerActionResult{}, coded("DOCKER_CONTAINER_NOT_FOUND", err)
+		}
 		return ContainerActionResult{}, coded("DOCKER_CONTAINER_ACTION_FAILED", err)
 	}
 
 	snapshot, err := c.gateway.InspectContainer(operationContext, request.ContainerID)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return ContainerActionResult{}, err
+		}
+		if errdefs.IsNotFound(err) {
+			return ContainerActionResult{}, coded("DOCKER_CONTAINER_NOT_FOUND", err)
+		}
 		return ContainerActionResult{}, coded("DOCKER_CONTAINER_INSPECT_FAILED", err)
 	}
 	name := strings.TrimPrefix(strings.TrimSpace(snapshot.Name), "/")

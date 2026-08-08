@@ -22,7 +22,7 @@ import { projectStateTone } from '@/domain/overview'
 import type { ContainerAction, DockerInventory, DockerProject } from '@/api/system'
 
 type DockerContainer = DockerInventory['containers'][number]
-type ProjectActionError = { containerId: string; name: string; message: string }
+type ProjectActionError = { containerId: string; name: string; message: string; scope?: 'project' | 'container' }
 
 const props = withDefaults(defineProps<{
   modelValue: boolean
@@ -33,11 +33,13 @@ const props = withDefaults(defineProps<{
   actionPending?: string | null
   projectActionPending?: ContainerAction | null
   projectActionErrors?: ProjectActionError[]
+  containerActionError?: string
 }>(), {
   allowOperations: false,
   actionPending: null,
   projectActionPending: null,
   projectActionErrors: () => [],
+  containerActionError: '',
 })
 
 const emit = defineEmits<{
@@ -66,6 +68,7 @@ const currentStateLabel = computed(() => {
   return props.project ? stateLabel(props.project.state) : ''
 })
 const currentStateTone = computed(() => props.projectActionPending ? 'pending' : props.project ? projectStateTone(props.project.state) : 'neutral')
+const projectActionErrorTitle = computed(() => props.projectActionErrors.some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败')
 function projectActionDisabled(action: ContainerAction) {
   if (!props.project || props.projectActionPending || props.actionPending || !props.containers.length) return true
   const runningCount = props.containers.filter((container) => container.state === 'running').length
@@ -140,7 +143,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
           <ActionButton variant="secondary" size="sm" :icon="RotateCw" :loading="projectActionPending === 'restart'" :disabled="projectActionDisabled('restart')" @click="emit('project-action', 'restart')">重启</ActionButton>
         </div>
         <div v-if="projectActionErrors.length" class="project-action-errors" role="alert">
-          <strong>部分容器操作失败</strong>
+          <strong>{{ projectActionErrorTitle }}</strong>
           <ul><li v-for="failure in projectActionErrors" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
         </div>
       </section>
@@ -159,6 +162,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 
       <section class="detail-section">
         <header><div><h3>容器</h3><p>镜像、状态、端口和运行操作</p></div><span>{{ containers.length }} 个</span></header>
+        <div v-if="containerActionError" class="project-action-errors" role="alert">
+          <strong>容器操作失败</strong>
+          <p>{{ containerActionError }}</p>
+        </div>
         <div class="container-cards">
           <article v-for="container in containers" :key="container.id" class="container-card">
             <div class="container-card__top">

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -211,12 +212,67 @@ func TestContainerActionUsesRootAgentAndReturnsState(t *testing.T) {
 	if agent.socketPath != "/run/ncp/test.sock" || !agent.deadlineObserved {
 		t.Fatalf("agent call = socket %q deadline=%v", agent.socketPath, agent.deadlineObserved)
 	}
+	if agent.deadlineRemaining < 40*time.Second {
+		t.Fatalf("container action deadline = %s, want at least 40s", agent.deadlineRemaining)
+	}
 	var body docker.ContainerActionResult
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if body.Name != "web" || body.State != "running" {
 		t.Fatalf("action response = %#v", body)
+	}
+}
+
+func TestContainerActionMapsDeadlineToGatewayTimeout(t *testing.T) {
+	agent := &fakeAgentClient{actionErr: context.DeadlineExceeded}
+	handler := NewHandler(Config{
+		Agent: agent, AgentTimeout: time.Second,
+		RequestID: func() string { return "req-container-timeout" },
+	})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/docker/containers/abc123/actions/stop", nil))
+
+	if response.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusGatewayTimeout, response.Body.String())
+	}
+	var body ErrorResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "AGENT_RPC_TIMEOUT" || body.RequestID != "req-container-timeout" {
+		t.Fatalf("error response = %#v", body)
+	}
+}
+
+func TestComposeProjectActionUsesDedicatedTimeout(t *testing.T) {
+	agent := &fakeAgentClient{composeActionResult: ncpcompose.LifecycleResult{
+		ProjectID: "compose:demo", Action: ncpcompose.LifecycleActionStop, State: "stopped", Completed: true,
+		Services: []ncpcompose.LifecycleServiceStatus{{Name: "web", State: "stopped"}},
+	}}
+	handler := NewHandler(Config{
+		Agent: agent, AgentTimeout: time.Second,
+		RequestID: func() string { return "req-compose-timeout" },
+	})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/docker/compose/projects/compose%3Ademo/actions/stop", strings.NewReader(`{
+		"projectId":"compose:forged",
+		"workingDirectory":"/volume2/DockerProject/demo",
+		"configFiles":["/volume2/DockerProject/demo/compose.yaml"]
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if agent.composeActionRequest.ProjectID != "compose:demo" || agent.composeActionRequest.Action != ncpcompose.LifecycleActionStop {
+		t.Fatalf("compose action request = %#v", agent.composeActionRequest)
+	}
+	if agent.deadlineRemaining < 85*time.Second {
+		t.Fatalf("compose action deadline = %s, want at least 85s", agent.deadlineRemaining)
 	}
 }
 
@@ -347,33 +403,40 @@ func TestContainerLogsRejectsTailOutsideSupportedRange(t *testing.T) {
 }
 
 type fakeAgentClient struct {
-	status           agentsocket.AgentStatus
-	statusErr        error
-	capabilities     system.Capabilities
-	capabilitiesErr  error
-	summary          system.Summary
-	summaryErr       error
-	details          system.Details
-	detailsErr       error
-	inventory        docker.Inventory
-	inventoryErr     error
-	actionResult     docker.ContainerActionResult
-	actionErr        error
-	actionRequest    docker.ContainerActionRequest
-	createResult     docker.ContainerCreateResult
-	createErr        error
-	createRequest    docker.ContainerCreateRequest
-	deleteResult     docker.ProjectDeleteResult
-	deleteErr        error
-	deleteRequest    docker.ProjectDeleteRequest
-	logsResult       docker.ContainerLogsResult
-	logsErr          error
-	logsRequest      docker.ContainerLogsRequest
-	journalPage      journal.Page
-	journalErr       error
-	journalQuery     journal.Query
-	socketPath       string
-	deadlineObserved bool
+	status               agentsocket.AgentStatus
+	statusErr            error
+	capabilities         system.Capabilities
+	capabilitiesErr      error
+	summary              system.Summary
+	summaryErr           error
+	details              system.Details
+	detailsErr           error
+	inventory            docker.Inventory
+	inventoryErr         error
+	actionResult         docker.ContainerActionResult
+	actionErr            error
+	actionRequest        docker.ContainerActionRequest
+	createResult         docker.ContainerCreateResult
+	createErr            error
+	createRequest        docker.ContainerCreateRequest
+	deleteResult         docker.ProjectDeleteResult
+	deleteErr            error
+	deleteRequest        docker.ProjectDeleteRequest
+	projectActionResult  docker.ProjectActionResult
+	projectActionErr     error
+	projectActionRequest docker.ProjectActionRequest
+	composeActionResult  ncpcompose.LifecycleResult
+	composeActionErr     error
+	composeActionRequest ncpcompose.LifecycleRequest
+	logsResult           docker.ContainerLogsResult
+	logsErr              error
+	logsRequest          docker.ContainerLogsRequest
+	journalPage          journal.Page
+	journalErr           error
+	journalQuery         journal.Query
+	socketPath           string
+	deadlineObserved     bool
+	deadlineRemaining    time.Duration
 }
 
 func (f *fakeAgentClient) Probe(_ context.Context, socketPath string) (agentsocket.AgentStatus, error) {
@@ -408,8 +471,34 @@ func (f *fakeAgentClient) CollectDockerInventory(ctx context.Context, socketPath
 func (f *fakeAgentClient) ControlContainer(ctx context.Context, socketPath string, request docker.ContainerActionRequest) (docker.ContainerActionResult, error) {
 	f.socketPath = socketPath
 	f.actionRequest = request
-	_, f.deadlineObserved = ctx.Deadline()
+	deadline, observed := ctx.Deadline()
+	f.deadlineObserved = observed
+	if observed {
+		f.deadlineRemaining = time.Until(deadline)
+	}
 	return f.actionResult, f.actionErr
+}
+
+func (f *fakeAgentClient) ControlStandaloneProject(ctx context.Context, socketPath string, request docker.ProjectActionRequest) (docker.ProjectActionResult, error) {
+	f.socketPath = socketPath
+	f.projectActionRequest = request
+	deadline, observed := ctx.Deadline()
+	f.deadlineObserved = observed
+	if observed {
+		f.deadlineRemaining = time.Until(deadline)
+	}
+	return f.projectActionResult, f.projectActionErr
+}
+
+func (f *fakeAgentClient) ControlComposeProject(ctx context.Context, socketPath string, request ncpcompose.LifecycleRequest) (ncpcompose.LifecycleResult, error) {
+	f.socketPath = socketPath
+	f.composeActionRequest = request
+	deadline, observed := ctx.Deadline()
+	f.deadlineObserved = observed
+	if observed {
+		f.deadlineRemaining = time.Until(deadline)
+	}
+	return f.composeActionResult, f.composeActionErr
 }
 
 func (f *fakeAgentClient) CreateDockerContainer(ctx context.Context, socketPath string, request docker.ContainerCreateRequest) (docker.ContainerCreateResult, error) {

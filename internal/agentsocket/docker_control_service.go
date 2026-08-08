@@ -56,6 +56,12 @@ func (s *dockerControlService) ControlContainer(ctx context.Context, request *st
 	}
 	result, err := s.provider.Control(ctx, decoded)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, grpcstatus.Error(codes.Canceled, "AGENT_RPC_CANCELED")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, grpcstatus.Error(codes.DeadlineExceeded, "AGENT_RPC_TIMEOUT")
+		}
 		code := docker.ErrorCode(err)
 		switch code {
 		case "DOCKER_CONTAINER_NOT_FOUND":

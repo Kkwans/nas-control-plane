@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 )
+
+const maxStandaloneProjectConcurrency = 4
 
 // ProjectActionRequest describes a lifecycle operation for the standalone
 // project. Standalone containers do not have a Compose configuration, so the
@@ -74,9 +77,9 @@ type ProjectActionResult struct {
 	Containers []ProjectContainerActionResult `json:"containers"`
 }
 
-// ProjectController executes standalone project actions sequentially. The
-// order is deliberate: it gives callers deterministic per-container results
-// and avoids issuing a burst of Docker mutations to a busy Engine.
+// ProjectController executes standalone project actions with a small bounded
+// worker pool. Result order still follows the request, while no more than four
+// mutations are sent to Docker at once.
 type ProjectController struct {
 	controller *ContainerController
 }
@@ -123,50 +126,90 @@ func (c *ProjectController) Control(ctx context.Context, request ProjectActionRe
 		State:      "unknown",
 		Containers: make([]ProjectContainerActionResult, 0, len(request.ContainerIDs)),
 	}
-	for _, containerID := range request.ContainerIDs {
-		if err := ctx.Err(); err != nil {
-			result.State = projectActionState(result.Containers)
-			return result, err
-		}
+	type actionSlot struct {
+		item      ProjectContainerActionResult
+		completed bool
+		err       error
+	}
+	slots := make([]actionSlot, len(request.ContainerIDs))
+	jobs := make(chan int)
+	workerCount := min(maxStandaloneProjectConcurrency, len(request.ContainerIDs))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				item, controlErr := c.controlContainer(ctx, request.ContainerIDs[index], request.Action)
+				slots[index] = actionSlot{item: item, completed: controlErr == nil, err: controlErr}
+				if errors.Is(controlErr, context.Canceled) || errors.Is(controlErr, context.DeadlineExceeded) {
+					return
+				}
+			}
+		}()
+	}
 
-		containerResult, controlErr := c.controller.Control(ctx, ContainerActionRequest{
-			ContainerID: containerID,
-			Action:      request.Action,
-		})
-		item := ProjectContainerActionResult{
-			ContainerID: containerID,
-			Action:      request.Action,
-			State:       "unknown",
+sendJobs:
+	for index := range request.ContainerIDs {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			break sendJobs
 		}
-		if controlErr == nil {
-			item.ContainerID = containerResult.ContainerID
-			item.Name = containerResult.Name
-			item.State = containerResult.State
-			item.Success = true
-		} else {
-			if errors.Is(controlErr, context.Canceled) || errors.Is(controlErr, context.DeadlineExceeded) {
-				result.State = projectActionState(result.Containers)
-				return result, controlErr
-			}
-			item.ErrorCode = ErrorCode(controlErr)
-			if item.ErrorCode == "" {
-				item.ErrorCode = "DOCKER_CONTAINER_ACTION_FAILED"
-			}
-			// An action may fail after Docker has applied part of the request.
-			// Read back the state where possible instead of reporting a guessed
-			// state to the caller.
-			if snapshot, inspectErr := c.inspect(ctx, containerID); inspectErr == nil {
-				item.ContainerID = snapshot.ID
-				item.Name = strings.TrimPrefix(strings.TrimSpace(snapshot.Name), "/")
-				item.State = containerState(snapshot.Running)
-			}
+	}
+	close(jobs)
+	workers.Wait()
+
+	var contextErr error
+	for _, slot := range slots {
+		if slot.completed {
+			result.Containers = append(result.Containers, slot.item)
 		}
-		result.Containers = append(result.Containers, item)
+		if contextErr == nil && (errors.Is(slot.err, context.Canceled) || errors.Is(slot.err, context.DeadlineExceeded)) {
+			contextErr = slot.err
+		}
+	}
+	if contextErr == nil {
+		contextErr = ctx.Err()
+	}
+	if contextErr != nil {
+		result.State = projectActionState(result.Containers)
+		return result, contextErr
 	}
 
 	result.Completed = len(result.Containers) == len(request.ContainerIDs) && allProjectItemsSucceeded(result.Containers)
 	result.State = projectActionState(result.Containers)
 	return result, nil
+}
+
+func (c *ProjectController) controlContainer(ctx context.Context, containerID string, action ContainerAction) (ProjectContainerActionResult, error) {
+	containerResult, controlErr := c.controller.Control(ctx, ContainerActionRequest{ContainerID: containerID, Action: action})
+	item := ProjectContainerActionResult{ContainerID: containerID, Action: action, State: "unknown"}
+	if controlErr == nil {
+		item.ContainerID = containerResult.ContainerID
+		item.Name = containerResult.Name
+		item.State = containerResult.State
+		item.Success = true
+		return item, nil
+	}
+	if errors.Is(controlErr, context.Canceled) || errors.Is(controlErr, context.DeadlineExceeded) {
+		return item, controlErr
+	}
+	item.ErrorCode = ErrorCode(controlErr)
+	if item.ErrorCode == "" {
+		item.ErrorCode = "DOCKER_CONTAINER_ACTION_FAILED"
+	}
+	// An action may fail after Docker has applied part of the request. Read back
+	// the state where possible instead of reporting a guessed state.
+	if snapshot, inspectErr := c.inspect(ctx, containerID); inspectErr == nil {
+		item.ContainerID = snapshot.ID
+		item.Name = strings.TrimPrefix(strings.TrimSpace(snapshot.Name), "/")
+		item.State = containerState(snapshot.Running)
+	}
+	return item, nil
 }
 
 func (c *ProjectController) inspect(ctx context.Context, containerID string) (ContainerSnapshot, error) {

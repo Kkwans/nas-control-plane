@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -73,12 +74,17 @@ func (api *handler) controlStandaloneProject(response http.ResponseWriter, reque
 		api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Root Agent 尚未提供 Docker 项目控制能力。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDockerContainerActionTimeout)
 	defer cancel()
 	result, err := client.ControlStandaloneProject(requestContext, api.agentSocketPath, input)
 	if err != nil {
 		code := agentsocket.ErrorCode(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = "AGENT_RPC_TIMEOUT"
+		}
 		switch code {
+		case "AGENT_RPC_TIMEOUT":
+			api.writeError(response, request, http.StatusGatewayTimeout, code, "Docker 项目操作超时，部分容器状态可能已经变化；请刷新后核对。")
 		case "AGENT_PROTOCOL_MISMATCH":
 			api.writeError(response, request, http.StatusConflict, code, "Root Agent 与 NCP Server 版本不一致，请同步更新后重试。")
 		case "DOCKER_PROJECT_ACTION_INVALID":
@@ -119,18 +125,25 @@ func (api *handler) controlComposeProject(response http.ResponseWriter, request 
 		api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Root Agent 尚未提供 Compose 项目控制能力。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultComposeLifecycleTimeout)
 	defer cancel()
 	result, err := client.ControlComposeProject(requestContext, api.agentSocketPath, input)
 	if err != nil {
 		code := agentsocket.ErrorCode(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = "AGENT_RPC_TIMEOUT"
+		}
 		switch code {
+		case "AGENT_RPC_TIMEOUT":
+			api.writeError(response, request, http.StatusGatewayTimeout, code, "Compose 项目操作超时，命令可能仍在收尾；请刷新后核对项目状态。")
 		case "COMPOSE_LIFECYCLE_INVALID":
 			api.writeError(response, request, http.StatusBadRequest, code, "Compose 项目操作参数无效。")
 		case "COMPOSE_LIFECYCLE_FAILED", "COMPOSE_LIFECYCLE_VERIFY_FAILED":
 			api.writeError(response, request, http.StatusConflict, code, "Compose 项目操作或状态复核未完成，请刷新状态后重试。")
+		case "COMPOSE_LIFECYCLE_UNAVAILABLE":
+			api.writeError(response, request, http.StatusServiceUnavailable, code, "当前 Root Agent 未提供可用的 Docker Compose 生命周期能力。")
 		default:
-			api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Compose 项目操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+			api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Compose 控制通道暂不可用，请检查 Root Agent 与 Docker Engine 状态。")
 		}
 		return
 	}
@@ -159,7 +172,7 @@ func (api *handler) deleteDockerProject(response http.ResponseWriter, request *h
 		api.writeError(response, request, http.StatusServiceUnavailable, "AGENT_DOCKER_CONTROL_UNAVAILABLE", "Root Agent 尚未提供 Docker 项目删除能力。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultComposeLifecycleTimeout)
 	defer cancel()
 	result, err := client.DeleteDockerProject(requestContext, api.agentSocketPath, input)
 	if err != nil {

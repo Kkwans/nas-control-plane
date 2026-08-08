@@ -3,7 +3,10 @@ package docker
 import (
 	"context"
 	"errors"
+	"sort"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestProjectControllerReturnsPerContainerResultsForPartialFailure(t *testing.T) {
@@ -33,7 +36,9 @@ func TestProjectControllerReturnsPerContainerResultsForPartialFailure(t *testing
 	if !result.Containers[2].Success || result.Containers[2].State != "stopped" {
 		t.Fatalf("third result = %#v", result.Containers[2])
 	}
-	if len(gateway.actions) != 3 || gateway.actions[0] != "first" || gateway.actions[1] != "second" || gateway.actions[2] != "third" {
+	actions := gateway.recordedActions()
+	sort.Strings(actions)
+	if len(actions) != 3 || actions[0] != "first" || actions[1] != "second" || actions[2] != "third" {
 		t.Fatalf("actions = %#v", gateway.actions)
 	}
 }
@@ -54,8 +59,35 @@ func TestProjectControllerPreservesCancellationAfterPartialExecution(t *testing.
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context cancellation", err)
 	}
-	if len(result.Containers) != 1 || !result.Containers[0].Success {
-		t.Fatalf("partial result = %#v", result)
+	if len(result.Containers) >= 2 {
+		t.Fatalf("cancellation should stop queued work, partial result = %#v", result)
+	}
+	if actions := gateway.recordedActions(); len(actions) > maxStandaloneProjectConcurrency {
+		t.Fatalf("actions after cancellation = %#v", actions)
+	}
+}
+
+func TestProjectControllerLimitsConcurrentDockerActions(t *testing.T) {
+	gateway := &projectControlGateway{
+		snapshots:   map[string]ContainerSnapshot{},
+		actionDelay: 20 * time.Millisecond,
+	}
+	containerIDs := make([]string, 12)
+	for index := range containerIDs {
+		containerIDs[index] = string(rune('a' + index))
+		gateway.snapshots[containerIDs[index]] = ContainerSnapshot{ID: containerIDs[index], Name: "/" + containerIDs[index]}
+	}
+	result, err := NewProjectController(NewContainerController(gateway)).Control(context.Background(), ProjectActionRequest{
+		ProjectID: "standalone", ContainerIDs: containerIDs, Action: ContainerActionStart,
+	})
+	if err != nil {
+		t.Fatalf("Control() error = %v", err)
+	}
+	if !result.Completed || len(result.Containers) != len(containerIDs) {
+		t.Fatalf("result = %#v", result)
+	}
+	if gateway.maxConcurrent() != maxStandaloneProjectConcurrency {
+		t.Fatalf("max concurrent actions = %d, want %d", gateway.maxConcurrent(), maxStandaloneProjectConcurrency)
 	}
 }
 
@@ -71,10 +103,14 @@ func TestProjectActionRequestRejectsComposeKindAndDuplicateIDs(t *testing.T) {
 }
 
 type projectControlGateway struct {
+	mu           sync.Mutex
 	actions      []string
 	actionErrors map[string]error
 	snapshots    map[string]ContainerSnapshot
 	onAction     func(string)
+	actionDelay  time.Duration
+	active       int
+	maxActive    int
 }
 
 func (gateway *projectControlGateway) StartContainer(_ context.Context, id string) error {
@@ -90,6 +126,8 @@ func (gateway *projectControlGateway) RestartContainer(_ context.Context, id str
 }
 
 func (gateway *projectControlGateway) InspectContainer(_ context.Context, id string) (ContainerSnapshot, error) {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
 	snapshot, ok := gateway.snapshots[id]
 	if !ok {
 		return ContainerSnapshot{}, errors.New("container not found")
@@ -98,18 +136,48 @@ func (gateway *projectControlGateway) InspectContainer(_ context.Context, id str
 }
 
 func (gateway *projectControlGateway) action(id string, running bool) error {
+	gateway.mu.Lock()
 	gateway.actions = append(gateway.actions, id)
-	if gateway.onAction != nil {
-		gateway.onAction(id)
+	gateway.active++
+	if gateway.active > gateway.maxActive {
+		gateway.maxActive = gateway.active
 	}
-	if err := gateway.actionErrors[id]; err != nil {
+	err := gateway.actionErrors[id]
+	snapshot, ok := gateway.snapshots[id]
+	if ok && err == nil {
+		snapshot.Running = running
+		gateway.snapshots[id] = snapshot
+	}
+	delay := gateway.actionDelay
+	onAction := gateway.onAction
+	gateway.mu.Unlock()
+
+	if onAction != nil {
+		onAction(id)
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	gateway.mu.Lock()
+	gateway.active--
+	gateway.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	snapshot, ok := gateway.snapshots[id]
 	if !ok {
 		return errors.New("container not found")
 	}
-	snapshot.Running = running
-	gateway.snapshots[id] = snapshot
 	return nil
+}
+
+func (gateway *projectControlGateway) recordedActions() []string {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	return append([]string(nil), gateway.actions...)
+}
+
+func (gateway *projectControlGateway) maxConcurrent() int {
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	return gateway.maxActive
 }

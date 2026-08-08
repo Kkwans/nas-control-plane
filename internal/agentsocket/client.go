@@ -707,6 +707,8 @@ func rpcError(err error) error {
 		return coded("DOCKER_CONTAINER_ACTION_FAILED", err)
 	case "DOCKER_CONTAINER_INSPECT_FAILED":
 		return coded("DOCKER_CONTAINER_INSPECT_FAILED", err)
+	case "DOCKER_CONTAINER_ACTION_UNAVAILABLE":
+		return coded("DOCKER_CONTAINER_ACTION_UNAVAILABLE", err)
 	}
 	return coded("AGENT_RPC_UNAVAILABLE", err)
 }

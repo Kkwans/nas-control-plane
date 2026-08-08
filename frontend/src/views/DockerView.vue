@@ -23,7 +23,7 @@ type StateFilter = 'all' | DockerProject['state']
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
 type DockerViewMode = 'projects' | 'containers' | 'images'
 type DockerContainer = DockerInventory['containers'][number]
-type ProjectActionError = { containerId: string; name: string; message: string }
+type ProjectActionError = { containerId: string; name: string; message: string; scope?: 'project' | 'container' }
 
 const route = useRoute()
 const router = useRouter()
@@ -37,6 +37,7 @@ const actionPending = ref<string | null>(null)
 const projectActionPending = ref<{ projectId: string; action: ContainerAction } | null>(null)
 const projectDeletePending = ref<string | null>(null)
 const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
+const projectContainerActionErrors = ref<Record<string, string>>({})
 const actionError = ref<string | null>(null)
 const logOpen = ref(false)
 const logLoading = ref(false)
@@ -72,6 +73,7 @@ const effectiveActionPending = computed(() => {
 })
 const selectedProject = computed(() => allProjects.value.find((project) => project.id === route.query.project) ?? null)
 const selectedContainers = computed(() => containersFor(selectedProject.value?.id ?? ''))
+const selectedProjectContainerActionError = computed(() => selectedProject.value ? projectContainerActionErrors.value[selectedProject.value.id] ?? '' : '')
 const detailOpen = computed({
   get: () => Boolean(selectedProject.value),
   set: (open) => {
@@ -178,16 +180,28 @@ async function updateSelectedProject(projectId: string | null) {
   await router.replace({ query: queryParameters })
 }
 async function performAction(containerId: string, action: ContainerAction) {
-  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
+  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return null
   actionPending.value = `${containerId}:${action}`
-  actionError.value = null
+  let failure: string | null = null
   try {
     await requestContainerAction(containerId, action)
     await systemStore.refresh({ inventory: true })
+    ElMessage.success(`容器已${actionLabel(action)}`)
   } catch (error) {
-    actionError.value = errorMessage(error, '容器操作失败，请稍后重试。')
+    failure = errorMessage(error, '容器操作失败，请稍后重试。')
+    ElMessage.error(failure)
   } finally {
     actionPending.value = null
+  }
+  return failure
+}
+async function performDetailAction(containerId: string, action: ContainerAction) {
+  const projectId = selectedProject.value?.id
+  if (!projectId) return
+  projectContainerActionErrors.value = { ...projectContainerActionErrors.value, [projectId]: '' }
+  const failure = await performAction(containerId, action)
+  if (failure) {
+    projectContainerActionErrors.value = { ...projectContainerActionErrors.value, [projectId]: failure }
   }
 }
 async function performProjectAction(project: DockerProject, action: ContainerAction) {
@@ -226,16 +240,18 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
         containerIds: actionTargets.map((container) => container.id),
       }, action)
     } catch (error) {
-      failures.push(...actionTargets.map((container) => ({
-        containerId: container.id,
-        name: container.name || container.id.slice(0, 12),
+      failures.push({
+        containerId: `project:${project.id}`,
+        name: '项目操作',
         message: errorMessage(error, `项目${actionLabel(action)}失败，请稍后重试。`),
-      })))
+        scope: 'project',
+      })
     }
     if (!failures.length && result) failures.push(...projectActionFailures(result, actionTargets, action))
     if (failures.length) {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: failures }
-      ElMessage.warning(`项目${actionLabel(action)}完成，但有 ${failures.length} 个容器失败。`)
+      if (failures.some((failure) => failure.scope === 'project')) ElMessage.error(failures.find((failure) => failure.scope === 'project')?.message ?? `项目${actionLabel(action)}失败。`)
+      else ElMessage.warning(`项目${actionLabel(action)}完成，但有 ${failures.length} 个容器失败。`)
     } else {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
       ElMessage.success(`项目“${project.name}”已${actionLabel(action)}`)
@@ -399,7 +415,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-row-feedback" role="alert">
-            <strong>部分容器操作失败</strong>
+            <strong>{{ projectErrorsFor(project.id).some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败' }}</strong>
             <ul><li v-for="failure in projectErrorsFor(project.id)" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
           </div>
         </div>
@@ -439,7 +455,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-action-errors" role="alert">
-            <strong>部分容器操作失败</strong>
+            <strong>{{ projectErrorsFor(project.id).some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败' }}</strong>
             <ul><li v-for="failure in projectErrorsFor(project.id)" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
           </div>
         </article>
@@ -474,7 +490,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       :action-pending="effectiveActionPending"
       :project-action-pending="projectActionFor(selectedProject?.id ?? '')"
       :project-action-errors="projectErrorsFor(selectedProject?.id ?? '')"
-      @action="performAction"
+      :container-action-error="selectedProjectContainerActionError"
+      @action="performDetailAction"
       @logs="openLogs"
       @compose="composeEditorOpen = true"
       @project-action="performSelectedProjectAction"

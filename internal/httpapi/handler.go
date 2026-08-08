@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	defaultAgentTimeout       = 5 * time.Second
-	defaultTerminalPOCTimeout = 30 * time.Minute
-	defaultRealtimeInterval   = 5 * time.Second
-	defaultDatabaseTimeout    = 20 * time.Second
-	defaultDockerImageTimeout = 10 * time.Minute
+	defaultAgentTimeout                 = 5 * time.Second
+	defaultDockerContainerActionTimeout = 45 * time.Second
+	defaultComposeLifecycleTimeout      = 90 * time.Second
+	defaultTerminalPOCTimeout           = 30 * time.Minute
+	defaultRealtimeInterval             = 5 * time.Second
+	defaultDatabaseTimeout              = 20 * time.Second
+	defaultDockerImageTimeout           = 10 * time.Minute
 )
 
 type AgentClient interface {
@@ -639,19 +641,25 @@ func (api *handler) containerAction(response http.ResponseWriter, request *http.
 		return
 	}
 
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDockerContainerActionTimeout)
 	defer cancel()
 	result, err := api.agent.ControlContainer(requestContext, api.agentSocketPath, containerRequest)
 	if err != nil {
-		switch agentsocket.ErrorCode(err) {
+		code := agentsocket.ErrorCode(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = "AGENT_RPC_TIMEOUT"
+		}
+		switch code {
+		case "AGENT_RPC_TIMEOUT":
+			api.writeError(response, request, http.StatusGatewayTimeout, code, "容器操作超时，Docker 可能仍在处理；请刷新状态后再重试。")
 		case "AGENT_PROTOCOL_MISMATCH":
-			api.writeError(response, request, http.StatusConflict, "AGENT_PROTOCOL_MISMATCH", "Root Agent 与 NCP Server 版本不一致，请同步更新后重试。")
+			api.writeError(response, request, http.StatusConflict, code, "Root Agent 与 NCP Server 版本不一致，请同步更新后重试。")
 		case "DOCKER_CONTAINER_NOT_FOUND":
-			api.writeError(response, request, http.StatusNotFound, "DOCKER_CONTAINER_NOT_FOUND", "目标容器不存在或已被移除。")
+			api.writeError(response, request, http.StatusNotFound, code, "目标容器不存在或已被移除。")
 		case "DOCKER_CONTAINER_ACTION_FAILED", "DOCKER_CONTAINER_INSPECT_FAILED":
-			api.writeError(response, request, http.StatusConflict, agentsocket.ErrorCode(err), "Docker Engine 未能完成容器操作，请刷新状态后重试。")
+			api.writeError(response, request, http.StatusConflict, code, "Docker Engine 未能完成容器操作，请刷新状态后重试。")
 		default:
-			api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "容器操作暂不可用，请确认 Root Agent 与 Docker Engine 已启动。")
+			api.writeError(response, request, http.StatusServiceUnavailable, "DOCKER_CONTAINER_ACTION_UNAVAILABLE", "Docker 控制通道暂不可用，请检查 Root Agent 与 Docker Engine 状态。")
 		}
 		return
 	}
