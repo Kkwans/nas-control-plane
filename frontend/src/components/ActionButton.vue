@@ -47,8 +47,8 @@ const buttonClass = computed(() => [
     :aria-pressed="ariaPressed"
     :aria-busy="loading || undefined"
   >
-    <LoaderCircle v-if="loading" class="action-button__spinner" :size="16" aria-hidden="true" />
-    <component :is="icon" v-else-if="icon" :size="16" :stroke-width="1.9" aria-hidden="true" />
+    <LoaderCircle v-if="loading" class="action-button__spinner" :size="17" aria-hidden="true" />
+    <component :is="icon" v-else-if="icon" :size="17" :stroke-width="1.9" aria-hidden="true" />
     <span class="action-button__label"><slot /></span>
   </button>
 </template>
@@ -74,19 +74,22 @@ const buttonClass = computed(() => [
 }
 
 .action-button--sm {
+  height: 40px;
   min-height: 40px;
   padding: 0 var(--ncp-space-3);
   font-size: .78rem;
 }
 
 .action-button--md {
-  min-height: var(--ncp-touch-target);
+  height: 40px;
+  min-height: 40px;
   padding: 0 var(--ncp-space-4);
   font-size: .84rem;
 }
 
 .action-button--lg {
-  min-height: 48px;
+  height: 44px;
+  min-height: 44px;
   padding: 0 var(--ncp-space-5);
   font-size: .92rem;
 }
@@ -172,6 +175,11 @@ const buttonClass = computed(() => [
   transform: translateY(1px) scale(.99);
 }
 
+.action-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ncp-focus-ring);
+}
+
 .action-button:disabled {
   border-color: var(--ncp-line);
   background: var(--ncp-control-disabled);
@@ -199,5 +207,10 @@ const buttonClass = computed(() => [
   .action-button--lg {
     min-height: var(--ncp-touch-target);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-button,
+  .action-button__spinner { animation: none; transition: none; }
 }
 </style>

@@ -11,6 +11,7 @@ import {
 } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
+import SectionHeader from '@/components/SectionHeader.vue'
 
 type EnvironmentRow = { key: string; value: string }
 type MountRow = { type: 'bind' | 'volume' | 'tmpfs'; source: string; target: string; readOnly: boolean }
@@ -220,7 +221,7 @@ async function submit(runContainer: boolean) {
 
     <form class="container-form" @submit.prevent="submit(true)">
       <section class="form-section">
-        <header class="section-heading"><div class="section-heading__main"><span class="section-heading__icon"><Box :size="18" /></span><span class="section-heading__copy"><strong>基础信息</strong><small>设置名称、资源限制和重启策略</small></span></div></header>
+        <SectionHeader title="基础信息" description="设置名称、资源限制和重启策略" :icon="Box" heading-tag="h3" />
         <div class="form-grid">
           <label class="field field--wide"><span>镜像</span><ElInput :model-value="imageReference" disabled /></label>
           <label class="field field--wide"><span>容器名称</span><ElInput v-model="form.name" maxlength="128" placeholder="例如 mysql-1" /></label>
@@ -232,7 +233,7 @@ async function submit(runContainer: boolean) {
       </section>
 
       <section class="form-section">
-        <header class="section-heading"><div class="section-heading__main"><span class="section-heading__icon"><HardDrive :size="18" /></span><span class="section-heading__copy"><strong>环境与存储</strong><small>管理环境变量、目录、卷和临时文件系统</small></span></div></header>
+        <SectionHeader title="环境与存储" description="管理环境变量、目录、卷和临时文件系统" :icon="HardDrive" heading-tag="h3" />
         <div class="row-group">
           <div v-for="(row, index) in environment" :key="`env-${index}`" class="repeat-row repeat-row--env">
             <ElInput v-model="row.key" placeholder="变量，例如 APP_MODE" /><ElInput v-model="row.value" placeholder="值" />
@@ -254,7 +255,9 @@ async function submit(runContainer: boolean) {
       </section>
 
       <section class="form-section">
-        <header class="section-heading"><div class="section-heading__main"><span class="section-heading__icon"><Network :size="18" /></span><span class="section-heading__copy"><strong>网络与端口</strong><small>连接现有网络，或使用子网配置创建专用网络</small></span></div><ElSwitch v-model="form.networkEnabled" aria-label="启用自定义网络" /></header>
+        <SectionHeader title="网络与端口" description="连接现有网络，或使用子网配置创建专用网络" :icon="Network" heading-tag="h3">
+          <template #actions><ElSwitch v-model="form.networkEnabled" aria-label="启用自定义网络" /></template>
+        </SectionHeader>
         <div v-if="form.networkEnabled" class="form-grid">
           <label class="field"><span>网络名称</span><ElInput v-model="form.networkName" placeholder="bridge" /></label>
           <label class="field"><span>驱动</span><ElInput v-model="form.networkDriver" placeholder="默认 bridge" /></label>
@@ -276,7 +279,7 @@ async function submit(runContainer: boolean) {
       </section>
 
       <section class="form-section">
-        <header class="section-heading"><div class="section-heading__main"><span class="section-heading__icon"><Cpu :size="18" /></span><span class="section-heading__copy"><strong>启动命令</strong><small>每行填写一个 argv 参数；留空时使用镜像默认命令</small></span></div></header>
+        <SectionHeader title="启动命令" description="每行填写一个 argv 参数；留空时使用镜像默认命令" :icon="Cpu" heading-tag="h3" />
         <textarea v-model="commandText" rows="4" placeholder="示例：&#10;sh&#10;-c&#10;echo $APP_MODE && exec /app/server"></textarea>
       </section>
 

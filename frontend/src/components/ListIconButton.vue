@@ -22,24 +22,25 @@ withDefaults(defineProps<{
     :class="{ 'list-icon-button--danger': tone === 'danger' }"
     :disabled="disabled || loading"
     :aria-label="label"
+    :title="label"
     :aria-busy="loading || undefined"
   >
-    <LoaderCircle v-if="loading" class="list-icon-button__spinner" :size="16" aria-hidden="true" />
-    <component :is="icon" v-else :size="16" :stroke-width="1.9" aria-hidden="true" />
+    <LoaderCircle v-if="loading" class="list-icon-button__spinner" :size="17" aria-hidden="true" />
+    <component :is="icon" v-else :size="17" :stroke-width="1.9" aria-hidden="true" />
   </button>
 </template>
 
 <style scoped>
 .list-icon-button {
   display: grid;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  min-height: 34px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
   place-items: center;
   padding: 0;
   border: 1px solid var(--ncp-line);
-  border-radius: 8px;
+  border-radius: var(--ncp-radius-control);
   background: var(--ncp-surface);
   color: var(--ncp-primary-strong);
   box-shadow: none;
@@ -77,6 +78,10 @@ withDefaults(defineProps<{
   color: var(--ncp-text-disabled);
   opacity: .72;
   transform: none;
+}
+
+.list-icon-button:focus-visible {
+  box-shadow: 0 0 0 3px var(--ncp-focus-ring);
 }
 
 .list-icon-button__spinner {
