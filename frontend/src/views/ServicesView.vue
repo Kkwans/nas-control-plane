@@ -32,6 +32,8 @@ import {
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
+import ActionButton from '@/components/ActionButton.vue'
+import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSitesStore } from '@/stores/sites'
@@ -88,6 +90,11 @@ const groupedSites = computed(() => {
   }
   return [...groups.entries()].map(([category, items]) => ({ category, items }))
 })
+const siteDirectoryGroups = computed<GroupedDirectoryGroup[]>(() => groupedSites.value.map((group) => ({
+  key: group.category,
+  title: group.category,
+  count: group.items.length,
+})))
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '全部站点', value: sites.value.filter((site) => !site.hidden).length },
   { label: '正在运行', value: sites.value.filter((site) => !site.hidden && site.state === 'running').length, tone: 'success' },
@@ -283,6 +290,10 @@ async function toggleFavorite(site: Site) {
 function markIconFailed(site: Site) {
   failedIcons.value = new Set(failedIcons.value).add(site.id)
 }
+
+function sitesForCategory(category: string) {
+  return groupedSites.value.find((group) => group.category === category)?.items ?? []
+}
 </script>
 
 <template>
@@ -320,14 +331,13 @@ function markIconFailed(site: Site) {
       <div class="section-heading">
         <div><h2 id="directory-title">站点目录</h2><p>按用途分类，快速查看状态和全部入口</p></div>
         <div class="section-actions">
-          <ElButton type="primary" @click="openCreator"><Plus :size="16" />添加站点</ElButton>
-          <ElButton :loading="sitesStore.loading" @click="sitesStore.refresh"><RefreshCw :size="16" />重新识别</ElButton>
+          <ActionButton variant="primary" :icon="Plus" @click="openCreator">添加站点</ActionButton>
+          <ActionButton :icon="RefreshCw" :loading="sitesStore.loading" @click="sitesStore.refresh">重新识别</ActionButton>
         </div>
       </div>
-      <div class="directory-panel panel">
-        <section v-for="group in groupedSites" :key="group.category" class="site-group">
-          <header><h3>{{ group.category }}</h3><span>{{ group.items.length }}</span></header>
-          <article v-for="site in group.items" :key="site.id" class="site-row">
+      <GroupedDirectory :groups="siteDirectoryGroups" label="按用途分组的站点目录">
+        <template #items="{ group }">
+          <article v-for="site in sitesForCategory(group.key)" :key="site.id" class="site-row">
             <div class="site-identity">
               <div class="site-logo" :class="{ 'site-logo--image': site.iconUrl && !failedIcons.has(site.id) }" :style="siteHue(site)">
                 <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site)" />
@@ -357,8 +367,8 @@ function markIconFailed(site: Site) {
               <a class="row-open" :class="{ disabled: site.state !== 'running' || !siteLaunchable(site) }" :href="site.state === 'running' && siteLaunchable(site) ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" @click="trackVisit(site)">打开<ArrowUpRight :size="15" /></a>
             </div>
           </article>
-        </section>
-      </div>
+        </template>
+      </GroupedDirectory>
     </section>
 
     <section v-if="siteFilter === 'ignored' && sitesStore.ignoredSites.length" class="directory-panel panel ignored-sites">
@@ -451,7 +461,7 @@ function markIconFailed(site: Site) {
 .launch-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.launch-card{position:relative;display:grid;min-height:210px;grid-template-rows:auto 1fr auto;gap:14px;padding:16px;overflow:hidden;transition:transform var(--ncp-duration-fast),border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base)}.launch-card::before{position:absolute;inset:0 0 auto;height:3px;background:hsl(var(--site-hue) 70% 52%);content:''}.launch-card:hover{border-color:hsl(var(--site-hue) 60% 78%);box-shadow:var(--ncp-shadow-hover);transform:translateY(-3px)}.launch-card__top,.launch-card footer{display:flex;align-items:center;justify-content:space-between}.favorite-button{display:grid;width:38px;height:38px;place-items:center;border-radius:10px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-button:hover,.favorite-button.active,.row-actions button.active{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.launch-card__content>span{color:hsl(var(--site-hue) 55% 42%);font-size:.76rem;font-weight:720}.launch-card h3{margin:5px 0 6px;font-size:1.02rem}.launch-card p{display:-webkit-box;margin:0;overflow:hidden;color:var(--ncp-text-muted);font-size:.82rem;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:2}.launch-card footer>span{display:flex;align-items:center;gap:5px;color:var(--ncp-text-subtle);font-size:.74rem}.launch-card footer>a{display:flex;min-height:38px;align-items:center;gap:4px;padding:0 12px;border-radius:9px;background:var(--ncp-primary);box-shadow:0 5px 14px rgba(23,104,229,.16);color:#fff;font-size:.8rem;font-weight:720}.launch-card footer>a:hover{background:var(--ncp-primary-strong);box-shadow:0 8px 18px rgba(23,104,229,.2);transform:translateY(-1px)}
 .site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--image{border-color:transparent;background:transparent}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:contain}
 .launch-card--skeleton{grid-template-columns:52px 1fr;min-height:140px}.launch-card--skeleton>i{width:52px;height:52px}.launch-card--skeleton>div{display:grid;align-content:start;gap:12px}.launch-card--skeleton>div i:first-child{width:55%;height:15px}.launch-card--skeleton>div i:last-child{width:88%;height:42px}
-.directory-panel{overflow:hidden}.site-group+ .site-group{border-top:1px solid var(--ncp-line)}.site-group>header{display:flex;min-height:42px;align-items:center;gap:8px;padding:0 15px;background:var(--ncp-surface-quiet)}.site-group>header h3{margin:0;font-size:.82rem}.site-group>header span{display:grid;min-width:22px;height:22px;place-items:center;border-radius:7px;background:#fff;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.7rem}.site-row{display:grid;min-height:72px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:2px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
+.directory-panel{overflow:hidden}.site-row{display:grid;min-height:78px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.9rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:3px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}
 .ignored-sites .site-row{grid-template-columns:minmax(280px,1fr) 100px 140px}
 .row-actions button.danger:hover{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
@@ -460,11 +470,11 @@ function markIconFailed(site: Site) {
 @media(max-width:1480px){.launch-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:1280px){.launch-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.site-row{grid-template-columns:minmax(230px,1.5fr) 98px 165px 92px 145px}.site-source{display:none}}
 @media(max-width:900px){.site-search{width:100%}.launch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.site-row{grid-template-columns:minmax(220px,1.4fr) 94px 1fr 145px}.site-source,.site-visited{display:none}}
-@media(max-width:680px){.category-filter{width:100%}.state-filter{width:100%}.state-filter button{flex:1;padding-inline:7px}.launch-grid{grid-template-columns:1fr}.launch-card{min-height:196px}.directory-panel{border:0;background:transparent;box-shadow:none}.site-group>header{border:1px solid var(--ncp-line);border-radius:10px}.site-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:9px;padding:14px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff}.site-identity{grid-column:1/-1}.site-ports{grid-column:1}.site-row>.status-pill{grid-column:2;grid-row:2}.row-actions{grid-column:1/-1}.row-actions .row-open{flex:1;justify-content:center}.editor-grid,.switch-grid{grid-template-columns:1fr}.empty-sites{padding:28px 18px;text-align:center;flex-direction:column}}
+@media(max-width:680px){.category-filter{width:100%}.state-filter{width:100%}.state-filter button{flex:1;padding-inline:7px}.launch-grid{grid-template-columns:1fr}.launch-card{min-height:196px}.directory-panel{border:0;background:transparent;box-shadow:none}.site-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:9px;padding:14px;border:1px solid var(--ncp-line);border-radius:12px;background:#fff}.site-identity{grid-column:1/-1}.site-ports{grid-column:1}.site-row>.status-pill{grid-column:2;grid-row:2}.row-actions{grid-column:1/-1}.row-actions .row-open{flex:1;justify-content:center}.editor-grid,.switch-grid{grid-template-columns:1fr}.empty-sites{padding:28px 18px;text-align:center;flex-direction:column}}
 .section-actions{display:flex;align-items:center;gap:8px}
-.section-actions :deep(.el-button){min-height:40px}
+.section-actions>.action-button{min-width:112px}
 .site-row{grid-template-columns:minmax(280px,1.8fr) 92px 170px 104px 100px 190px}
 .site-row>.status-pill{justify-self:center}
-@media(max-width:680px){.section-heading{align-items:flex-start;flex-direction:column}.section-actions{width:100%}.section-actions :deep(.el-button){flex:1}}
+@media(max-width:680px){.section-heading{align-items:flex-start;flex-direction:column}.section-actions{width:100%}.section-actions>.action-button{flex:1}}
 @media(max-width:680px){.site-row{grid-template-columns:minmax(0,1fr) auto}.site-row>.status-pill{justify-self:end}.row-actions{min-width:0}.row-actions .row-open{min-width:0}}
 </style>

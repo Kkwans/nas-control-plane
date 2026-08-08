@@ -13,10 +13,12 @@ import {
   Search,
   Server,
 } from '@lucide/vue'
-import { ElButton, ElInput, ElMessage, ElTooltip } from 'element-plus'
+import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
 import { NcpApiError } from '@/api/system'
 import type { DatabaseDriver, DatabaseSource } from '@/api/database'
+import ActionButton from '@/components/ActionButton.vue'
+import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
 import { databaseProjectKey, useDatabaseStore } from '@/stores/database'
@@ -107,6 +109,11 @@ const filteredGroups = computed(() => {
     return sources.length ? [{ ...group, sources }] : []
   })
 })
+const databaseDirectoryGroups = computed<GroupedDirectoryGroup[]>(() => filteredGroups.value.map((group) => ({
+  key: group.key,
+  title: group.name,
+  count: group.sources.length,
+})))
 
 function driverLabel(driver: DatabaseDriver) {
   return driver === 'sqlite' ? 'SQLite' : driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL'
@@ -183,6 +190,23 @@ async function toggleArchive(group: DatabaseProjectGroup) {
   }
 }
 
+function databaseGroupFor(key: string) {
+  return filteredGroups.value.find((group) => group.key === key)
+}
+
+function databaseSourcesFor(key: string) {
+  return databaseGroupFor(key)?.sources ?? []
+}
+
+function databaseGroupCategory(key: string) {
+  return databaseGroupFor(key)?.category ?? 'project'
+}
+
+function toggleArchiveByKey(key: string) {
+  const group = databaseGroupFor(key)
+  if (group) void toggleArchive(group)
+}
+
 onMounted(() => {
   if (!databaseStore.sources.length) void refreshDiscovery()
 })
@@ -208,7 +232,7 @@ onMounted(() => {
           <ElInput v-model="query" class="database-search" clearable placeholder="搜索数据库、项目或模块" aria-label="搜索数据库">
             <template #prefix><Search :size="17" /></template>
           </ElInput>
-          <ElButton class="database-action" :loading="databaseStore.loading" title="重新发现数据库" aria-label="重新发现数据库" @click="refreshDiscovery"><RefreshCw :size="16" />重新发现</ElButton>
+          <ActionButton :icon="RefreshCw" :loading="databaseStore.loading" aria-label="重新发现数据库" @click="refreshDiscovery">重新发现</ActionButton>
         </div>
       </template>
     </WorkspaceHeader>
@@ -234,32 +258,28 @@ onMounted(() => {
       <div class="section-heading">
         <div><h2 id="database-directory-title">数据库目录</h2><p><Info :size="14" />进入数据源后会先完成认证，再读取数据表和视图目录</p></div>
       </div>
-      <div class="database-catalog panel" aria-label="按项目分组的数据库来源">
-        <article v-for="group in filteredGroups" :key="group.key" class="database-group">
-          <header class="database-group__header">
-            <div class="database-group__title"><h3>{{ group.name }}</h3><span>{{ group.sources.length }}</span></div>
-            <div class="database-group__meta">
-              <span :class="['project-kind', { 'project-kind--system': group.category === 'system' }]">{{ group.category === 'system' ? '系统模块' : '用户项目' }}</span>
-              <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
-                <ListIconButton :icon="databaseStore.isProjectArchived(group.key) ? ArchiveRestore : Archive" :label="databaseStore.isProjectArchived(group.key) ? `恢复 ${group.name}` : `归档 ${group.name}`" @click="toggleArchive(group)" />
-              </ElTooltip>
-            </div>
-          </header>
-
+      <GroupedDirectory :groups="databaseDirectoryGroups" label="按项目分组的数据库来源">
+        <template #actions="{ group }">
+          <span :class="['project-kind', { 'project-kind--system': databaseGroupCategory(group.key) === 'system' }]">{{ databaseGroupCategory(group.key) === 'system' ? '系统模块' : '用户项目' }}</span>
+          <ElTooltip :content="databaseStore.isProjectArchived(group.key) ? '恢复到默认列表' : '归档后从默认列表隐藏'" placement="top">
+            <ListIconButton :icon="databaseStore.isProjectArchived(group.key) ? ArchiveRestore : Archive" :label="databaseStore.isProjectArchived(group.key) ? `恢复 ${group.title}` : `归档 ${group.title}`" @click="toggleArchiveByKey(group.key)" />
+          </ElTooltip>
+        </template>
+        <template #items="{ group }">
           <div class="database-table">
             <RouterLink
-              v-for="source in group.sources"
+              v-for="source in databaseSourcesFor(group.key)"
               :key="source.id"
               class="database-row"
               :to="{ name: 'database-detail', params: { sourceId: source.id }, query: { sourceName: source.name } }"
-              :aria-label="`进入 ${databaseDisplayName(source, group.name)} 数据库详情`"
+              :aria-label="`进入 ${databaseDisplayName(source, group.title)} 数据库详情`"
             >
               <div class="database-identity">
                 <span :class="['database-type-icon', `database-type-icon--${source.driver}`, { 'database-type-icon--system': source.category === 'system' }]" aria-hidden="true">
                   <component :is="driverIcon(source.driver)" :size="19" />
                 </span>
                 <div>
-                  <strong>{{ databaseDisplayName(source, group.name) }}</strong>
+                  <strong>{{ databaseDisplayName(source, group.title) }}</strong>
                   <small>{{ source.tags.slice(0, 2).join(' · ') || (source.category === 'system' ? 'NAS 系统数据库' : '项目数据库') }}</small>
                 </div>
               </div>
@@ -270,8 +290,8 @@ onMounted(() => {
               <span class="database-row__affordance" aria-hidden="true"><ArrowRight :size="17" /></span>
             </RouterLink>
           </div>
-        </article>
-      </div>
+        </template>
+      </GroupedDirectory>
     </section>
 
     <section v-else class="empty-panel panel">
@@ -405,67 +425,11 @@ onMounted(() => {
   color: var(--ncp-primary-strong);
 }
 
-.database-catalog {
-  overflow: hidden;
-}
-
-.database-group + .database-group {
-  border-top: 1px solid var(--ncp-line-strong);
-}
-
-.database-group__header {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 15px;
-  border-bottom: 1px solid var(--ncp-line);
-  background: var(--ncp-surface-quiet);
-}
-
-.database-group__title,
-.database-group__meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-
-.database-group__title {
-  gap: 8px;
-}
-
-.database-group__meta {
-  flex: 0 0 auto;
-  gap: 10px;
-}
-
 .database-type-icon {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
   border-radius: var(--ncp-radius-control);
-}
-
-.database-group__title h3 {
-  overflow: hidden;
-  margin: 0;
-  font-size: .82rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.database-group__title > span {
-  display: grid;
-  min-width: 22px;
-  height: 22px;
-  place-items: center;
-  border: 1px solid var(--ncp-line);
-  border-radius: 7px;
-  background: var(--ncp-surface);
-  color: var(--ncp-text-subtle);
-  font-family: var(--ncp-font-mono);
-  font-size: .7rem;
 }
 
 .project-kind,
@@ -500,7 +464,7 @@ onMounted(() => {
 }
 
 .database-row {
-  min-height: 72px;
+  min-height: 78px;
   border-top: 1px solid var(--ncp-line);
   color: inherit;
   text-decoration: none;
@@ -565,12 +529,13 @@ onMounted(() => {
 }
 
 .database-identity strong {
-  font-size: .86rem;
+  font-size: .9rem;
 }
 
 .database-identity small {
   color: var(--ncp-text-subtle);
-  font-size: .7rem;
+  font-size: .73rem;
+  line-height: 1.4;
 }
 
 .database-cell {
@@ -795,19 +760,6 @@ onMounted(() => {
 
   .database-tools :deep(.el-button svg) {
     margin: 0;
-  }
-
-  .database-group__header {
-    min-height: 62px;
-    padding-inline: 14px;
-  }
-
-  .database-group__title {
-    gap: 9px;
-  }
-
-  .database-group__meta {
-    gap: 0;
   }
 
   .project-kind {
