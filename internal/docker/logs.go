@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kkwans/nas-control-plane/internal/logformat"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 )
@@ -45,10 +46,11 @@ func (r ContainerLogsRequest) Normalize() (ContainerLogsRequest, error) {
 }
 
 type ContainerLogEntry struct {
-	Timestamp time.Time `json:"timestamp"`
-	Level     string    `json:"level"`
-	Stream    string    `json:"stream"`
-	Message   string    `json:"message"`
+	Timestamp  time.Time `json:"timestamp"`
+	Level      string    `json:"level"`
+	Stream     string    `json:"stream"`
+	Message    string    `json:"message"`
+	RawMessage string    `json:"rawMessage,omitempty"`
 }
 
 type ContainerLogsResult struct {
@@ -98,7 +100,16 @@ func (c *ContainerLogCollector) Read(ctx context.Context, request ContainerLogsR
 		entries = make([]ContainerLogEntry, 0)
 	}
 	for index := range entries {
-		entries[index].Level = ResolveContainerLogLevel(entries[index].Level, entries[index].Message)
+		original := entries[index].RawMessage
+		if original == "" {
+			original = entries[index].Message
+		}
+		normalized := logformat.NormalizeMessage(original)
+		entries[index].Level = ResolveContainerLogLevel(entries[index].Level, original)
+		entries[index].Message = normalized.Text
+		if entries[index].RawMessage == "" {
+			entries[index].RawMessage = normalized.RawMessage
+		}
 	}
 	return ContainerLogsResult{
 		ContainerID: request.ContainerID,
@@ -169,11 +180,13 @@ func (a *logAccumulator) append(stream, text string) {
 		return
 	}
 	timestamp, message := parseDockerLogLine(text)
+	normalized := logformat.NormalizeMessage(message)
 	a.entries = append(a.entries, ContainerLogEntry{
-		Timestamp: timestamp,
-		Level:     ResolveContainerLogLevel("", message),
-		Stream:    stream,
-		Message:   message,
+		Timestamp:  timestamp,
+		Level:      ResolveContainerLogLevel("", message),
+		Stream:     stream,
+		Message:    normalized.Text,
+		RawMessage: normalized.RawMessage,
 	})
 }
 
@@ -208,11 +221,13 @@ func textLogEntries(stream, text string) []ContainerLogEntry {
 	for _, line := range lines {
 		if line != "" {
 			timestamp, message := parseDockerLogLine(line)
+			normalized := logformat.NormalizeMessage(message)
 			entries = append(entries, ContainerLogEntry{
-				Timestamp: timestamp,
-				Level:     ResolveContainerLogLevel("", message),
-				Stream:    stream,
-				Message:   message,
+				Timestamp:  timestamp,
+				Level:      ResolveContainerLogLevel("", message),
+				Stream:     stream,
+				Message:    normalized.Text,
+				RawMessage: normalized.RawMessage,
 			})
 		}
 	}
@@ -223,31 +238,7 @@ func textLogEntries(stream, text string) []ContainerLogEntry {
 // never raises the level by itself, and only an explicit level prefix can do
 // so.  In particular, stderr defaults to info just like stdout.
 func ResolveContainerLogLevel(explicit, message string) string {
-	if level := normalizeContainerLogLevel(explicit); level != "" {
-		return level
-	}
-	if fields := strings.Fields(message); len(fields) > 0 {
-		token := strings.Trim(fields[0], "[](){}:;,|")
-		if level := normalizeContainerLogLevel(token); level != "" {
-			return level
-		}
-	}
-	return "info"
-}
-
-func normalizeContainerLogLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "trace", "debug":
-		return "debug"
-	case "info", "notice":
-		return "info"
-	case "warn", "warning":
-		return "warning"
-	case "error", "fatal", "panic":
-		return "error"
-	default:
-		return ""
-	}
+	return logformat.ResolveLevel(explicit, message)
 }
 
 func parseDockerLogLine(line string) (time.Time, string) {

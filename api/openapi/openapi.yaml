@@ -2924,6 +2924,9 @@ components:
           type: string
           enum: [stdout, stderr]
         message: { type: string }
+        rawMessage:
+          type: string
+          description: 仅在移除正文前导时间或级别信息时返回的原始日志内容
     ServiceListResponse:
       type: object
       required: [collectedAt, services]

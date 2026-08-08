@@ -421,6 +421,7 @@ export interface ContainerLogEntry {
   level: 'error' | 'warning' | 'info' | 'debug'
   stream: 'stdout' | 'stderr'
   message: string
+  rawMessage?: string
 }
 
 export interface ContainerLogsResult {

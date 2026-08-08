@@ -100,6 +100,20 @@ func TestDecodeDockerLogEntriesPreservesRealTimestamp(t *testing.T) {
 	}
 }
 
+func TestDecodeDockerLogEntriesRemovesApplicationTimestamp(t *testing.T) {
+	entries := textLogEntries("stdout", "2026-08-08T21:06:26.472531311Z 2026/08/08 13:06:26 Using config file\n")
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	entry := entries[0]
+	if entry.Message != "Using config file" || entry.RawMessage != "2026/08/08 13:06:26 Using config file" {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.Timestamp.Format(time.RFC3339Nano) != "2026-08-08T21:06:26.472531311Z" {
+		t.Fatalf("timestamp = %s", entry.Timestamp.Format(time.RFC3339Nano))
+	}
+}
+
 func TestResolveContainerLogLevelRequiresAnExplicitPrefix(t *testing.T) {
 	tests := []struct {
 		name    string

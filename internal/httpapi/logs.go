@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
+	"github.com/Kkwans/nas-control-plane/internal/logformat"
 )
 
 type logEntry struct {
@@ -164,10 +164,10 @@ func (api *handler) readJournalLogs(ctx context.Context, source string, limit in
 	}
 	entries := make([]logEntry, 0, len(page.Entries))
 	for _, item := range page.Entries {
-		message, rawMessage := normalizeLogMessage(item.Message)
+		normalized := logformat.NormalizeMessage(item.Message)
 		entries = append(entries, logEntry{
 			ID: item.Cursor, Timestamp: item.Timestamp, Source: source, Unit: firstNonEmpty(item.Unit, item.Identifier),
-			Level: journalLevel(item.Priority), Message: message, RawMessage: rawMessage,
+			Level: journalLevel(item.Priority), Message: normalized.Text, RawMessage: normalized.RawMessage,
 		})
 	}
 	return logResponse{CollectedAt: time.Now().UTC(), Entries: entries, NextCursor: page.NextCursor}, nil
@@ -186,12 +186,16 @@ func (api *handler) readContainerLogCenter(ctx context.Context, limit int, conta
 	}
 	entries := make([]logEntry, 0, len(result.Entries))
 	for _, item := range result.Entries {
-		level := docker.ResolveContainerLogLevel(item.Level, item.Message)
-		identifier := fmt.Sprintf("%x", sha256.Sum256([]byte(containerID+"\x00"+item.Stream+"\x00"+item.Timestamp.Format(time.RFC3339Nano)+"\x00"+item.Message)))
-		message, rawMessage := normalizeLogMessage(item.Message)
+		original := item.RawMessage
+		if original == "" {
+			original = item.Message
+		}
+		normalized := logformat.NormalizeMessage(original)
+		level := docker.ResolveContainerLogLevel(item.Level, original)
+		identifier := fmt.Sprintf("%x", sha256.Sum256([]byte(containerID+"\x00"+item.Stream+"\x00"+item.Timestamp.Format(time.RFC3339Nano)+"\x00"+original)))
 		entries = append(entries, logEntry{
 			ID: identifier[:20], Timestamp: item.Timestamp, Source: "container",
-			Unit: containerID, Level: level, Stream: item.Stream, Message: message, RawMessage: rawMessage,
+			Unit: containerID, Level: level, Stream: item.Stream, Message: normalized.Text, RawMessage: normalized.RawMessage,
 		})
 	}
 	return logResponse{CollectedAt: result.CollectedAt, Entries: entries, NextCursor: ""}, nil
@@ -211,19 +215,6 @@ func filterLogEntries(entries []logEntry, level, keyword string) []logEntry {
 		filtered = append(filtered, entry)
 	}
 	return filtered
-}
-
-// structuredLogPrefix only removes a timestamp/level prefix when it is the
-// first token in the message.  Numbers and timestamps appearing in the body
-// are deliberately left untouched so diagnostic messages remain faithful.
-var structuredLogPrefix = regexp.MustCompile(`(?i)^(?:(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\s+)?(?:(?:\d{4}-\d{2}-\d{2}(?:T|\s)\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)|(?:\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?))\s+`)
-
-func normalizeLogMessage(message string) (string, string) {
-	cleaned := structuredLogPrefix.ReplaceAllString(message, "")
-	if cleaned == message {
-		return message, ""
-	}
-	return cleaned, message
 }
 
 func journalLevel(priority int) string {

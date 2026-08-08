@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/logformat"
 )
 
 func TestNormalizeLogMessage(t *testing.T) {
@@ -29,6 +30,12 @@ func TestNormalizeLogMessage(t *testing.T) {
 			input:       "2026-08-01T11:24:34.846634623Z [diagnostic] heartbeat",
 			wantMessage: "[diagnostic] heartbeat",
 			wantRaw:     "2026-08-01T11:24:34.846634623Z [diagnostic] heartbeat",
+		},
+		{
+			name:        "slash date prefix",
+			input:       "2026/08/08 13:06:26 Using config file: /config/settings.json",
+			wantMessage: "Using config file: /config/settings.json",
+			wantRaw:     "2026/08/08 13:06:26 Using config file: /config/settings.json",
 		},
 		{
 			name:        "time only prefix",
@@ -66,9 +73,9 @@ func TestNormalizeLogMessage(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			message, raw := normalizeLogMessage(test.input)
-			if message != test.wantMessage || raw != test.wantRaw {
-				t.Fatalf("normalizeLogMessage(%q) = (%q, %q), want (%q, %q)", test.input, message, raw, test.wantMessage, test.wantRaw)
+			normalized := logformat.NormalizeMessage(test.input)
+			if normalized.Text != test.wantMessage || normalized.RawMessage != test.wantRaw {
+				t.Fatalf("NormalizeMessage(%q) = (%q, %q), want (%q, %q)", test.input, normalized.Text, normalized.RawMessage, test.wantMessage, test.wantRaw)
 			}
 		})
 	}
