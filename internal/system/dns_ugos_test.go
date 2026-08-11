@@ -36,9 +36,9 @@ func TestParseUGOSSingleBool(t *testing.T) {
 		want    bool
 		wantErr string
 	}{
-		{name: "accepted", content: []byte{0x08, 0x01}, want: true},
-		{name: "rejected default", content: nil, want: false},
-		{name: "rejected explicit", content: []byte{0x08, 0x00}, want: false},
+		{name: "reboot required", content: []byte{0x08, 0x01}, want: true},
+		{name: "no reboot default", content: nil, want: false},
+		{name: "no reboot explicit", content: []byte{0x08, 0x00}, want: false},
 		{name: "malformed", content: []byte{0x08}, wantErr: "UGOS_DNS_RESPONSE_INVALID"},
 	}
 	for _, test := range tests {
@@ -54,6 +54,17 @@ func TestParseUGOSSingleBool(t *testing.T) {
 				t.Fatalf("parseUGOSSingleBool() = %v, %v", got, err)
 			}
 		})
+	}
+}
+
+func TestValidateUGOSSetGeneralConfigResponseAcceptsBothRebootStates(t *testing.T) {
+	for _, content := range [][]byte{nil, {0x08, 0x00}, {0x08, 0x01}} {
+		if err := validateUGOSSetGeneralConfigResponse(content); err != nil {
+			t.Fatalf("response %x was rejected: %v", content, err)
+		}
+	}
+	if err := validateUGOSSetGeneralConfigResponse([]byte{0x08}); err == nil || err.Error() != "UGOS_DNS_RESPONSE_INVALID" {
+		t.Fatalf("malformed response error = %v", err)
 	}
 }
 

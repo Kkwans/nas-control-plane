@@ -87,14 +87,7 @@ func (c liveUGOSDNSClient) SetGeneralConfig(ctx context.Context, config []byte) 
 	if err != nil {
 		return err
 	}
-	applied, err := parseUGOSSingleBool(response)
-	if err != nil {
-		return err
-	}
-	if !applied {
-		return errors.New("UGOS_DNS_APPLY_REJECTED")
-	}
-	return nil
+	return validateUGOSSetGeneralConfigResponse(response)
 }
 
 type ugosDNSPreview struct {
@@ -453,9 +446,9 @@ func parseUGOSDNSConfig(config []byte) ([]string, bool, error) {
 	return nameservers, manual, nil
 }
 
-// parseUGOSSingleBool decodes ugidl.common.SingleBool. A protobuf message with
-// the default false value is encoded as an empty payload, so absence of field 1
-// is a valid rejection rather than a successful empty response.
+// parseUGOSSingleBool decodes ugidl.common.SingleBool. SetGeneralConfig uses
+// this value as a reboot-required flag, not an applied/success flag. A false
+// value is encoded as an empty payload and is a valid successful response.
 func parseUGOSSingleBool(content []byte) (bool, error) {
 	result := false
 	for len(content) > 0 {
@@ -480,6 +473,11 @@ func parseUGOSSingleBool(content []byte) (bool, error) {
 		content = content[tagLength+valueLength:]
 	}
 	return result, nil
+}
+
+func validateUGOSSetGeneralConfigResponse(content []byte) error {
+	_, err := parseUGOSSingleBool(content)
+	return err
 }
 
 func rewriteUGOSDNSConfig(config []byte, nameservers []string) ([]byte, error) {
