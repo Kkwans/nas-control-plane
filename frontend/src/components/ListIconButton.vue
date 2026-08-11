@@ -80,6 +80,10 @@ withDefaults(defineProps<{
   background: var(--ncp-primary-hover);
 }
 
+.list-icon-button.is-active svg:not(.list-icon-button__spinner) {
+  fill: currentColor;
+}
+
 .list-icon-button:disabled {
   cursor: not-allowed;
   border-color: var(--ncp-line);

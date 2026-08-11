@@ -15,6 +15,7 @@ import {
   type SiteDiscoverySummary,
   type SiteProfileInput,
 } from '@/api/control'
+import { NcpApiError } from '@/api/system'
 
 export const useSitesStore = defineStore('sites', () => {
   const sites = ref<Site[]>([])
@@ -38,8 +39,10 @@ export const useSitesStore = defineStore('sites', () => {
       discovery.value = result.discovery
       ignoredSites.value = ignored
       collectedAt.value = result.collectedAt
-    } catch {
-      error.value = '站点识别失败，请确认 Root Agent 与 Docker Engine 正常运行。'
+    } catch (caught) {
+      error.value = caught instanceof NcpApiError
+        ? caught.message
+        : '无法读取站点目录，请检查 NCP Server 与 Root Agent 的连接。'
     } finally {
       loading.value = false
     }
