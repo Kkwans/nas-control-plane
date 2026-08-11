@@ -12,12 +12,28 @@ import {
   requestContainerLogs,
   requestDockerImages,
   requestDockerHubTags,
+  requestDNSCapability,
   requestJobs,
   requestSystemSummary,
   inspectMihomo,
 } from './system'
 
 describe('NCP API client', () => {
+  it('keeps effective and backend-managed DNS values separate', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      backend: 'ugos-network-service', detected: true, state: 'available', readOnly: false,
+      canRead: true, canPreview: true, canConfirm: true, canRollback: true,
+      nameservers: ['240c::6666', '240c::6644', '192.168.5.1'],
+      configuredNameservers: ['240c::6666', '192.168.5.1'],
+      detectionSource: 'ugos-net-serv', errorCode: '',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(requestDNSCapability(fetcher)).resolves.toMatchObject({
+      nameservers: ['240c::6666', '240c::6644', '192.168.5.1'],
+      configuredNameservers: ['240c::6666', '192.168.5.1'],
+    })
+  })
+
   it('requests protected system data with same-origin credentials', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

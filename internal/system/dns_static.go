@@ -71,6 +71,20 @@ func NewStaticResolvDNSController(path, backupDir string) (*StaticResolvDNSContr
 	}, nil
 }
 
+func (c *StaticResolvDNSController) CurrentDNSState(ctx context.Context) (DNSState, error) {
+	if err := ctx.Err(); err != nil {
+		return DNSState{}, err
+	}
+	before, _, err := readStaticDNSFile(c.path)
+	if err != nil {
+		return DNSState{}, err
+	}
+	return DNSState{
+		Nameservers:   parseNameservers(string(before)),
+		SearchDomains: parseSearchDomains(string(before)),
+	}, nil
+}
+
 func (c *StaticResolvDNSController) Preview(ctx context.Context, request DNSChangeRequest) (DNSChangePreview, error) {
 	if err := ctx.Err(); err != nil {
 		return DNSChangePreview{Backend: DNSBackendStaticResolv, ErrorCode: "DNS_CHANGE_CANCELED"}, err

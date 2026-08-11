@@ -157,8 +157,17 @@ func (p *LiveSystemProvider) CollectDNSCapability(ctx context.Context) (system.D
 	}
 	capability := system.ProbeDNS(ctx, p.Environment)
 	// 探测到管理后端并不等于具备安全写入能力。只有显式注入实现了
-	// 预览、确认和回滚契约的控制器时，才向 Console 开放修改入口。
-	if p.resolveDNSController() != nil && capability.Detected {
+	// 预览、确认、回滚和当前配置读取契约的控制器时，才向 Console 开放修改入口。
+	controller := p.resolveDNSController()
+	reader, readable := controller.(system.DNSStateReader)
+	if controller != nil && readable && capability.Detected {
+		managedState, err := reader.CurrentDNSState(ctx)
+		if err != nil {
+			capability.State = system.CapabilityStateDegraded
+			capability.ErrorCode = "DNS_MANAGED_STATE_UNAVAILABLE"
+			return capability, nil
+		}
+		capability.ConfiguredNameservers = append([]string(nil), managedState.Nameservers...)
 		capability.State = system.CapabilityStateAvailable
 		capability.ReadOnly = false
 		capability.CanPreview = true
@@ -352,6 +361,9 @@ func CollectDNSCapability(ctx context.Context, socketPath string) (system.DNSCap
 	}
 	if value.Nameservers == nil {
 		value.Nameservers = []string{}
+	}
+	if value.ConfiguredNameservers == nil {
+		value.ConfiguredNameservers = []string{}
 	}
 	return value, nil
 }

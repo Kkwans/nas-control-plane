@@ -116,6 +116,26 @@ func TestUGOSNetworkDNSControllerPreviewConfirmAndRollback(t *testing.T) {
 	}
 }
 
+func TestUGOSNetworkDNSControllerReadsManagedState(t *testing.T) {
+	client := &fakeUGOSDNSClient{config: makeUGOSTestConfig([]string{"192.168.5.1", "240c::6666"}, true)}
+	controller := newUGOSNetworkDNSController(client, t.TempDir())
+
+	state, err := controller.CurrentDNSState(context.Background())
+	if err != nil || !equalStringSlices(state.Nameservers, []string{"192.168.5.1", "240c::6666"}) || len(state.SearchDomains) != 0 {
+		t.Fatalf("managed state = %#v, error = %v", state, err)
+	}
+}
+
+func TestUGOSNetworkDNSControllerRejectsMoreThanTwoServers(t *testing.T) {
+	client := &fakeUGOSDNSClient{config: makeUGOSTestConfig([]string{"192.168.5.1"}, true)}
+	controller := newUGOSNetworkDNSController(client, t.TempDir())
+
+	preview, err := controller.Preview(context.Background(), DNSChangeRequest{Nameservers: []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}})
+	if err == nil || err.Error() != "UGOS_DNS_SERVER_LIMIT" || preview.ErrorCode != "UGOS_DNS_SERVER_LIMIT" || client.setCalls != 0 {
+		t.Fatalf("preview = %#v, error = %v, set calls = %d", preview, err, client.setCalls)
+	}
+}
+
 func TestUGOSNetworkDNSControllerRejectsConcurrentChanges(t *testing.T) {
 	client := &fakeUGOSDNSClient{config: makeUGOSTestConfig([]string{"192.168.5.1"}, true)}
 	controller := newUGOSNetworkDNSController(client, t.TempDir())

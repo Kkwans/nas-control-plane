@@ -122,6 +122,13 @@ func TestDNSFailureMessageExplainsConcurrentChange(t *testing.T) {
 	}
 }
 
+func TestDNSFailureMessageExplainsUGOSServerLimit(t *testing.T) {
+	message := dnsChangeFailureMessage(errors.New("UGOS_DNS_SERVER_LIMIT"), "fallback")
+	if !strings.Contains(message, "最多") || !strings.Contains(message, "2 个") {
+		t.Fatalf("UGOS DNS limit message = %q", message)
+	}
+}
+
 type systemHTTPAgent struct {
 	*fakeAgentClient
 	dns              system.DNSCapability

@@ -232,7 +232,7 @@ func (c *DetailsCollector) Collect(ctx context.Context) (Details, error) {
 		Storage:      StorageDetails{Mounts: []MountDetails{}, Disks: []PhysicalDiskDetails{}, RAID: []RAIDDetails{}},
 		Proxy:        ProxyDetails{System: []ProxyEvidence{}, Associations: []ProxyAssociation{}, MihomoCapability: MihomoCapability{Controller: MihomoControllerCapability{Operations: []string{}}, Evidence: []CapabilityEvidence{}, Warnings: []ProbeWarning{}}},
 		Tailscale:    TailscaleCapability{OverlayIPs: []string{}, Evidence: []CapabilityEvidence{}, Warnings: []ProbeWarning{}},
-		DNS:          DNSCapability{Backend: DNSBackendUnknown, Nameservers: []string{}},
+		DNS:          DNSCapability{Backend: DNSBackendUnknown, Nameservers: []string{}, ConfiguredNameservers: []string{}},
 		PublicEgress: NewPublicEgressCapability(os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT")),
 		Control: ControlDetails{Nodes: []ControlNode{{
 			ID: "agent", Name: "Root Agent", Detail: "宿主机与 Docker Engine 采集端",

@@ -785,25 +785,27 @@ func readFileSafe(environment Environment, path string) []byte {
 // DNSCapability 描述可读取、可预览、可确认和可回滚的能力边界。
 // 只有 Agent 显式注入带备份和回滚能力的控制器后才开放写入。
 type DNSCapability struct {
-	Backend         string   `json:"backend"`
-	Detected        bool     `json:"detected"`
-	State           string   `json:"state"`
-	ReadOnly        bool     `json:"readOnly"`
-	CanRead         bool     `json:"canRead"`
-	CanPreview      bool     `json:"canPreview"`
-	CanConfirm      bool     `json:"canConfirm"`
-	CanRollback     bool     `json:"canRollback"`
-	Nameservers     []string `json:"nameservers"`
-	DetectionSource string   `json:"detectionSource"`
-	ErrorCode       string   `json:"errorCode"`
+	Backend               string   `json:"backend"`
+	Detected              bool     `json:"detected"`
+	State                 string   `json:"state"`
+	ReadOnly              bool     `json:"readOnly"`
+	CanRead               bool     `json:"canRead"`
+	CanPreview            bool     `json:"canPreview"`
+	CanConfirm            bool     `json:"canConfirm"`
+	CanRollback           bool     `json:"canRollback"`
+	Nameservers           []string `json:"nameservers"`
+	ConfiguredNameservers []string `json:"configuredNameservers"`
+	DetectionSource       string   `json:"detectionSource"`
+	ErrorCode             string   `json:"errorCode"`
 }
 
 func ProbeDNS(ctx context.Context, environment Environment) DNSCapability {
 	result := DNSCapability{
-		Backend:         DNSBackendUnknown,
-		State:           CapabilityStateUnavailable,
-		Nameservers:     []string{},
-		DetectionSource: "resolv.conf",
+		Backend:               DNSBackendUnknown,
+		State:                 CapabilityStateUnavailable,
+		Nameservers:           []string{},
+		ConfiguredNameservers: []string{},
+		DetectionSource:       "resolv.conf",
 	}
 	if environment == nil {
 		environment = NewOSEnvironment()
@@ -929,6 +931,13 @@ type DNSChangeController interface {
 	Preview(context.Context, DNSChangeRequest) (DNSChangePreview, error)
 	Confirm(context.Context, DNSChangeConfirmation) (DNSChangeResult, error)
 	Rollback(context.Context, DNSRollbackRequest) (DNSChangeResult, error)
+}
+
+// DNSStateReader exposes only the controller-managed DNS values. These can
+// differ from the effective resolver list in /etc/resolv.conf, so callers must
+// not use DNSCapability.Nameservers as an editable form source.
+type DNSStateReader interface {
+	CurrentDNSState(context.Context) (DNSState, error)
 }
 
 // ReadOnlyDNSController is the safe default when no managed DNS adapter was injected.

@@ -26,6 +26,7 @@ import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import {
   classifyListenerScope,
+  editableDNSNameservers,
   isAuxiliaryNetworkInterface,
   isSubscriptionStatusNodeName,
   networkInterfaceKindLabel,
@@ -98,8 +99,10 @@ const listenerScopeOptions = computed(() => [
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
   canPreview: false, canConfirm: false, canRollback: false, nameservers: [],
+  configuredNameservers: [],
   detectionSource: '', errorCode: '',
 })
+const editableDNS = computed(() => editableDNSNameservers(dnsDetails.value))
 const tailscaleDetails = computed<TailscaleCapability>(() => details.value?.tailscale ?? {
   detected: false, state: 'not-found', backendState: 'unknown', version: '', interface: '',
   overlayIps: [], online: false, linkState: 'unknown', heartbeatState: 'unknown', reachable: false,
@@ -217,7 +220,7 @@ async function loadDetails() {
     ])
     details.value = systemDetails
     dnsCapability.value = liveDNSCapability
-    dnsDraft.value = dnsDetails.value.nameservers.join(', ')
+    dnsDraft.value = editableDNS.value.join(', ')
     dnsPreview.value = null
     dnsMessage.value = ''
     mihomoInspection.value = null
@@ -239,6 +242,10 @@ async function previewDNS() {
   const nameservers = dnsServersFromDraft()
   if (!nameservers.length) {
     dnsMessage.value = '至少填写一个 DNS 地址。'
+    return
+  }
+  if (dnsDetails.value.backend === 'ugos-network-service' && nameservers.length > 2) {
+    dnsMessage.value = 'UGOS 最多支持配置 2 个 DNS 服务器。'
     return
   }
   dnsMessage.value = ''
@@ -286,7 +293,7 @@ async function rollbackDNS() {
 }
 
 function openDNSEditor() {
-  dnsDraft.value = dnsDetails.value.nameservers.join(', ')
+  dnsDraft.value = editableDNS.value.join(', ')
   dnsPreview.value = null
   dnsMessage.value = ''
   dnsDialogOpen.value = true
@@ -695,7 +702,10 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
               <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
               <small>{{ dnsCapabilityExplanation() }}</small>
             </div>
-            <div class="dns-current-value"><span>当前解析服务器</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
+            <div class="dns-current-grid">
+              <div class="dns-current-value"><span>当前生效 DNS</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
+              <div v-if="!dnsDetails.readOnly" class="dns-current-value dns-current-value--managed"><span>UGOS 手动配置</span><code>{{ dnsDetails.configuredNameservers.join('、') || '未读取到可编辑配置' }}</code></div>
+            </div>
           </div>
         </article>
 
@@ -915,7 +925,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
         <label class="dns-editor__field">
           <span>DNS 服务器</span>
           <ElInput v-model="dnsDraft" placeholder="例如 223.5.5.5, 1.1.1.1" clearable @input="invalidateDNSPreview" />
-          <small>支持 IPv4 或 IPv6，多个地址可用逗号或空格分隔。</small>
+          <small>支持 IPv4 或 IPv6，多个地址可用逗号或空格分隔；UGOS 最多保存 2 个地址。</small>
         </label>
         <div v-if="dnsPreview" class="dns-preview" aria-label="DNS 修改预览">
           <div><span>当前配置</span><strong>{{ dnsPreview.before.nameservers.join('、') || '未配置' }}</strong></div>
@@ -1203,6 +1213,21 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   background: var(--ncp-surface-quiet);
 }
 
+.dns-current-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.dns-current-grid > .dns-current-value:only-child {
+  grid-column: 1 / -1;
+}
+
+.dns-current-value--managed {
+  border-color: var(--ncp-primary-border);
+  background: color-mix(in srgb, var(--ncp-primary-soft) 62%, var(--ncp-surface));
+}
+
 .dns-current-value span {
   color: var(--ncp-text-subtle);
   font-size: .68rem;
@@ -1319,6 +1344,12 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 9px;
+}
+
+@media (max-width: 620px) {
+  .dns-current-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .proxy-workspace {

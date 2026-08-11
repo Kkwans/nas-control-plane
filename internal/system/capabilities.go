@@ -113,7 +113,7 @@ func (p *Probe) Collect(ctx context.Context) (Capabilities, error) {
 			Controller: MihomoControllerCapability{Operations: make([]string, 0)},
 			Evidence:   make([]CapabilityEvidence, 0), Warnings: make([]ProbeWarning, 0),
 		},
-		DNS:      DNSCapability{Backend: DNSBackendUnknown, Nameservers: make([]string, 0)},
+		DNS:      DNSCapability{Backend: DNSBackendUnknown, Nameservers: make([]string, 0), ConfiguredNameservers: make([]string, 0)},
 		Warnings: make([]ProbeWarning, 0),
 	}
 

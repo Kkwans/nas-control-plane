@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   classifyListenerScope,
+  editableDNSNameservers,
   isAuxiliaryNetworkInterface,
   isSubscriptionStatusNodeName,
   networkInterfaceKindLabel,
@@ -25,6 +26,19 @@ describe('classifyListenerScope', () => {
 
   it('uses the most exposed scope when a group contains multiple addresses', () => {
     expect(classifyListenerScope(['127.0.0.1', '0.0.0.0']).value).toBe('all-interfaces')
+  })
+})
+
+describe('editableDNSNameservers', () => {
+  it('uses backend-managed values instead of the larger effective resolver list', () => {
+    expect(editableDNSNameservers({
+      nameservers: ['240c::6666', '240c::6644', '192.168.5.1'],
+      configuredNameservers: ['240c::6666', '192.168.5.1'],
+    })).toEqual(['240c::6666', '192.168.5.1'])
+  })
+
+  it('falls back to effective resolvers for read-only backends', () => {
+    expect(editableDNSNameservers({ nameservers: ['1.1.1.1'], configuredNameservers: [] })).toEqual(['1.1.1.1'])
   })
 })
 

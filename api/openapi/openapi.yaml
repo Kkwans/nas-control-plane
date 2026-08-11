@@ -3176,7 +3176,7 @@ components:
         errorCode: { type: string }
     DNSCapability:
       type: object
-      required: [backend, detected, state, readOnly, canRead, canPreview, canConfirm, canRollback, nameservers, detectionSource, errorCode]
+      required: [backend, detected, state, readOnly, canRead, canPreview, canConfirm, canRollback, nameservers, configuredNameservers, detectionSource, errorCode]
       properties:
         backend: { type: string, enum: [systemd-resolved, networkmanager, static-resolv-conf, ugos-network-service, unknown] }
         detected: { type: boolean }
@@ -3187,6 +3187,10 @@ components:
         canConfirm: { type: boolean }
         canRollback: { type: boolean }
         nameservers: { type: array, items: { type: string } }
+        configuredNameservers:
+          type: array
+          items: { type: string }
+          description: DNS servers managed by the detected writable backend; may differ from effective resolvers.
         detectionSource: { type: string }
         errorCode: { type: string }
     DNSChangeRequest:

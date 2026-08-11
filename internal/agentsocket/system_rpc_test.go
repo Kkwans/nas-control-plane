@@ -124,6 +124,9 @@ func TestLiveSystemProviderAdvertisesDNSWritesOnlyWithInjectedController(t *test
 	if capability.ReadOnly || !capability.CanPreview || !capability.CanConfirm || !capability.CanRollback || capability.ErrorCode != "" {
 		t.Fatalf("capability with controller = %#v", capability)
 	}
+	if !reflect.DeepEqual(capability.ConfiguredNameservers, []string{"9.9.9.9", "149.112.112.112"}) {
+		t.Fatalf("configured nameservers = %#v", capability.ConfiguredNameservers)
+	}
 }
 
 func TestLiveSystemProviderRetriesTransientDNSControllerInitialization(t *testing.T) {
@@ -152,6 +155,10 @@ func TestLiveSystemProviderRetriesTransientDNSControllerInitialization(t *testin
 }
 
 type fakeDNSController struct{}
+
+func (fakeDNSController) CurrentDNSState(context.Context) (system.DNSState, error) {
+	return system.DNSState{Nameservers: []string{"9.9.9.9", "149.112.112.112"}, SearchDomains: []string{}}, nil
+}
 
 func (fakeDNSController) Preview(context.Context, system.DNSChangeRequest) (system.DNSChangePreview, error) {
 	return system.DNSChangePreview{}, nil

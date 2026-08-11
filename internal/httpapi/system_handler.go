@@ -123,6 +123,10 @@ func dnsChangeFailureMessage(err error, fallback string) string {
 		return "UGOS 网络服务暂不可用或返回了无法识别的配置；NCP 未修改 DNS。"
 	case "UGOS_DNS_APPLY_REJECTED":
 		return "UGOS 网络服务拒绝了 DNS 修改；NCP 未把传输成功误判为配置已生效。"
+	case "UGOS_DNS_SERVER_LIMIT":
+		return "当前 UGOS 网络服务最多支持配置 2 个 DNS 服务器。"
+	case "DNS_MANAGED_STATE_UNAVAILABLE":
+		return "当前生效 DNS 可读取，但 UGOS 可编辑配置暂时无法读取；NCP 已保持只读。"
 	case "DNS_NAMESERVERS_INVALID":
 		return "请输入 1 至 6 个有效且不重复的 IPv4 或 IPv6 DNS 地址。"
 	case "DNS_SEARCH_DOMAINS_UNSUPPORTED":

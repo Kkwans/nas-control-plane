@@ -8,6 +8,14 @@ export interface ListenerScopePresentation {
   rank: number
 }
 
+export function editableDNSNameservers(capability: {
+  nameservers: readonly string[]
+  configuredNameservers?: readonly string[]
+}) {
+  const configured = normalizedUniqueValues(capability.configuredNameservers ?? [])
+  return configured.length ? configured : normalizedUniqueValues(capability.nameservers)
+}
+
 export function isAuxiliaryNetworkInterface(name: string) {
   return /^(br-|docker|veth|virbr|tun|tap|meta$)/i.test(name.trim())
 }
@@ -108,4 +116,8 @@ function ipv4Octets(value: string) {
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return null
   const octets = value.split('.').map(Number)
   return octets.every((part) => part >= 0 && part <= 255) ? octets : null
+}
+
+function normalizedUniqueValues(values: readonly string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }

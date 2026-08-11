@@ -23,6 +23,7 @@ const (
 	ugosSetGeneralConfigRPC = "/ugidl.netserv.general.GeneralService/SetGeneralConfig"
 	ugosDNSModeAuto         = 1
 	ugosDNSModeManual       = 2
+	ugosDNSMaxNameservers   = 2
 )
 
 type ugosRawMessage []byte
@@ -156,6 +157,21 @@ func newUGOSNetworkDNSController(client ugosDNSClient, backupDir string) *UGOSNe
 	}
 }
 
+func (c *UGOSNetworkDNSController) CurrentDNSState(ctx context.Context) (DNSState, error) {
+	if err := ctx.Err(); err != nil {
+		return DNSState{}, err
+	}
+	config, err := c.client.GetGeneralConfig(ctx)
+	if err != nil {
+		return DNSState{}, errors.New("UGOS_DNS_READ_FAILED")
+	}
+	nameservers, _, err := parseUGOSDNSConfig(config)
+	if err != nil {
+		return DNSState{}, err
+	}
+	return DNSState{Nameservers: nameservers, SearchDomains: []string{}}, nil
+}
+
 func (c *UGOSNetworkDNSController) Preview(ctx context.Context, request DNSChangeRequest) (DNSChangePreview, error) {
 	if err := ctx.Err(); err != nil {
 		return DNSChangePreview{Backend: DNSBackendUGOSNetwork, ErrorCode: "DNS_CHANGE_CANCELED"}, err
@@ -163,6 +179,9 @@ func (c *UGOSNetworkDNSController) Preview(ctx context.Context, request DNSChang
 	nameservers, searchDomains, err := normalizeStaticDNSRequest(request)
 	if err != nil {
 		return DNSChangePreview{Backend: DNSBackendUGOSNetwork, ErrorCode: err.Error()}, err
+	}
+	if len(nameservers) > ugosDNSMaxNameservers {
+		return DNSChangePreview{Backend: DNSBackendUGOSNetwork, ErrorCode: "UGOS_DNS_SERVER_LIMIT"}, errors.New("UGOS_DNS_SERVER_LIMIT")
 	}
 	if len(searchDomains) > 0 {
 		return DNSChangePreview{Backend: DNSBackendUGOSNetwork, ErrorCode: "DNS_SEARCH_DOMAINS_UNSUPPORTED"}, errors.New("DNS_SEARCH_DOMAINS_UNSUPPORTED")
