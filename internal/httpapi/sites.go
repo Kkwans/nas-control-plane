@@ -22,7 +22,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxSiteIconBytes = 2 << 20
+const (
+	maxSiteIconBytes    = 2 << 20
+	siteIconFallbackSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#edf3fc"/><circle cx="24" cy="24" r="12" fill="none" stroke="#6f86a3" stroke-width="2"/><path d="M12 24h24M24 12c4 4 6 8 6 12s-2 8-6 12c-4-4-6-8-6-12s2-8 6-12Z" fill="none" stroke="#6f86a3" stroke-width="2" stroke-linecap="round"/></svg>`
+)
 
 var siteIconTypes = map[string]string{
 	"image/png":     ".png",
@@ -488,17 +491,17 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 	upstreamRequest.Header.Set("Accept", "image/avif,image/webp,image/svg+xml,image/png,image/jpeg,image/*;q=0.8")
 	upstreamResponse, err := client.Do(upstreamRequest)
 	if err != nil {
-		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标读取失败。")
+		writeSiteIconFallback(response)
 		return
 	}
 	defer upstreamResponse.Body.Close()
 	if upstreamResponse.StatusCode < http.StatusOK || upstreamResponse.StatusCode >= http.StatusMultipleChoices {
-		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标读取失败。")
+		writeSiteIconFallback(response)
 		return
 	}
 	content, err := io.ReadAll(io.LimitReader(upstreamResponse.Body, maxSiteIconBytes+1))
 	if err != nil || len(content) == 0 || len(content) > maxSiteIconBytes {
-		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标无效或超过 2 MB。")
+		writeSiteIconFallback(response)
 		return
 	}
 	contentType := strings.ToLower(strings.TrimSpace(strings.Split(upstreamResponse.Header.Get("Content-Type"), ";")[0]))
@@ -509,7 +512,7 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 		contentType = "image/svg+xml"
 	}
 	if siteIconTypes[contentType] == "" {
-		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_TYPE_UNSUPPORTED", "站点图标格式不受支持。")
+		writeSiteIconFallback(response)
 		return
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
@@ -520,6 +523,16 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 	}
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(content)
+}
+
+func writeSiteIconFallback(response http.ResponseWriter) {
+	response.Header().Set("Cache-Control", "private, max-age=300")
+	response.Header().Set("Content-Type", "image/svg+xml")
+	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	response.Header().Set("X-NCP-Icon-Fallback", "true")
+	response.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(response, siteIconFallbackSVG)
 }
 
 func validSiteIconProxyTarget(target *url.URL, publicHost string) bool {

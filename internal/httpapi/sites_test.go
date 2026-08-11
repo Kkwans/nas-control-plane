@@ -182,6 +182,24 @@ func TestSiteIconProxyServesSameHostImage(t *testing.T) {
 	}
 }
 
+func TestSiteIconProxyFallsBackWhenUpstreamFails(t *testing.T) {
+	client := &http.Client{Transport: siteIconRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("upstream unavailable")
+	})}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/icon-proxy?url="+url.QueryEscape("http://192.168.5.110:3210/favicon.png"), nil)
+	request.Host = "192.168.5.110:8760"
+	response := httptest.NewRecorder()
+
+	(&handler{siteIconClient: client}).siteIconProxy(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" || response.Header().Get("X-NCP-Icon-Fallback") != "true" {
+		t.Fatalf("response = %d %#v %q", response.Code, response.Header(), response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "<svg") {
+		t.Fatalf("fallback body = %q", response.Body.String())
+	}
+}
+
 func TestSiteIconProxyRejectsDifferentHost(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/icon-proxy?url="+url.QueryEscape("http://127.0.0.1:8080/favicon.ico"), nil)
 	request.Host = "192.168.5.110:8760"
