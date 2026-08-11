@@ -21,6 +21,8 @@ const (
 	ugosDNSPreviewTTL       = 5 * time.Minute
 	ugosGetGeneralConfigRPC = "/ugidl.netserv.general.GeneralService/GetGeneralConfig"
 	ugosSetGeneralConfigRPC = "/ugidl.netserv.general.GeneralService/SetGeneralConfig"
+	ugosDNSModeAuto         = 1
+	ugosDNSModeManual       = 2
 )
 
 type ugosRawMessage []byte
@@ -444,7 +446,7 @@ func parseUGOSDNSConfig(config []byte) ([]string, bool, error) {
 			if consumed < 0 {
 				return nil, false, errors.New("UGOS_DNS_CONFIG_INVALID")
 			}
-			manual = item == 1
+			manual = item == ugosDNSModeManual
 		}
 		general = general[tagLength+valueLength:]
 	}
@@ -513,7 +515,7 @@ func rewriteUGOSGeneralDNS(general []byte, nameservers []string) ([]byte, error)
 		result = protowire.AppendString(result, nameserver)
 	}
 	result = protowire.AppendTag(result, 4, protowire.VarintType)
-	result = protowire.AppendVarint(result, 1)
+	result = protowire.AppendVarint(result, ugosDNSModeManual)
 	return result, nil
 }
 

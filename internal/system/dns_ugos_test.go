@@ -139,7 +139,50 @@ func TestRewriteUGOSDNSConfigPreservesOtherFields(t *testing.T) {
 	}
 }
 
+func TestParseUGOSDNSConfigUsesVendorDNSModeEnum(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   uint64
+		manual bool
+	}{
+		{name: "automatic", mode: ugosDNSModeAuto, manual: false},
+		{name: "manual", mode: ugosDNSModeManual, manual: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := makeUGOSTestConfigWithMode([]string{"192.168.5.1"}, test.mode)
+			_, manual, err := parseUGOSDNSConfig(config)
+			if err != nil || manual != test.manual {
+				t.Fatalf("manual = %v, want %v, error = %v", manual, test.manual, err)
+			}
+		})
+	}
+}
+
+func TestRewriteUGOSDNSConfigWritesManualMode(t *testing.T) {
+	after, err := rewriteUGOSDNSConfig(makeUGOSTestConfig([]string{"192.168.5.1"}, false), []string{"1.1.1.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	general, ok, err := firstBytesField(after, 1)
+	if err != nil || !ok {
+		t.Fatalf("general config missing: %v", err)
+	}
+	mode, ok, err := firstVarintField(general, 4)
+	if err != nil || !ok || mode != ugosDNSModeManual {
+		t.Fatalf("dns mode = %d, want %d, present = %v, error = %v", mode, ugosDNSModeManual, ok, err)
+	}
+}
+
 func makeUGOSTestConfig(nameservers []string, manual bool) []byte {
+	mode := uint64(ugosDNSModeAuto)
+	if manual {
+		mode = ugosDNSModeManual
+	}
+	return makeUGOSTestConfigWithMode(nameservers, mode)
+}
+
+func makeUGOSTestConfigWithMode(nameservers []string, mode uint64) []byte {
 	general := []byte{}
 	general = protowire.AppendTag(general, 1, protowire.BytesType)
 	general = protowire.AppendBytes(general, []byte("gateway-fixture"))
@@ -148,11 +191,7 @@ func makeUGOSTestConfig(nameservers []string, manual bool) []byte {
 		general = protowire.AppendString(general, nameserver)
 	}
 	general = protowire.AppendTag(general, 4, protowire.VarintType)
-	if manual {
-		general = protowire.AppendVarint(general, 1)
-	} else {
-		general = protowire.AppendVarint(general, 0)
-	}
+	general = protowire.AppendVarint(general, mode)
 	general = protowire.AppendTag(general, 6, protowire.VarintType)
 	general = protowire.AppendVarint(general, 1)
 
@@ -162,4 +201,26 @@ func makeUGOSTestConfig(nameservers []string, manual bool) []byte {
 	result = protowire.AppendTag(result, 2, protowire.BytesType)
 	result = protowire.AppendBytes(result, []byte{0x0a, 0x00, 0x22, 0x00})
 	return result
+}
+
+func firstVarintField(content []byte, target protowire.Number) (uint64, bool, error) {
+	for len(content) > 0 {
+		number, kind, tagLength := protowire.ConsumeTag(content)
+		if tagLength < 0 {
+			return 0, false, errors.New("malformed protobuf tag")
+		}
+		valueLength := protowire.ConsumeFieldValue(number, kind, content[tagLength:])
+		if valueLength < 0 {
+			return 0, false, errors.New("malformed protobuf value")
+		}
+		if number == target && kind == protowire.VarintType {
+			value, consumed := protowire.ConsumeVarint(content[tagLength : tagLength+valueLength])
+			if consumed < 0 {
+				return 0, false, errors.New("malformed protobuf varint")
+			}
+			return value, true, nil
+		}
+		content = content[tagLength+valueLength:]
+	}
+	return 0, false, nil
 }
