@@ -64,6 +64,28 @@ func TestSiteProbeTargetsUseLoopbackForWildcardBinding(t *testing.T) {
 	}
 }
 
+func TestDiscoverSitesReportsUnavailableProbe(t *testing.T) {
+	inventory := docker.Inventory{
+		Projects: []docker.Project{{ID: "compose:web", Name: "web", State: "running"}},
+		Containers: []docker.InventoryContainer{{
+			ProjectID: "compose:web",
+			Ports:     []docker.PortMapping{{HostIP: "0.0.0.0", PublicPort: 8088, Protocol: "tcp"}},
+		}},
+	}
+	api := &handler{agent: &fakeAgentClient{}}
+
+	sites, summary := api.discoverSites(context.Background(), "192.168.5.110", inventory, nil, nil)
+	if len(sites) != 0 {
+		t.Fatalf("sites = %#v, want no unverified sites", sites)
+	}
+	if summary.Status != "unavailable" || summary.ProbeAvailable || summary.CandidateCount != 1 || summary.FailedCount != 1 || len(summary.Issues) != 1 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if summary.Issues[0].ProjectID != "compose:web" || summary.Issues[0].Reason != "站点网页探测暂不可用" {
+		t.Fatalf("issue = %#v", summary.Issues[0])
+	}
+}
+
 func TestDiscoveredSitesCreatesIndependentHostNetworkEntries(t *testing.T) {
 	inventory := docker.Inventory{
 		Projects: []docker.Project{{ID: "compose:film-forest", Name: "film-forest", State: "running"}},

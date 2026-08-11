@@ -12,6 +12,7 @@ import {
   updateSite,
   uploadSiteIcon,
   type Site,
+  type SiteDiscoverySummary,
   type SiteProfileInput,
 } from '@/api/control'
 
@@ -20,6 +21,10 @@ export const useSitesStore = defineStore('sites', () => {
   const loading = ref(false)
   const collectedAt = ref('')
   const error = ref<string | null>(null)
+  const discovery = ref<SiteDiscoverySummary>({
+    status: 'unavailable', probeAvailable: false, candidateCount: 0,
+    verifiedCount: 0, failedCount: 0, issues: [],
+  })
   const ignoredSites = ref<Array<SiteProfileInput & { projectId: string }>>([])
 
   const visibleSites = computed(() => sites.value.filter((site) => !site.hidden))
@@ -30,6 +35,7 @@ export const useSitesStore = defineStore('sites', () => {
     try {
       const [result, ignored] = await Promise.all([requestSites(), requestIgnoredSites()])
       sites.value = result.sites
+      discovery.value = result.discovery
       ignoredSites.value = ignored
       collectedAt.value = result.collectedAt
     } catch {
@@ -94,6 +100,7 @@ export const useSitesStore = defineStore('sites', () => {
     loading,
     collectedAt,
     error,
+    discovery,
     refresh,
     save,
     create,

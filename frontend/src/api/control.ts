@@ -46,6 +46,24 @@ export interface Site {
 export interface SiteListResponse {
   collectedAt: string
   sites: Site[]
+  discovery: SiteDiscoverySummary
+}
+
+export interface SiteDiscoverySummary {
+  status: 'complete' | 'partial' | 'unavailable'
+  probeAvailable: boolean
+  candidateCount: number
+  verifiedCount: number
+  failedCount: number
+  issues: SiteDiscoveryIssue[]
+}
+
+export interface SiteDiscoveryIssue {
+  siteId: string
+  projectId: string
+  name: string
+  ports: number[]
+  reason: string
 }
 
 export interface SiteProfileInput {
@@ -156,6 +174,17 @@ export function updateDatabaseProjectPreference(input: DatabaseProjectPreference
 export function requestSites(): Promise<SiteListResponse> {
   return request<SiteListResponse>('/api/v1/sites').then((result) => ({
     ...result,
+    discovery: {
+      status: result.discovery?.status ?? 'unavailable',
+      probeAvailable: result.discovery?.probeAvailable ?? false,
+      candidateCount: result.discovery?.candidateCount ?? result.sites?.length ?? 0,
+      verifiedCount: result.discovery?.verifiedCount ?? result.sites?.length ?? 0,
+      failedCount: result.discovery?.failedCount ?? 0,
+      issues: Array.isArray(result.discovery?.issues) ? result.discovery.issues.map((issue) => ({
+        ...issue,
+        ports: Array.isArray(issue.ports) ? issue.ports : [],
+      })) : [],
+    },
     sites: (result.sites ?? []).map((site) => ({
       ...site,
       ports: Array.isArray(site.ports) ? site.ports : [],

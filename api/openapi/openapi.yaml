@@ -1985,7 +1985,7 @@ components:
               items: { type: integer, minimum: 1, maximum: 65535 }
             source:
               type: string
-              enum: [auto, labels, built-in, edited]
+              enum: [auto, labels, built-in, edited, manual]
             lastVisitedAt:
               oneOf:
                 - type: string
@@ -1993,7 +1993,7 @@ components:
                 - type: 'null'
     SiteListResponse:
       type: object
-      required: [collectedAt, sites]
+      required: [collectedAt, sites, discovery]
       properties:
         collectedAt:
           type: string
@@ -2002,6 +2002,34 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Site'
+        discovery:
+          $ref: '#/components/schemas/SiteDiscoverySummary'
+    SiteDiscoverySummary:
+      type: object
+      required: [status, probeAvailable, candidateCount, verifiedCount, failedCount, issues]
+      properties:
+        status:
+          type: string
+          enum: [complete, partial, unavailable]
+        probeAvailable: { type: boolean }
+        candidateCount: { type: integer, minimum: 0 }
+        verifiedCount: { type: integer, minimum: 0 }
+        failedCount: { type: integer, minimum: 0 }
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/SiteDiscoveryIssue'
+    SiteDiscoveryIssue:
+      type: object
+      required: [siteId, projectId, name, ports, reason]
+      properties:
+        siteId: { type: string }
+        projectId: { type: string }
+        name: { type: string }
+        ports:
+          type: array
+          items: { type: integer, minimum: 1, maximum: 65535 }
+        reason: { type: string }
     SiteVisitResponse:
       type: object
       required: [siteId, lastVisitedAt]

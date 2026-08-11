@@ -57,8 +57,26 @@ type Site struct {
 }
 
 type SiteListResponse struct {
-	CollectedAt time.Time `json:"collectedAt"`
-	Sites       []Site    `json:"sites"`
+	CollectedAt time.Time            `json:"collectedAt"`
+	Sites       []Site               `json:"sites"`
+	Discovery   SiteDiscoverySummary `json:"discovery"`
+}
+
+type SiteDiscoverySummary struct {
+	Status         string               `json:"status"`
+	ProbeAvailable bool                 `json:"probeAvailable"`
+	CandidateCount int                  `json:"candidateCount"`
+	VerifiedCount  int                  `json:"verifiedCount"`
+	FailedCount    int                  `json:"failedCount"`
+	Issues         []SiteDiscoveryIssue `json:"issues"`
+}
+
+type SiteDiscoveryIssue struct {
+	SiteID    string `json:"siteId"`
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Ports     []int  `json:"ports"`
+	Reason    string `json:"reason"`
 }
 
 func (api *handler) sites(response http.ResponseWriter, request *http.Request) {
@@ -83,9 +101,11 @@ func (api *handler) sites(response http.ResponseWriter, request *http.Request) {
 		}
 		cancel()
 	}
+	sites, discovery := api.discoverSites(request.Context(), requestHostName(request), inventory, profiles, hostCandidates)
 	writeJSON(response, http.StatusOK, SiteListResponse{
 		CollectedAt: inventory.CollectedAt,
-		Sites:       api.discoveredSites(request.Context(), requestHostName(request), inventory, profiles, hostCandidates),
+		Sites:       sites,
+		Discovery:   discovery,
 	})
 }
 
@@ -98,22 +118,41 @@ func requestHostName(request *http.Request) string {
 }
 
 func (api *handler) discoveredSites(ctx context.Context, publicHost string, inventory docker.Inventory, profiles []controlstore.SiteProfile, hostCandidates []docker.HostSiteCandidate) []Site {
+	sites, _ := api.discoverSites(ctx, publicHost, inventory, profiles, hostCandidates)
+	return sites
+}
+
+func (api *handler) discoverSites(ctx context.Context, publicHost string, inventory docker.Inventory, profiles []controlstore.SiteProfile, hostCandidates []docker.HostSiteCandidate) ([]Site, SiteDiscoverySummary) {
 	candidates := mergeSites(inventory, profiles, hostCandidates)
 	prober, canProbe := api.agent.(WebProbeAgentClient)
+	summary := SiteDiscoverySummary{
+		Status:         "complete",
+		ProbeAvailable: canProbe,
+		CandidateCount: len(candidates),
+		Issues:         make([]SiteDiscoveryIssue, 0),
+	}
 	if !canProbe {
 		result := candidates[:0]
 		for _, site := range candidates {
 			if hasExplicitSiteLabel(inventory.Containers, site.ProjectID) || site.Source == "manual" {
 				result = append(result, site)
+				continue
 			}
+			summary.Issues = append(summary.Issues, siteDiscoveryIssue(site, "站点网页探测暂不可用"))
 		}
-		return result
+		summary.VerifiedCount = len(result)
+		summary.FailedCount = len(candidates) - len(result)
+		if summary.FailedCount > 0 {
+			summary.Status = "unavailable"
+		}
+		return result, summary
 	}
 	type probeOutcome struct {
-		index int
-		probe agentsocket.WebProbeResult
-		port  int
-		ok    bool
+		index  int
+		probe  agentsocket.WebProbeResult
+		port   int
+		ok     bool
+		reason string
 	}
 	outcomes := make(chan probeOutcome, len(candidates))
 	limiter := make(chan struct{}, 6)
@@ -137,7 +176,7 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 					return
 				}
 			}
-			outcomes <- probeOutcome{index: index}
+			outcomes <- probeOutcome{index: index, reason: "端口未返回可识别的网页"}
 		}(index, site)
 	}
 	group.Wait()
@@ -150,6 +189,7 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 	for index, site := range candidates {
 		outcome := verified[index]
 		if !outcome.ok {
+			summary.Issues = append(summary.Issues, siteDiscoveryIssue(site, outcome.reason))
 			continue
 		}
 		if outcome.port > 0 {
@@ -164,7 +204,20 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 		}
 		result = append(result, site)
 	}
-	return result
+	summary.VerifiedCount = len(result)
+	summary.FailedCount = len(candidates) - len(result)
+	if summary.FailedCount > 0 {
+		summary.Status = "partial"
+	}
+	return result, summary
+}
+
+func siteDiscoveryIssue(site Site, reason string) SiteDiscoveryIssue {
+	ports := append([]int(nil), site.Ports...)
+	return SiteDiscoveryIssue{
+		SiteID: site.ID, ProjectID: site.ProjectID, Name: site.Name,
+		Ports: ports, Reason: reason,
+	}
 }
 
 func acceptableWebProbe(probe agentsocket.WebProbeResult) bool {
