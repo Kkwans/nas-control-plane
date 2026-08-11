@@ -28,6 +28,7 @@ const (
 	defaultRealtimeInterval             = 5 * time.Second
 	defaultDatabaseTimeout              = 20 * time.Second
 	defaultDockerImageTimeout           = 10 * time.Minute
+	defaultDNSControlTimeout            = 45 * time.Second
 	defaultPublicEgressTimeout          = 15 * time.Second
 	defaultProxyInspectionTimeout       = 20 * time.Second
 )

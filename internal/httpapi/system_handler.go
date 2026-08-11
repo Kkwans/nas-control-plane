@@ -49,7 +49,7 @@ func (api *handler) previewDNSChange(response http.ResponseWriter, request *http
 		api.writeError(response, request, http.StatusBadRequest, "SYSTEM_DNS_INPUT_INVALID", err.Error())
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDNSControlTimeout)
 	defer cancel()
 	value, err := client.PreviewDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {
@@ -73,7 +73,7 @@ func (api *handler) confirmDNSChange(response http.ResponseWriter, request *http
 		api.writeError(response, request, http.StatusBadRequest, "SYSTEM_DNS_CONFIRMATION_REQUIRED", "必须提供有效 previewId 并明确确认 DNS 修改。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDNSControlTimeout)
 	defer cancel()
 	value, err := client.ConfirmDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {
@@ -97,7 +97,7 @@ func (api *handler) rollbackDNSChange(response http.ResponseWriter, request *htt
 		api.writeError(response, request, http.StatusBadRequest, "SYSTEM_DNS_ROLLBACK_INVALID", "必须提供 changeId。")
 		return
 	}
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDNSControlTimeout)
 	defer cancel()
 	value, err := client.RollbackDNSChange(requestContext, api.agentSocketPath, input)
 	if err != nil {

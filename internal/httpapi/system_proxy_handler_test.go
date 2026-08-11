@@ -37,6 +37,22 @@ func TestDNSHandlerAllowsStaticBackendWithoutNetworkTargetAndRequiresConfirmatio
 	}
 }
 
+func TestDNSControlUsesDedicatedLongTimeout(t *testing.T) {
+	agent := &systemHTTPAgent{fakeAgentClient: &fakeAgentClient{}, confirm: system.DNSChangeResult{Applied: true}}
+	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Millisecond}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/confirm", bytes.NewBufferString(`{"previewId":"p1","confirmed":true}`))
+	response := httptest.NewRecorder()
+	api.confirmDNSChange(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", response.Code, response.Body.String())
+	}
+	if agent.confirmTimeout < 40*time.Second {
+		t.Fatalf("confirm timeout=%s, want dedicated DNS control timeout", agent.confirmTimeout)
+	}
+}
+
 func TestPublicEgressHandlerReturnsUnavailableResultExplicitly(t *testing.T) {
 	agent := &systemHTTPAgent{fakeAgentClient: &fakeAgentClient{}, egress: system.PublicEgressResult{
 		Status: system.CapabilityStateUnavailable, ErrorCode: "PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED",
@@ -123,6 +139,7 @@ type systemHTTPAgent struct {
 	invokeCalled     bool
 	inspectionCalled bool
 	inspectionForce  bool
+	confirmTimeout   time.Duration
 }
 
 func (f *systemHTTPAgent) CollectDNSCapability(context.Context, string) (system.DNSCapability, error) {
@@ -132,8 +149,11 @@ func (f *systemHTTPAgent) PreviewDNSChange(context.Context, string, system.DNSCh
 	f.previewCalled = true
 	return f.preview, nil
 }
-func (f *systemHTTPAgent) ConfirmDNSChange(context.Context, string, system.DNSChangeConfirmation) (system.DNSChangeResult, error) {
+func (f *systemHTTPAgent) ConfirmDNSChange(ctx context.Context, _ string, _ system.DNSChangeConfirmation) (system.DNSChangeResult, error) {
 	f.confirmCalled = true
+	if deadline, ok := ctx.Deadline(); ok {
+		f.confirmTimeout = time.Until(deadline)
+	}
 	return f.confirm, nil
 }
 func (f *systemHTTPAgent) RollbackDNSChange(context.Context, string, system.DNSRollbackRequest) (system.DNSChangeResult, error) {
