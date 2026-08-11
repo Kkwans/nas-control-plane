@@ -35,8 +35,11 @@ type webProbeService struct {
 
 func newWebProbeService() *webProbeService {
 	hostSites, _ := docker.NewLiveHostSiteCandidateCollector()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	return &webProbeService{client: &http.Client{
-		Timeout: 3 * time.Second,
+		Transport: transport,
+		Timeout:   3 * time.Second,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 4 {
 				return errors.New("too many redirects")
@@ -114,15 +117,46 @@ func (service *webProbeService) Probe(ctx context.Context, input *structpb.Struc
 }
 
 func validateLocalProbeURL(target *url.URL) error {
+	localAddresses, err := localInterfaceAddresses()
+	if err != nil {
+		localAddresses = nil
+	}
+	return validateLocalProbeURLWithAddresses(target, localAddresses)
+}
+
+func validateLocalProbeURLWithAddresses(target *url.URL, localAddresses []net.IP) error {
 	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
 		return errors.New("unsupported URL")
 	}
 	host := target.Hostname()
 	ip := net.ParseIP(host)
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return errors.New("only loopback targets are allowed")
+	if host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		return nil
 	}
-	return nil
+	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
+		return errors.New("only local interface targets are allowed")
+	}
+	for _, localAddress := range localAddresses {
+		if localAddress != nil && localAddress.Equal(ip) {
+			return nil
+		}
+	}
+	return errors.New("only local interface targets are allowed")
+}
+
+func localInterfaceAddresses() ([]net.IP, error) {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]net.IP, 0, len(addresses))
+	for _, address := range addresses {
+		ip, _, parseErr := net.ParseCIDR(address.String())
+		if parseErr == nil && ip != nil {
+			result = append(result, ip)
+		}
+	}
+	return result, nil
 }
 
 func parseWebMetadata(body []byte) (string, string) {

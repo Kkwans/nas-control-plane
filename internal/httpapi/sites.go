@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -129,12 +128,12 @@ func (api *handler) discoveredSites(ctx context.Context, publicHost string, inve
 			defer group.Done()
 			limiter <- struct{}{}
 			defer func() { <-limiter }()
-			for _, port := range site.Ports {
+			for _, target := range siteProbeTargets(site, inventory.Containers) {
 				probeContext, cancel := context.WithTimeout(ctx, 4*time.Second)
-				probe, err := prober.ProbeWeb(probeContext, api.agentSocketPath, fmt.Sprintf("http://127.0.0.1:%d/", port))
+				probe, err := prober.ProbeWeb(probeContext, api.agentSocketPath, target.URL)
 				cancel()
 				if err == nil && acceptableWebProbe(probe) {
-					outcomes <- probeOutcome{index: index, probe: probe, port: port, ok: true}
+					outcomes <- probeOutcome{index: index, probe: probe, port: target.Port, ok: true}
 					return
 				}
 			}
@@ -732,6 +731,11 @@ func builtInSiteProfile(name string) (controlstore.SiteProfile, bool) {
 			Description: "面向 NAS 的 AI Agent 工作台，用于执行开发与自动化任务。",
 			Category:    "AI 工具",
 		},
+		"agenthub": {
+			Name:        "AgentHub",
+			Description: "集中管理 AI Coding Agent、任务队列与运行状态。",
+			Category:    "AI 工具",
+		},
 		"firefox": {
 			Name:        "Firefox",
 			Description: "运行在 NAS 上的远程浏览器，用于局域网网页访问和调试。",
@@ -762,6 +766,66 @@ func sitePorts(containers []docker.InventoryContainer, projectID string) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+type siteProbeTarget struct {
+	Port int
+	URL  string
+}
+
+func siteProbeTargets(site Site, containers []docker.InventoryContainer) []siteProbeTarget {
+	result := make([]siteProbeTarget, 0, len(site.Ports))
+	seen := make(map[string]struct{})
+	for _, port := range site.Ports {
+		hosts := make([]string, 0, 1)
+		for _, container := range containers {
+			if container.ProjectID != site.ProjectID {
+				continue
+			}
+			for _, mapping := range container.Ports {
+				if int(mapping.PublicPort) != port || (mapping.Protocol != "" && !strings.EqualFold(mapping.Protocol, "tcp")) {
+					continue
+				}
+				host := probeHostForBinding(mapping.HostIP)
+				if !containsString(hosts, host) {
+					hosts = append(hosts, host)
+				}
+			}
+		}
+		if len(hosts) == 0 {
+			hosts = append(hosts, "127.0.0.1")
+		}
+		for _, host := range hosts {
+			targetURL := "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
+			if _, exists := seen[targetURL]; exists {
+				continue
+			}
+			seen[targetURL] = struct{}{}
+			result = append(result, siteProbeTarget{Port: port, URL: targetURL})
+		}
+	}
+	return result
+}
+
+func probeHostForBinding(host string) string {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	switch host {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::":
+		return "::1"
+	default:
+		return host
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func likelyHTTPPort(port int) bool {
@@ -805,7 +869,7 @@ func inferSiteCategory(name string) string {
 		return "文件与 NAS"
 	case strings.Contains(value, "film"), strings.Contains(value, "media"), strings.Contains(value, "movie"):
 		return "影音服务"
-	case strings.Contains(value, "claw"), strings.Contains(value, "claude"), strings.Contains(value, "hermes"):
+	case strings.Contains(value, "claw"), strings.Contains(value, "claude"), strings.Contains(value, "hermes"), strings.Contains(value, "agenthub"):
 		return "AI 工具"
 	case strings.Contains(value, "mihomo"), strings.Contains(value, "ddns"), strings.Contains(value, "tailscale"):
 		return "网络服务"
