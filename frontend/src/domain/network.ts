@@ -8,6 +8,24 @@ export interface ListenerScopePresentation {
   rank: number
 }
 
+export function isAuxiliaryNetworkInterface(name: string) {
+  return /^(br-|docker|veth|virbr|tun|tap|meta$)/i.test(name.trim())
+}
+
+export function networkInterfaceKindLabel(name: string) {
+  const normalized = name.trim()
+  if (/^meta$/i.test(normalized)) return 'Mihomo TUN 虚拟接口'
+  if (/^(br-|docker|veth)/i.test(normalized)) return 'Docker 虚拟接口'
+  if (/^tailscale/i.test(normalized)) return 'Tailscale Overlay 接口'
+  if (/^(tun|tap)/i.test(normalized)) return '代理虚拟接口'
+  if (normalized === 'lo') return '本机回环'
+  return '主机网络接口'
+}
+
+export function isSubscriptionStatusNodeName(name: string) {
+  return /(?:剩余|已用|总计)?流量|到期|套餐|订阅|traffic|quota|expire|subscription/i.test(name.trim())
+}
+
 const presentations: Record<ListenerScope, ListenerScopePresentation> = {
   public: {
     value: 'public', label: '公网地址', description: '直接监听公网地址', tone: 'danger', rank: 0,

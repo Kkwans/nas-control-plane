@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { classifyListenerScope } from './network'
+import {
+  classifyListenerScope,
+  isAuxiliaryNetworkInterface,
+  isSubscriptionStatusNodeName,
+  networkInterfaceKindLabel,
+} from './network'
 
 describe('classifyListenerScope', () => {
   it.each([
@@ -20,5 +25,28 @@ describe('classifyListenerScope', () => {
 
   it('uses the most exposed scope when a group contains multiple addresses', () => {
     expect(classifyListenerScope(['127.0.0.1', '0.0.0.0']).value).toBe('all-interfaces')
+  })
+})
+
+describe('network interface presentation', () => {
+  it('moves the Mihomo Meta TUN interface out of primary connections', () => {
+    expect(isAuxiliaryNetworkInterface('Meta')).toBe(true)
+    expect(networkInterfaceKindLabel('Meta')).toBe('Mihomo TUN 虚拟接口')
+  })
+
+  it('keeps physical and Tailscale interfaces in the primary group', () => {
+    expect(isAuxiliaryNetworkInterface('eth0')).toBe(false)
+    expect(isAuxiliaryNetworkInterface('tailscale0')).toBe(false)
+    expect(networkInterfaceKindLabel('tailscale0')).toBe('Tailscale Overlay 接口')
+  })
+})
+
+describe('Mihomo node presentation', () => {
+  it.each(['剩余流量：388.49 GB', '套餐到期 2026-12-31', 'Traffic 82%'])('recognizes subscription status node %s', (name) => {
+    expect(isSubscriptionStatusNodeName(name)).toBe(true)
+  })
+
+  it('does not relabel a normal node name', () => {
+    expect(isSubscriptionStatusNodeName('香港 IEPL 01')).toBe(false)
   })
 })
