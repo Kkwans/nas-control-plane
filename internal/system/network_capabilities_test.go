@@ -311,6 +311,29 @@ func TestPublicEgressDetectorSupportsNestedConnectionMetadata(t *testing.T) {
 	}
 }
 
+func TestPublicEgressLookupPreservesLocalizedEndpointQuery(t *testing.T) {
+	var requestPath string
+	var language string
+	var fields string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestPath = request.URL.Path
+		language = request.URL.Query().Get("lang")
+		fields = request.URL.Query().Get("fields")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"ip":"1.1.1.9","country":"中国","region":"上海市"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	detector := NewPublicEgressDetector(server.URL + "/lookup?lang=zh-CN&fields=success,ip,country,region,connection")
+	value := detector.LookupAddress(context.Background(), "1.1.1.9")
+	if value.Status != CapabilityStateAvailable || value.Country != "中国" || value.Region != "上海市" {
+		t.Fatalf("localized node metadata = %#v", value)
+	}
+	if requestPath != "/lookup/1.1.1.9" || language != "zh-CN" || fields != "success,ip,country,region,connection" {
+		t.Fatalf("lookup request path = %q, lang = %q, fields = %q", requestPath, language, fields)
+	}
+}
+
 func TestPublicEgressDetectorUsesExplicitOutboundProxy(t *testing.T) {
 	proxyRequests := 0
 	proxy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

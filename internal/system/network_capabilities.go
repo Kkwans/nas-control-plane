@@ -1090,7 +1090,6 @@ func (d *PublicEgressDetector) LookupAddress(ctx context.Context, address string
 		return result
 	}
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + url.PathEscape(ip.String())
-	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
 	return d.detectEndpoint(ctx, endpoint, "node-metadata")
 }

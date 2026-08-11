@@ -7,7 +7,7 @@ After=local-fs.target
 Type=simple
 User=root
 Group=root
-Environment=NCP_PUBLIC_EGRESS_ENDPOINT=https://ipwho.is/
+Environment=NCP_PUBLIC_EGRESS_ENDPOINT=https://ipwho.is/?lang=zh-CN&fields=success,ip,country,region,connection
 Environment=NCP_MIHOMO_CONFIG_PATH=/volume2/DockerProject/mihomo/config/config.yaml
 # 显式启用受控 UGOS DNS 通道；写入仍需预览确认，并自动备份、复核和支持回滚。
 Environment=NCP_ENABLE_UGOS_DNS_WRITE=true
