@@ -13,6 +13,9 @@ defineProps<{
 
 <template>
   <div class="grouped-directory panel" :aria-label="label">
+    <div v-if="$slots.header" class="grouped-directory__column-header">
+      <slot name="header" />
+    </div>
     <section v-for="group in groups" :key="group.key" class="grouped-directory__group">
       <header class="grouped-directory__header">
         <div class="grouped-directory__title">
@@ -37,6 +40,15 @@ defineProps<{
 
 .grouped-directory__group + .grouped-directory__group {
   border-top: 1px solid var(--ncp-line-strong);
+}
+
+.grouped-directory__column-header {
+  min-height: 42px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: var(--ncp-table-head);
+  color: var(--ncp-text-muted);
+  font-size: .76rem;
+  font-weight: 720;
 }
 
 .grouped-directory__header {
@@ -104,6 +116,10 @@ defineProps<{
   .grouped-directory__group + .grouped-directory__group {
     margin-top: var(--ncp-space-3);
     border-top: 0;
+  }
+
+  .grouped-directory__column-header {
+    display: none;
   }
 
   .grouped-directory__header {

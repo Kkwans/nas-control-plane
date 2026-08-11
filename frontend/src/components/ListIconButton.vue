@@ -8,10 +8,12 @@ withDefaults(defineProps<{
   tone?: 'default' | 'danger'
   disabled?: boolean
   loading?: boolean
+  active?: boolean
 }>(), {
   tone: 'default',
   disabled: false,
   loading: false,
+  active: false,
 })
 </script>
 
@@ -19,11 +21,12 @@ withDefaults(defineProps<{
   <button
     type="button"
     class="list-icon-button"
-    :class="{ 'list-icon-button--danger': tone === 'danger' }"
+    :class="{ 'list-icon-button--danger': tone === 'danger', 'is-active': active }"
     :disabled="disabled || loading"
     :aria-label="label"
     :title="label"
     :aria-busy="loading || undefined"
+    :aria-pressed="active || undefined"
   >
     <LoaderCircle v-if="loading" class="list-icon-button__spinner" :size="17" aria-hidden="true" />
     <component :is="icon" v-else :size="17" :stroke-width="1.9" aria-hidden="true" />
@@ -52,7 +55,8 @@ withDefaults(defineProps<{
 }
 
 .list-icon-button:hover:not(:disabled),
-.list-icon-button:focus-visible {
+.list-icon-button:focus-visible,
+.list-icon-button.is-active {
   border-color: var(--ncp-primary-border);
   background: var(--ncp-primary-soft);
   color: var(--ncp-primary-strong);
@@ -69,6 +73,11 @@ withDefaults(defineProps<{
   border-color: var(--ncp-danger-border);
   background: var(--ncp-danger-soft);
   color: var(--ncp-danger-strong);
+}
+
+.list-icon-button.is-active:hover:not(:disabled) {
+  border-color: var(--ncp-primary);
+  background: var(--ncp-primary-hover);
 }
 
 .list-icon-button:disabled {
