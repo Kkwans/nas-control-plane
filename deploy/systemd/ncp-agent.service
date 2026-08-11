@@ -9,6 +9,8 @@ User=root
 Group=root
 Environment=NCP_PUBLIC_EGRESS_ENDPOINT=https://ipwho.is/
 Environment=NCP_MIHOMO_CONFIG_PATH=/volume2/DockerProject/mihomo/config/config.yaml
+# 显式启用受控 UGOS DNS 通道；写入仍需预览确认，并自动备份、复核和支持回滚。
+Environment=NCP_ENABLE_UGOS_DNS_WRITE=true
 RuntimeDirectory=ncp
 RuntimeDirectoryMode=0750
 # Server 容器绑定的是该目录。重启 Agent 时必须保留目录 inode，
