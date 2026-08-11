@@ -152,6 +152,7 @@ type handler struct {
 	controlStore        ControlStore
 	sessionCookieSecure bool
 	siteAssetsDirectory string
+	siteIconClient      siteIconHTTPClient
 	terminal            TerminalClient
 	terminalEnabled     bool
 	terminalTimeout     time.Duration
@@ -378,6 +379,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/docker/containers/{containerID}/logs", api.containerLogs)
 			protected.Get("/services", api.services)
 			protected.Get("/sites", api.sites)
+			protected.Get("/sites/icon-proxy", api.siteIconProxy)
 			protected.Post("/sites", api.createSite)
 			protected.Put("/sites/{siteID}", api.updateSite)
 			protected.Delete("/sites/{siteID}", api.deleteSite)

@@ -1,8 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +21,12 @@ type siteProbeAgent struct {
 	mu      sync.Mutex
 	probes  map[string]agentsocket.WebProbeResult
 	targets []string
+}
+
+type siteIconRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function siteIconRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }
 
 func (agent *siteProbeAgent) ProbeWeb(_ context.Context, _ string, target string) (agentsocket.WebProbeResult, error) {
@@ -121,5 +132,64 @@ func TestDiscoveredSitesCreatesIndependentHostNetworkEntries(t *testing.T) {
 	}
 	if site := byID["compose:film-forest@3001"]; site.Name != "影视森林 - 管理后台" || site.PrimaryPort != 3001 || site.LaunchURL != "http://192.168.5.110:3001/" {
 		t.Fatalf("admin site = %#v", site)
+	}
+}
+
+func TestDiscoveredSiteUsesSameOriginIconProxy(t *testing.T) {
+	inventory := docker.Inventory{
+		Projects: []docker.Project{{ID: "compose:agenthub", Name: "agenthub", State: "running"}},
+		Containers: []docker.InventoryContainer{{
+			ID: "agenthub", ProjectID: "compose:agenthub", ProjectName: "agenthub", State: "running",
+			Ports: []docker.PortMapping{{HostIP: "192.168.5.110", PublicPort: 3210, Protocol: "tcp"}},
+		}},
+	}
+	agent := &siteProbeAgent{fakeAgentClient: &fakeAgentClient{}, probes: map[string]agentsocket.WebProbeResult{
+		"3210": {URL: "http://192.168.5.110:3210/", Title: "AgentHub", IconURL: "http://192.168.5.110:3210/favicon.svg", ContentType: "text/html", StatusCode: 200},
+	}}
+	api := &handler{agent: agent}
+
+	sites := api.discoveredSites(context.Background(), "192.168.5.110", inventory, nil, nil)
+	if len(sites) != 1 {
+		t.Fatalf("sites = %#v", sites)
+	}
+	parsed, err := url.Parse(sites[0].IconURL)
+	if err != nil || parsed.Path != "/api/v1/sites/icon-proxy" || parsed.Query().Get("url") != "http://192.168.5.110:3210/favicon.svg" {
+		t.Fatalf("icon URL = %q", sites[0].IconURL)
+	}
+}
+
+func TestSiteIconProxyServesSameHostImage(t *testing.T) {
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
+	client := &http.Client{Transport: siteIconRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "http://192.168.5.110:3210/favicon.png" {
+			t.Fatalf("upstream URL = %q", request.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(bytes.NewReader(png)),
+			Request:    request,
+		}, nil
+	})}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/icon-proxy?url="+url.QueryEscape("http://192.168.5.110:3210/favicon.png"), nil)
+	request.Host = "192.168.5.110:8760"
+	response := httptest.NewRecorder()
+
+	(&handler{siteIconClient: client}).siteIconProxy(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/png" || !strings.EqualFold(response.Header().Get("X-Content-Type-Options"), "nosniff") {
+		t.Fatalf("response = %d %#v %q", response.Code, response.Header(), response.Body.Bytes())
+	}
+}
+
+func TestSiteIconProxyRejectsDifferentHost(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/sites/icon-proxy?url="+url.QueryEscape("http://127.0.0.1:8080/favicon.ico"), nil)
+	request.Host = "192.168.5.110:8760"
+	response := httptest.NewRecorder()
+
+	(&handler{newRequestID: func() string { return "req-icon" }}).siteIconProxy(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
 }

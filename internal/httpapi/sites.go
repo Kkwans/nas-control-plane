@@ -38,6 +38,10 @@ type siteProfileStore interface {
 	SetSiteIgnored(context.Context, string, bool) error
 }
 
+type siteIconHTTPClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type Site struct {
 	ID            string     `json:"id"`
 	ProjectID     string     `json:"projectId"`
@@ -199,7 +203,7 @@ func (api *handler) discoverSites(ctx context.Context, publicHost string, invent
 			}
 			site.LaunchURL = publicSiteURL(publicHost, outcome.port, outcome.probe.URL)
 			if site.IconURL == "" {
-				site.IconURL = publicSiteURL(publicHost, outcome.port, outcome.probe.IconURL)
+				site.IconURL = proxiedSiteIconURL(publicSiteURL(publicHost, outcome.port, outcome.probe.IconURL))
 			}
 		}
 		result = append(result, site)
@@ -262,6 +266,14 @@ func publicSiteURL(publicHost string, port int, probeURL string) string {
 	parsed.Scheme = "http"
 	parsed.Host = net.JoinHostPort(publicHost, strconv.Itoa(port))
 	return parsed.String()
+}
+
+func proxiedSiteIconURL(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return ""
+	}
+	return "/api/v1/sites/icon-proxy?url=" + url.QueryEscape(source)
 }
 
 func (api *handler) updateSite(response http.ResponseWriter, request *http.Request) {
@@ -442,6 +454,88 @@ func (api *handler) siteIcon(response http.ResponseWriter, request *http.Request
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(response, request, target)
+}
+
+func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Request) {
+	target, err := url.Parse(strings.TrimSpace(request.URL.Query().Get("url")))
+	if err != nil || !validSiteIconProxyTarget(target, requestHostName(request)) {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_SOURCE_INVALID", "站点图标地址无效。")
+		return
+	}
+	client := api.siteIconClient
+	if client == nil {
+		productionClient := &http.Client{
+			Timeout: 4 * time.Second,
+			Transport: &http.Transport{
+				Proxy:       nil,
+				DialContext: (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+			},
+			CheckRedirect: func(next *http.Request, _ []*http.Request) error {
+				if !validSiteIconProxyTarget(next.URL, requestHostName(request)) {
+					return errors.New("site icon redirect target is invalid")
+				}
+				return nil
+			},
+		}
+		defer productionClient.CloseIdleConnections()
+		client = productionClient
+	}
+	upstreamRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, target.String(), nil)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "SITE_ICON_SOURCE_INVALID", "站点图标地址无效。")
+		return
+	}
+	upstreamRequest.Header.Set("Accept", "image/avif,image/webp,image/svg+xml,image/png,image/jpeg,image/*;q=0.8")
+	upstreamResponse, err := client.Do(upstreamRequest)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标读取失败。")
+		return
+	}
+	defer upstreamResponse.Body.Close()
+	if upstreamResponse.StatusCode < http.StatusOK || upstreamResponse.StatusCode >= http.StatusMultipleChoices {
+		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标读取失败。")
+		return
+	}
+	content, err := io.ReadAll(io.LimitReader(upstreamResponse.Body, maxSiteIconBytes+1))
+	if err != nil || len(content) == 0 || len(content) > maxSiteIconBytes {
+		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_FETCH_FAILED", "站点图标无效或超过 2 MB。")
+		return
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(upstreamResponse.Header.Get("Content-Type"), ";")[0]))
+	if contentType == "" || siteIconTypes[contentType] == "" {
+		contentType = http.DetectContentType(content)
+	}
+	if len(content) >= 5 && strings.Contains(strings.ToLower(string(content[:min(len(content), 256)])), "<svg") {
+		contentType = "image/svg+xml"
+	}
+	if siteIconTypes[contentType] == "" {
+		api.writeError(response, request, http.StatusBadGateway, "SITE_ICON_TYPE_UNSUPPORTED", "站点图标格式不受支持。")
+		return
+	}
+	response.Header().Set("Cache-Control", "private, max-age=3600")
+	response.Header().Set("Content-Type", contentType)
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if contentType == "image/svg+xml" {
+		response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	}
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(content)
+}
+
+func validSiteIconProxyTarget(target *url.URL, publicHost string) bool {
+	if target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil {
+		return false
+	}
+	if target.Hostname() == "" || !strings.EqualFold(strings.Trim(target.Hostname(), "[]"), strings.Trim(publicHost, "[]")) {
+		return false
+	}
+	if value := target.Port(); value != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 1 || port > 65535 {
+			return false
+		}
+	}
+	return true
 }
 
 func (api *handler) deleteSiteIcon(response http.ResponseWriter, request *http.Request) {
