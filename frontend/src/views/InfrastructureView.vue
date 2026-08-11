@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElDialog, ElInput, ElTooltip } from 'element-plus'
 import {
   Activity,
@@ -25,6 +25,11 @@ import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import {
+  classifyListenerScope,
+  type ListenerScope,
+  type ListenerScopePresentation,
+} from '@/domain/network'
+import {
   confirmDNSChange,
   inspectMihomo,
   previewDNSChange,
@@ -41,6 +46,17 @@ import {
 import { useSystemStore } from '@/stores/system'
 
 type DetailTab = 'overview' | 'network' | 'storage' | 'services'
+type ListenerScopeFilter = 'all' | 'exposed' | ListenerScope
+
+interface ListeningPortGroup {
+  port: number
+  protocol: string
+  addresses: string[]
+  pids: number[]
+  owners: Array<{ label: string; detail: string }>
+  sources: string[]
+  scope: ListenerScopePresentation
+}
 
 const systemStore = useSystemStore()
 const details = ref<SystemDetails | null>(null)
@@ -59,12 +75,22 @@ const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
 const listenerQuery = ref('')
 const listenerProtocol = ref('all')
+const listenerScope = ref<ListenerScopeFilter>('all')
+const listenerVisibleLimit = ref(24)
 
 const listenerProtocolOptions = [
   { label: '全部协议', value: 'all' },
   { label: 'TCP', value: 'tcp' },
   { label: 'UDP', value: 'udp' },
 ]
+const listenerScopeOptions = computed(() => [
+  { label: '全部范围', value: 'all' },
+  { label: `对外监听 ${exposedListenerCount.value}`, value: 'exposed' },
+  { label: `局域网 ${listenerScopeCount('lan')}`, value: 'lan' },
+  { label: `仅本机 ${listenerScopeCount('loopback')}`, value: 'loopback' },
+  { label: `Tailscale ${listenerScopeCount('overlay')}`, value: 'overlay' },
+  { label: `容器网络 ${listenerScopeCount('container')}`, value: 'container' },
+])
 
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
@@ -120,7 +146,7 @@ const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filte
   !/^md\d+$/i.test(item.name) && !physicalDisks.value.some((disk) => disk.name === item.name)
 )))
 const listeningPortGroups = computed(() => {
-  const groups = new Map<string, { port: number; protocol: string; addresses: string[]; pids: number[]; owners: Array<{ label: string; detail: string }>; sources: string[] }>()
+  const groups = new Map<string, Omit<ListeningPortGroup, 'scope'>>()
   for (const item of details.value?.network.listeningPorts ?? []) {
     const key = `${item.protocol}:${item.port}`
     const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], owners: [], sources: [] }
@@ -134,12 +160,19 @@ const listeningPortGroups = computed(() => {
     }
     groups.set(key, group)
   }
-  return [...groups.values()].sort((left, right) => left.port - right.port)
+  return [...groups.values()]
+    .map<ListeningPortGroup>((group) => ({
+      ...group,
+      scope: classifyListenerScope(group.addresses, tailscaleDetails.value.overlayIps),
+    }))
+    .sort((left, right) => left.scope.rank - right.scope.rank || left.port - right.port)
 })
 const filteredListeningPortGroups = computed(() => {
   const query = listenerQuery.value.trim().toLocaleLowerCase('zh-CN')
   return listeningPortGroups.value.filter((item) => {
     if (listenerProtocol.value !== 'all' && item.protocol.toLowerCase() !== listenerProtocol.value) return false
+    if (listenerScope.value === 'exposed' && !['public', 'all-interfaces'].includes(item.scope.value)) return false
+    if (listenerScope.value !== 'all' && listenerScope.value !== 'exposed' && item.scope.value !== listenerScope.value) return false
     if (!query) return true
     return [
       String(item.port), item.protocol, ...item.addresses, ...item.sources,
@@ -147,6 +180,14 @@ const filteredListeningPortGroups = computed(() => {
     ].some((value) => value.toLocaleLowerCase('zh-CN').includes(query))
   })
 })
+const visibleListeningPortGroups = computed(() => filteredListeningPortGroups.value.slice(0, listenerVisibleLimit.value))
+const exposedListenerCount = computed(() => listeningPortGroups.value.filter((item) => ['public', 'all-interfaces'].includes(item.scope.value)).length)
+const localListenerCount = computed(() => listeningPortGroups.value.filter((item) => item.scope.value === 'loopback').length)
+const listenerResultLabel = computed(() => filteredListeningPortGroups.value.length === listeningPortGroups.value.length
+  ? `共 ${listeningPortGroups.value.length} 个监听端口`
+  : `筛选出 ${filteredListeningPortGroups.value.length} / ${listeningPortGroups.value.length} 个端口`)
+
+watch([listenerQuery, listenerProtocol, listenerScope], () => { listenerVisibleLimit.value = 24 })
 
 const capabilityItems = computed(() => [
   { name: 'Docker Engine', enabled: Boolean(systemStore.capabilities?.docker), detail: systemStore.inventory?.engine.serverVersion ? `版本 ${systemStore.inventory.engine.serverVersion}` : '等待检测', icon: Boxes, type: 'docker' },
@@ -485,6 +526,14 @@ function listeningSourceLabel(sources: string[]) {
   return [...new Set(labels)].join('、') || '系统监听信息'
 }
 
+function listenerScopeCount(scope: ListenerScope) {
+  return listeningPortGroups.value.filter((item) => item.scope.value === scope).length
+}
+
+function showMoreListeningPorts() {
+  listenerVisibleLimit.value += 24
+}
+
 function formatTime(value: string) {
   if (!value) return '—'
   const date = new Date(value)
@@ -583,7 +632,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
           <div class="network-summary-card panel"><span class="network-summary-card__icon"><Wifi :size="18" /></span><div><small>当前联网</small><strong>{{ activeInterfaceCount }} 个接口</strong><p>{{ primaryInterfaces.map((item) => item.name).join('、') || '未发现主网络接口' }}</p></div></div>
           <div class="network-summary-card panel"><span class="network-summary-card__icon"><Route :size="18" /></span><div><small>默认出口</small><strong>{{ details.network.gateway || '未发现' }}</strong><p>路由 {{ details.network.routes.length }} 条</p></div></div>
           <div class="network-summary-card panel"><span class="network-summary-card__icon"><Network :size="18" /></span><div><small>DNS 服务</small><strong>{{ details.network.dnsServers.length || 0 }} 个</strong><p>{{ details.network.dnsServers.slice(0, 2).join('、') || '未发现解析服务' }}</p></div></div>
-          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Gauge :size="18" /></span><div><small>监听端点</small><strong>{{ listeningPortGroups.length }} 个端口</strong><p>仅展示宿主机服务入口</p></div></div>
+          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Gauge :size="18" /></span><div><small>监听服务</small><strong>{{ listeningPortGroups.length }} 个端口</strong><p>{{ exposedListenerCount }} 个可能对外可达 · {{ localListenerCount }} 个仅本机</p></div></div>
         </article>
 
         <article class="panel detail-card network-layout__full">
@@ -693,20 +742,25 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
           </div>
         </article>
 
-        <details class="panel network-details ports-disclosure network-layout__full">
-          <summary>
-            <span class="ports-disclosure__title"><Gauge :size="19" /><span><strong>监听服务</strong><small>按端口合并显示，仅在需要排查入口时展开</small></span></span>
-            <span>{{ listeningPortGroups.length }} 个端口</span>
-          </summary>
+        <article class="panel detail-card ports-workspace-card network-layout__full">
+          <SectionHeader class="detail-card__section-header" title="监听服务" description="按端口合并归属信息，并优先展示对外监听的服务" :icon="Gauge">
+            <template #actions><span class="listener-count">{{ listenerResultLabel }}</span></template>
+          </SectionHeader>
           <div v-if="listeningPortGroups.length" class="port-workspace">
             <div class="port-toolbar">
               <ElInput v-model="listenerQuery" clearable aria-label="搜索监听服务" placeholder="搜索端口、进程、容器或地址">
                 <template #prefix><Search :size="16" /></template>
               </ElInput>
               <NcpSelect v-model="listenerProtocol" :options="listenerProtocolOptions" accessible-label="筛选监听协议" />
+              <NcpSelect v-model="listenerScope" :options="listenerScopeOptions" accessible-label="筛选监听范围" />
             </div>
-            <div v-if="filteredListeningPortGroups.length" class="port-grid">
-              <article v-for="item in filteredListeningPortGroups" :key="`${item.protocol}-${item.port}`" class="port-card">
+            <div class="port-risk-summary" role="note">
+              <span class="port-risk-summary__item port-risk-summary__item--warning"><i></i><strong>{{ exposedListenerCount }}</strong> 个端口可能对外可达</span>
+              <span class="port-risk-summary__item"><i></i><strong>{{ localListenerCount }}</strong> 个端口仅允许本机访问</span>
+              <small>“公网地址”或“所有接口”需要重点检查；实际可达范围仍受路由、防火墙与端口转发控制。</small>
+            </div>
+            <div v-if="visibleListeningPortGroups.length" class="port-grid">
+              <article v-for="item in visibleListeningPortGroups" :key="`${item.protocol}-${item.port}`" class="port-card">
                 <div class="port-card__endpoint">
                   <b>{{ item.port }}</b>
                   <span>{{ item.protocol.toUpperCase() }}</span>
@@ -730,16 +784,22 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
                   <span>{{ item.addresses.some((address) => /^(0\.0\.0\.0|::|\[::\])/.test(address)) ? '所有网络接口' : '指定网络接口' }}</span>
                 </div>
                 <div class="port-card__fact">
-                  <small>识别来源</small>
-                  <strong>{{ listeningSourceLabel(item.sources) }}</strong>
-                  <span>{{ item.sources.length ? '已合并多来源证据' : '由 Root Agent 采集' }}</span>
+                  <small>访问范围</small>
+                  <span class="listener-scope" :class="`listener-scope--${item.scope.tone}`"><i></i>{{ item.scope.label }}</span>
+                  <ElTooltip :content="`${item.scope.description}；识别证据：${listeningSourceLabel(item.sources)}`" placement="top" :show-after="350">
+                    <span>{{ item.scope.description }}</span>
+                  </ElTooltip>
                 </div>
               </article>
             </div>
             <div v-else class="inline-empty">没有符合当前搜索和协议条件的监听服务。</div>
+            <div v-if="visibleListeningPortGroups.length" class="port-results-footer">
+              <span>已显示 {{ visibleListeningPortGroups.length }} / {{ filteredListeningPortGroups.length }} 个端口</span>
+              <ActionButton v-if="visibleListeningPortGroups.length < filteredListeningPortGroups.length" size="sm" @click="showMoreListeningPorts">再显示 {{ Math.min(24, filteredListeningPortGroups.length - visibleListeningPortGroups.length) }} 个</ActionButton>
+            </div>
           </div>
           <div v-else class="inline-empty">未取得监听服务信息。</div>
-        </details>
+        </article>
       </section>
 
       <section v-else-if="activeTab === 'storage'" class="storage-layout">
@@ -898,13 +958,51 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 
 .port-toolbar {
   display: grid;
-  grid-template-columns: minmax(240px, 420px) 160px;
+  grid-template-columns: minmax(240px, 1fr) 150px 190px;
   align-items: center;
   gap: 10px;
   padding: 13px 18px;
   border-bottom: 1px solid var(--ncp-line);
   background: var(--ncp-surface);
 }
+
+.listener-count {
+  color: var(--ncp-text-subtle);
+  font-size: .72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.port-risk-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--ncp-line);
+  background: var(--ncp-surface-quiet);
+}
+
+.port-risk-summary__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ncp-text-muted);
+  font-size: .72rem;
+}
+
+.port-risk-summary__item i,
+.listener-scope i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.port-risk-summary__item strong { color: var(--ncp-text); font-family: var(--ncp-font-data); }
+.port-risk-summary__item--warning { color: var(--ncp-warning-strong); }
+.port-risk-summary > small { margin-left: auto; color: var(--ncp-text-subtle); font-size: .67rem; }
 
 .port-toolbar :deep(.el-input__wrapper) {
   min-height: var(--ncp-control-height);
@@ -989,6 +1087,43 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.listener-scope {
+  display: inline-flex !important;
+  width: max-content;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--ncp-neutral-border);
+  border-radius: var(--ncp-radius-pill);
+  background: var(--ncp-neutral-soft);
+  color: var(--ncp-neutral-strong) !important;
+  font-size: .68rem !important;
+  font-weight: 720;
+}
+
+.listener-scope--danger { border-color: var(--ncp-danger-border); background: var(--ncp-danger-soft); color: var(--ncp-danger-strong) !important; }
+.listener-scope--warning { border-color: var(--ncp-warning-border); background: var(--ncp-warning-soft); color: var(--ncp-warning-strong) !important; }
+.listener-scope--info { border-color: var(--ncp-info-border); background: var(--ncp-info-soft); color: var(--ncp-info-strong) !important; }
+.listener-scope--success { border-color: var(--ncp-success-border); background: var(--ncp-success-soft); color: var(--ncp-success-strong) !important; }
+
+.port-results-footer {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ncp-space-3);
+  padding: 8px 18px;
+  border-top: 1px solid var(--ncp-line);
+  background: var(--ncp-surface);
+}
+
+.port-results-footer > span {
+  color: var(--ncp-text-subtle);
+  font-size: .72rem;
 }
 
 .port-card__fact code {
@@ -1305,7 +1440,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 
 @media (max-width: 760px) {
   .port-toolbar {
-    grid-template-columns: minmax(0, 1fr) 140px;
+    grid-template-columns: minmax(0, 1fr) 140px 170px;
     padding-inline: 15px;
   }
 
@@ -1340,6 +1475,10 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   .port-toolbar {
     grid-template-columns: 1fr;
   }
+
+  .port-risk-summary { align-items: flex-start; flex-direction: column; }
+  .port-risk-summary > small { margin-left: 0; line-height: 1.5; }
+  .port-results-footer { align-items: stretch; flex-direction: column; padding-block: 12px; }
 
   .port-card {
     grid-template-columns: 58px minmax(0, 1fr);
