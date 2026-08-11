@@ -704,7 +704,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
             </div>
             <div class="dns-current-grid">
               <div class="dns-current-value"><span>当前生效 DNS</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
-              <div v-if="!dnsDetails.readOnly" class="dns-current-value dns-current-value--managed"><span>UGOS 手动配置</span><code>{{ dnsDetails.configuredNameservers.join('、') || '未读取到可编辑配置' }}</code></div>
+              <div v-if="!dnsDetails.readOnly" class="dns-current-value dns-current-value--managed"><span>UGOS 手动配置</span><code>{{ dnsDetails.configuredNameservers?.join('、') || '未读取到可编辑配置' }}</code></div>
             </div>
           </div>
         </article>

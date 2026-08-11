@@ -76,7 +76,7 @@ export interface DNSCapability {
   canConfirm: boolean
   canRollback: boolean
   nameservers: string[]
-  configuredNameservers: string[]
+  configuredNameservers?: string[]
   detectionSource: string
   errorCode: string
 }
@@ -1340,7 +1340,7 @@ function isDNSCapability(value: unknown): value is DNSCapability {
     typeof value.canConfirm === 'boolean' &&
     typeof value.canRollback === 'boolean' &&
     isStringArray(value.nameservers) &&
-    isStringArray(value.configuredNameservers) &&
+    (value.configuredNameservers === undefined || isStringArray(value.configuredNameservers)) &&
     typeof value.detectionSource === 'string' &&
     typeof value.errorCode === 'string'
   )
