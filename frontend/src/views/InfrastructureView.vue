@@ -460,6 +460,7 @@ function mihomoInspectionErrorMessage(code: string) {
 }
 
 function publicEgressAddressLabel() {
+  if (publicEgressLoading.value) return '正在检测…'
   if (!publicEgressResult.value) return publicEgressDetails.value.configured ? '待手动检测' : '未配置探针'
   return publicEgressResult.value.address || '探针未返回公网 IP'
 }
@@ -474,7 +475,14 @@ function mihomoModeLabel(value: string | undefined) {
 function nodeLocationLabel() {
   const node = mihomoInspection.value?.node
   if (!node) return '等待检查'
-  return [node.country, node.region].filter(Boolean).join(' · ') || '地区未返回'
+  return [node.country, node.region].filter(Boolean).join(' · ') || (node.server ? '入口位置未解析' : '等待检查')
+}
+
+function proxyRouteExplanation() {
+  if (mihomoInspection.value?.localProxy.mode === 'rule') {
+    return '公网出口来自本次真实代理请求；规则模式下，不同域名或应用可能命中不同策略，因此“默认策略选择”不代表所有连接。'
+  }
+  return '公网出口来自本次真实代理请求；节点入口是连接代理节点所用的地址，两者不是同一个概念。'
 }
 
 function egressLocationLabel() {
@@ -708,26 +716,27 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
                 <code>发起连接</code>
               </div>
               <div class="proxy-route-node">
-                <small>本地 Mihomo</small>
+                <small>本地代理入口</small>
                 <strong>{{ mihomoInspection?.localProxy.address || '监听地址待确认' }}</strong>
                 <code>{{ mihomoModeLabel(mihomoInspection?.localProxy.mode) }}</code>
               </div>
               <div class="proxy-route-node">
-                <small>策略组 / 当前节点</small>
+                <small>默认策略选择</small>
                 <strong>{{ mihomoInspection?.strategy.selectedNode || '节点待确认' }}</strong>
                 <code>{{ mihomoInspection?.strategy.group || '策略组待确认' }}<template v-if="mihomoInspection?.strategy.provider"> · {{ mihomoInspection.strategy.provider }}</template></code>
               </div>
               <div class="proxy-route-node">
-                <small>节点服务器</small>
-                <strong>{{ mihomoInspection?.node.server ? `${mihomoInspection.node.server}:${mihomoInspection.node.port}` : '服务器待确认' }}</strong>
-                <code>{{ mihomoInspection?.node.resolvedIp || (mihomoInspection?.node.server ? '节点域名由 Mihomo 解析' : 'IP 未确认') }} · {{ nodeLocationLabel() }}</code>
+                <small>节点入口</small>
+                <strong>{{ mihomoInspection?.node.server ? `${mihomoInspection.node.server}:${mihomoInspection.node.port}` : '入口待确认' }}</strong>
+                <code>{{ mihomoInspection?.node.resolvedIp || (mihomoInspection?.node.server ? '入口 IP 未解析' : 'IP 待确认') }} · {{ nodeLocationLabel() }}</code>
               </div>
               <div class="proxy-route-node proxy-route-node--egress">
-                <small>公网出口</small>
+                <small>本次检测公网出口</small>
                 <strong>{{ publicEgressAddressLabel() }}</strong>
                 <code>{{ egressLocationLabel() }}<template v-if="publicEgressResult?.isp"> · {{ publicEgressResult.isp }}</template><template v-if="publicEgressResult?.asn"> · {{ publicEgressResult.asn }}</template></code>
               </div>
             </div>
+            <p class="proxy-route-note">{{ proxyRouteExplanation() }}</p>
             <small v-if="publicEgressMessage" class="proxy-message" role="status">{{ publicEgressMessage }}</small>
             <details class="proxy-capabilities">
               <summary>控制器与分流能力 <span>展开技术明细</span></summary>
@@ -1423,6 +1432,17 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
   color: var(--ncp-text-muted);
   font-family: var(--ncp-font-mono);
   font-size: .69rem;
+}
+
+.proxy-route-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ncp-info-border);
+  border-radius: 10px;
+  background: var(--ncp-info-soft);
+  color: var(--ncp-text-muted);
+  font-size: .7rem !important;
+  line-height: 1.55;
 }
 
 .proxy-message {
