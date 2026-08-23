@@ -79,6 +79,47 @@ const sites = {
   discovery: { status: 'complete', probeAvailable: true, candidateCount: 1, verifiedCount: 1, failedCount: 0, issues: [] },
 }
 
+const databaseSource = {
+  id: 'sqlite-main',
+  name: 'NCP 数据库',
+  driver: 'sqlite',
+  category: 'system',
+  project: 'NCP',
+  module: '控制面配置',
+  location: '/volume2/Project/nas-control-plane/data/ncp.db',
+  path: '/volume2/Project/nas-control-plane/data/ncp.db',
+  requiresLogin: false,
+  status: 'available',
+  tags: ['SQLite', '系统'],
+}
+
+const databaseTable = {
+  schema: '',
+  name: 'settings',
+  type: 'table',
+  columns: [
+    { name: 'id', dataType: 'INTEGER', nullable: false, primaryKey: true, default: undefined, position: 1 },
+    { name: 'key', dataType: 'TEXT', nullable: false, primaryKey: false, default: undefined, position: 2 },
+    { name: 'value', dataType: 'TEXT', nullable: true, primaryKey: false, default: null, position: 3 },
+  ],
+  rowCount: 2,
+  sizeBytes: 4096,
+  createdAt: collectedAt,
+  definition: 'CREATE TABLE settings (id INTEGER PRIMARY KEY, key TEXT NOT NULL, value TEXT);',
+}
+
+const databaseCatalog = { source: databaseSource, tables: [databaseTable] }
+const databaseRows = {
+  table: databaseTable,
+  rows: [
+    { id: 1, key: 'theme', value: 'light' },
+    { id: 2, key: 'empty-value', value: null },
+  ],
+  limit: 10,
+  offset: 0,
+  hasMore: false,
+}
+
 const systemCapabilities = {
   hostname: 'ncp-fixture',
   architecture: 'aarch64',
@@ -241,8 +282,17 @@ export async function installMockApi(page: Page) {
 
     if (path === '/api/v1/auth/status') return json(route, { initialized: true, authenticated: true, user: { id: 1, username: 'root', role: 'root' } })
     if (path === '/api/v1/preferences') return json(route, preferences)
+    if (path.startsWith('/api/v1/preferences/lists/')) {
+      return json(route, { listKey: decodeURIComponent(path.split('/').at(-1) || ''), pageSize: 10, sortKey: '', sortDirection: 'asc' })
+    }
     if (path === '/api/v1/sites') return json(route, sites)
     if (path === '/api/v1/sites/ignored') return json(route, [])
+    if (path === '/api/v1/system/summary') return json(route, summary)
+    if (path === '/api/v1/docker/inventory') return json(route, docker)
+    if (path === '/api/v1/databases/project-preferences') return json(route, [])
+    if (path === '/api/v1/databases/discovery') return json(route, { collectedAt, sources: [databaseSource] })
+    if (path === '/api/v1/databases/catalog') return json(route, databaseCatalog)
+    if (path === '/api/v1/databases/rows') return json(route, databaseRows)
     if (path === '/api/v1/system/events') {
       const body = `event: snapshot\ndata: ${JSON.stringify({ collectedAt, summary, docker })}\n\n`
       return route.fulfill({ status: 200, headers: { 'cache-control': 'no-cache', 'content-type': 'text/event-stream' }, body })
