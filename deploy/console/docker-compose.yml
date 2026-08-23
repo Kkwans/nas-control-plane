@@ -5,7 +5,9 @@ services:
     build:
       context: ../..
       dockerfile: deploy/console/Dockerfile.server
-    image: nas-control-plane:2026.8.11-v5
+      args:
+        BUILD_VERSION: 2026.8.24-v1
+    image: nas-control-plane:2026.8.24-v1
     container_name: nas-control-plane
     restart: unless-stopped
     command:

@@ -34,6 +34,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		if err := writeBuildVersion(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "NCP_SERVER_VERSION_OUTPUT_FAILED")
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "NCP_SERVER_COMMAND_UNKNOWN")
 		os.Exit(1)
@@ -59,6 +67,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "NCP_SERVER_COMMAND_UNKNOWN")
 		os.Exit(1)
 	}
+}
+
+func writeBuildVersion(output io.Writer) error {
+	_, err := fmt.Fprintln(output, agentsocket.BuildVersion)
+	return err
 }
 
 // runDatabaseKeyInit is an explicit installation-time operation. It never

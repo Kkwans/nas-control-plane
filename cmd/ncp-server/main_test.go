@@ -1,12 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestWriteBuildVersion(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeBuildVersion(&output); err != nil {
+		t.Fatalf("writeBuildVersion error = %v", err)
+	}
+	if got, want := output.String(), "dev\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
 
 func TestRunAgentProbeRejectsUnexpectedArguments(t *testing.T) {
 	if err := runAgentProbe(context.Background(), []string{"unexpected"}, io.Discard); err == nil {

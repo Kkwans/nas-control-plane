@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"testing"
@@ -8,6 +9,16 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 )
+
+func TestWriteBuildVersion(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeBuildVersion(&output); err != nil {
+		t.Fatalf("writeBuildVersion error = %v", err)
+	}
+	if got, want := output.String(), "dev\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
 
 func TestRunAgentServerRequiresSocketGroup(t *testing.T) {
 	err := runAgentServer(context.Background(), nil)

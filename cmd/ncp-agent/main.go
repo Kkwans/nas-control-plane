@@ -21,6 +21,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		if err := writeBuildVersion(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "NCP_AGENT_VERSION_OUTPUT_FAILED")
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "docker-poc":
@@ -62,6 +70,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ncp-agent capability output failed")
 		os.Exit(1)
 	}
+}
+
+func writeBuildVersion(output io.Writer) error {
+	_, err := fmt.Fprintln(output, agentsocket.BuildVersion)
+	return err
 }
 
 func runDockerPOC(ctx context.Context, args []string, output io.Writer) error {
