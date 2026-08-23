@@ -1,37 +1,23 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component, type PropType, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, type PropType, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  Boxes,
   ChevronRight,
-  Database,
-  Container,
-  FileClock,
-  Gauge,
   Info,
-  LayoutDashboard,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   Server,
-  Settings,
   TerminalSquare,
-  UserRound,
   X,
 } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'
 
 import NcpLogo from '@/components/NcpLogo.vue'
+import { navigationByID, primaryNavigation, type NavigationItem } from '@/router/navigation'
 import type { RealtimeState, SystemConnectionState } from '@/stores/system'
-
-interface NavigationItem {
-  id: string
-  label: string
-  icon: Component
-  to: string
-}
 
 const route = useRoute()
 const emit = defineEmits<{ refresh: []; logout: [] }>()
@@ -51,19 +37,6 @@ const mobileNavigationOpen = ref(false)
 const sidebarCollapsed = ref(props.sidebarDefault === 'collapsed')
 const menuButton = ref<HTMLButtonElement | null>(null)
 
-const primaryNavigation: NavigationItem[] = [
-  { id: 'overview', label: '总览', to: '/', icon: LayoutDashboard },
-  { id: 'sites', label: '站点管理', to: '/sites', icon: Boxes },
-  { id: 'docker', label: 'Docker', to: '/docker', icon: Container },
-  { id: 'databases', label: '数据库', to: '/databases', icon: Database },
-  { id: 'logs', label: '日志中心', to: '/logs', icon: FileClock },
-  { id: 'monitoring', label: '系统监控', to: '/monitoring', icon: Gauge },
-  { id: 'system', label: '系统信息', to: '/system', icon: Info },
-  { id: 'users', label: '用户管理', to: '/users', icon: UserRound },
-  { id: 'terminal', label: '终端', to: '/terminal', icon: TerminalSquare },
-  { id: 'settings', label: '设置', to: '/settings', icon: Settings },
-]
-const navigationByID = new Map(primaryNavigation.map((item) => [item.id, item]))
 const orderedNavigation = computed(() => {
   const result: NavigationItem[] = []
   const seen = new Set<string>()

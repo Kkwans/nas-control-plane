@@ -5,22 +5,10 @@ import { ElButton, ElOption, ElSelect } from 'element-plus'
 
 import type { UserPreferences } from '@/api/control'
 import WorkspaceHeader from '@/components/WorkspaceHeader.vue'
+import { DEFAULT_NAVIGATION_ORDER, navigationLabels } from '@/router/navigation'
 import { useSystemStore } from '@/stores/system'
 
 const systemStore = useSystemStore()
-const DEFAULT_NAVIGATION_ORDER = ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings']
-const navigationLabels: Record<string, string> = {
-  overview: '总览',
-  sites: '站点管理',
-  docker: 'Docker',
-  databases: '数据库',
-  logs: '日志中心',
-  monitoring: '系统监控',
-  system: '系统信息',
-  users: '用户管理',
-  terminal: '终端',
-  settings: '设置',
-}
 const clonePreferences = (value: UserPreferences): UserPreferences => ({
   ...value,
   navigationOrder: [...(value.navigationOrder ?? [])],
