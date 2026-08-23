@@ -83,6 +83,13 @@ const docker = {
   }],
 }
 
+const overviewDocker = {
+  ...docker,
+  engine: { ...docker.engine, containers: 2, containersRunning: 2, containersStopped: 0 },
+  containers: docker.containers.slice(0, 2).map((container) => ({ ...container, state: 'running', status: 'Up 2 hours' })),
+  projects: [{ ...docker.projects[0], state: 'running', runningCount: 2 }],
+}
+
 const dockerImages = {
   collectedAt,
   images: [
@@ -341,7 +348,8 @@ export async function installMockApi(page: Page) {
           const openEvent = new Event('open')
           this.onopen?.(openEvent)
           this.dispatchEvent(openEvent)
-          this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify(snapshot) }))
+          const currentDocker = location.pathname === '/docker' ? snapshot.docker : snapshot.overviewDocker
+          this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify({ ...snapshot, docker: currentDocker }) }))
         }, 0)
       }
 
@@ -351,7 +359,7 @@ export async function installMockApi(page: Page) {
     }
 
     window.EventSource = MockEventSource as unknown as typeof EventSource
-  }, { collectedAt, summary, docker })
+  }, { collectedAt, summary, docker, overviewDocker })
 
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
@@ -365,7 +373,7 @@ export async function installMockApi(page: Page) {
     if (path === '/api/v1/sites') return json(route, sites)
     if (path === '/api/v1/sites/ignored') return json(route, [])
     if (path === '/api/v1/system/summary') return json(route, summary)
-    if (path === '/api/v1/docker/inventory') return json(route, docker)
+    if (path === '/api/v1/docker/inventory') return json(route, page.url().includes('/docker') ? docker : overviewDocker)
     if (path === '/api/v1/docker/images') return json(route, dockerImages)
     if (path === '/api/v1/docker/hub/search') {
       const query = (url.searchParams.get('query') || '').trim().toLowerCase()
