@@ -70,7 +70,10 @@ export const useSystemStore = defineStore('system', () => {
   const listPreferenceRequests = new Map<string, Promise<ListPreference>>()
 
   let eventSource: EventSource | null = null
-  let refreshPromise: Promise<void> | null = null
+  type RefreshResource = 'summary' | 'inventory' | 'capabilities'
+  const refreshPromises = new Map<RefreshResource, Promise<void>>()
+  const pendingRefreshes = new Set<RefreshResource>()
+  const refreshErrors = new Map<RefreshResource, string>()
   let previousNetwork: { timestamp: number; receiveBytes: number; transmitBytes: number } | null = null
 
   const deviceName = computed(() => summary.value?.host.hostname || capabilities.value?.hostname || 'NAS 管理面板')
@@ -78,7 +81,6 @@ export const useSystemStore = defineStore('system', () => {
   const services = computed(() => inventory.value?.projects ?? [])
 
   async function refresh(options: RefreshOptions = {}) {
-    if (refreshPromise) return refreshPromise
     const hasExplicitScope = options.summary !== undefined || options.inventory !== undefined || options.capabilities !== undefined
     const normalized = hasExplicitScope
       ? options
@@ -87,12 +89,11 @@ export const useSystemStore = defineStore('system', () => {
           inventory: realtimeScopes.value.includes('docker'),
           capabilities: false,
         }
-    refreshPromise = runRefresh(normalized)
-    try {
-      await refreshPromise
-    } finally {
-      refreshPromise = null
-    }
+    const requests: Promise<void>[] = []
+    if (normalized.summary) requests.push(refreshResource('summary'))
+    if (normalized.inventory) requests.push(refreshResource('inventory'))
+    if (normalized.capabilities) requests.push(refreshResource('capabilities'))
+    await Promise.all(requests)
   }
 
   async function loadPreferences() {
@@ -158,35 +159,46 @@ export const useSystemStore = defineStore('system', () => {
     applyExperiencePreferences(input)
   }
 
-  async function runRefresh(options: RefreshOptions) {
-    isRefreshing.value = true
-    connectionState.value = summary.value || inventory.value ? 'degraded' : 'loading'
-    const requests: Array<{
-      type: 'summary' | 'inventory' | 'capabilities'
-      promise: Promise<SystemCapabilities | SystemSummary | DockerInventory>
-    }> = []
-    if (options.summary) requests.push({ type: 'summary', promise: requestSystemSummary() })
-    if (options.inventory) requests.push({ type: 'inventory', promise: requestDockerInventory() })
-    if (options.capabilities) requests.push({ type: 'capabilities', promise: requestCapabilities() })
-    if (!requests.length) {
-      isRefreshing.value = false
-      return
-    }
+  function refreshResource(resource: 'summary' | 'inventory' | 'capabilities') {
+    const pending = refreshPromises.get(resource)
+    if (pending) return pending
 
-    const results = await Promise.allSettled(requests.map((request) => request.promise))
-    results.forEach((result, index) => {
-      if (result.status !== 'fulfilled') return
-      const type = requests[index]?.type
-      if (type === 'summary') applySummary(result.value as SystemSummary)
-      if (type === 'inventory') inventory.value = result.value as DockerInventory
-      if (type === 'capabilities') capabilities.value = result.value as SystemCapabilities
+    const request = runRefreshResource(resource)
+    const promise = request.finally(() => {
+      if (refreshPromises.get(resource) === promise) refreshPromises.delete(resource)
     })
+    refreshPromises.set(resource, promise)
+    return promise
+  }
 
-    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-    errorCode.value = failures.length > 0 ? errorCodeFor(failures[0]?.reason) : null
-    const successful = results.length - failures.length
-    connectionState.value = successful === results.length ? 'connected' : successful > 0 ? 'degraded' : 'unavailable'
-    isRefreshing.value = false
+  async function runRefreshResource(resource: 'summary' | 'inventory' | 'capabilities') {
+    pendingRefreshes.add(resource)
+    updateRefreshState()
+    try {
+      if (resource === 'summary') applySummary(await requestSystemSummary())
+      if (resource === 'inventory') inventory.value = await requestDockerInventory()
+      if (resource === 'capabilities') capabilities.value = await requestCapabilities()
+      refreshErrors.delete(resource)
+    } catch (error) {
+      refreshErrors.set(resource, errorCodeFor(error))
+    } finally {
+      pendingRefreshes.delete(resource)
+      updateRefreshState()
+    }
+  }
+
+  function updateRefreshState() {
+    isRefreshing.value = pendingRefreshes.size > 0
+    const dataAvailable = Boolean(summary.value || inventory.value || capabilities.value)
+    const firstError = refreshErrors.values().next().value as string | undefined
+    errorCode.value = firstError ?? null
+    if (pendingRefreshes.size > 0) {
+      connectionState.value = dataAvailable ? 'degraded' : 'loading'
+    } else if (firstError) {
+      connectionState.value = dataAvailable ? 'degraded' : 'unavailable'
+    } else if (dataAvailable) {
+      connectionState.value = 'connected'
+    }
   }
 
   function startRealtime(scopes: RealtimeScope[]) {

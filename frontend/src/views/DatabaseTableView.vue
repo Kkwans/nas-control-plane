@@ -44,6 +44,7 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
+import { DatabaseValueError, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -80,6 +81,7 @@ const databaseErrorCopy: Record<string, DatabaseErrorCopy> = {
   key_rotation_failed: { message: '数据库凭据密钥更新失败。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
   migration_failed: { message: '数据库凭据存储迁移失败。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
   DATABASE_OPERATION_FAILED: { message: '数据库操作失败，请稍后重试。', nextStep: '稍后重试；若持续失败，请记录错误码联系管理员。' },
+  DATABASE_VALUE_INVALID: { message: '字段值格式不正确。', nextStep: '按字段类型填写值；空字符串不会自动转换成 NULL。' },
 }
 
 const route = useRoute()
@@ -209,7 +211,7 @@ async function submitRow() {
     const values = Object.fromEntries(columns.value.flatMap((column) => {
       const rawValue = rowForm.value[column.name] ?? ''
       if (rowDialogMode.value === 'insert' && rawValue === '' && (column.primaryKey || column.default !== undefined)) return []
-      return [[column.name, rowNullFields.value[column.name] ? null : convertValue(rawValue, column)]]
+      return [[column.name, resolveDatabaseValue(rawValue, column, rowNullFields.value[column.name] === true)]]
     }))
     if (rowDialogMode.value === 'insert') {
       await insertDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values })
@@ -264,17 +266,6 @@ async function runSQL() {
   }
 }
 
-function convertValue(value: string, column: DatabaseColumn): DatabaseValue {
-  const type = column.dataType.toLowerCase()
-  if (value === '' && column.nullable) return null
-  if (/(^|[^a-z])(int|real|float|double|decimal|numeric)/.test(type)) {
-    const numeric = Number(value)
-    return Number.isFinite(numeric) ? numeric : value
-  }
-  if (/bool/.test(type)) return value === 'true' || value === '1'
-  return value
-}
-
 function isSensitiveColumn(name: string) {
   return /(password|passwd|token|secret|cookie|api[_-]?key|private[_-]?key)/i.test(name)
 }
@@ -317,6 +308,7 @@ function schemaLabel(value: string) {
 }
 
 function errorCode(error: unknown) {
+  if (error instanceof DatabaseValueError) return error.code
   if (error instanceof NcpApiError) return error.code
   if (error instanceof Error && databaseErrorCopy[error.message]) return error.message
   return 'DATABASE_OPERATION_FAILED'
