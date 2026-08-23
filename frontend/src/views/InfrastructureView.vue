@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElDialog, ElInput, ElTooltip } from 'element-plus'
+import { ElButton, ElDialog, ElInput, ElTooltip } from 'element-plus'
 import {
   Activity,
   AlertTriangle,
@@ -22,6 +22,7 @@ import {
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
+import InfrastructureSignalSummary, { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import {
@@ -140,6 +141,36 @@ const primaryInterfaces = computed(() => {
 const primaryInterfaceNames = computed(() => new Set(primaryInterfaces.value.map((item) => item.name)))
 const secondaryInterfaces = computed(() => networkInterfaces.value.filter((item) => !primaryInterfaceNames.value.has(item.name)))
 const primaryActiveInterfaceCount = computed(() => primaryInterfaces.value.filter(interfaceIsOnline).length)
+const infrastructureSignals = computed<InfrastructureSignal[]>(() => [
+  {
+    label: '主网络',
+    value: primaryActiveInterfaceCount.value ? `${primaryActiveInterfaceCount.value} 个接口在线` : '未连接',
+    detail: details.value?.network.gateway ? `默认出口 ${details.value.network.gateway}` : '默认出口未发现',
+    icon: Wifi,
+    tone: primaryActiveInterfaceCount.value ? 'success' : 'warning',
+  },
+  {
+    label: 'DNS 服务',
+    value: dnsDetails.value.nameservers.length ? `${dnsDetails.value.nameservers.length} 个服务` : '未读取',
+    detail: dnsDetails.value.readOnly ? '当前只读展示' : '支持预览与回滚',
+    icon: Network,
+    tone: dnsDetails.value.nameservers.length ? 'success' : 'warning',
+  },
+  {
+    label: 'Tailscale',
+    value: tailscaleStatusLabel(),
+    detail: tailscaleDetails.value.overlayIps.join('、') || tailscaleEvidenceLabel(),
+    icon: Waypoints,
+    tone: tailscaleDetails.value.reachable ? 'success' : tailscaleDetails.value.detected ? 'warning' : 'neutral',
+  },
+  {
+    label: 'Mihomo / 公网出口',
+    value: proxyStateLabel(details.value?.proxy.mihomo.state ?? 'unknown', details.value?.proxy.mihomo.detected ?? false),
+    detail: publicEgressResult.value?.address || (publicEgressDetails.value.configured ? '公网出口待检查' : '未配置探针'),
+    icon: Router,
+    tone: details.value?.proxy.mihomo.detected ? 'success' : 'neutral',
+  },
+])
 const volumeMounts = computed(() => (details.value?.storage.mounts ?? []).filter((item) => item.path === '/' || item.path.startsWith('/volume')))
 const auxiliaryMounts = computed(() => (details.value?.storage.mounts ?? []).filter((item) => !volumeMounts.value.some((volume) => volume.path === item.path)))
 const volumeTotalBytes = computed(() => volumeMounts.value.reduce((total, item) => total + item.totalBytes, 0))
@@ -597,7 +628,7 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
     <section v-else-if="errorMessage && !details" class="details-error panel">
       <AlertTriangle :size="24" />
       <div><strong>系统详情暂不可用</strong><p>{{ errorMessage }}</p></div>
-      <el-button @click="loadDetails">重试</el-button>
+      <ElButton @click="loadDetails">重试</ElButton>
     </section>
 
     <template v-else-if="details">
@@ -619,6 +650,8 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
             <small>{{ details.control.nodes.length }} 个节点已纳入检测</small>
           </div>
         </article>
+
+        <InfrastructureSignalSummary :signals="infrastructureSignals" />
 
         <article class="panel overview-facts">
           <div><span>系统版本</span><strong>{{ details.device.operatingSystem || '不可用' }}</strong></div>
@@ -1549,6 +1582,16 @@ onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleMan
 @media (max-width: 520px) {
   .detail-card__section-header {
     padding-inline: 15px;
+  }
+
+  .detail-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .detail-tabs button {
+    justify-content: center;
   }
 
   .port-toolbar {
