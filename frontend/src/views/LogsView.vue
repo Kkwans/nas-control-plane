@@ -23,9 +23,11 @@ const following = ref(false)
 const loading = ref(false)
 const error = ref('')
 const entries = ref<LogEntry[]>([])
+const nextCursor = ref('')
 const selectedEntry = ref<LogEntry | null>(null)
 const page = ref(1)
 const showSkeleton = ref(false)
+const loadingMore = ref(false)
 let logSource: EventSource | null = null
 let loadController: AbortController | null = null
 let skeletonTimer: ReturnType<typeof setTimeout> | null = null
@@ -49,6 +51,7 @@ async function load(silent = false) {
   loadController?.abort()
   if (source.value === 'container' && !containerId.value) {
     entries.value = []
+    nextCursor.value = ''
     loading.value = false
     showSkeleton.value = false
     return
@@ -69,6 +72,7 @@ async function load(silent = false) {
     }, loadController.signal)
     if (requestSequence !== loadSequence) return
     entries.value = result.entries
+    nextCursor.value = result.nextCursor
     page.value = 1
   } catch (caught) {
     if (caught instanceof DOMException && caught.name === 'AbortError') return
@@ -80,6 +84,34 @@ async function load(silent = false) {
     skeletonTimer = null
     showSkeleton.value = false
     loading.value = false
+  }
+}
+
+async function loadMore() {
+  const cursor = nextCursor.value
+  if (!cursor || loading.value || loadingMore.value) return
+  const requestSequence = ++loadSequence
+  loadController?.abort()
+  loadingMore.value = true
+  error.value = ''
+  loadController = new AbortController()
+  try {
+    const result = await requestLogs({
+      source: source.value, containerId: containerId.value, level: level.value,
+      query: query.value, hours: hours.value, limit: 200, cursor,
+    }, loadController.signal)
+    if (requestSequence !== loadSequence) return
+    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
+    for (const entry of result.entries) merged.set(entry.id, entry)
+    entries.value = [...merged.values()]
+    nextCursor.value = result.nextCursor
+  } catch (caught) {
+    if (caught instanceof DOMException && caught.name === 'AbortError') return
+    if (requestSequence !== loadSequence) return
+    error.value = '更多日志读取失败，请重试。'
+  } finally {
+    if (requestSequence !== loadSequence) return
+    loadingMore.value = false
   }
 }
 
@@ -188,7 +220,12 @@ function entryContext(entry: LogEntry) {
       </div>
       <div v-if="!loading && !entries.length" class="log-empty">当前筛选条件下没有日志记录</div>
       <footer v-if="entries.length" class="log-pagination">
-        <span>共 {{ entries.length }} 条</span>
+        <div class="log-history-note" role="status">
+          <Info :size="14" />
+          <span v-if="nextCursor">历史日志按服务端分页加载，当前已载入 {{ entries.length }} 条；单次最多 200 条，可继续加载更多结果。</span>
+          <span v-else>历史日志按服务端分页加载，当前已载入 {{ entries.length }} 条；单次最多 200 条，当前筛选范围已没有更多结果。</span>
+        </div>
+        <ElButton v-if="nextCursor" size="small" :loading="loadingMore" @click="loadMore">加载更多结果</ElButton>
         <div><button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button><strong>{{ page }} / {{ pageCount }}</strong><button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button></div>
       </footer>
     </section>
@@ -214,7 +251,7 @@ function entryContext(entry: LogEntry) {
 .log-toolbar{display:flex;min-height:66px;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px}.log-filters,.log-tools{display:flex;align-items:center;gap:8px}.log-filters :deep(.el-select){width:148px}.log-filters :deep(.el-select:nth-child(3)),.log-filters :deep(.el-select:nth-child(4)){width:126px}.log-tools :deep(.el-input){width:min(300px,24vw)}.log-toolbar :deep(.el-select__wrapper),.log-toolbar :deep(.el-input__wrapper){min-height:42px;border-radius:10px}.follow-switch{display:flex;min-height:42px;align-items:center;gap:7px;padding:0 11px;border:1px solid var(--ncp-line);border-radius:10px;color:var(--ncp-text-muted);font-size:.82rem}.log-refresh-button{min-width:86px}.log-console{min-height:610px;overflow:hidden}.log-head,.log-row{display:grid;grid-template-columns:188px 78px 200px minmax(360px,1fr);align-items:start;gap:13px}.log-head{min-height:46px;align-items:center;padding:0 16px;background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-size:.8rem;font-weight:720}.log-row{min-height:52px;padding:10px 16px;border-top:1px solid var(--ncp-line);font-size:.8rem}.log-row:hover{background:var(--ncp-surface-hover)}.log-row time,.log-row code{overflow:hidden;color:var(--ncp-text-subtle);font-family:var(--ncp-font-mono);font-size:.76rem;text-overflow:ellipsis;white-space:nowrap}.log-row pre{margin:0;overflow-wrap:anywhere;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.55;white-space:pre-wrap}.level-badge{justify-self:start;padding:3px 8px;border-radius:7px;background:var(--ncp-info-soft);color:var(--ncp-info);font-size:.74rem;font-weight:720}.level-badge--error{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.level-badge--warning{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.level-badge--debug{background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.log-row--skeleton i{width:75%;height:10px}.log-empty{display:grid;min-height:560px;place-items:center;color:var(--ncp-text-subtle);font-size:.84rem}.log-error{padding:11px 14px;border-radius:9px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}@media(max-width:1180px){.log-toolbar{align-items:stretch;flex-direction:column}.log-filters,.log-tools{width:100%}.log-filters :deep(.el-select){flex:1;width:auto}.log-tools :deep(.el-input){min-width:0;flex:1}.log-head,.log-row{grid-template-columns:155px 68px 150px minmax(280px,1fr)}}@media(max-width:700px){.log-filters{display:grid;grid-template-columns:1fr 1fr}.log-filters :deep(.el-select){width:100%}.log-tools{flex-wrap:wrap}.log-tools :deep(.el-input){order:-1;flex-basis:100%}.log-head{display:none}.log-row{grid-template-columns:1fr auto}.log-row code{grid-column:1}.log-row pre{grid-column:1/-1}.log-row time{grid-row:1;grid-column:1}}
 .log-toolbar :deep(.el-select__input),.log-toolbar :deep(.el-select__input-wrapper){border:0!important;outline:0!important;box-shadow:none!important}.log-head,.log-row{grid-template-columns:188px 78px minmax(360px,1fr) 64px;align-items:center}.log-head>span:nth-child(2),.log-head>span:last-child{text-align:center}.level-badge{justify-self:center}.log-message{overflow:hidden;margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.55;text-overflow:ellipsis;white-space:nowrap}.log-detail-button{display:grid;width:34px;height:34px;place-items:center;justify-self:center;border:1px solid transparent;border-radius:8px;color:var(--ncp-text-subtle);transition:background-color .18s ease,border-color .18s ease,color .18s ease}.log-row:hover .log-detail-button,.log-detail-button:focus-visible{border-color:var(--ncp-line);background:#fff;color:var(--ncp-primary-strong)}.log-token--method{color:#2769ba;font-weight:700}.log-token--success{color:#23866f;font-weight:700}.log-token--danger{color:#c95361;font-weight:700}.log-token--punctuation{color:#7b8798}.log-detail-dialog{display:grid;gap:16px}.log-detail-meta{display:grid;grid-template-columns:1fr 1fr;margin:0;border:1px solid var(--ncp-line);border-radius:12px;background:#fff}.log-detail-meta>div{display:grid;min-width:0;gap:5px;padding:12px}.log-detail-meta dt{color:var(--ncp-text-subtle);font-size:.75rem}.log-detail-meta dd{overflow-wrap:anywhere;margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.82rem}.log-detail-message{max-height:52vh;overflow:auto;margin:0;padding:18px;border:1px solid var(--ncp-line);border-radius:12px;background:var(--ncp-surface-quiet);color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.84rem;line-height:1.7;white-space:pre-wrap;word-break:break-word}.log-pagination{display:flex;min-height:52px;align-items:center;justify-content:space-between;padding:8px 16px;border-top:1px solid var(--ncp-line);color:var(--ncp-text-subtle);font-size:.78rem}.log-pagination div{display:flex;align-items:center;gap:8px}.log-pagination button{min-height:34px;padding:0 11px;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-weight:680}.log-pagination button:disabled{opacity:.4}.log-pagination strong{min-width:56px;color:var(--ncp-text);text-align:center}@media(max-width:1050px){.log-head,.log-row{grid-template-columns:155px 68px minmax(280px,1fr) 58px}}@media(max-width:700px){.log-row{grid-template-columns:1fr auto auto}.log-message{grid-column:1/-1}.log-row time{grid-row:1;grid-column:1}.log-detail-meta{grid-template-columns:1fr}.log-console{min-height:520px}}
 .log-token--warning{color:var(--ncp-warning-strong);font-weight:700}.log-token--string{color:#7b5ba7}.log-token--path{color:#25798a}.log-token--field{color:#44658c;font-weight:650}.log-detail-meta .level-badge{justify-self:start}.log-detail-message{tab-size:4}.log-raw-message{border:1px solid var(--ncp-line);border-radius:10px;background:#fff}.log-raw-message summary{cursor:pointer;padding:11px 14px;color:var(--ncp-text-muted);font-size:.8rem;font-weight:700}.log-raw-message pre{max-height:240px;overflow:auto;margin:0;padding:14px;border-top:1px solid var(--ncp-line);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.65;tab-size:4;white-space:pre-wrap;word-break:break-word}
-.log-toolbar{align-items:stretch;padding:13px 14px}.log-filters{flex-wrap:wrap;align-items:center}.log-filter-field{display:block;min-width:126px}.log-filter-field:first-child{min-width:210px}.log-filters :deep(.el-select){width:100%}.log-tools{align-items:flex-end}.log-message{display:grid;min-width:0;gap:2px;overflow:hidden;margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.5;text-overflow:ellipsis}.log-message>small{overflow:hidden;color:var(--ncp-text-subtle);font-family:var(--ncp-font-ui);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.log-message__text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.log-detail-button{min-width:34px;min-height:34px}.log-pagination{background:var(--ncp-surface-quiet)}
+.log-toolbar{align-items:stretch;padding:13px 14px}.log-filters{flex-wrap:wrap;align-items:center}.log-filter-field{display:block;min-width:126px}.log-filter-field:first-child{min-width:210px}.log-filters :deep(.el-select){width:100%}.log-tools{align-items:flex-end}.log-message{display:grid;min-width:0;gap:2px;overflow:hidden;margin:0;color:var(--ncp-text);font-family:var(--ncp-font-mono);font-size:.78rem;line-height:1.5;text-overflow:ellipsis}.log-message>small{overflow:hidden;color:var(--ncp-text-subtle);font-family:var(--ncp-font-ui);font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.log-message__text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.log-detail-button{min-width:34px;min-height:34px}.log-pagination{background:var(--ncp-surface-quiet)}.log-history-note{display:flex;min-width:0;align-items:flex-start;gap:6px;color:var(--ncp-text-subtle);font-size:.72rem;line-height:1.45}.log-history-note svg{flex:0 0 auto;margin-top:2px;color:var(--ncp-info)}.log-pagination>.el-button{flex:0 0 auto}
 @media(max-width:1180px){.log-toolbar{gap:14px}.log-filters{align-items:stretch}.log-filter-field,.log-filter-field:first-child{flex:1;min-width:0}.log-tools{align-items:center}}
 @media(max-width:700px){.log-toolbar{gap:12px;padding:12px}.log-filters{display:grid;grid-template-columns:1fr 1fr;gap:9px}.log-filter-field{min-width:0}.log-filter-field>span{font-size:.67rem}.log-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}.log-tools :deep(.el-input){grid-column:1/-1;order:0;width:100%;flex:none}.log-tools .follow-switch{min-width:0;justify-content:space-between}.log-refresh-button{min-width:86px}.log-row{grid-template-columns:minmax(0,1fr) auto auto;gap:9px;padding:12px 13px}.log-message{grid-column:1/-1;gap:3px;padding-top:2px}.log-message__text{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}.log-detail-dialog{gap:12px}.log-detail-message{max-height:55vh;padding:14px}.logs-page :deep(.el-dialog){width:calc(100vw - 24px)!important;margin:0 auto!important}.logs-page :deep(.el-dialog__body){padding:12px}.log-pagination{align-items:flex-start;flex-direction:column;gap:8px;padding:10px 13px}.log-pagination>div{width:100%;justify-content:space-between}.log-pagination button{flex:1}}
 @media(max-width:420px){.log-filters{grid-template-columns:1fr}.log-tools{grid-template-columns:1fr 1fr}.log-tools :deep(.el-input){grid-column:1/-1}.follow-switch,.log-refresh-button{width:100%}.log-row{grid-template-columns:minmax(0,1fr) auto;}.log-row .log-detail-button{grid-column:2;grid-row:1}.level-badge{grid-column:1;grid-row:1;justify-self:start}.log-row time{grid-column:1;grid-row:2}.log-message{grid-row:3}}
@@ -283,6 +320,8 @@ function entryContext(entry: LogEntry) {
   .logs-page :deep(.el-dialog__body) { padding: 12px; }
   .log-pagination { align-items: flex-start; flex-direction: column; gap: 8px; padding: 10px 13px; }
   .log-pagination > div { width: 100%; justify-content: space-between; }
+  .log-history-note { width: 100%; }
+  .log-pagination > .el-button { width: 100%; }
   .log-pagination button { flex: 1; }
 }
 

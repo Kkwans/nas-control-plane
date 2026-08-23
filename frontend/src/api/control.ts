@@ -257,6 +257,7 @@ export function requestLogs(input: {
   query?: string
   hours?: number
   limit?: number
+  cursor?: string
 }, signal?: AbortSignal): Promise<LogResponse> {
   return request(`/api/v1/logs?${logParameters(input)}`, { signal })
 }
@@ -330,9 +331,10 @@ function logParameters(input: {
   source: 'system' | 'agent' | 'container'
   containerId?: string
   level?: string
-  query?: string
-  hours?: number
-  limit?: number
+    query?: string
+    hours?: number
+    limit?: number
+    cursor?: string
 }) {
   const parameters = new URLSearchParams({
     source: input.source,
@@ -342,6 +344,7 @@ function logParameters(input: {
     limit: String(input.limit || 150),
   })
   if (input.containerId) parameters.set('containerId', input.containerId)
+  if (input.cursor) parameters.set('cursor', input.cursor)
   return parameters
 }
 
