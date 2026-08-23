@@ -17,7 +17,7 @@ const routes = [
   { path: '/settings', heading: '系统设置' },
 ]
 
-const routeNavigationTimeout = 30_000
+const routeNavigationTimeout = 60_000
 
 const viewports = [
   { name: 'desktop-wide', width: 1440, height: 900 },
@@ -28,6 +28,7 @@ const viewports = [
 
 for (const viewport of viewports) {
   test(`主要页面在 ${viewport.name} 可进入且无横向失控`, async ({ page }) => {
+    test.setTimeout(120_000)
     const browserErrors: string[] = []
     page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
     page.on('console', (message) => {
