@@ -45,6 +45,7 @@ import {
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
 import { DatabaseValueError, resolveDatabaseValue } from '@/domain/database/valueConversion'
+import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -127,6 +128,7 @@ const queryRows = computed(() => {
   return queryResult.value.rows.map((row) =>
     Object.fromEntries(queryResult.value!.columns.map((column, index) => [column, row[index]])))
 })
+const sqlRisk = computed(() => classifySqlRisk(sql.value))
 
 onMounted(() => void initialize())
 
@@ -253,6 +255,17 @@ async function removeRow(row: Record<string, DatabaseValue>) {
 
 async function runSQL() {
   if (!sql.value.trim()) return
+  if (sqlRisk.value) {
+    try {
+      await ElMessageBox.confirm(sqlRisk.value.confirmation, sqlRisk.value.title, {
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
   queryPending.value = true
   queryError.value = null
   try {
@@ -449,7 +462,11 @@ function clearError() {
     <section v-else class="sql-workbench panel">
       <div class="sql-toolbar">
         <div><strong>SQL 查询</strong><span>{{ tableTypeLabel(table.type) }} / {{ source.name }} / {{ table.name }}</span></div>
-        <div><small>最多返回 500 行</small><ElButton type="primary" :loading="queryPending" :disabled="!sql.trim()" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton></div>
+        <div class="sql-toolbar__actions">
+          <small v-if="sqlRisk" class="sql-risk-hint" role="status"><CircleAlert :size="14" />{{ sqlRisk.hint }}</small>
+          <small v-else>最多返回 500 行</small>
+          <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim()" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton>
+        </div>
       </div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
@@ -965,6 +982,23 @@ function clearError() {
   min-width: 0;
   align-items: center;
   gap: 9px;
+}
+
+.sql-toolbar__actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sql-risk-hint {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--ncp-warning-strong);
+}
+
+.sql-risk-hint svg {
+  flex: 0 0 auto;
 }
 
 .sql-toolbar strong {
