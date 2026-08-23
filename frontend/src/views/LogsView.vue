@@ -45,6 +45,11 @@ const pagedEntries = computed(() => {
   const start = (page.value - 1) * pageSize.value
   return sortedEntries.value.slice(start, start + pageSize.value)
 })
+const logHistoryNote = computed(() => {
+  if (source.value === 'container') return `Docker 容器日志当前最多读取 200 条；服务端暂未提供历史游标，缩小时间范围可查看指定窗口。`
+  if (nextCursor.value) return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，可继续加载更多结果。`
+  return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，当前筛选范围已没有更多结果。`
+})
 
 async function load(silent = false) {
   const requestSequence = ++loadSequence
@@ -222,8 +227,7 @@ function entryContext(entry: LogEntry) {
       <footer v-if="entries.length" class="log-pagination">
         <div class="log-history-note" role="status">
           <Info :size="14" />
-          <span v-if="nextCursor">历史日志按服务端分页加载，当前已载入 {{ entries.length }} 条；单次最多 200 条，可继续加载更多结果。</span>
-          <span v-else>历史日志按服务端分页加载，当前已载入 {{ entries.length }} 条；单次最多 200 条，当前筛选范围已没有更多结果。</span>
+          <span>{{ logHistoryNote }}</span>
         </div>
         <ElButton v-if="nextCursor" size="small" :loading="loadingMore" @click="loadMore">加载更多结果</ElButton>
         <div><button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button><strong>{{ page }} / {{ pageCount }}</strong><button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button></div>
