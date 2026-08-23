@@ -39,21 +39,47 @@ const docker = {
     serverVersion: '27.5.1',
     operatingSystem: 'Linux',
     architecture: 'aarch64',
-    containers: 2,
-    containersRunning: 2,
-    containersStopped: 0,
+    containers: 3,
+    containersRunning: 1,
+    containersStopped: 2,
     images: 6,
   },
-  containers: [],
+  containers: [
+    {
+      id: 'media-api-id', name: 'media-api', image: 'media-api:latest', state: 'running', status: 'Up 2 hours (healthy)',
+      createdAt: collectedAt, startedAt: collectedAt, exitCode: 0, restartCount: 0, health: 'healthy',
+      ports: [{ hostIp: '0.0.0.0', privatePort: 8080, publicPort: 8080, protocol: 'tcp' }],
+      projectId: 'media-stack', projectName: '媒体服务', serviceName: 'api',
+    },
+    {
+      id: 'media-worker-id', name: 'media-worker', image: 'media-worker:latest', state: 'exited', status: 'Exited (0) 1 hour ago',
+      createdAt: collectedAt, finishedAt: collectedAt, exitCode: 0, restartCount: 0, health: 'none',
+      ports: [], projectId: 'media-stack', projectName: '媒体服务', serviceName: 'worker',
+    },
+    {
+      id: 'backup-id', name: 'backup-worker', image: 'backup:latest', state: 'exited', status: 'Exited (0) 3 hours ago',
+      createdAt: collectedAt, finishedAt: collectedAt, exitCode: 0, restartCount: 0, health: 'none',
+      ports: [], projectId: 'backup-stack', projectName: '备份任务', serviceName: 'worker',
+    },
+  ],
   projects: [{
     id: 'media-stack',
     name: '媒体服务',
     kind: 'compose',
-    state: 'running',
+    state: 'degraded',
     workingDirectory: '/volume2/DockerProject/media-stack',
     configFiles: ['compose.yml'],
     containerCount: 2,
-    runningCount: 2,
+    runningCount: 1,
+  }, {
+    id: 'backup-stack',
+    name: '备份任务',
+    kind: 'compose',
+    state: 'stopped',
+    workingDirectory: '/volume2/DockerProject/backup-stack',
+    configFiles: ['compose.yml'],
+    containerCount: 1,
+    runningCount: 0,
   }],
 }
 
@@ -289,6 +315,37 @@ export async function installMockApi(page: Page) {
     if (path === '/api/v1/sites/ignored') return json(route, [])
     if (path === '/api/v1/system/summary') return json(route, summary)
     if (path === '/api/v1/docker/inventory') return json(route, docker)
+    if (path.startsWith('/api/v1/docker/compose/projects/') && path.includes('/actions/')) {
+      const segments = path.split('/')
+      const projectId = decodeURIComponent(segments[6] || '')
+      const action = segments.at(-1) || 'start'
+      const projectContainers = docker.containers.filter((container) => container.projectId === projectId)
+      return json(route, {
+        projectId,
+        action,
+        state: action === 'stop' ? 'stopped' : 'running',
+        services: projectContainers.map((container) => ({
+          name: container.serviceName,
+          containerId: container.id,
+          state: action === 'stop' ? 'exited' : 'running',
+          running: action !== 'stop',
+        })),
+        output: '',
+        completed: true,
+      })
+    }
+    if (path.startsWith('/api/v1/docker/containers/') && path.includes('/actions/')) {
+      const segments = path.split('/')
+      const containerId = decodeURIComponent(segments[5] || '')
+      const action = segments.at(-1) || 'start'
+      const container = docker.containers.find((item) => item.id === containerId)
+      return json(route, {
+        containerId,
+        name: container?.name || containerId,
+        action,
+        state: action === 'stop' ? 'exited' : 'running',
+      })
+    }
     if (path === '/api/v1/databases/project-preferences') return json(route, [])
     if (path === '/api/v1/databases/discovery') return json(route, { collectedAt, sources: [databaseSource] })
     if (path === '/api/v1/databases/catalog') return json(route, databaseCatalog)

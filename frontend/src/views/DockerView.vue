@@ -16,6 +16,15 @@ import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useListPreference } from '@/composables/useListPreference'
+import {
+  dockerActionLabel,
+  dockerActionNeedsConfirmation,
+  dockerContainerActionConfirmation,
+  dockerProjectActionConfirmation,
+  dockerProjectActionDisabled,
+  dockerProjectActionTargets,
+  dockerProjectDeleteDisabledReason,
+} from '@/domain/dockerLifecycle'
 import { projectStateTone as projectStateToneBase } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 
@@ -103,15 +112,12 @@ function portsFor(projectId: string) {
 function stateLabel(state: DockerProject['state']) {
   return state === 'running' ? '运行中' : state === 'degraded' ? '需关注' : '已停止'
 }
-function actionLabel(action: ContainerAction) {
-  return action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'
-}
 function projectActionFor(projectId: string) {
   return projectActionPending.value?.projectId === projectId ? projectActionPending.value.action : null
 }
 function projectStateLabel(project: DockerProject) {
   const action = projectActionFor(project.id)
-  return action ? `正在${actionLabel(action)}` : stateLabel(project.state)
+  return action ? `正在${dockerActionLabel(action)}` : stateLabel(project.state)
 }
 function projectStateTone(project: DockerProject) {
   return projectActionFor(project.id) ? 'pending' : projectStateToneBase(project.state)
@@ -120,17 +126,17 @@ function projectErrorsFor(projectId: string) {
   return projectActionErrors.value[projectId] ?? []
 }
 function projectActionDisabled(project: DockerProject, action: ContainerAction) {
-  if (Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value) || project.containerCount === 0) return true
-  if (action === 'start') return project.state === 'running'
-  if (action === 'stop') return project.state === 'stopped'
-  return project.runningCount === 0
+  return dockerProjectActionDisabled(
+    project,
+    action,
+    Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value),
+  )
 }
 function projectDeleteDisabledReason(project: DockerProject) {
-  if (project.kind !== 'compose') return '独立容器是虚拟分组，不能作为项目删除；请在容器列表中单独管理。'
-  if (project.name.toLowerCase() === 'nas-control-plane') return 'NCP 自身项目受保护，不能从当前控制台删除。'
-  if (project.state !== 'stopped' || project.runningCount > 0) return '项目仍在运行，请先停止全部容器。'
-  if (actionPending.value || projectActionPending.value || projectDeletePending.value) return '其他 Docker 操作正在执行，请稍后重试。'
-  return ''
+  return dockerProjectDeleteDisabledReason(
+    project,
+    Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value),
+  )
 }
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof NcpApiError ? error.message : fallback
@@ -183,12 +189,22 @@ async function updateSelectedProject(projectId: string | null) {
 }
 async function performAction(containerId: string, action: ContainerAction) {
   if (actionPending.value || projectActionPending.value || projectDeletePending.value) return null
+  const container = inventory.value?.containers.find((item) => item.id === containerId)
+  if (dockerActionNeedsConfirmation(action)) {
+    try {
+      await ElMessageBox.confirm(
+        dockerContainerActionConfirmation(container ?? { name: containerId, image: '' }, action),
+        `确认${dockerActionLabel(action)}容器`,
+        { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' },
+      )
+    } catch { return null }
+  }
   actionPending.value = `${containerId}:${action}`
   let failure: string | null = null
   try {
     await requestContainerAction(containerId, action)
     await systemStore.refresh({ inventory: true })
-    ElMessage.success(`容器已${actionLabel(action)}`)
+    ElMessage.success(`容器已${dockerActionLabel(action)}`)
   } catch (error) {
     failure = errorMessage(error, '容器操作失败，请稍后重试。')
     ElMessage.error(failure)
@@ -208,24 +224,20 @@ async function performDetailAction(containerId: string, action: ContainerAction)
 }
 async function performProjectAction(project: DockerProject, action: ContainerAction) {
   if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
-  const containers = containersFor(project.id)
-  const targets = action === 'start'
-    ? containers.filter((container) => container.state !== 'running')
-    : action === 'stop'
-      ? containers.filter((container) => container.state === 'running')
-      : containers.filter((container) => container.state === 'running')
-  const actionTargets = project.kind === 'compose' ? containers : targets
+  const actionTargets = dockerProjectActionTargets(project, inventory.value?.containers ?? [], action)
   if (!actionTargets.length) {
     ElMessage.info(`项目“${project.name}”已经${action === 'start' ? '全部运行' : action === 'stop' ? '全部停止' : '没有可重启的容器'}`)
     return
   }
-  try {
-    await ElMessageBox.confirm(
-      `将对项目“${project.name}”的 ${actionTargets.length} 个容器执行${actionLabel(action)}。操作会按容器逐项执行。`,
-      `确认${actionLabel(action)}项目`,
-      { confirmButtonText: `确认${actionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' },
-    )
-  } catch { return }
+  if (dockerActionNeedsConfirmation(action)) {
+    try {
+      await ElMessageBox.confirm(
+        dockerProjectActionConfirmation(project, action, actionTargets.length),
+        `确认${dockerActionLabel(action)}项目`,
+        { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' },
+      )
+    } catch { return }
+  }
 
   projectActionPending.value = { projectId: project.id, action }
   projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
@@ -245,18 +257,18 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       failures.push({
         containerId: `project:${project.id}`,
         name: '项目操作',
-        message: errorMessage(error, `项目${actionLabel(action)}失败，请稍后重试。`),
+        message: errorMessage(error, `项目${dockerActionLabel(action)}失败，请稍后重试。`),
         scope: 'project',
       })
     }
     if (!failures.length && result) failures.push(...projectActionFailures(result, actionTargets, action))
     if (failures.length) {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: failures }
-      if (failures.some((failure) => failure.scope === 'project')) ElMessage.error(failures.find((failure) => failure.scope === 'project')?.message ?? `项目${actionLabel(action)}失败。`)
-      else ElMessage.warning(`项目${actionLabel(action)}完成，但有 ${failures.length} 个容器失败。`)
+      if (failures.some((failure) => failure.scope === 'project')) ElMessage.error(failures.find((failure) => failure.scope === 'project')?.message ?? `项目${dockerActionLabel(action)}失败。`)
+      else ElMessage.warning(`项目${dockerActionLabel(action)}完成，但有 ${failures.length} 个容器失败。`)
     } else {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
-      ElMessage.success(`项目“${project.name}”已${actionLabel(action)}`)
+      ElMessage.success(`项目“${project.name}”已${dockerActionLabel(action)}`)
     }
     try {
       await systemStore.refresh({ inventory: true })
@@ -264,7 +276,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       actionError.value = errorMessage(error, '项目状态刷新失败，请手动重新加载。')
     }
   } catch (error) {
-    actionError.value = errorMessage(error, `项目${actionLabel(action)}失败，请稍后重试。`)
+    actionError.value = errorMessage(error, `项目${dockerActionLabel(action)}失败，请稍后重试。`)
   } finally {
     projectActionPending.value = null
   }
@@ -385,11 +397,11 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <div class="docker-table__head">
           <span>项目</span><span>状态</span><span>容器</span><span>公开端口</span><span>工作目录</span><span>操作</span>
         </div>
-        <div v-for="project in pagedProjects" :key="project.id" class="project-row" @click="updateSelectedProject(project.id)">
-          <div class="project-name">
+        <div v-for="project in pagedProjects" :key="project.id" class="project-row">
+          <button class="project-name project-identity" type="button" :aria-label="`查看 Docker 项目 ${project.name}`" aria-haspopup="dialog" @click="updateSelectedProject(project.id)">
             <span><Boxes :size="18" /></span>
             <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? `Compose · ${project.configFiles.length || 1} 个配置文件` : '独立容器组' }}</small></div>
-          </div>
+          </button>
           <StatusPill :label="projectStateLabel(project)" :tone="projectStateTone(project)" />
           <span class="mono">{{ project.runningCount }}/{{ project.containerCount }}</span>
           <div class="port-cell">
@@ -437,12 +449,12 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       </section>
 
       <section v-if="activeView === 'projects'" class="docker-mobile-list" aria-label="Docker 项目列表">
-        <article v-for="project in pagedProjects" :key="project.id" class="mobile-project panel interactive-surface" @click="updateSelectedProject(project.id)">
+        <article v-for="project in pagedProjects" :key="project.id" class="mobile-project panel">
           <header>
-            <div class="project-name">
+            <button class="project-name project-identity" type="button" :aria-label="`查看 Docker 项目 ${project.name}`" aria-haspopup="dialog" @click="updateSelectedProject(project.id)">
               <span><Boxes :size="18" /></span>
               <div><strong>{{ project.name }}</strong><small>{{ project.kind === 'compose' ? `Compose · ${project.configFiles.length || 1} 个配置文件` : '独立容器组' }}</small></div>
-            </div>
+            </button>
             <StatusPill :label="projectStateLabel(project)" :tone="projectStateTone(project)" />
           </header>
           <dl>
@@ -526,7 +538,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .docker-table { overflow: hidden; border-color:rgba(203,214,228,.9); }
 .docker-table__head, .project-row { display: grid; grid-template-columns: minmax(210px,1.3fr) 108px 74px 180px minmax(170px,1fr) minmax(180px,auto); align-items: center; gap: 12px; }
 .docker-table__head { min-height: 46px; padding: 0 18px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; }
-.project-row { width: 100%; min-height: 70px; padding: 10px 18px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); cursor: pointer; font-size: .86rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
+.project-row { width: 100%; min-height: 70px; padding: 10px 18px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); font-size: .86rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .project-row:hover { position: relative; z-index: 1; background: var(--ncp-surface-hover); }
 .docker-table__head>span:nth-child(2),.docker-table__head>span:nth-child(3),.docker-table__head>span:nth-child(4),.docker-table__head>span:nth-child(6),.project-row>:nth-child(2),.project-row>:nth-child(3),.project-row>:nth-child(4),.project-row>:nth-child(6){justify-self:center;text-align:center}
 .project-name { display: flex; min-width: 0; align-items: center; gap: 9px; }
@@ -534,6 +546,9 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .project-name>div { display: grid; min-width: 0; gap: 1px; }
 .project-name strong { overflow: hidden; color: var(--ncp-text); font-size: .92rem; text-overflow: ellipsis; white-space: nowrap; }
 .project-name small { color: var(--ncp-text-subtle); font-size: .8rem; }
+.project-identity { width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.project-identity:hover strong { color: var(--ncp-primary-strong); }
+.project-identity:focus-visible { outline: 2px solid var(--ncp-primary); outline-offset: 3px; border-radius: 8px; }
 .mono { font-family: 'JetBrains Mono Variable', monospace; }
 .port-cell { display: flex; min-width: 0; align-items: center; gap: 5px; }
 .port-cell a { display: flex; min-height: 32px; align-items: center; gap: 3px; padding: 0 8px; border-radius: 7px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .72rem; }
@@ -570,10 +585,10 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
   .state-filter button { flex: 1; min-height: 40px; }
   .mobile-project { display: grid; gap: 13px; padding: 15px; }
   .mobile-project header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .mobile-project header .project-identity { flex: 1; }
   .mobile-project dl { display: grid; gap: 8px; margin: 0; padding: 11px; border-radius: 10px; background: var(--ncp-surface-quiet); }
   .mobile-project dl>div { display: grid; grid-template-columns: 74px minmax(0,1fr); gap: 8px; }
   .mobile-project dt { color: var(--ncp-text-subtle); font-size: .65rem; }
   .mobile-project dd { overflow: hidden; margin: 0; color: var(--ncp-text-muted); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-project>button { display: flex; min-height: 44px; align-items: center; justify-content: center; gap: 4px; border-radius: 9px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-size: .69rem; font-weight: 730; }
 }
 </style>
