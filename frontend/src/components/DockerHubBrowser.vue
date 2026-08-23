@@ -5,14 +5,11 @@ import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
 import {
   NcpApiError,
-  followJob,
-  pullDockerImage,
-  requestDockerHubTags,
-  searchDockerHub,
   type DockerHubRepository,
   type DockerHubTag,
   type JobSnapshot,
 } from '@/api/system'
+import { followJob, pullDockerImage, requestDockerHubTags, searchDockerHub } from '@/api/docker'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { formatBytes } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'

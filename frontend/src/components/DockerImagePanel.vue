@@ -5,6 +5,11 @@ import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import {
   NcpApiError,
+  type DockerImageSummary,
+  type DockerInventory,
+  type JobSnapshot,
+} from '@/api/system'
+import {
   cancelJob,
   deleteJob,
   followJob,
@@ -12,10 +17,7 @@ import {
   retryJob,
   removeDockerImages,
   requestDockerImages,
-  type DockerImageSummary,
-  type DockerInventory,
-  type JobSnapshot,
-} from '@/api/system'
+} from '@/api/docker'
 import ActionButton from '@/components/ActionButton.vue'
 import CreateContainerDrawer from '@/components/CreateContainerDrawer.vue'
 import DockerHubBrowser from '@/components/DockerHubBrowser.vue'

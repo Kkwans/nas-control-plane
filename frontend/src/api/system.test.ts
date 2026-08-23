@@ -5,18 +5,15 @@ import {
   detectPublicEgress,
   deleteDockerProject,
   loginRoot,
-  pullDockerImage,
   requestCapabilities,
   requestContainerAction,
   requestContainerDetails,
   requestContainerLogs,
-  requestDockerImages,
-  requestDockerHubTags,
   requestDNSCapability,
-  requestJobs,
   requestSystemSummary,
   inspectMihomo,
 } from './system'
+import { pullDockerImage, requestDockerImages, requestDockerHubTags, requestJobs } from './docker'
 
 describe('NCP API client', () => {
   it('keeps effective and backend-managed DNS values separate', async () => {
