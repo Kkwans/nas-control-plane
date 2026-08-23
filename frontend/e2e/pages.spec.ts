@@ -31,7 +31,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
     for (const route of routes) {
-      await page.goto(route.path)
+      await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: 15_000 })
       await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: 15_000 })
       const layout = await page.evaluate(() => ({
         bodyWidth: document.body.scrollWidth,

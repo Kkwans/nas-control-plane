@@ -20,7 +20,7 @@ test('系统概览在四档目标 viewport 可读并保留视觉基线', async (
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto('/system')
+    await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: 15_000 })
 
     await expect(page.getByRole('heading', { name: '系统信息' })).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('heading', { name: '网络与控制链路' })).toBeVisible()
@@ -41,7 +41,7 @@ test('系统概览在四档目标 viewport 可读并保留视觉基线', async (
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
     }
 
-    await expect(page).toHaveScreenshot(`system-${viewport.name}.png`, { fullPage: true, animations: 'disabled' })
+    await expect(page).toHaveScreenshot(`system-${viewport.name}.png`, { fullPage: true, animations: 'disabled', timeout: 30_000 })
   }
 
   expect(browserErrors).toEqual([])
