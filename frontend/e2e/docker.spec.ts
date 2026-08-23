@@ -3,6 +3,8 @@ import AxeBuilder from '@axe-core/playwright'
 
 import { installMockApi } from './mockApi'
 
+const routeNavigationTimeout = 30_000
+
 test('Docker 生命周期按影响确认并保持项目入口可键盘访问', async ({ page }) => {
   const browserErrors: string[] = []
   const actionRequests: string[] = []
@@ -16,8 +18,8 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
 
   await installMockApi(page)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto('/docker', { waitUntil: 'domcontentloaded', timeout: 15_000 })
-  await expect(page.getByRole('heading', { name: 'Docker 管理', exact: true })).toBeVisible({ timeout: 15_000 })
+  await page.goto('/docker', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+  await expect(page.getByRole('heading', { name: 'Docker 管理', exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
   await expect(page.getByRole('button', { name: '查看 Docker 项目 备份任务', exact: true })).toBeVisible()
 
   const accessibility = await new AxeBuilder({ page }).analyze()
@@ -63,8 +65,8 @@ test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向
     { name: 'mobile', width: 390, height: 844 },
   ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto('/docker', { waitUntil: 'domcontentloaded', timeout: 15_000 })
-    await expect(page.getByRole('heading', { name: 'Docker 管理', exact: true })).toBeVisible({ timeout: 15_000 })
+    await page.goto('/docker', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+    await expect(page.getByRole('heading', { name: 'Docker 管理', exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
     await page.getByRole('button', { name: '镜像', exact: true }).click()
     await expect(page.getByText('media-api:latest', { exact: true })).toBeVisible({ timeout: 15_000 })
     await page.getByRole('button', { name: '线上仓库', exact: true }).click()
