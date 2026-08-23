@@ -1,0 +1,86 @@
+name: NCP CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Go checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build native commands
+        run: go build -buildvcs=false ./cmd/ncp-server ./cmd/ncp-agent
+      - name: Build ARM64 binaries
+        env:
+          NCP_VERSION: ${{ github.workspace }}/VERSION
+        run: |
+          version="$(tr -d '\r\n' < "$NCP_VERSION")"
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags "-X github.com/Kkwans/nas-control-plane/internal/agentsocket.BuildVersion=${version}" \
+            -o "${RUNNER_TEMP}/ncp-server-linux-arm64" ./cmd/ncp-server
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags "-X github.com/Kkwans/nas-control-plane/internal/agentsocket.BuildVersion=${version}" \
+            -o "${RUNNER_TEMP}/ncp-agent-linux-arm64" ./cmd/ncp-agent
+      - name: Check release consistency
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          bash scripts/release/check-version.sh \
+            --tag "${GITHUB_REF_NAME}" \
+            --server-binary "${RUNNER_TEMP}/ncp-server-linux-arm64" \
+            --agent-binary "${RUNNER_TEMP}/ncp-agent-linux-arm64"
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: corepack pnpm run typecheck
+      - name: Unit tests
+        run: corepack pnpm test
+      - name: Production build
+        run: corepack pnpm run build
+      - name: Install Chromium
+        run: corepack pnpm exec playwright install --with-deps chromium
+      - name: Mock E2E and screenshot regression
+        run: corepack pnpm exec playwright test
+
+  compose:
+    name: Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Compose
+        run: docker compose -f deploy/console/docker-compose.yml config

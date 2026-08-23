@@ -38,6 +38,7 @@
     "vue-router": "latest"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "latest",
     "@types/node": "latest",
     "@vitejs/plugin-vue": "latest",
