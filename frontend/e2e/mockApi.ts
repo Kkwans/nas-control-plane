@@ -83,6 +83,57 @@ const docker = {
   }],
 }
 
+const dockerImages = {
+  collectedAt,
+  images: [
+    {
+      id: 'sha256:media-image-fixture',
+      repoTags: ['media-api:latest'],
+      repoDigests: ['media-api@sha256:media-image-fixture'],
+      sizeBytes: 268 * 1024 * 1024,
+      createdAt: collectedAt,
+      containers: 1,
+    },
+    {
+      id: 'sha256:unused-image-fixture',
+      repoTags: ['alpine:3.20'],
+      repoDigests: [],
+      sizeBytes: 9 * 1024 * 1024,
+      createdAt: '2026-08-20T02:00:00.000Z',
+      containers: 0,
+    },
+  ],
+}
+
+const hubRepositories = [
+  {
+    name: 'nginx', namespace: 'library', description: 'Official build of Nginx.', starCount: 20800, pullCount: 1200000000,
+    official: true, publisher: 'Docker Official Images', lastUpdated: collectedAt, repositoryType: '官方镜像', statusDescription: '可用',
+  },
+  {
+    name: 'nginx-proxy', namespace: 'fixture', description: 'Fixture reverse proxy image for E2E.', starCount: 128, pullCount: 42000,
+    official: false, publisher: 'fixture', lastUpdated: '2026-08-18T02:00:00.000Z', repositoryType: '公共镜像', statusDescription: '可用',
+  },
+]
+
+const hubTags = {
+  count: 2,
+  page: 1,
+  pageSize: 25,
+  results: [
+    { name: 'latest', publishedAt: collectedAt, lastUpdated: collectedAt, fullSize: 188 * 1024 * 1024, architectures: ['linux/amd64', 'linux/arm64'] },
+    { name: '1.27.1', publishedAt: '2026-08-19T02:00:00.000Z', lastUpdated: '2026-08-19T02:00:00.000Z', fullSize: 182 * 1024 * 1024, architectures: ['linux/amd64', 'linux/arm64'] },
+  ],
+}
+
+const dockerImageJobs = {
+  jobs: [{
+    id: 'job-completed-fixture', type: 'docker-image-pull', status: 'completed', artifactState: 'present', reference: 'nginx:latest',
+    message: '镜像已拉取', progress: 100, createdAt: collectedAt, updatedAt: collectedAt, completedAt: collectedAt,
+    downloadedBytes: 188 * 1024 * 1024, totalBytes: 188 * 1024 * 1024, speedBytes: 0, layers: {},
+  }],
+}
+
 const sites = {
   collectedAt,
   sites: [{
@@ -315,6 +366,23 @@ export async function installMockApi(page: Page) {
     if (path === '/api/v1/sites/ignored') return json(route, [])
     if (path === '/api/v1/system/summary') return json(route, summary)
     if (path === '/api/v1/docker/inventory') return json(route, docker)
+    if (path === '/api/v1/docker/images') return json(route, dockerImages)
+    if (path === '/api/v1/docker/hub/search') {
+      const query = (url.searchParams.get('query') || '').trim().toLowerCase()
+      if (query === 'broken') return json(route, { code: 'DOCKER_HUB_SEARCH_FAILED', message: 'Fixture Docker Hub 搜索失败。', requestId: 'fixture-request' }, 502)
+      const results = query === 'missing' ? [] : hubRepositories.filter((repository) => `${repository.namespace}/${repository.name}`.includes(query) || repository.description.toLowerCase().includes(query))
+      return json(route, { count: results.length, page: 1, pageSize: 20, results })
+    }
+    if (path === '/api/v1/docker/hub/tags') return json(route, hubTags)
+    if (path === '/api/v1/docker/images/pull') {
+      const body = route.request().postDataJSON() as { reference?: string; expectedBytes?: number }
+      return json(route, {
+        id: 'job-pull-fixture', type: 'docker-image-pull', status: 'queued', artifactState: 'unknown', reference: body.reference || 'nginx:latest',
+        message: '已加入下载队列', progress: 0, createdAt: collectedAt, updatedAt: collectedAt,
+        downloadedBytes: 0, totalBytes: body.expectedBytes || 0, speedBytes: 0, layers: {},
+      })
+    }
+    if (path === '/api/v1/jobs') return json(route, dockerImageJobs)
     if (path.startsWith('/api/v1/docker/compose/projects/') && path.includes('/actions/')) {
       const segments = path.split('/')
       const projectId = decodeURIComponent(segments[6] || '')
