@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElButton, ElDialog, ElInput, ElTooltip } from 'element-plus'
 import {
   Activity,
@@ -36,20 +36,16 @@ import {
   interfaceAddress,
   interfaceIsOnline,
   interfaceStateLabel,
-  listeningPortOwners,
   listeningSourceLabel,
   mihomoModeLabel,
   proxyStateLabel,
 } from '@/domain/infrastructurePresentation'
 import {
-  classifyListenerScope,
   editableDNSNameservers,
-  isAuxiliaryNetworkInterface,
   isSubscriptionStatusNodeName,
   networkInterfaceKindLabel,
-  type ListenerScope,
-  type ListenerScopePresentation,
 } from '@/domain/network'
+import { useInfrastructureNetwork } from '@/composables/useInfrastructureNetwork'
 import {
   confirmDNSChange,
   inspectMihomo,
@@ -67,17 +63,6 @@ import {
 import { useSystemStore } from '@/stores/system'
 
 type DetailTab = 'overview' | 'network' | 'storage' | 'services'
-type ListenerScopeFilter = 'all' | 'exposed' | ListenerScope
-
-interface ListeningPortGroup {
-  port: number
-  protocol: string
-  addresses: string[]
-  pids: number[]
-  owners: Array<{ label: string; detail: string }>
-  sources: string[]
-  scope: ListenerScopePresentation
-}
 
 const systemStore = useSystemStore()
 const details = ref<SystemDetails | null>(null)
@@ -94,26 +79,8 @@ const dnsPending = ref(false)
 const mihomoInspection = ref<MihomoInspection | null>(null)
 const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
-const listenerQuery = ref('')
-const listenerProtocol = ref('all')
-const listenerScope = ref<ListenerScopeFilter>('all')
-const listenerVisibleLimit = ref(24)
 const detailsRequestGate = createRequestSequenceGate()
 const mihomoRequestGate = createRequestSequenceGate()
-
-const listenerProtocolOptions = [
-  { label: '全部协议', value: 'all' },
-  { label: 'TCP', value: 'tcp' },
-  { label: 'UDP', value: 'udp' },
-]
-const listenerScopeOptions = computed(() => [
-  { label: '全部范围', value: 'all' },
-  { label: `对外监听 ${exposedListenerCount.value}`, value: 'exposed' },
-  { label: `局域网 ${listenerScopeCount('lan')}`, value: 'lan' },
-  { label: `仅本机 ${listenerScopeCount('loopback')}`, value: 'loopback' },
-  { label: `Tailscale ${listenerScopeCount('overlay')}`, value: 'overlay' },
-  { label: `容器网络 ${listenerScopeCount('container')}`, value: 'container' },
-])
 
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
@@ -127,6 +94,23 @@ const tailscaleDetails = computed<TailscaleCapability>(() => details.value?.tail
   overlayIps: [], online: false, linkState: 'unknown', heartbeatState: 'unknown', reachable: false,
   evidence: [], warnings: [],
 })
+const {
+  listenerQuery,
+  listenerProtocol,
+  listenerScope,
+  listenerProtocolOptions,
+  listenerScopeOptions,
+  primaryInterfaces,
+  secondaryInterfaces,
+  primaryActiveInterfaceCount,
+  listeningPortGroups,
+  filteredListeningPortGroups,
+  visibleListeningPortGroups,
+  exposedListenerCount,
+  localListenerCount,
+  listenerResultLabel,
+  showMoreListeningPorts,
+} = useInfrastructureNetwork(details, tailscaleDetails)
 const publicEgressDetails = computed(() => details.value?.publicEgress ?? {
   configured: false, status: 'unavailable', endpoint: '', requiresUserAction: true,
   detectionSource: '', errorCode: 'PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED',
@@ -146,19 +130,6 @@ const headerStats = computed<WorkspaceStat[]>(() => [
   { label: '挂载点', value: details.value?.storage.mounts.length ?? '—' },
 ])
 
-const networkInterfaces = computed(() => details.value?.network.interfaces ?? [])
-const primaryInterfaces = computed(() => {
-  const candidates = networkInterfaces.value.filter((item) => item.name !== 'lo' && !isAuxiliaryNetworkInterface(item.name))
-  const tailscale = candidates.filter((item) => /^tailscale/i.test(item.name))
-  const physical = candidates
-    .filter((item) => !/^tailscale/i.test(item.name))
-    .sort((left, right) => Number(interfaceIsOnline(right)) - Number(interfaceIsOnline(left)))
-  const reserved = Math.min(tailscale.length, 1)
-  return [...physical.slice(0, 4 - reserved), ...tailscale.slice(0, reserved)]
-})
-const primaryInterfaceNames = computed(() => new Set(primaryInterfaces.value.map((item) => item.name)))
-const secondaryInterfaces = computed(() => networkInterfaces.value.filter((item) => !primaryInterfaceNames.value.has(item.name)))
-const primaryActiveInterfaceCount = computed(() => primaryInterfaces.value.filter(interfaceIsOnline).length)
 const infrastructureSignals = computed<InfrastructureSignal[]>(() => [
   {
     label: '主网络',
@@ -200,50 +171,6 @@ const physicalDisks = computed(() => (details.value?.storage.disks ?? []).filter
 const auxiliaryDisks = computed(() => (details.value?.storage.disks ?? []).filter((item) => (
   !/^md\d+$/i.test(item.name) && !physicalDisks.value.some((disk) => disk.name === item.name)
 )))
-const listeningPortGroups = computed(() => {
-  const groups = new Map<string, Omit<ListeningPortGroup, 'scope'>>()
-  for (const item of details.value?.network.listeningPorts ?? []) {
-    const key = `${item.protocol}:${item.port}`
-    const group = groups.get(key) ?? { port: item.port, protocol: item.protocol, addresses: [], pids: [], owners: [], sources: [] }
-    if (item.address && !group.addresses.includes(item.address)) group.addresses.push(item.address)
-    if (item.pid && !group.pids.includes(item.pid)) group.pids.push(item.pid)
-    for (const source of [...(item.detectionSources ?? []), item.detectionSource ?? ''].filter(Boolean)) {
-      if (!group.sources.includes(source)) group.sources.push(source)
-    }
-    for (const owner of listeningPortOwners(item)) {
-      if (!group.owners.some((current) => current.label === owner.label && current.detail === owner.detail)) group.owners.push(owner)
-    }
-    groups.set(key, group)
-  }
-  return [...groups.values()]
-    .map<ListeningPortGroup>((group) => ({
-      ...group,
-      scope: classifyListenerScope(group.addresses, tailscaleDetails.value.overlayIps),
-    }))
-    .sort((left, right) => left.scope.rank - right.scope.rank || left.port - right.port)
-})
-const filteredListeningPortGroups = computed(() => {
-  const query = listenerQuery.value.trim().toLocaleLowerCase('zh-CN')
-  return listeningPortGroups.value.filter((item) => {
-    if (listenerProtocol.value !== 'all' && item.protocol.toLowerCase() !== listenerProtocol.value) return false
-    if (listenerScope.value === 'exposed' && !['public', 'all-interfaces'].includes(item.scope.value)) return false
-    if (listenerScope.value !== 'all' && listenerScope.value !== 'exposed' && item.scope.value !== listenerScope.value) return false
-    if (!query) return true
-    return [
-      String(item.port), item.protocol, ...item.addresses, ...item.sources,
-      ...item.owners.flatMap((owner) => [owner.label, owner.detail]),
-    ].some((value) => value.toLocaleLowerCase('zh-CN').includes(query))
-  })
-})
-const visibleListeningPortGroups = computed(() => filteredListeningPortGroups.value.slice(0, listenerVisibleLimit.value))
-const exposedListenerCount = computed(() => listeningPortGroups.value.filter((item) => ['public', 'all-interfaces'].includes(item.scope.value)).length)
-const localListenerCount = computed(() => listeningPortGroups.value.filter((item) => item.scope.value === 'loopback').length)
-const listenerResultLabel = computed(() => filteredListeningPortGroups.value.length === listeningPortGroups.value.length
-  ? `共 ${listeningPortGroups.value.length} 个监听端口`
-  : `筛选出 ${filteredListeningPortGroups.value.length} / ${listeningPortGroups.value.length} 个端口`)
-
-watch([listenerQuery, listenerProtocol, listenerScope], () => { listenerVisibleLimit.value = 24 })
-
 const capabilityItems = computed(() => [
   { name: 'Docker Engine', enabled: Boolean(systemStore.capabilities?.docker), detail: systemStore.inventory?.engine.serverVersion ? `版本 ${systemStore.inventory.engine.serverVersion}` : '等待检测', icon: Boxes, type: 'docker' },
   { name: 'Docker Compose', enabled: Boolean(systemStore.capabilities?.compose), detail: `已发现 ${systemStore.services.length} 个项目`, icon: Database, type: 'database' },
@@ -487,14 +414,6 @@ function egressLocationLabel() {
   const value = publicEgressResult.value
   if (!value) return '等待检查'
   return [value.country, value.region].filter(Boolean).join(' · ') || '地区未返回'
-}
-
-function listenerScopeCount(scope: ListenerScope) {
-  return listeningPortGroups.value.filter((item) => item.scope.value === scope).length
-}
-
-function showMoreListeningPorts() {
-  listenerVisibleLimit.value += 24
 }
 
 onMounted(() => {
