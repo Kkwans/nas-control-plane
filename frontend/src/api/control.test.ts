@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { requestSites } from './control'
+import { requestMetricSamples, requestSites } from './control'
 
 describe('site discovery API', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -38,5 +38,32 @@ describe('site discovery API', () => {
       discovery: { status: 'unavailable', candidateCount: 1, verifiedCount: 1, failedCount: 0 },
       sites: [{ ports: [], description: '', iconUrl: '', category: '', launchUrl: '' }],
     })
+  })
+})
+
+describe('monitoring history API', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps disk I/O and temperature fields from the shared MetricSample contract', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([
+      {
+        collectedAt: '2026-08-24T00:00:00Z',
+        cpuPercent: 12.5,
+        memoryPercent: 34.5,
+        load1: 0.4,
+        diskPercent: 62,
+        networkReceiveBytes: 100,
+        networkTransmitBytes: 200,
+        diskReadBytes: 300,
+        diskWriteBytes: 400,
+        temperatures: [{ name: 'soc-thermal', temperatureCelsius: 42.25 }],
+      },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(requestMetricSamples('1h')).resolves.toEqual([expect.objectContaining({
+      diskReadBytes: 300,
+      diskWriteBytes: 400,
+      temperatures: [{ name: 'soc-thermal', temperatureCelsius: 42.25 }],
+    })])
   })
 })

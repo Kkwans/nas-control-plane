@@ -24,34 +24,12 @@ const quickRanges = [
   { label: '7 天', value: '7d' },
 ]
 
-interface MonitoringTemperature {
-  name: string
-  temperatureCelsius: number
-}
-
-/**
- * The history endpoint already returns these fields in the running backend.
- * They stay optional here until the shared frontend API contract is updated.
- */
-type MonitoringSample = MetricSample & {
-  diskReadBytes?: number
-  diskWriteBytes?: number
-  temperatures?: MonitoringTemperature[]
-}
-
-type MonitoringSummary = SystemSummary & {
-  diskIO?: {
-    readBytes?: number
-    writeBytes?: number
-  }
-}
-
 const range = ref<TimeRange>('6h')
 const customFrom = ref<Date | null>(null)
 const customTo = ref<Date | null>(null)
 const customFollowsNow = ref(false)
 const systemStore = useSystemStore()
-const samples = ref<MonitoringSample[]>([])
+const samples = ref<MetricSample[]>([])
 const loading = ref(false)
 const error = ref('')
 const latest = computed(() => samples.value.at(-1))
@@ -101,7 +79,7 @@ const diskIOSeries = computed<TrendSeries[]>(() => {
 })
 const diskIOMessage = computed(() => {
   if (!samples.value.length) return '当前范围暂无磁盘 I/O 历史样本。'
-  if (!diskIORates.value.hasData) return '当前接口尚未提供磁盘 I/O 累计计数器；接入 diskReadBytes 与 diskWriteBytes 后显示速率。'
+  if (!diskIORates.value.hasData) return '当前运行数据暂未提供磁盘读写统计；接入磁盘 I/O 采集后显示速率。'
   return '磁盘 I/O 数据尚未积累到足够样本。'
 })
 
@@ -125,7 +103,7 @@ const temperatureSeries = computed<TrendSeries[]>(() => temperatureNames.value.m
 const hasTemperatureHistoryField = computed(() => samples.value.some((sample) => Array.isArray(sample.temperatures)))
 const temperatureTrendMessage = computed(() => {
   if (!samples.value.length) return '当前范围暂无温度历史样本。'
-  if (!hasTemperatureHistoryField.value) return '当前接口尚未提供 temperatures 历史字段；温度趋势图暂无法绘制历史曲线。'
+  if (!hasTemperatureHistoryField.value) return '当前运行数据暂未提供温度历史；采集到传感器数据后显示趋势。'
   return '当前范围暂无可绘制的温度历史样本。'
 })
 
@@ -182,12 +160,12 @@ function useNow() {
   customFollowsNow.value = true
 }
 
-function summaryToSample(): MonitoringSample | null {
-  const summary = systemStore.summary as MonitoringSummary | null
+function summaryToSample(): MetricSample | null {
+  const summary = systemStore.summary
   if (!summary) return null
   const storageTotal = summary.storage.reduce((total, item) => total + item.totalBytes, 0)
   const storageUsed = summary.storage.reduce((total, item) => total + item.usedBytes, 0)
-  const sample: MonitoringSample = {
+  const sample: MetricSample = {
     collectedAt: summary.collectedAt,
     cpuPercent: summary.cpu.usagePercent,
     memoryPercent: summary.memory.totalBytes > 0 ? summary.memory.usedBytes / summary.memory.totalBytes * 100 : 0,
@@ -221,7 +199,7 @@ function mergeRealtimeSample() {
   else {
     lowerBound = timestamp - rangeMilliseconds[range.value]
   }
-  const merged = new Map<number, MonitoringSample>()
+  const merged = new Map<number, MetricSample>()
   for (const item of samples.value) {
     const itemTimestamp = new Date(item.collectedAt).valueOf()
     if (itemTimestamp >= lowerBound && itemTimestamp <= timestamp) merged.set(itemTimestamp, item)
@@ -234,7 +212,7 @@ function handleManualRefresh() {
   void load()
 }
 
-function sampleSeconds(current: MonitoringSample, previous: MonitoringSample) {
+function sampleSeconds(current: MetricSample, previous: MetricSample) {
   const elapsed = (new Date(current.collectedAt).valueOf() - new Date(previous.collectedAt).valueOf()) / 1000
   return Number.isFinite(elapsed) ? Math.max(elapsed, 1) : 1
 }

@@ -1481,6 +1481,55 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: createSiteProfile
+      summary: 创建手工 NAS 站点
+      tags: [sites]
+      security: [{RootSession: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteProfileInput'
+      responses:
+        '201':
+          description: 手工站点已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteProfileInput'
+        '400':
+          description: 站点资料参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites/icon-proxy:
+    get:
+      operationId: proxySiteIcon
+      summary: 读取站点远程图标
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema: { type: string, format: uri, maxLength: 2048 }
+      responses:
+        '200':
+          description: 图标内容；上游不可用时返回内置 SVG 回退图标
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+        '400':
+          description: 图标地址无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/sites/{siteID}:
     put:
       operationId: updateSiteProfile
@@ -1507,6 +1556,148 @@ paths:
                 $ref: '#/components/schemas/SiteProfileInput'
         '400':
           description: Invalid site profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteSiteProfile
+      summary: 删除或隐藏一个站点
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: siteID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '204':
+          description: 站点已删除或隐藏
+        '400':
+          description: 站点删除失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites/{siteID}/icon:
+    get:
+      operationId: getSiteIcon
+      summary: 读取站点本地图标
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: siteID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: 站点图标内容
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+        '404':
+          description: 站点图标不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: uploadSiteIcon
+      summary: 上传站点图标
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: siteID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [icon]
+              properties:
+                icon: { type: string, format: binary }
+      responses:
+        '200':
+          description: 图标已保存
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [siteId, iconUrl]
+                properties:
+                  siteId: { type: string }
+                  iconUrl: { type: string }
+        '400':
+          description: 图标格式或大小无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteSiteIcon
+      summary: 删除站点图标
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: siteID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '204':
+          description: 图标已删除
+        '404':
+          description: 站点不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/sites/ignored:
+    get:
+      operationId: listIgnoredSites
+      summary: 列出已隐藏站点
+      tags: [sites]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 已隐藏的站点资料
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SiteProfileInput'
+  /api/v1/sites/{siteID}/restore:
+    post:
+      operationId: restoreSite
+      summary: 恢复一个已隐藏站点
+      tags: [sites]
+      security: [{RootSession: []}]
+      parameters:
+        - name: siteID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: 站点已恢复
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [siteId, ignored]
+                properties:
+                  siteId: { type: string }
+                  ignored: { type: boolean, const: false }
+        '400':
+          description: 站点恢复失败
           content:
             application/json:
               schema:
@@ -1657,6 +1848,30 @@ paths:
                 $ref: '#/components/schemas/LogResponse'
         '503':
           description: Root Agent or requested log source is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/logs/events:
+    get:
+      operationId: streamLogEvents
+      summary: 订阅日志实时事件
+      tags: [logs]
+      security: [{RootSession: []}]
+      parameters:
+        - { name: source, in: query, schema: { type: string, enum: [system, agent, container], default: system } }
+        - { name: containerId, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: string, enum: [all, error, warning, info, debug], default: all } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: interval, in: query, schema: { type: integer, minimum: 2, maximum: 300, default: 5 } }
+      responses:
+        '200':
+          description: Server-Sent Events 日志流
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '503':
+          description: 日志实时流不可用
           content:
             application/json:
               schema:
