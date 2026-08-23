@@ -19,10 +19,14 @@ const routes = [
 
 const routeNavigationTimeout = 30_000
 
-for (const viewport of [
+const viewports = [
   { name: 'desktop-wide', width: 1440, height: 900 },
+  { name: 'desktop-compact', width: 1280, height: 800 },
+  { name: 'tablet', width: 768, height: 1024 },
   { name: 'mobile', width: 390, height: 844 },
-]) {
+]
+
+for (const viewport of viewports) {
   test(`主要页面在 ${viewport.name} 可进入且无横向失控`, async ({ page }) => {
     const browserErrors: string[] = []
     page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
