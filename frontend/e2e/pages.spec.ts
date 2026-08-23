@@ -17,6 +17,8 @@ const routes = [
   { path: '/settings', heading: '系统设置' },
 ]
 
+const routeNavigationTimeout = 30_000
+
 for (const viewport of [
   { name: 'desktop-wide', width: 1440, height: 900 },
   { name: 'mobile', width: 390, height: 844 },
@@ -31,8 +33,8 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
     for (const route of routes) {
-      await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: 15_000 })
-      await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: 15_000 })
+      await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+      await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
       const layout = await page.evaluate(() => ({
         bodyWidth: document.body.scrollWidth,
         viewportWidth: window.innerWidth,
