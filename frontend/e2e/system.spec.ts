@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-import { installMockApi } from './mockApi'
+import { installMockApi, systemDetails } from './mockApi'
 
 const viewports = [
   { name: 'desktop-wide', width: 1440, height: 900 },
@@ -45,4 +45,27 @@ test('系统概览在四档目标 viewport 可读并保留视觉基线', async (
   }
 
   expect(browserErrors).toEqual([])
+})
+
+test('系统详情刷新不会被较早响应覆盖', async ({ page }) => {
+  await installMockApi(page)
+  let detailsRequests = 0
+  await page.route('**/api/v1/system/details', async (route) => {
+    const requestNumber = ++detailsRequests
+    if (requestNumber === 1) await new Promise((resolve) => setTimeout(resolve, 500))
+    const model = requestNumber === 1 ? '旧响应 NAS' : '新响应 NAS'
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...systemDetails, device: { ...systemDetails.device, model } }),
+    })
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: 15_000 })
+  await expect(page.getByRole('heading', { name: '系统信息' })).toBeVisible({ timeout: 15_000 })
+  await page.getByRole('button', { name: '立即刷新数据' }).click()
+  await expect(page.getByText('新响应 NAS', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await new Promise((resolve) => setTimeout(resolve, 650))
+  await expect(page.getByText('旧响应 NAS', { exact: true })).toHaveCount(0)
+  expect(detailsRequests).toBeGreaterThanOrEqual(2)
 })

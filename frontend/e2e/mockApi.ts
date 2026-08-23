@@ -219,7 +219,7 @@ const systemCapabilities = {
   networkInterfaces: ['bond0'],
 }
 
-const systemDetails = {
+export const systemDetails = {
   collectedAt,
   warnings: [],
   device: {

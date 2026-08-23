@@ -25,6 +25,7 @@ import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureSignalSummary, { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import { createRequestSequenceGate } from '@/domain/requestSequence'
 import {
   classifyListenerScope,
   editableDNSNameservers,
@@ -82,6 +83,8 @@ const listenerQuery = ref('')
 const listenerProtocol = ref('all')
 const listenerScope = ref<ListenerScopeFilter>('all')
 const listenerVisibleLimit = ref(24)
+const detailsRequestGate = createRequestSequenceGate()
+const mihomoRequestGate = createRequestSequenceGate()
 
 const listenerProtocolOptions = [
   { label: '全部协议', value: 'all' },
@@ -242,6 +245,10 @@ const mihomoRulesEvidence = computed(() => mihomoCapability.value?.evidence.find
 const mihomoRulesReadable = computed(() => mihomoRulesEvidence.value?.status === 'reachable')
 
 async function loadDetails() {
+  const requestSequence = detailsRequestGate.begin()
+  mihomoRequestGate.invalidate()
+  publicEgressLoading.value = false
+  mihomoInspection.value = null
   loading.value = true
   errorMessage.value = ''
   try {
@@ -249,18 +256,21 @@ async function loadDetails() {
       requestSystemDetails(),
       requestDNSCapability().catch(() => null),
     ])
+    if (!detailsRequestGate.isLatest(requestSequence)) return
     details.value = systemDetails
     dnsCapability.value = liveDNSCapability
     dnsDraft.value = editableDNS.value.join(', ')
     dnsPreview.value = null
     dnsMessage.value = ''
-    mihomoInspection.value = null
     publicEgressMessage.value = ''
+    mihomoRequestGate.invalidate()
     void checkMihomo(false)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '系统详情暂不可用'
+    if (detailsRequestGate.isLatest(requestSequence)) {
+      errorMessage.value = error instanceof Error ? error.message : '系统详情暂不可用'
+    }
   } finally {
-    loading.value = false
+    if (detailsRequestGate.isLatest(requestSequence)) loading.value = false
   }
 }
 
@@ -337,16 +347,20 @@ function invalidateDNSPreview() {
 
 async function checkMihomo(force: boolean) {
   if (publicEgressLoading.value) return
+  const requestSequence = mihomoRequestGate.begin()
   publicEgressMessage.value = ''
   publicEgressLoading.value = true
   try {
-    mihomoInspection.value = await inspectMihomo(force)
-    if (mihomoInspection.value.errorCode) publicEgressMessage.value = mihomoInspectionErrorMessage(mihomoInspection.value.errorCode)
+    const inspection = await inspectMihomo(force)
+    if (!mihomoRequestGate.isLatest(requestSequence)) return
+    mihomoInspection.value = inspection
+    if (inspection.errorCode) publicEgressMessage.value = mihomoInspectionErrorMessage(inspection.errorCode)
   } catch (error) {
+    if (!mihomoRequestGate.isLatest(requestSequence)) return
     const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
     publicEgressMessage.value = code ? mihomoInspectionErrorMessage(code) : error instanceof Error ? error.message : '代理链路检查失败。'
   } finally {
-    publicEgressLoading.value = false
+    if (mihomoRequestGate.isLatest(requestSequence)) publicEgressLoading.value = false
   }
 }
 
