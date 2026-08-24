@@ -46,6 +46,7 @@ import {
 import { NcpApiError } from '@/api/system'
 import { DatabaseValueError, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
+import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -54,12 +55,6 @@ import { useListPreference } from '@/composables/useListPreference'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
-
-interface ErrorState {
-  code: string
-  message: string
-  nextStep: string
-}
 
 interface DatabaseErrorCopy {
   message: string
@@ -98,7 +93,7 @@ const table = computed(() => catalog.value?.tables.find((item) => item.name === 
 const mode = ref<TableMode>('data')
 const tableRows = ref<DatabaseRows | null>(null)
 const rowsLoading = ref(false)
-const errorState = ref<ErrorState | null>(null)
+const errorState = ref<DatabaseErrorState | null>(null)
 const offset = ref(0)
 const sortColumn = ref('')
 const sortDirection = ref('')
@@ -111,7 +106,7 @@ const mutationPending = ref(false)
 const sql = ref('')
 const queryResult = ref<QueryResult | null>(null)
 const queryPending = ref(false)
-const queryError = ref<ErrorState | null>(null)
+const queryError = ref<DatabaseErrorState | null>(null)
 
 const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
@@ -336,7 +331,7 @@ function errorNextStep(error: unknown, fallback: string) {
   return databaseErrorCopy[errorCode(error)]?.nextStep || fallback
 }
 
-function toErrorState(error: unknown, fallback: string): ErrorState {
+function toErrorState(error: unknown, fallback: string): DatabaseErrorState {
   return {
     code: errorCode(error),
     message: errorMessage(error, fallback),
@@ -361,15 +356,7 @@ function clearError() {
       </template>
     </WorkspaceHeader>
 
-    <div v-if="errorState" class="database-error" role="alert">
-      <CircleAlert :size="18" />
-      <div class="database-error__body">
-        <strong>数据表操作失败</strong>
-        <span>{{ errorState.message }}</span>
-        <small>下一步：{{ errorState.nextStep }}</small>
-      </div>
-      <code>代码 {{ errorState.code }}</code>
-    </div>
+    <DatabaseErrorPanel v-if="errorState" title="数据表操作失败" :error="errorState" />
 
     <div class="table-connection-note" role="note">
       <Info :size="16" aria-hidden="true" />
@@ -504,56 +491,6 @@ function clearError() {
 </template>
 
 <style scoped>
-.database-error {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--ncp-danger-border);
-  border-radius: var(--ncp-radius-md);
-  background: var(--ncp-danger-soft);
-  color: var(--ncp-danger-strong);
-}
-
-.database-error > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.database-error > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.database-error__body small {
-  color: var(--ncp-danger-strong);
-  font-size: .71rem;
-  line-height: 1.4;
-}
-
-.database-error strong {
-  font-size: .8rem;
-}
-
-.database-error span {
-  color: var(--ncp-danger-strong);
-  font-size: .77rem;
-  line-height: 1.45;
-}
-
-.database-error code {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid var(--ncp-danger-border);
-  border-radius: var(--ncp-radius-xs);
-  color: var(--ncp-danger-strong);
-  font-family: var(--ncp-font-mono);
-  font-size: .67rem;
-  white-space: nowrap;
-}
-
 .table-connection-note {
   display: flex;
   min-width: 0;

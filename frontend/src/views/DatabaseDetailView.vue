@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  CircleAlert,
   Columns3,
   Database,
   Eye,
@@ -21,14 +20,9 @@ import { ElButton, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { NcpApiError } from '@/api/system'
 import { testDatabaseConnection } from '@/api/database'
 import type { DatabaseConnectionDiagnostic, DatabaseCredentials, DatabaseTable } from '@/api/database'
+import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
-
-interface ErrorState {
-  code: string
-  message: string
-  nextStep: string
-}
 
 type ConnectionDiagnostic = DatabaseConnectionDiagnostic
 
@@ -60,7 +54,7 @@ const catalog = computed(() => databaseStore.catalogs[sourceId.value] ?? null)
 const query = ref('')
 const loading = ref(false)
 const diagnosticLoading = ref(false)
-const errorState = ref<ErrorState | null>(null)
+const errorState = ref<DatabaseErrorState | null>(null)
 const credentialDraft = ref<DatabaseCredentials>({})
 const diagnostic = ref<ConnectionDiagnostic | null>(null)
 
@@ -269,11 +263,7 @@ function clearError() {
       </template>
     </WorkspaceHeader>
 
-    <div v-if="errorState" class="database-error" role="alert">
-      <CircleAlert :size="18" />
-      <div><strong>数据库操作失败</strong><span>{{ errorState.message }}</span><small>下一步：{{ errorState.nextStep }}</small></div>
-      <code>代码 {{ errorState.code }}</code>
-    </div>
+    <DatabaseErrorPanel v-if="errorState" title="数据库操作失败" :error="errorState" />
 
     <dl class="source-summary panel">
       <div class="source-summary__status">
@@ -368,7 +358,6 @@ function clearError() {
   width: min(280px, 26vw);
 }
 
-.database-error,
 .diagnostic-result {
   display: flex;
   min-width: 0;
@@ -378,43 +367,26 @@ function clearError() {
   border-radius: var(--ncp-radius-md);
 }
 
-.database-error {
-  border: 1px solid var(--ncp-danger-border);
-  background: var(--ncp-danger-soft);
-  color: var(--ncp-danger-strong);
-}
-
-.database-error > svg,
 .diagnostic-result > svg {
   flex: 0 0 auto;
   margin-top: 1px;
 }
 
-.database-error > div,
 .diagnostic-result > div {
   display: grid;
   min-width: 0;
   gap: 2px;
 }
 
-.database-error strong,
 .diagnostic-result strong {
   font-size: .8rem;
 }
 
-.database-error span,
 .diagnostic-result span {
   font-size: .77rem;
   line-height: 1.45;
 }
 
-.database-error small {
-  color: var(--ncp-danger-strong);
-  font-size: .7rem;
-  line-height: 1.4;
-}
-
-.database-error code,
 .diagnostic-result code {
   margin-left: auto;
   padding: 2px 6px;
@@ -422,11 +394,6 @@ function clearError() {
   font-family: var(--ncp-font-mono);
   font-size: .67rem;
   white-space: nowrap;
-}
-
-.database-error code {
-  border: 1px solid var(--ncp-danger-border);
-  color: var(--ncp-danger-strong);
 }
 
 .source-summary {

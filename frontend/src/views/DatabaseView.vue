@@ -5,7 +5,6 @@ import {
   Archive,
   ArchiveRestore,
   ArrowRight,
-  CircleAlert,
   Database,
   HardDrive,
   Info,
@@ -18,6 +17,7 @@ import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 import { NcpApiError } from '@/api/system'
 import type { DatabaseDriver, DatabaseSource } from '@/api/database'
 import ActionButton from '@/components/ActionButton.vue'
+import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
@@ -31,12 +31,6 @@ interface DatabaseProjectGroup {
   name: string
   category: DatabaseSource['category']
   sources: DatabaseSource[]
-}
-
-interface ErrorState {
-  code: string
-  message: string
-  nextStep: string
 }
 
 interface DatabaseErrorCopy {
@@ -65,7 +59,7 @@ const databaseErrorCopy: Record<string, DatabaseErrorCopy> = {
 const databaseStore = useDatabaseStore()
 const query = ref('')
 const sourceFilter = ref<SourceFilter>('all')
-const errorState = ref<ErrorState | null>(null)
+const errorState = ref<DatabaseErrorState | null>(null)
 
 const projectGroups = computed<DatabaseProjectGroup[]>(() => {
   const groups = new Map<string, DatabaseProjectGroup>()
@@ -237,15 +231,7 @@ onMounted(() => {
       </template>
     </WorkspaceHeader>
 
-    <div v-if="errorState" class="database-error" role="alert">
-      <CircleAlert :size="18" />
-      <div class="database-error__body">
-        <strong>数据库发现失败</strong>
-        <span>{{ errorState.message }}</span>
-        <small>下一步：{{ errorState.nextStep }}</small>
-      </div>
-      <code>代码 {{ errorState.code }}</code>
-    </div>
+    <DatabaseErrorPanel v-if="errorState" title="数据库发现失败" :error="errorState" />
 
     <section v-if="databaseStore.loading && !databaseStore.sources.length" class="database-catalog panel" aria-label="正在发现数据库">
       <div v-for="group in 3" :key="group" class="database-skeleton">
@@ -341,56 +327,6 @@ onMounted(() => {
 
 .source-filter button.active {
   box-shadow: var(--ncp-shadow-control);
-}
-
-.database-error {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--ncp-danger-border);
-  border-radius: var(--ncp-radius-md);
-  background: var(--ncp-danger-soft);
-  color: var(--ncp-danger-strong);
-}
-
-.database-error > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.database-error > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.database-error__body small {
-  color: var(--ncp-danger-strong);
-  font-size: .72rem;
-  line-height: 1.4;
-}
-
-.database-error strong {
-  font-size: .8rem;
-}
-
-.database-error span {
-  color: var(--ncp-danger-strong);
-  font-size: .78rem;
-  line-height: 1.45;
-}
-
-.database-error code {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid var(--ncp-danger-border);
-  border-radius: var(--ncp-radius-xs);
-  color: var(--ncp-danger-strong);
-  font-family: var(--ncp-font-mono);
-  font-size: .67rem;
-  white-space: nowrap;
 }
 
 .database-directory {
@@ -843,15 +779,6 @@ onMounted(() => {
 }
 
 @media (max-width: 500px) {
-  .database-error {
-    flex-wrap: wrap;
-  }
-
-  .database-error code {
-    width: 100%;
-    margin-left: 28px;
-  }
-
   .database-row {
     padding-inline: 13px;
   }
