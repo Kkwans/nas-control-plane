@@ -10,6 +10,11 @@ services:
     image: nas-control-plane:2026.8.24-v1
     container_name: nas-control-plane
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     command:
       - serve
       - --listen
@@ -45,6 +50,11 @@ services:
     image: nginx:alpine
     container_name: nas-control-plane-console
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     depends_on:
       server:
         condition: service_healthy
