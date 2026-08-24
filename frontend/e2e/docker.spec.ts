@@ -40,13 +40,14 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
   await expect(confirmation).toBeVisible()
   await expect(confirmation).toContainText('镜像、卷、Compose 文件和工作目录不会删除')
   await confirmation.getByRole('button', { name: '确认停止', exact: true }).click()
+  await expect(confirmation).toHaveCount(0)
   await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/media-stack/actions/stop'))).toBe(true)
 
   const projectIdentity = page.getByRole('button', { name: '查看 Docker 项目 备份任务', exact: true })
   await projectIdentity.focus()
   await expect(projectIdentity).toBeFocused()
   await projectIdentity.press('Enter')
-  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.locator('.project-drawer')).toBeVisible()
   await expect(browserErrors).toEqual([])
 })
 
