@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  CircleAlert,
   Columns3,
   Database,
   Eye,
