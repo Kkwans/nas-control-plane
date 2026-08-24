@@ -22,7 +22,8 @@ import {
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
-import InfrastructureSignalSummary, { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
+import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
+import { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import InfrastructureServicesPanel from '@/components/InfrastructureServicesPanel.vue'
 import InfrastructureStoragePanel from '@/components/InfrastructureStoragePanel.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
@@ -466,49 +467,16 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
         <span>{{ details.warnings.join('；') }}</span>
       </div>
 
-      <section v-if="activeTab === 'overview'" class="overview-layout">
-        <article class="device-summary panel">
-          <div class="device-summary__icon"><Server :size="31" /></div>
-          <div class="device-summary__identity">
-            <span>当前设备</span>
-            <h2>{{ details.device.model || details.device.hostname || 'NAS 主机' }}</h2>
-            <p>{{ details.device.hostname }} · {{ details.device.operatingSystem }} · {{ details.device.architecture }}</p>
-          </div>
-          <div class="device-summary__health">
-            <span><i></i>控制链路正常</span>
-            <small>{{ details.control.nodes.length }} 个节点已纳入检测</small>
-          </div>
-        </article>
-
-        <InfrastructureSignalSummary :signals="infrastructureSignals" />
-
-        <article class="panel overview-facts">
-          <div><span>系统版本</span><strong>{{ details.device.operatingSystem || '不可用' }}</strong></div>
-          <div><span>内核版本</span><strong>{{ details.device.kernelVersion || '不可用' }}</strong></div>
-          <div><span>系统架构</span><strong>{{ details.device.architecture || '不可用' }}</strong></div>
-          <div><span>运行时间</span><strong>{{ formatDuration(details.device.uptimeSeconds) }}</strong></div>
-          <div><span>运行进程</span><strong>{{ details.device.processCount.toLocaleString('zh-CN') }}</strong></div>
-          <div class="overview-fact--cgroup"><span>资源控制（cgroup）</span><strong>{{ details.device.cgroupVersion || '不可用' }}</strong><small>{{ details.device.cgroupVersion === 'v2' ? 'v2 使用统一层级和控制器接口，负责统计、限制与委派进程资源。' : 'Linux 控制组用于统计和限制进程资源；当前版本决定可用的控制器接口。' }}</small></div>
-        </article>
-
-        <article class="panel overview-section overview-section--processor">
-          <header><Cpu :size="18" /><div><h2>处理器信息</h2><p>设备识别到的静态 CPU 信息</p></div></header>
-          <div class="processor-facts">
-            <div class="processor-facts__model"><span>型号</span><strong>{{ details.hardware.cpu.model || '不可用' }}</strong></div>
-            <div><span>核心</span><strong>{{ details.hardware.cpu.physicalCores || '—' }} 物理 / {{ details.hardware.cpu.logicalCores || '—' }} 逻辑</strong></div>
-            <div><span>频率</span><strong>{{ details.hardware.cpu.frequencyMHz ? `${details.hardware.cpu.frequencyMHz.toFixed(0)} MHz` : '不可用' }}</strong></div>
-          </div>
-        </article>
-
-        <article class="panel overview-section overview-section--resources">
-          <header><Gauge :size="18" /><div><h2>资源概览</h2><p>容量类数据放在这里，实时变化请前往系统监控</p></div></header>
-          <div class="resource-summary">
-            <div><MemoryStick :size="18" /><span>内存容量</span><strong>{{ formatBytes(details.hardware.memory.totalBytes) }}</strong></div>
-            <div><Wifi :size="18" /><span>主网络连接</span><strong>{{ primaryActiveInterfaceCount }}</strong></div>
-            <div><HardDrive :size="18" /><span>存储卷</span><strong>{{ volumeMounts.length }}</strong></div>
-          </div>
-        </article>
-      </section>
+      <InfrastructureOverviewPanel
+        v-if="activeTab === 'overview'"
+        :details="details"
+        :infrastructure-signals="infrastructureSignals"
+        :primary-active-interface-count="primaryActiveInterfaceCount"
+        :volume-count="volumeMounts.length"
+        :format-bytes="formatBytes"
+        :format-duration="formatDuration"
+        :icons="{ cpu: Cpu, gauge: Gauge, hardDrive: HardDrive, memoryStick: MemoryStick, server: Server, wifi: Wifi }"
+      />
 
       <section v-else-if="activeTab === 'network'" class="network-layout">
         <article class="network-summary-grid network-layout__full">
