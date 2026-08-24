@@ -100,7 +100,7 @@ test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
     }
 
-    await expect(page).toHaveScreenshot(`docker-hub-${viewport.name}.png`, { fullPage: true, animations: 'disabled', timeout: 30_000 })
+    await expect(page).toHaveScreenshot(`docker-hub-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
   }
 
   expect(browserErrors).toEqual([])

@@ -43,7 +43,7 @@ test('系统概览在四档目标 viewport 可读并保留视觉基线', async (
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
     }
 
-    await expect(page).toHaveScreenshot(`system-${viewport.name}.png`, { fullPage: true, animations: 'disabled', timeout: 30_000 })
+    await expect(page).toHaveScreenshot(`system-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
   }
 
   expect(browserErrors).toEqual([])
