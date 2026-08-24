@@ -22,7 +22,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Test
-        run: go test ./...
+        # Host PTY integration tests exercise the root Agent boundary (/root).
+        run: sudo -n -E "$(command -v go)" test ./...
       - name: Vet
         run: go vet ./...
       - name: Build native commands
