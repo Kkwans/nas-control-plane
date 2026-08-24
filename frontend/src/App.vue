@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -7,6 +7,7 @@ import { LoaderCircle } from '@lucide/vue'
 
 import AppShell from './layout/AppShell.vue'
 import LoginView from './views/LoginView.vue'
+import { createManualRefreshRegistry, provideManualRefreshRegistry } from '@/composables/manualRefresh'
 import { useAuthStore } from './stores/auth'
 import { useSystemStore } from './stores/system'
 import type { RealtimeScope } from './stores/system'
@@ -15,6 +16,9 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
+const manualRefreshRegistry = createManualRefreshRegistry()
+const manualRefreshInFlight = ref(false)
+provideManualRefreshRegistry(manualRefreshRegistry)
 let sessionStartPromise: Promise<void> | null = null
 
 watch(() => authStore.isAuthenticated, (authenticated) => {
@@ -62,10 +66,16 @@ function startAuthenticatedSession() {
 }
 
 async function handleRefresh() {
-  await systemStore.refresh()
-  window.dispatchEvent(new CustomEvent('ncp:manual-refresh'))
-  if (systemStore.errorCode === 'AUTH_UNAUTHORIZED') {
-    await authStore.refresh()
+  if (manualRefreshInFlight.value) return
+  manualRefreshInFlight.value = true
+  try {
+    await systemStore.refresh()
+    await manualRefreshRegistry.refresh()
+    if (systemStore.errorCode === 'AUTH_UNAUTHORIZED') {
+      await authStore.refresh()
+    }
+  } finally {
+    manualRefreshInFlight.value = false
   }
 }
 
@@ -111,7 +121,7 @@ async function syncRouteData() {
       :sidebar-default="systemStore.preferences.sidebarDefault"
       :navigation-order="systemStore.preferences.navigationOrder"
       :user-name="authStore.user?.username ?? 'root'"
-      :is-refreshing="systemStore.isRefreshing"
+      :is-refreshing="systemStore.isRefreshing || manualRefreshInFlight"
       :live-data-active="systemStore.realtimeScopes.length > 0"
       @refresh="handleRefresh"
       @logout="handleLogout"

@@ -8,6 +8,7 @@ import type { SystemSummary } from '@/api/system'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -32,6 +33,8 @@ const systemStore = useSystemStore()
 const samples = ref<MetricSample[]>([])
 const loading = ref(false)
 const error = ref('')
+const manualRefreshRegistry = useManualRefreshRegistry()
+let unregisterManualRefresh: (() => void) | undefined
 const latest = computed(() => samples.value.at(-1))
 const timestamps = computed(() => samples.value.map((item) => item.collectedAt))
 
@@ -243,10 +246,10 @@ watch(() => systemStore.summary?.collectedAt, (next, previous) => {
   if (next && next !== previous) mergeRealtimeSample()
 })
 onMounted(() => {
-  window.addEventListener('ncp:manual-refresh', handleManualRefresh)
+  unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
   void load()
 })
-onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleManualRefresh))
+onBeforeUnmount(() => unregisterManualRefresh?.())
 </script>
 
 <template>

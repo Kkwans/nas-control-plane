@@ -23,6 +23,7 @@ import {
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureSignalSummary, { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
+import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { createRequestSequenceGate } from '@/domain/requestSequence'
@@ -81,6 +82,8 @@ const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
 const detailsRequestGate = createRequestSequenceGate()
 const mihomoRequestGate = createRequestSequenceGate()
+const manualRefreshRegistry = useManualRefreshRegistry()
+let unregisterManualRefresh: (() => void) | undefined
 
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
@@ -417,11 +420,11 @@ function egressLocationLabel() {
 }
 
 onMounted(() => {
+  unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
   void loadDetails()
-  window.addEventListener('ncp:manual-refresh', handleManualRefresh)
 })
 
-onBeforeUnmount(() => window.removeEventListener('ncp:manual-refresh', handleManualRefresh))
+onBeforeUnmount(() => unregisterManualRefresh?.())
 </script>
 
 <template>
