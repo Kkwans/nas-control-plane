@@ -3,6 +3,11 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
+  expect: {
+    // GitHub Chromium and the NAS acceptance Chromium rasterize fonts slightly
+    // differently; keep local baselines strict and tolerate only small CI noise.
+    toHaveScreenshot: { maxDiffPixelRatio: process.env.CI ? 0.02 : 0 },
+  },
   use: {
     baseURL: 'http://127.0.0.1:4173',
     trace: 'retain-on-failure',
