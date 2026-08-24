@@ -71,3 +71,46 @@ test('系统详情刷新不会被较早响应覆盖', async ({ page }) => {
   await expect(page.getByText('旧响应 NAS', { exact: true })).toHaveCount(0)
   expect(detailsRequests).toBeGreaterThanOrEqual(2)
 })
+
+test('系统信息的存储与服务 tab 在四档 viewport 可读', async ({ page }) => {
+  test.setTimeout(120_000)
+  const browserErrors: string[] = []
+  page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(`console.error: ${message.text()}`)
+  })
+  await installMockApi(page)
+
+  for (const viewport of viewports) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+    await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+    await expect(page.getByRole('heading', { name: '系统信息' })).toBeVisible({ timeout: routeNavigationTimeout })
+
+    await page.getByRole('button', { name: '存储与磁盘' }).click()
+    await expect(page.getByRole('heading', { name: '存储卷' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '物理磁盘' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '存储阵列' })).toBeVisible()
+    const storageLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      mainWidth: document.querySelector('#app-main')?.scrollWidth ?? 0,
+    }))
+    expect(storageLayout.bodyWidth, `${viewport.name} storage body 横向溢出`).toBeLessThanOrEqual(storageLayout.viewportWidth)
+    expect(storageLayout.mainWidth, `${viewport.name} storage main 横向溢出`).toBeLessThanOrEqual(storageLayout.viewportWidth)
+    await expect(page).toHaveScreenshot(`system-storage-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
+
+    await page.getByRole('button', { name: '服务与能力' }).click()
+    await expect(page.getByRole('heading', { name: '控制链路' })).toBeVisible()
+    await expect(page.getByText('Docker Engine', { exact: true })).toBeVisible()
+    const servicesLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      mainWidth: document.querySelector('#app-main')?.scrollWidth ?? 0,
+    }))
+    expect(servicesLayout.bodyWidth, `${viewport.name} services body 横向溢出`).toBeLessThanOrEqual(servicesLayout.viewportWidth)
+    expect(servicesLayout.mainWidth, `${viewport.name} services main 横向溢出`).toBeLessThanOrEqual(servicesLayout.viewportWidth)
+    await expect(page).toHaveScreenshot(`system-services-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
+  }
+
+  expect(browserErrors).toEqual([])
+})

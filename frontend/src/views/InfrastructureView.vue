@@ -23,6 +23,8 @@ import {
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureSignalSummary, { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
+import InfrastructureServicesPanel from '@/components/InfrastructureServicesPanel.vue'
+import InfrastructureStoragePanel from '@/components/InfrastructureStoragePanel.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import NcpSelect from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
@@ -687,86 +689,30 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
         </article>
       </section>
 
-      <section v-else-if="activeTab === 'storage'" class="storage-layout">
-        <article class="storage-summary-grid storage-layout__full">
-          <div class="storage-summary-card panel"><span class="storage-summary-card__icon"><HardDrive :size="18" /></span><div><small>可管理存储卷</small><strong>{{ volumeMounts.length }}</strong><p>{{ volumeMounts.map((item) => item.path).join('、') || '未发现 /volume 存储卷' }}</p></div></div>
-          <div class="storage-summary-card panel"><span class="storage-summary-card__icon"><Gauge :size="18" /></span><div><small>合计已用</small><strong>{{ formatBytes(volumeUsedBytes) }}</strong><p>总容量 {{ formatBytes(volumeTotalBytes) }}</p></div></div>
-          <div class="storage-summary-card panel"><span class="storage-summary-card__icon"><Database :size="18" /></span><div><small>使用率</small><strong>{{ volumeTotalBytes ? `${volumeUsedPercent.toFixed(1)}%` : '—' }}</strong><p>按 NAS 存储卷合计计算</p></div></div>
-        </article>
+      <InfrastructureStoragePanel
+        v-else-if="activeTab === 'storage'"
+        :details="details"
+        :volume-mounts="volumeMounts"
+        :auxiliary-mounts="auxiliaryMounts"
+        :volume-total-bytes="volumeTotalBytes"
+        :volume-used-bytes="volumeUsedBytes"
+        :volume-used-percent="volumeUsedPercent"
+        :physical-disks="physicalDisks"
+        :auxiliary-disks="auxiliaryDisks"
+        :format-bytes="formatBytes"
+        :block-device-description="blockDeviceDescription"
+        :block-device-kind-label="blockDeviceKindLabel"
+        :block-device-transport="blockDeviceTransport"
+        :icons="{ boxes: Boxes, database: Database, gauge: Gauge, hardDrive: HardDrive }"
+      />
 
-        <article class="panel detail-card storage-layout__full">
-          <SectionHeader class="detail-card__section-header" title="存储卷" description="仅展示系统根目录和 /volume 数据卷；系统镜像挂载点收进明细" :icon="HardDrive" />
-          <div class="volume-list">
-            <div v-for="mount in volumeMounts" :key="mount.path" class="volume-row">
-              <div class="volume-row__name"><strong>{{ mount.path === '/' ? '系统根目录' : mount.path }}</strong><small>{{ mount.filesystem || '未知文件系统' }} · {{ mount.device || '未知设备' }}</small></div>
-              <div class="volume-row__usage"><div class="meter"><i :style="{ width: `${Math.min(100, mount.usedPercent)}%` }"></i></div><strong>{{ mount.usedPercent.toFixed(1) }}%</strong><small>{{ formatBytes(mount.usedBytes) }} / {{ formatBytes(mount.totalBytes) }}</small></div>
-            </div>
-          </div>
-          <details v-if="auxiliaryMounts.length" class="storage-details">
-            <summary>查看系统挂载点 <span>{{ auxiliaryMounts.length }} 个系统 / 镜像挂载点</span></summary>
-            <div class="storage-details__list"><div v-for="mount in auxiliaryMounts" :key="mount.path"><strong>{{ mount.path }}</strong><span>{{ mount.filesystem || '未知' }}</span><span>{{ mount.usedPercent.toFixed(1) }}%</span></div></div>
-          </details>
-          <div v-if="!volumeMounts.length" class="inline-empty">未发现可管理的存储卷。</div>
-        </article>
-
-        <article class="panel detail-card">
-          <SectionHeader class="detail-card__section-header" title="物理磁盘" description="只展示可独立更换的数据盘；RAID、系统 eMMC 与内存设备不混入此处" :icon="Database" />
-          <div v-if="physicalDisks.length" class="disk-list">
-            <div v-for="disk in physicalDisks" :key="disk.name" class="disk-row">
-              <span class="disk-row__icon"><HardDrive :size="16" /></span>
-              <div><strong>{{ disk.name }}</strong><small>{{ disk.model || '型号未知' }} · {{ blockDeviceKindLabel(disk) }} · {{ blockDeviceTransport(disk) }}</small></div>
-              <span class="disk-row__size">{{ formatBytes(disk.sizeBytes) }}</span>
-              <span :class="['disk-health', { unknown: !disk.health || disk.health === 'unknown' }]">{{ disk.health && disk.health !== 'unknown' ? disk.health : '健康状态未知' }}</span>
-            </div>
-          </div>
-          <div v-else class="inline-empty">系统未暴露物理磁盘信息。</div>
-          <details v-if="auxiliaryDisks.length" class="storage-details">
-            <summary>查看系统与内存设备 <span>{{ auxiliaryDisks.length }} 个，均不是数据盘</span></summary>
-            <div class="storage-details__list storage-details__list--devices">
-              <div v-for="disk in auxiliaryDisks" :key="disk.name">
-                <span class="auxiliary-device__identity"><strong>{{ disk.name }}</strong><small>{{ blockDeviceKindLabel(disk) }} · {{ blockDeviceTransport(disk) }}</small></span>
-                <ElTooltip :content="blockDeviceDescription(disk)" placement="top" :show-after="350"><span class="auxiliary-device__description">{{ blockDeviceDescription(disk) }}</span></ElTooltip>
-                <span>{{ formatBytes(disk.sizeBytes) }}</span>
-              </div>
-            </div>
-          </details>
-        </article>
-
-        <article class="panel detail-card">
-          <SectionHeader class="detail-card__section-header" title="存储阵列" description="阵列级别、运行状态与成员设备；md1、md2 只在这里展示" :icon="Boxes" />
-          <div v-if="details.storage.raid.length" class="compact-list">
-            <div v-for="raid in details.storage.raid" :key="raid.name">
-              <span><strong>{{ raid.name }}</strong><small>{{ raid.level || '级别未知' }}</small></span>
-              <span :class="{ 'raid-state--active': raid.state === 'active' }">{{ raid.state || '状态未知' }}</span>
-              <span>{{ raid.devices.join('、') || '成员未知' }}</span>
-            </div>
-          </div>
-          <div v-else class="inline-empty">未发现可读取的软件 RAID 信息。</div>
-        </article>
-      </section>
-
-      <section v-else class="services-layout">
-        <article class="panel detail-card services-layout__full">
-          <SectionHeader class="detail-card__section-header" title="控制链路" description="Web 控制台至 Root Agent 的真实请求路径" :icon="Waypoints" />
-          <ol class="control-chain">
-            <li v-for="(node, index) in details.control.nodes" :key="node.id">
-              <span class="control-chain__index">{{ index + 1 }}</span>
-              <div><strong>{{ node.name }}</strong><small>{{ node.detail }}</small></div>
-              <div class="control-chain__meta"><span :class="`status-${node.status}`">{{ node.status === 'ready' ? '正常' : node.status || '未知' }}</span><small>{{ node.version || '版本不可用' }} · {{ formatTime(node.lastSeen) }}</small></div>
-            </li>
-          </ol>
-        </article>
-
-        <article
-          v-for="item in capabilityItems"
-          :key="item.name"
-          class="panel capability-card"
-        >
-          <span :class="['capability-card__icon', `type-${item.type}`]"><component :is="item.icon" :size="21" /></span>
-          <div><strong>{{ item.name }}</strong><small>{{ item.detail }}</small></div>
-          <span :class="['capability-state', { off: !item.enabled }]"><i></i>{{ item.enabled ? '可用' : '不可用' }}</span>
-        </article>
-      </section>
+      <InfrastructureServicesPanel
+        v-else
+        :details="details"
+        :capability-items="capabilityItems"
+        :format-time="formatTime"
+        :control-chain-icon="Waypoints"
+      />
     </template>
 
     <ElDialog
