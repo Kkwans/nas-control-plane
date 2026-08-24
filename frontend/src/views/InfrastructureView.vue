@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElButton, ElDialog, ElInput, ElTooltip } from 'element-plus'
+import { ElButton, ElDialog, ElInput } from 'element-plus'
 import {
   Activity,
   AlertTriangle,
@@ -13,7 +13,6 @@ import {
   Network,
   Route,
   Router,
-  Search,
   Server,
   Waypoints,
   Wifi,
@@ -23,14 +22,13 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
 import InfrastructureDnsPanel from '@/components/InfrastructureDnsPanel.vue'
+import InfrastructureListenersPanel from '@/components/InfrastructureListenersPanel.vue'
 import InfrastructureNetworkInterfacesPanel from '@/components/InfrastructureNetworkInterfacesPanel.vue'
 import InfrastructureProxyPanel from '@/components/InfrastructureProxyPanel.vue'
 import { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import InfrastructureServicesPanel from '@/components/InfrastructureServicesPanel.vue'
 import InfrastructureStoragePanel from '@/components/InfrastructureStoragePanel.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
-import NcpSelect from '@/components/NcpSelect.vue'
-import SectionHeader from '@/components/SectionHeader.vue'
 import { createRequestSequenceGate } from '@/domain/requestSequence'
 import {
   blockDeviceDescription,
@@ -39,7 +37,6 @@ import {
   formatBytes,
   formatDuration,
   formatTime,
-  listeningSourceLabel,
   proxyStateLabel,
 } from '@/domain/infrastructurePresentation'
 import { editableDNSNameservers } from '@/domain/network'
@@ -433,64 +430,24 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
           @refresh="checkMihomo(true)"
         />
 
-        <article class="panel detail-card ports-workspace-card network-layout__full">
-          <SectionHeader class="detail-card__section-header" title="监听服务" description="按端口合并归属信息，并优先展示对外监听的服务" :icon="Gauge">
-            <template #actions><span class="listener-count">{{ listenerResultLabel }}</span></template>
-          </SectionHeader>
-          <div v-if="listeningPortGroups.length" class="port-workspace">
-            <div class="port-toolbar">
-              <ElInput v-model="listenerQuery" clearable aria-label="搜索监听服务" placeholder="搜索端口、进程、容器或地址">
-                <template #prefix><Search :size="16" /></template>
-              </ElInput>
-              <NcpSelect v-model="listenerProtocol" :options="listenerProtocolOptions" accessible-label="筛选监听协议" />
-              <NcpSelect v-model="listenerScope" :options="listenerScopeOptions" accessible-label="筛选监听范围" />
-            </div>
-            <div class="port-risk-summary" role="note">
-              <span class="port-risk-summary__item port-risk-summary__item--warning"><i></i><strong>{{ exposedListenerCount }}</strong> 个端口可能对外可达</span>
-              <span class="port-risk-summary__item"><i></i><strong>{{ localListenerCount }}</strong> 个端口仅允许本机访问</span>
-              <small>“公网地址”或“所有接口”需要重点检查；实际可达范围仍受路由、防火墙与端口转发控制。</small>
-            </div>
-            <div v-if="visibleListeningPortGroups.length" class="port-grid">
-              <article v-for="item in visibleListeningPortGroups" :key="`${item.protocol}-${item.port}`" class="port-card">
-                <div class="port-card__endpoint">
-                  <b>{{ item.port }}</b>
-                  <span>{{ item.protocol.toUpperCase() }}</span>
-                </div>
-                <div class="port-card__fact">
-                  <small>进程 / 服务 / 容器</small>
-                  <ElTooltip
-                    :content="item.owners.map((owner) => `${owner.label} · ${owner.detail}`).join('；') || `PID ${item.pids.join('、') || '未知'}`"
-                    placement="top"
-                    :show-after="350"
-                  >
-                    <strong>{{ item.owners.map((owner) => owner.label).join('、') || (item.pids.length ? `PID ${item.pids.join('、')}` : '未识别') }}</strong>
-                  </ElTooltip>
-                  <span>{{ item.owners.map((owner) => owner.detail).join('、') || '未取得进程归属' }}</span>
-                </div>
-                <div class="port-card__fact">
-                  <small>监听地址</small>
-                  <ElTooltip :content="item.addresses.join('、') || '*'" placement="top" :show-after="350">
-                    <code>{{ item.addresses.join('、') || '*' }}</code>
-                  </ElTooltip>
-                  <span>{{ item.addresses.some((address) => /^(0\.0\.0\.0|::|\[::\])/.test(address)) ? '所有网络接口' : '指定网络接口' }}</span>
-                </div>
-                <div class="port-card__fact">
-                  <small>访问范围</small>
-                  <span class="listener-scope" :class="`listener-scope--${item.scope.tone}`"><i></i>{{ item.scope.label }}</span>
-                  <ElTooltip :content="`${item.scope.description}；识别证据：${listeningSourceLabel(item.sources)}`" placement="top" :show-after="350">
-                    <span>{{ item.scope.description }}</span>
-                  </ElTooltip>
-                </div>
-              </article>
-            </div>
-            <div v-else class="inline-empty">没有符合当前搜索和协议条件的监听服务。</div>
-            <div v-if="visibleListeningPortGroups.length" class="port-results-footer">
-              <span>已显示 {{ visibleListeningPortGroups.length }} / {{ filteredListeningPortGroups.length }} 个端口</span>
-              <ActionButton v-if="visibleListeningPortGroups.length < filteredListeningPortGroups.length" size="sm" @click="showMoreListeningPorts">再显示 {{ Math.min(24, filteredListeningPortGroups.length - visibleListeningPortGroups.length) }} 个</ActionButton>
-            </div>
-          </div>
-          <div v-else class="inline-empty">未取得监听服务信息。</div>
-        </article>
+        <InfrastructureListenersPanel
+          :listener-query="listenerQuery"
+          :listener-protocol="listenerProtocol"
+          :listener-scope="listenerScope"
+          :listener-protocol-options="listenerProtocolOptions"
+          :listener-scope-options="listenerScopeOptions"
+          :listening-port-groups="listeningPortGroups"
+          :filtered-listening-port-groups="filteredListeningPortGroups"
+          :visible-listening-port-groups="visibleListeningPortGroups"
+          :exposed-listener-count="exposedListenerCount"
+          :local-listener-count="localListenerCount"
+          :listener-result-label="listenerResultLabel"
+          :icon="Gauge"
+          @update:listener-query="listenerQuery = $event"
+          @update:listener-protocol="listenerProtocol = $event"
+          @update:listener-scope="listenerScope = $event"
+          @show-more="showMoreListeningPorts"
+        />
       </section>
 
       <InfrastructureStoragePanel
