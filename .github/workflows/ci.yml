@@ -88,3 +88,57 @@ jobs:
         uses: actions/checkout@v4
       - name: Validate Compose
         run: docker compose -f deploy/console/docker-compose.yml config
+
+  release:
+    name: Publish ARM64 release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build ARM64 binaries
+        env:
+          NCP_VERSION_FILE: ${{ github.workspace }}/VERSION
+          NCP_RELEASE_DIR: ${{ runner.temp }}/ncp-release
+        run: |
+          version="$(tr -d '\r\n' < "$NCP_VERSION_FILE")"
+          mkdir -p "$NCP_RELEASE_DIR"
+          ldflags="-X github.com/Kkwans/nas-control-plane/internal/agentsocket.BuildVersion=${version}"
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags "$ldflags" \
+            -o "$NCP_RELEASE_DIR/ncp-server-linux-arm64" ./cmd/ncp-server
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -trimpath \
+            -ldflags "$ldflags" \
+            -o "$NCP_RELEASE_DIR/ncp-agent-linux-arm64" ./cmd/ncp-agent
+
+      - name: Check release consistency
+        env:
+          NCP_RELEASE_DIR: ${{ runner.temp }}/ncp-release
+        run: |
+          bash scripts/release/check-version.sh \
+            --tag "$GITHUB_REF_NAME" \
+            --server-binary "$NCP_RELEASE_DIR/ncp-server-linux-arm64" \
+            --agent-binary "$NCP_RELEASE_DIR/ncp-agent-linux-arm64"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NCP_VERSION_FILE: ${{ github.workspace }}/VERSION
+          NCP_RELEASE_DIR: ${{ runner.temp }}/ncp-release
+        run: |
+          version="$(tr -d '\r\n' < "$NCP_VERSION_FILE")"
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "NCP ${version}" \
+            --generate-notes \
+            "$NCP_RELEASE_DIR/ncp-server-linux-arm64#ncp-server-linux-arm64" \
+            "$NCP_RELEASE_DIR/ncp-agent-linux-arm64#ncp-agent-linux-arm64"
