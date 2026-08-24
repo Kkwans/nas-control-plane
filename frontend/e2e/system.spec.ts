@@ -98,6 +98,18 @@ test('系统信息的存储与服务 tab 在四档 viewport 可读', async ({ pa
     expect(networkLayout.mainWidth, `${viewport.name} network main 横向溢出`).toBeLessThanOrEqual(networkLayout.viewportWidth)
     await expect(page).toHaveScreenshot(`system-network-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
 
+    const proxyHeading = page.getByRole('heading', { name: '代理链路', exact: true })
+    await proxyHeading.scrollIntoViewIfNeeded()
+    await expect(proxyHeading).toBeVisible()
+    await expect(page.getByRole('button', { name: '刷新链路', exact: true })).toBeVisible()
+    await expect(page).toHaveScreenshot(`system-proxy-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
+
+    const listenersHeading = page.getByRole('heading', { name: '监听服务', exact: true })
+    await listenersHeading.scrollIntoViewIfNeeded()
+    await expect(listenersHeading).toBeVisible()
+    await expect(page.getByRole('textbox', { name: '搜索监听服务' })).toBeVisible()
+    await expect(page).toHaveScreenshot(`system-listeners-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
+
     await page.getByRole('button', { name: '存储与磁盘' }).click()
     await expect(page.getByRole('heading', { name: '存储卷' })).toBeVisible()
     await expect(page.getByRole('heading', { name: '物理磁盘' })).toBeVisible()
