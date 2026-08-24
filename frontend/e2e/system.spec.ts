@@ -72,6 +72,61 @@ test('系统详情刷新不会被较早响应覆盖', async ({ page }) => {
   expect(detailsRequests).toBeGreaterThanOrEqual(2)
 })
 
+test('系统详情加载完成后可打开并取消 DNS 编辑 Dialog', async ({ page }) => {
+  await installMockApi(page)
+  const editableDns = {
+    ...systemDetails.dns,
+    readOnly: false,
+    canPreview: true,
+    canConfirm: true,
+    canRollback: true,
+    configuredNameservers: ['192.168.5.1'],
+    errorCode: '',
+  }
+  await page.route('**/api/v1/system/details', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(systemDetails) })
+  })
+  await page.route('**/api/v1/system/dns/capability', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(editableDns) })
+  })
+
+  await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: 30_000 })
+  await expect(page.locator('.details-skeleton')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByRole('heading', { name: '网络与控制链路' })).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: '网络与代理', exact: true }).click()
+  await page.getByRole('button', { name: '编辑 DNS', exact: true }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('先生成差异预览，确认后才调用 UGOS 网络服务')
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
+test('系统详情失败时显示恢复入口并可重试', async ({ page }) => {
+  await installMockApi(page)
+  let shouldFail = true
+  await page.route('**/api/v1/system/details', async (route) => {
+    if (shouldFail) {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'SYSTEM_DETAILS_UNAVAILABLE', message: 'Fixture system details unavailable', requestId: 'fixture-system-error' }),
+      })
+      return
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(systemDetails) })
+  })
+
+  await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: 30_000 })
+  await expect(page.getByText('系统详情暂不可用', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Fixture system details unavailable', { exact: true })).toBeVisible()
+  shouldFail = false
+  await page.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '网络与控制链路' })).toBeVisible({ timeout: 30_000 })
+})
+
 test('系统信息的存储与服务 tab 在四档 viewport 可读', async ({ page }) => {
   test.setTimeout(120_000)
   const browserErrors: string[] = []
