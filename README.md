@@ -1,6 +1,6 @@
 # NAS Control Plane
 
-> 当前开发快照：2026-07-29。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
+> 当前开发快照：2026-08-24。NCP 已形成 Root Agent、NCP Server 与 Vue 控制台的完整管理链路；OpenSpec 默认禁用，后续按轻量 SDD 维护。
 
 ## 当前可用能力
 
@@ -479,3 +479,11 @@ docs(readme)：完善部署与故障排查说明
 ```
 
 每个提交只包含一个可独立说明和验证的功能模块。
+
+## 2026-08-24 产品化收敛快照
+
+- 当前版本为 `2026.8.24-v1`；仓库、Compose、server/agent 二进制和运行容器版本一致。
+- 本轮已完成 P1 正确性与契约门禁、Docker/Database 定向收敛，以及 Infrastructure 页面按 Overview、Network、DNS、Proxy、Listeners、Storage、Services 职责拆分。
+- GitHub Actions run `32685567779` 已通过 Go test/vet/native+ARM64 build、前端 typecheck/unit/build/Mock E2E、Compose config；非 tag push 不发布 ARM64 release。
+- NAS 当前运行 `nas-control-plane:2026.8.24-v1`；回滚镜像保留为 `nas-control-plane:2026.8.11-v5`。详细截图、验证输出、部署边界和回滚步骤见 [`docs/qa/NCP-2026.8.24-v1-validation.md`](docs/qa/NCP-2026.8.24-v1-validation.md)。
+- 本轮不新增 MFA、RBAC、限流或 Root 能力收紧；HostPath、Docker capability 和既有认证边界保持产品决策不变。

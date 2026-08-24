@@ -1,6 +1,6 @@
 # NAS Control Plane 阶段进度
 
-更新时间：2026-07-29
+更新时间：2026-08-24
 
 ## 当前结论
 
@@ -37,7 +37,7 @@ go test ./internal/httpapi ./internal/agentsocket ./internal/terminal
 pnpm run typecheck
 ```
 
-最终统一验证和 NAS 部署尚在进行，完成后补充：
+2026-08-24 产品化收敛的统一门禁和 NAS 只读 smoke 已完成；详细证据位于 `docs/qa/NCP-2026.8.24-v1-validation.md`。当前仍明确延期：全站 lint/format、所有主要页面的全量状态截图、Docker HostPath/Network/Volume 选择器、后端大模块拆分、bundle/gzip、基础镜像 pin 和首次 tag release。
 
 - `go test ./...`
 - Linux ARM64 Agent / Server 构建
