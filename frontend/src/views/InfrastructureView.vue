@@ -23,6 +23,7 @@ import {
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
+import InfrastructureNetworkInterfacesPanel from '@/components/InfrastructureNetworkInterfacesPanel.vue'
 import { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import InfrastructureServicesPanel from '@/components/InfrastructureServicesPanel.vue'
 import InfrastructureStoragePanel from '@/components/InfrastructureStoragePanel.vue'
@@ -37,9 +38,6 @@ import {
   formatBytes,
   formatDuration,
   formatTime,
-  interfaceAddress,
-  interfaceIsOnline,
-  interfaceStateLabel,
   listeningSourceLabel,
   mihomoModeLabel,
   proxyStateLabel,
@@ -47,7 +45,6 @@ import {
 import {
   editableDNSNameservers,
   isSubscriptionStatusNodeName,
-  networkInterfaceKindLabel,
 } from '@/domain/network'
 import { useInfrastructureNetwork } from '@/composables/useInfrastructureNetwork'
 import {
@@ -479,36 +476,16 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
       />
 
       <section v-else-if="activeTab === 'network'" class="network-layout">
-        <article class="network-summary-grid network-layout__full">
-          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Wifi :size="18" /></span><div><small>当前联网</small><strong>{{ primaryActiveInterfaceCount }} 个主接口</strong><p>{{ primaryInterfaces.map((item) => item.name).join('、') || '未发现主网络接口' }}</p></div></div>
-          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Route :size="18" /></span><div><small>默认出口</small><strong>{{ details.network.gateway || '未发现' }}</strong><p>路由 {{ details.network.routes.length }} 条</p></div></div>
-          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Network :size="18" /></span><div><small>DNS 服务</small><strong>{{ details.network.dnsServers.length || 0 }} 个</strong><p>{{ details.network.dnsServers.slice(0, 2).join('、') || '未发现解析服务' }}</p></div></div>
-          <div class="network-summary-card panel"><span class="network-summary-card__icon"><Gauge :size="18" /></span><div><small>监听服务</small><strong>{{ listeningPortGroups.length }} 个端口</strong><p>{{ exposedListenerCount }} 个可能对外可达 · {{ localListenerCount }} 个仅本机</p></div></div>
-        </article>
-
-        <article class="panel detail-card network-layout__full">
-          <header class="detail-card__header type-site"><Network :size="20" /><div><h2>主要网络连接</h2><p>展示主机和 Tailscale Overlay 接口；Docker 等内部接口收进下方明细</p></div></header>
-          <div v-if="primaryInterfaces.length" class="primary-interface-list">
-            <div v-for="item in primaryInterfaces" :key="item.name" class="primary-interface-row">
-              <span class="primary-interface-row__status" :class="{ online: interfaceIsOnline(item) }"><i></i>{{ interfaceStateLabel(item) }}</span>
-              <div class="primary-interface-row__name"><strong>{{ item.name }}</strong><small>{{ networkInterfaceKindLabel(item.name) }}</small></div>
-              <div><span>IP 地址</span><strong>{{ interfaceAddress(item) ? `${interfaceAddress(item)?.address}/${interfaceAddress(item)?.prefixLength}` : '未分配' }}</strong></div>
-              <div><span>链路</span><strong>{{ item.speedMbps > 0 ? `${item.speedMbps} Mbps` : '速率未知' }}<template v-if="item.duplex"> · {{ item.duplex }}</template></strong></div>
-            </div>
-          </div>
-          <div v-else class="inline-empty">未发现可用于联网的主机接口。</div>
-          <details v-if="secondaryInterfaces.length" class="network-details">
-            <summary>查看所有接口明细 <span>{{ secondaryInterfaces.length }} 个虚拟 / 辅助接口</span></summary>
-            <div class="network-details__list">
-              <div v-for="item in secondaryInterfaces" :key="item.name" class="network-detail-row">
-                <div><strong>{{ item.name }}</strong><small>{{ networkInterfaceKindLabel(item.name) }}</small></div>
-                <span :class="{ 'is-online': interfaceIsOnline(item) }">{{ interfaceStateLabel(item) }}</span>
-                <span>{{ item.addresses.length }} 个地址</span>
-                <code>{{ item.hardwareAddress || '无 MAC' }}</code>
-              </div>
-            </div>
-          </details>
-        </article>
+        <InfrastructureNetworkInterfacesPanel
+          :details="details"
+          :primary-interfaces="primaryInterfaces"
+          :secondary-interfaces="secondaryInterfaces"
+          :primary-active-interface-count="primaryActiveInterfaceCount"
+          :listening-port-count="listeningPortGroups.length"
+          :exposed-listener-count="exposedListenerCount"
+          :local-listener-count="localListenerCount"
+          :icons="{ gauge: Gauge, network: Network, route: Route, wifi: Wifi }"
+        />
 
         <article class="panel detail-card network-layout__full dns-workspace">
           <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="Route">

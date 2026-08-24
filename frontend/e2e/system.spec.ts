@@ -86,6 +86,18 @@ test('系统信息的存储与服务 tab 在四档 viewport 可读', async ({ pa
     await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
     await expect(page.getByRole('heading', { name: '系统信息' })).toBeVisible({ timeout: routeNavigationTimeout })
 
+    await page.getByRole('button', { name: '网络与代理' }).click()
+    await expect(page.getByRole('heading', { name: '主要网络连接' })).toBeVisible()
+    await expect(page.getByText('当前联网', { exact: true })).toBeVisible()
+    const networkLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      mainWidth: document.querySelector('#app-main')?.scrollWidth ?? 0,
+    }))
+    expect(networkLayout.bodyWidth, `${viewport.name} network body 横向溢出`).toBeLessThanOrEqual(networkLayout.viewportWidth)
+    expect(networkLayout.mainWidth, `${viewport.name} network main 横向溢出`).toBeLessThanOrEqual(networkLayout.viewportWidth)
+    await expect(page).toHaveScreenshot(`system-network-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
+
     await page.getByRole('button', { name: '存储与磁盘' }).click()
     await expect(page.getByRole('heading', { name: '存储卷' })).toBeVisible()
     await expect(page.getByRole('heading', { name: '物理磁盘' })).toBeVisible()

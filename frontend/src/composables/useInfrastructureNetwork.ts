@@ -12,9 +12,9 @@ import {
   listeningPortOwners,
 } from '@/domain/infrastructurePresentation'
 
-type ListenerScopeFilter = 'all' | 'exposed' | ListenerScope
+export type ListenerScopeFilter = 'all' | 'exposed' | ListenerScope
 
-interface ListeningPortGroup {
+export interface ListeningPortGroup {
   port: number
   protocol: string
   addresses: string[]
