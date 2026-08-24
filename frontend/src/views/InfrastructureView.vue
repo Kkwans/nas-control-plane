@@ -11,7 +11,6 @@ import {
   HardDrive,
   MemoryStick,
   Network,
-  Pencil,
   Route,
   Router,
   Search,
@@ -23,6 +22,7 @@ import {
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
+import InfrastructureDnsPanel from '@/components/InfrastructureDnsPanel.vue'
 import InfrastructureNetworkInterfacesPanel from '@/components/InfrastructureNetworkInterfacesPanel.vue'
 import { type InfrastructureSignal } from '@/components/InfrastructureSignalSummary.vue'
 import InfrastructureServicesPanel from '@/components/InfrastructureServicesPanel.vue'
@@ -347,16 +347,6 @@ function tailscaleEvidenceLabel() {
   return parts.join(' · ') || '未取得控制面、链路或心跳证据'
 }
 
-function dnsCapabilityExplanation() {
-  if (!dnsDetails.value.readOnly && dnsDetails.value.backend === 'ugos-network-service') return '通过 UGOS 官方网络服务预览和应用；修改前保存完整配置，且支持并发变更保护与一键回滚。'
-  if (!dnsDetails.value.readOnly && dnsDetails.value.backend === 'static-resolv-conf') return '修改前自动备份，确认后原子应用；若配置未被其他进程改动，可一键回滚。'
-  if (dnsDetails.value.errorCode === 'DNS_BACKEND_READ_ONLY') return '检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；保持只读。'
-  if (dnsDetails.value.errorCode === 'UGOS_DNS_WRITE_UNCONFIRMED') return '已检测到 UGOS 网络服务，但当前固件拒绝了受控写入；为避免伪成功，DNS 保持只读，请在 UGOS 网络设置中修改。'
-  if (dnsDetails.value.errorCode === 'DNS_WRITE_ADAPTER_UNAVAILABLE') return '检测到 DNS 后端，但未接入安全的预览、应用和回滚适配器；保持只读。'
-  if (dnsDetails.value.readOnly) return '当前 DNS 后端只提供读取能力；NCP 不会直接覆盖 /etc/resolv.conf。'
-  return dnsDetails.value.detectionSource || 'DNS 能力未报告'
-}
-
 function publicEgressErrorMessage(code: string) {
   switch (code) {
     case 'PUBLIC_EGRESS_ENDPOINT_NOT_CONFIGURED': return '尚未配置公网出口检测端点。'
@@ -487,34 +477,12 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
           :icons="{ gauge: Gauge, network: Network, route: Route, wifi: Wifi }"
         />
 
-        <article class="panel detail-card network-layout__full dns-workspace">
-          <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="Route">
-            <template #actions>
-              <ActionButton
-                v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly"
-                size="sm"
-                :icon="Pencil"
-                @click="openDNSEditor"
-              >编辑 DNS</ActionButton>
-            </template>
-          </SectionHeader>
-          <dl class="definition-grid">
-            <div class="definition-grid__wide"><dt>默认网关</dt><dd>{{ details.network.gateway || '未发现' }}</dd></div>
-            <div class="definition-grid__wide"><dt>DNS</dt><dd>{{ details.network.dnsServers.join('、') || '未发现' }}</dd></div>
-            <div><dt>路由数量</dt><dd>{{ details.network.routes.length }}</dd></div>
-            <div><dt>默认出口</dt><dd>{{ details.network.routes.find((route) => route.destination === '0.0.0.0/0')?.interface || '未识别' }}</dd></div>
-          </dl>
-          <div class="dns-management">
-            <div class="dns-management__state">
-              <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
-              <small>{{ dnsCapabilityExplanation() }}</small>
-            </div>
-            <div class="dns-current-grid">
-              <div class="dns-current-value"><span>当前生效 DNS</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
-              <div v-if="!dnsDetails.readOnly" class="dns-current-value dns-current-value--managed"><span>UGOS 手动配置</span><code>{{ dnsDetails.configuredNameservers?.join('、') || '未读取到可编辑配置' }}</code></div>
-            </div>
-          </div>
-        </article>
+        <InfrastructureDnsPanel
+          :details="details"
+          :dns-details="dnsDetails"
+          :route-icon="Route"
+          @edit="openDNSEditor"
+        />
 
         <article class="panel detail-card proxy-workspace network-layout__full">
           <SectionHeader class="detail-card__section-header" title="代理链路" description="区分 Overlay、本地代理、当前节点和真实公网出口" :icon="Router">
