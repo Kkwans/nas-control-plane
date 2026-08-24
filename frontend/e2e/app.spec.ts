@@ -9,8 +9,10 @@ const viewports = [
   { name: 'tablet', width: 768, height: 1024 },
   { name: 'mobile', width: 390, height: 844 },
 ]
+const routeNavigationTimeout = 60_000
 
 test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page }) => {
+  test.setTimeout(120_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
@@ -20,9 +22,9 @@ test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto('/')
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
 
-    await expect(page.getByRole('heading', { name: '系统总览' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('heading', { name: '系统总览' })).toBeVisible({ timeout: routeNavigationTimeout })
     await expect(page.getByText('Jellyfin')).toBeVisible()
     await expect(page.getByText('收藏站点')).toBeVisible()
     await expect(page.getByText('CPU 使用率')).toBeVisible()

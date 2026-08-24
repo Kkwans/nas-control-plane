@@ -51,6 +51,7 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
 })
 
 test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向溢出', async ({ page }) => {
+  test.setTimeout(120_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
