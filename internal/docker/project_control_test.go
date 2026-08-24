@@ -45,25 +45,39 @@ func TestProjectControllerReturnsPerContainerResultsForPartialFailure(t *testing
 
 func TestProjectControllerPreservesCancellationAfterPartialExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	firstActionStarted := make(chan struct{})
+	containerIDs := []string{"first", "second", "third", "fourth", "fifth"}
 	gateway := &projectControlGateway{
 		snapshots: map[string]ContainerSnapshot{"first": {ID: "first", Name: "/first", Running: true}},
+		beforeAction: func(id string) {
+			if id != "first" {
+				<-firstActionStarted
+			}
+		},
 		onAction: func(id string) {
 			if id == "first" {
 				cancel()
+				close(firstActionStarted)
 			}
 		},
 	}
 	result, err := NewProjectController(NewContainerController(gateway)).Control(ctx, ProjectActionRequest{
-		ProjectID: "standalone", ContainerIDs: []string{"first", "second"}, Action: ContainerActionRestart,
+		ProjectID: "standalone", ContainerIDs: containerIDs, Action: ContainerActionRestart,
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context cancellation", err)
 	}
-	if len(result.Containers) >= 2 {
-		t.Fatalf("cancellation should stop queued work, partial result = %#v", result)
+	if len(result.Containers) == 0 || len(result.Containers) >= len(containerIDs) {
+		t.Fatalf("cancellation should preserve a partial result, result = %#v", result)
 	}
 	if actions := gateway.recordedActions(); len(actions) > maxStandaloneProjectConcurrency {
-		t.Fatalf("actions after cancellation = %#v", actions)
+		t.Fatalf("actions after cancellation exceeded concurrency = %#v", actions)
+	} else {
+		for _, id := range actions {
+			if id == "fifth" {
+				t.Fatalf("cancellation should stop queued fifth action, actions = %#v", actions)
+			}
+		}
 	}
 }
 
@@ -107,6 +121,7 @@ type projectControlGateway struct {
 	actions      []string
 	actionErrors map[string]error
 	snapshots    map[string]ContainerSnapshot
+	beforeAction func(string)
 	onAction     func(string)
 	actionDelay  time.Duration
 	active       int
@@ -149,9 +164,13 @@ func (gateway *projectControlGateway) action(id string, running bool) error {
 		gateway.snapshots[id] = snapshot
 	}
 	delay := gateway.actionDelay
+	beforeAction := gateway.beforeAction
 	onAction := gateway.onAction
 	gateway.mu.Unlock()
 
+	if beforeAction != nil {
+		beforeAction(id)
+	}
 	if onAction != nil {
 		onAction(id)
 	}
