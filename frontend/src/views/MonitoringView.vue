@@ -9,6 +9,8 @@ import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
+import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
+import { mergeMetricSampleWindow } from '@/domain/monitoring/series'
 import { useSystemStore } from '@/stores/system'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -76,8 +78,8 @@ const diskIORates = computed(() => {
 })
 const diskIOSeries = computed<TrendSeries[]>(() => {
   const series: TrendSeries[] = []
-  if (diskIORates.value.read.length) series.push({ name: '读取', color: '#7a5bd0', values: diskIORates.value.read })
-  if (diskIORates.value.write.length) series.push({ name: '写入', color: '#d28a1b', values: diskIORates.value.write })
+  if (diskIORates.value.read.length) series.push({ name: '读取', color: monitoringChartTokens.storage, values: diskIORates.value.read })
+  if (diskIORates.value.write.length) series.push({ name: '写入', color: monitoringChartTokens.load, values: diskIORates.value.write })
   return series
 })
 const diskIOMessage = computed(() => {
@@ -97,7 +99,7 @@ const temperatureNames = computed(() => {
 })
 const temperatureSeries = computed<TrendSeries[]>(() => temperatureNames.value.map((name, index) => ({
   name: temperatureLabel(name, index),
-  color: ['#d28a1b', '#c64a59', '#7a5bd0', '#16866a'][index % 4] ?? '#d28a1b',
+  color: monitoringChartTokens.temperature[index % monitoringChartTokens.temperature.length] ?? monitoringChartTokens.load,
   values: samples.value.map((sample) => {
     const reading = sample.temperatures?.find((item) => item.name === name)?.temperatureCelsius
     return finiteNumber(reading) ? reading : Number.NaN
@@ -202,13 +204,7 @@ function mergeRealtimeSample() {
   else {
     lowerBound = timestamp - rangeMilliseconds[range.value]
   }
-  const merged = new Map<number, MetricSample>()
-  for (const item of samples.value) {
-    const itemTimestamp = new Date(item.collectedAt).valueOf()
-    if (itemTimestamp >= lowerBound && itemTimestamp <= timestamp) merged.set(itemTimestamp, item)
-  }
-  merged.set(timestamp, sample)
-  samples.value = [...merged.entries()].sort(([left], [right]) => left - right).map(([, item]) => item)
+  samples.value = mergeMetricSampleWindow(samples.value, sample, lowerBound, timestamp)
 }
 
 function handleManualRefresh() {
@@ -286,28 +282,28 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
           <span class="chart-card__icon" aria-hidden="true"><Cpu :size="18" /></span>
           <div><h2 id="cpu-chart-title">处理器与负载</h2><p>CPU 使用率与 1 分钟负载</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'CPU',color:'#2468d8',values:samples.map(i=>i.cpuPercent)},{name:'负载',color:'#d28a1b',values:samples.map(i=>i.load1)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'CPU',color:monitoringChartTokens.cpu,values:samples.map(i=>i.cpuPercent)},{name:'负载',color:monitoringChartTokens.load,values:samples.map(i=>i.load1)}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="memory-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><MemoryStick :size="18" /></span>
           <div><h2 id="memory-chart-title">内存使用</h2><p>已用内存占总容量比例</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'内存',color:'#16866a',values:samples.map(i=>i.memoryPercent)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'内存',color:monitoringChartTokens.memory,values:samples.map(i=>i.memoryPercent)}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="storage-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><HardDrive :size="18" /></span>
           <div><h2 id="storage-chart-title">存储使用</h2><p>所有已采集挂载点的合计占用</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'磁盘',color:'#7a5bd0',values:samples.map(i=>i.diskPercent)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'磁盘',color:monitoringChartTokens.storage,values:samples.map(i=>i.diskPercent)}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="network-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><Activity :size="18" /></span>
           <div><h2 id="network-chart-title">网络吞吐</h2><p>接收与发送速率</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="KB/s" :series="[{name:'接收',color:'#16866a',values:networkRates.map(i=>i.receive)},{name:'发送',color:'#2468d8',values:networkRates.map(i=>i.transmit)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" unit="KB/s" :series="[{name:'接收',color:monitoringChartTokens.receive,values:networkRates.map(i=>i.receive)},{name:'发送',color:monitoringChartTokens.transmit,values:networkRates.map(i=>i.transmit)}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="disk-io-chart-title">
         <header>
@@ -338,7 +334,7 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
 .chart-card:hover { border-color:rgba(52,116,212,.22); box-shadow:0 15px 34px rgba(44,66,94,.08); transform:translateY(-1px); }
 .chart-card>header { display:flex; align-items:center; gap:11px; margin-bottom:12px; }
 .chart-card__icon { display:grid; width:34px; height:34px; flex:0 0 auto; place-items:center; border-radius:10px; background:var(--ncp-primary-soft); color:var(--ncp-primary-strong); }
-.chart-card__icon--violet { background:#f0edff; color:#6855c7; }
+.chart-card__icon--violet { background:color-mix(in srgb, var(--ncp-chart-storage) 12%, transparent); color:var(--ncp-chart-storage); }
 .chart-card__icon--amber { background:var(--ncp-warning-soft); color:var(--ncp-warning-strong); }
 .chart-card>header>div { display:grid; min-width:0; gap:2px; }
 .chart-card h2 { margin:0; color:var(--ncp-text); font-size:1rem; }

@@ -65,6 +65,16 @@
   --ncp-neutral-soft: #e9eef4;
   --ncp-neutral-border: rgba(100, 117, 138, .22);
 
+  /* 监控图表语义色：同一指标在所有趋势卡片中保持一致。 */
+  --ncp-chart-cpu: #2468d8;
+  --ncp-chart-load: #d28a1b;
+  --ncp-chart-memory: #16866a;
+  --ncp-chart-storage: #7a5bd0;
+  --ncp-chart-axis: #7b8aa1;
+  --ncp-chart-grid: #e7edf4;
+  --ncp-chart-line: #dce4ee;
+  --ncp-chart-tooltip: #14213a;
+
   /* 对象色只表达资源类型，不能替代状态色。 */
   --ncp-object-project: #23866f;
   --ncp-object-project-soft: #e9f6f2;

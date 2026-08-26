@@ -8,6 +8,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsOption } from 'echarts'
 import { Activity } from '@lucide/vue'
 
+import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
+
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent, AriaComponent])
 
 export interface TrendSeries {
@@ -158,25 +160,25 @@ const option = computed<EChartsOption>(() => ({
     itemWidth: 16,
     itemHeight: 3,
     itemGap: 12,
-    textStyle: { color: '#53627a', fontSize: 10, fontFamily: 'Manrope Variable' },
+    textStyle: { color: monitoringChartTokens.legendText, fontSize: 10, fontFamily: 'Manrope Variable' },
   })),
   tooltip: {
     trigger: 'axis',
     confine: true,
-    backgroundColor: 'rgba(20, 33, 58, .94)',
+    backgroundColor: monitoringChartTokens.tooltip,
     borderWidth: 0,
     padding: [9, 11],
-    textStyle: { color: '#fff', fontSize: 11 },
+    textStyle: { color: monitoringChartTokens.tooltipText, fontSize: 11 },
     formatter: formatTooltip,
   },
   xAxis: {
     type: 'category',
     boundaryGap: false,
     data: formatAxisLabels(props.timestamps),
-    axisLine: { lineStyle: { color: '#dce4ee' } },
+    axisLine: { lineStyle: { color: monitoringChartTokens.line } },
     axisTick: { show: false },
     axisLabel: {
-      color: '#7b8aa1',
+      color: monitoringChartTokens.axis,
       fontSize: 10,
       hideOverlap: true,
       interval: (index: number) => shouldShowAxisLabel(index, props.timestamps),
@@ -186,11 +188,11 @@ const option = computed<EChartsOption>(() => ({
     type: 'value',
     min: 0,
     axisLabel: {
-      color: '#7b8aa1',
+      color: monitoringChartTokens.axis,
       fontSize: 10,
       formatter: (value: number) => `${value}${props.unit === '%' ? '%' : ''}`,
     },
-    splitLine: { lineStyle: { color: '#e7edf4', type: 'dashed' } },
+    splitLine: { lineStyle: { color: monitoringChartTokens.grid, type: 'dashed' } },
   },
   series: availableSeries.value.map((item) => ({
     name: item.name,
