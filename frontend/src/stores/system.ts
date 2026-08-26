@@ -34,6 +34,19 @@ export interface RefreshOptions {
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 5
 const MAX_HISTORY_POINTS = 60
 
+export const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
+  interfaceDensity: 'comfortable',
+  baseFontSize: 15,
+  pageSize: 10,
+  sidebarDefault: 'collapsed',
+  linkOpenMode: 'new-tab',
+  siteDefaultProtocol: 'http',
+  chineseFont: 'system',
+  latinFont: 'system',
+  navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'],
+}
+
 export interface ResourceSample {
   timestamp: string
   cpuPercent: number
@@ -54,18 +67,7 @@ export const useSystemStore = defineStore('system', () => {
   const resourceHistory = ref<ResourceSample[]>([])
   const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
   const realtimeScopes = ref<RealtimeScope[]>([])
-  const preferences = ref<UserPreferences>({
-    refreshIntervalSeconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
-    interfaceDensity: 'comfortable',
-    baseFontSize: 15,
-    pageSize: 10,
-    sidebarDefault: 'collapsed',
-    linkOpenMode: 'new-tab',
-    siteDefaultProtocol: 'http',
-    chineseFont: 'system',
-    latinFont: 'system',
-    navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'],
-  })
+  const preferences = ref<UserPreferences>({ ...DEFAULT_USER_PREFERENCES, navigationOrder: [...DEFAULT_USER_PREFERENCES.navigationOrder] })
   const listPreferences = ref<Record<string, ListPreference>>({})
   const listPreferenceRequests = new Map<string, Promise<ListPreference>>()
 
