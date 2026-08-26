@@ -31,13 +31,13 @@ const localImages = useDockerLocalImages({ query: computed(() => props.query), c
 const downloads = useDockerImageDownloads(localImages.images)
 const {
   images, loading, error, removeFailures, selectedImageIds, localPage, localPreference,
-  filteredImages, localPageCount, pagedImages, visibleImageIds, allVisibleSelected,
+  filteredImages, localPageCount, pagedImages, allVisibleSelected,
   someVisibleSelected, selectedImageCount, bulkRemovePending, toggleLocalSort, refresh,
   handleVisibleSelectionChange, handleImageSelectionChange, isRemovePending, confirmRemove,
   confirmRemoveSelected, containerReferenceCount, displayName, shortId, dateLabel,
 } = localImages
 const {
-  invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage, downloadPageSize,
+  invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage,
   downloadStatusOptions, activePullCount, filteredDownloadJobs, downloadPageCount,
   pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
   confirmDeleteJob, downloadState, downloadStateLabel, effectiveTotal,

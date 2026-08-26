@@ -9,8 +9,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build && node scripts/normalize-dist-permissions.mjs",
+    "build": "vue-tsc --noEmit -p tsconfig.app.json && vite build && node scripts/normalize-dist-permissions.mjs && node scripts/check-bundle-budget.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
+    "lint": "eslint . --max-warnings=0",
+    "format:check": "prettier --check eslint.config.mjs .prettierrc.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
@@ -39,14 +41,21 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.10.2",
+    "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.0",
     "@types/node": "26.1.1",
     "@vitejs/plugin-vue": "6.0.8",
     "@vue/tsconfig": "0.9.1",
+    "eslint": "10.9.1",
+    "eslint-plugin-vue": "10.10.0",
+    "globals": "17.11.0",
     "jsdom": "29.1.1",
+    "prettier": "3.9.6",
     "typescript": "~5.9.3",
+    "typescript-eslint": "8.68.0",
     "vite": "8.1.5",
     "vitest": "4.1.10",
+    "vue-eslint-parser": "10.4.1",
     "vue-tsc": "3.3.8"
   }
 }

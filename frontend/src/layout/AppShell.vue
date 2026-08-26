@@ -3,14 +3,12 @@ import { computed, onBeforeUnmount, onMounted, ref, type PropType, watch } from 
 import { RouterLink, useRoute } from 'vue-router'
 import {
   ChevronRight,
-  Info,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   Server,
-  TerminalSquare,
   X,
 } from '@lucide/vue'
 import { ElTooltip } from 'element-plus'

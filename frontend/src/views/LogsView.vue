@@ -89,11 +89,12 @@ async function load(silent = false) {
     if (requestSequence !== loadSequence) return
     error.value = '日志读取失败，请确认目标服务正在运行。'
   } finally {
-    if (requestSequence !== loadSequence) return
-    if (skeletonTimer) clearTimeout(skeletonTimer)
-    skeletonTimer = null
-    showSkeleton.value = false
-    loading.value = false
+    if (requestSequence === loadSequence) {
+      if (skeletonTimer) clearTimeout(skeletonTimer)
+      skeletonTimer = null
+      showSkeleton.value = false
+      loading.value = false
+    }
   }
 }
 
@@ -120,8 +121,7 @@ async function loadMore() {
     if (requestSequence !== loadSequence) return
     error.value = '更多日志读取失败，请重试。'
   } finally {
-    if (requestSequence !== loadSequence) return
-    loadingMore.value = false
+    if (requestSequence === loadSequence) loadingMore.value = false
   }
 }
 

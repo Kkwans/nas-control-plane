@@ -4,7 +4,6 @@ import { Activity, Cpu, Gauge, HardDrive, LoaderCircle, MemoryStick, Thermometer
 import { ElSegmented } from 'element-plus'
 
 import { requestMetricSamples, type MetricSample } from '@/api/control'
-import type { SystemSummary } from '@/api/system'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import ResourceState from '@/components/ResourceState.vue'

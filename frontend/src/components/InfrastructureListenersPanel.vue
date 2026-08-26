@@ -11,7 +11,7 @@ import {
 } from '@/domain/infrastructurePresentation'
 import type { ListenerScopeFilter, ListeningPortGroup } from '@/composables/useInfrastructureNetwork'
 
-const props = defineProps<{
+defineProps<{
   listenerQuery: string
   listenerProtocol: string
   listenerScope: ListenerScopeFilter
