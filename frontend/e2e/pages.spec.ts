@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 
 import { installMockApi } from './mockApi'
+import { waitForPageReady } from './pageReadiness'
 
 const routes = [
   { path: '/', heading: '系统总览' },
@@ -39,7 +40,10 @@ for (const viewport of viewports) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
       await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
-      await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
+      await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({
+        timeout: routeNavigationTimeout,
+      })
+      await waitForPageReady(page)
       const layout = await page.evaluate(() => ({
         bodyWidth: document.body.scrollWidth,
         viewportWidth: window.innerWidth,

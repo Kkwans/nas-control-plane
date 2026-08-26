@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 import { installMockApi } from './mockApi'
+import { waitForPageReady } from './pageReadiness'
 
 const routes = [
   { path: '/', heading: '系统总览' },
@@ -26,10 +27,15 @@ for (const route of routes) {
     await installMockApi(page)
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
-    await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
+    await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({
+      timeout: routeNavigationTimeout,
+    })
+    await waitForPageReady(page)
 
     const results = await new AxeBuilder({ page }).analyze()
-    const blockingViolations = results.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
+    const blockingViolations = results.violations.filter(
+      (violation) => violation.impact === 'critical' || violation.impact === 'serious',
+    )
     expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
   })
 }
