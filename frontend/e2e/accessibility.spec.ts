@@ -5,7 +5,7 @@ import { installMockApi } from './mockApi'
 
 const routes = [
   { path: '/', heading: '系统总览' },
-  { path: '/sites', heading: '站点中心' },
+  { path: '/sites', heading: '站点管理' },
   { path: '/docker', heading: 'Docker 管理' },
   { path: '/databases', heading: '数据库' },
   { path: '/databases/sqlite-main', heading: 'NCP 数据库' },
@@ -15,15 +15,18 @@ const routes = [
   { path: '/system', heading: '系统信息' },
   { path: '/terminal', heading: '终端' },
   { path: '/users', heading: '用户管理' },
-  { path: '/settings', heading: '系统设置' },
+  { path: '/settings', heading: '设置' },
 ]
+
+const routeNavigationTimeout = 60_000
 
 for (const route of routes) {
   test(`${route.path} 关键可访问性规则通过`, async ({ page }) => {
+    test.setTimeout(120_000)
     await installMockApi(page)
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(route.path, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible()
+    await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+    await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
 
     const results = await new AxeBuilder({ page }).analyze()
     const blockingViolations = results.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')

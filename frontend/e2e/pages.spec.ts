@@ -4,7 +4,7 @@ import { installMockApi } from './mockApi'
 
 const routes = [
   { path: '/', heading: '系统总览' },
-  { path: '/sites', heading: '站点中心' },
+  { path: '/sites', heading: '站点管理' },
   { path: '/docker', heading: 'Docker 管理' },
   { path: '/databases', heading: '数据库' },
   { path: '/databases/sqlite-main', heading: 'NCP 数据库' },
@@ -14,7 +14,7 @@ const routes = [
   { path: '/system', heading: '系统信息' },
   { path: '/terminal', heading: '终端' },
   { path: '/users', heading: '用户管理' },
-  { path: '/settings', heading: '系统设置' },
+  { path: '/settings', heading: '设置' },
 ]
 
 const routeNavigationTimeout = 60_000

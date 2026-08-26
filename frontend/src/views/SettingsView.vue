@@ -179,7 +179,7 @@ function restoreSection(fields: readonly (keyof UserPreferences)[]) {
 
 async function restoreAllDefaults() {
   try {
-    await ElMessageBox.confirm('将恢复所有系统设置为 NCP 默认值，并自动保存。已保存的自定义设置不会保留。', '恢复全部默认设置', {
+    await ElMessageBox.confirm('将恢复所有设置为 NCP 默认值，并自动保存。已保存的自定义设置不会保留。', '恢复全部默认设置', {
       confirmButtonText: '恢复全部默认',
       cancelButtonText: '取消',
       type: 'warning',
@@ -206,7 +206,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page workspace-page settings-page">
-    <WorkspaceHeader title="系统设置" description="统一调整数据更新、界面密度、字体与站点打开方式" :icon="Settings2" :stats="[]">
+    <WorkspaceHeader title="设置" description="统一调整数据更新、界面密度、字体与站点打开方式" :icon="Settings2" :stats="[]">
       <template #actions>
         <div class="settings-header-actions">
           <ElButton text :disabled="!changed" @click="restoreAllDefaults">恢复全部默认</ElButton>
@@ -244,7 +244,7 @@ onBeforeUnmount(() => {
         <label class="setting-row"><span><strong>侧栏默认状态</strong><small>移动端始终使用汉堡菜单</small></span>
           <ElSelect v-model="draft.sidebarDefault"><ElOption label="默认折叠" value="collapsed" /><ElOption label="默认展开" value="expanded" /></ElSelect>
         </label>
-        <label class="setting-row"><span><strong>链接打开方式</strong><small>应用于站点中心的入口链接</small></span>
+        <label class="setting-row"><span><strong>链接打开方式</strong><small>应用于站点管理的入口链接</small></span>
           <ElSelect v-model="draft.linkOpenMode"><ElOption label="新标签页" value="new-tab" /><ElOption label="当前页面" value="same-tab" /></ElSelect>
         </label>
         <label class="setting-row"><span><strong>默认协议</strong><small>站点没有自定义 URL 时使用</small></span>

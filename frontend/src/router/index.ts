@@ -14,7 +14,7 @@ const router = createRouter({
       path: '/sites',
       name: 'sites',
       component: () => import('@/views/ServicesView.vue'),
-      meta: { title: '站点中心' },
+      meta: { title: '站点管理' },
     },
     {
       path: '/services',
@@ -72,7 +72,7 @@ const router = createRouter({
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
-      meta: { title: '系统设置' },
+      meta: { title: '设置' },
     },
     {
       path: '/users',

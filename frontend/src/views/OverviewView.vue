@@ -112,8 +112,8 @@ onMounted(() => {
       </div>
       <div v-else class="favorite-empty">
         <Globe2 :size="26" />
-        <div><strong>还没有收藏站点</strong><span>在站点中心点击星标，入口会固定显示在这里。</span></div>
-        <RouterLink to="/sites">前往站点中心</RouterLink>
+        <div><strong>还没有收藏站点</strong><span>在站点管理中点击星标，入口会固定显示在这里。</span></div>
+        <RouterLink to="/sites">前往站点管理</RouterLink>
       </div>
     </section>
 
