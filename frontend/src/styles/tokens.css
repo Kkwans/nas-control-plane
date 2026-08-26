@@ -75,6 +75,29 @@
   --ncp-chart-line: #dce4ee;
   --ncp-chart-tooltip: #14213a;
 
+  /* 终端主题适配器读取的语义色，避免页面组件散落 ANSI 调色板。 */
+  --ncp-terminal-background: #fbfcfe;
+  --ncp-terminal-foreground: #25354b;
+  --ncp-terminal-cursor: #3474d4;
+  --ncp-terminal-cursor-accent: #fbfcfe;
+  --ncp-terminal-selection: #dbe9fb;
+  --ncp-terminal-black: #263548;
+  --ncp-terminal-bright-black: #718096;
+  --ncp-terminal-red: #c95361;
+  --ncp-terminal-bright-red: #df6673;
+  --ncp-terminal-green: #23866f;
+  --ncp-terminal-bright-green: #36a287;
+  --ncp-terminal-yellow: #b87622;
+  --ncp-terminal-bright-yellow: #cf933a;
+  --ncp-terminal-blue: #3474d4;
+  --ncp-terminal-bright-blue: #5792e5;
+  --ncp-terminal-magenta: #875eae;
+  --ncp-terminal-bright-magenta: #a477c9;
+  --ncp-terminal-cyan: #23828d;
+  --ncp-terminal-bright-cyan: #3d9da7;
+  --ncp-terminal-white: #dfe6ef;
+  --ncp-terminal-bright-white: #ffffff;
+
   /* 对象色只表达资源类型，不能替代状态色。 */
   --ncp-object-project: #23866f;
   --ncp-object-project-soft: #e9f6f2;

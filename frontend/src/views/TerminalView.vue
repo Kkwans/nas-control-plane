@@ -25,6 +25,7 @@ import {
   type TerminalCapabilities,
   type TerminalCapabilityState,
 } from '@/domain/terminal'
+import { getTerminalTheme } from '@/domain/terminalTheme'
 import { useSystemStore } from '@/stores/system'
 
 type Target = 'host' | 'container'
@@ -135,14 +136,7 @@ async function connect() {
     fontSize: 14,
     lineHeight: 1.32,
     scrollback: 5000,
-    theme: {
-      background: '#fbfcfe', foreground: '#25354b', cursor: '#3474d4', cursorAccent: '#fbfcfe',
-      selectionBackground: '#dbe9fb', black: '#263548', brightBlack: '#718096',
-      red: '#c95361', brightRed: '#df6673', green: '#23866f', brightGreen: '#36a287',
-      yellow: '#b87622', brightYellow: '#cf933a', blue: '#3474d4', brightBlue: '#5792e5',
-      magenta: '#875eae', brightMagenta: '#a477c9', cyan: '#23828d', brightCyan: '#3d9da7',
-      white: '#dfe6ef', brightWhite: '#ffffff',
-    },
+    theme: getTerminalTheme(),
   })
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
