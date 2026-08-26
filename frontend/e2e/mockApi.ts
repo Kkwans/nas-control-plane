@@ -112,6 +112,35 @@ const dockerImages = {
   ],
 }
 
+const dockerResources = {
+  collectedAt,
+  networks: [
+    { id: 'bridge-id', name: 'bridge', driver: 'bridge', scope: 'local', internal: false, subnets: ['172.17.0.0/16'], gateways: ['172.17.0.1'] },
+    { id: 'media-net-id', name: 'media-net', driver: 'bridge', scope: 'local', internal: false, subnets: ['172.30.0.0/24'], gateways: ['172.30.0.1'] },
+  ],
+  volumes: [
+    { name: 'media-data', driver: 'local', scope: 'local', mountpoint: '/var/lib/docker/volumes/media-data/_data' },
+  ],
+}
+
+const pathEntries = {
+  '/': {
+    path: '/', parent: '/', nextCursor: '', collectedAt,
+    entries: [{ name: 'volume2', path: '/volume2', type: 'directory', readable: true }],
+  },
+  '/volume2': {
+    path: '/volume2', parent: '/', nextCursor: '', collectedAt,
+    entries: [
+      { name: 'Docker', path: '/volume2/Docker', type: 'directory', readable: true },
+      { name: 'README.txt', path: '/volume2/README.txt', type: 'file', readable: true },
+    ],
+  },
+  '/volume2/Docker': {
+    path: '/volume2/Docker', parent: '/volume2', nextCursor: '', collectedAt,
+    entries: [{ name: 'media', path: '/volume2/Docker/media', type: 'directory', readable: true }],
+  },
+}
+
 const hubRepositories = [
   {
     name: 'nginx', namespace: 'library', description: 'Official build of Nginx.', starCount: 20800, pullCount: 1200000000,
@@ -374,7 +403,12 @@ export async function installMockApi(page: Page) {
     if (path === '/api/v1/sites/ignored') return json(route, [])
     if (path === '/api/v1/system/summary') return json(route, summary)
     if (path === '/api/v1/docker/inventory') return json(route, page.url().includes('/docker') ? docker : overviewDocker)
+    if (path === '/api/v1/docker/resources') return json(route, dockerResources)
     if (path === '/api/v1/docker/images') return json(route, dockerImages)
+    if (path === '/api/v1/files/entries') {
+      const requestedPath = url.searchParams.get('path') || '/'
+      return json(route, pathEntries[requestedPath as keyof typeof pathEntries] || { path: requestedPath, parent: '/', nextCursor: '', collectedAt, entries: [] })
+    }
     if (path === '/api/v1/docker/hub/search') {
       const query = (url.searchParams.get('query') || '').trim().toLowerCase()
       if (query === 'broken') return json(route, { code: 'DOCKER_HUB_SEARCH_FAILED', message: 'Fixture Docker Hub 搜索失败。', requestId: 'fixture-request' }, 502)
@@ -389,6 +423,13 @@ export async function installMockApi(page: Page) {
         message: '已加入下载队列', progress: 0, createdAt: collectedAt, updatedAt: collectedAt,
         downloadedBytes: 0, totalBytes: body.expectedBytes || 0, speedBytes: 0, layers: {},
       })
+    }
+    if (path === '/api/v1/docker/containers' && route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as { image?: string; name?: string; runContainer?: boolean }
+      return json(route, {
+        containerId: 'created-fixture', name: body.name || 'created-fixture', image: body.image || 'unknown',
+        state: body.runContainer ? 'running' : 'stopped', created: true, started: Boolean(body.runContainer), runContainer: Boolean(body.runContainer),
+      }, 201)
     }
     if (path === '/api/v1/jobs') return json(route, dockerImageJobs)
     if (path.startsWith('/api/v1/docker/compose/projects/') && path.includes('/actions/')) {

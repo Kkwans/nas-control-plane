@@ -965,6 +965,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/resources:
+    get:
+      operationId: getDockerResources
+      summary: 列出 Docker 网络和卷资源
+      description: 从 Root Agent 读取 Docker Engine 当前网络与卷清单，供创建容器时选择已有资源。
+      tags: [docker]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: Docker 网络和卷清单
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DockerResources'
+        '503':
+          description: Root Agent 或 Docker Engine 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/files/entries:
+    get:
+      operationId: listFileEntries
+      summary: 浏览 NAS 目录
+      description: 以 Root Agent 读取任意绝对 NAS 路径；结果按目录优先稳定分页，不执行 shell 命令，也不设置目录 allowlist。
+      tags: [files]
+      security: [{RootSession: []}]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: 要读取的绝对 NAS 路径
+          schema: { type: string, minLength: 1, maxLength: 4096 }
+        - name: cursor
+          in: query
+          required: false
+          description: 上一页返回的稳定偏移游标
+          schema: { type: string, pattern: '^[0-9]+$' }
+        - name: limit
+          in: query
+          required: false
+          description: 每页条数，默认 200，最大 1000
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        '200':
+          description: 目录条目分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntriesPage'
+        '400':
+          description: 路径或分页参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 路径不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 目录暂不可读取
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Root Agent 不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images:
     get:
       operationId: listDockerImages
@@ -2640,6 +2714,58 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DockerProject'
+    DockerResources:
+      type: object
+      required: [collectedAt, networks, volumes]
+      properties:
+        collectedAt: { type: string, format: date-time }
+        networks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerNetworkResource'
+        volumes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DockerVolumeResource'
+    DockerNetworkResource:
+      type: object
+      required: [id, name, driver, scope, internal, subnets, gateways]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        driver: { type: string }
+        scope: { type: string }
+        internal: { type: boolean }
+        subnets: { type: array, items: { type: string } }
+        gateways: { type: array, items: { type: string } }
+    DockerVolumeResource:
+      type: object
+      required: [name, driver, scope, mountpoint]
+      properties:
+        name: { type: string }
+        driver: { type: string }
+        scope: { type: string }
+        mountpoint: { type: string }
+    FileEntriesPage:
+      type: object
+      required: [path, parent, entries, collectedAt]
+      properties:
+        path: { type: string }
+        parent: { type: string }
+        nextCursor: { type: string }
+        collectedAt: { type: string, format: date-time }
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileEntry'
+    FileEntry:
+      type: object
+      required: [name, path, type, readable]
+      properties:
+        name: { type: string }
+        path: { type: string }
+        type: { type: string, enum: [directory, file, symlink, other] }
+        readable: { type: boolean }
     DockerImageInventory:
       type: object
       required: [collectedAt, images]

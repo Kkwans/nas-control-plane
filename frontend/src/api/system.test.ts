@@ -13,7 +13,8 @@ import {
   requestSystemSummary,
   inspectMihomo,
 } from './system'
-import { pullDockerImage, requestDockerImages, requestDockerHubTags, requestJobs } from './docker'
+import { pullDockerImage, requestDockerImages, requestDockerHubTags, requestDockerResources, requestJobs } from './docker'
+import { requestPathEntries } from './filesystem'
 
 describe('NCP API client', () => {
   it('keeps effective and backend-managed DNS values separate', async () => {
@@ -320,6 +321,36 @@ describe('NCP API client', () => {
     await expect(requestDockerImages(fetcher)).resolves.toMatchObject({
       images: [{ repoTags: [], repoDigests: [] }],
     })
+  })
+
+  it('loads Docker resources and preserves the typed network/volume contract', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      collectedAt: '2026-08-27T02:00:00Z',
+      networks: [{ id: 'bridge-id', name: 'bridge', driver: 'bridge', scope: 'local', internal: false, subnets: [], gateways: [] }],
+      volumes: [{ name: 'media-data', driver: 'local', scope: 'local', mountpoint: '/var/lib/docker/volumes/media-data/_data' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(requestDockerResources(fetcher)).resolves.toMatchObject({
+      networks: [{ name: 'bridge' }],
+      volumes: [{ name: 'media-data' }],
+    })
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/docker/resources', expect.objectContaining({ credentials: 'same-origin' }))
+  })
+
+  it('encodes absolute NAS paths and validates path entry pages', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      path: '/volume2/Docker Projects',
+      parent: '/volume2',
+      entries: [{ name: 'media', path: '/volume2/Docker Projects/media', type: 'directory', readable: true }],
+      nextCursor: '1',
+      collectedAt: '2026-08-27T02:00:00Z',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(requestPathEntries('/volume2/Docker Projects', '0', 20, fetcher)).resolves.toMatchObject({
+      path: '/volume2/Docker Projects',
+      entries: [{ type: 'directory' }],
+    })
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/files/entries?path=%2Fvolume2%2FDocker+Projects&cursor=0&limit=20')
   })
 
   it('normalizes an empty artifact state returned while Agent and Server roll forward', async () => {

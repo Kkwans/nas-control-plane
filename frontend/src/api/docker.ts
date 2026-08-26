@@ -16,6 +16,7 @@ import type {
   ComposeValidationResult,
   DockerContainerCreateInput,
   DockerContainerCreateResult,
+  DockerResources,
   DockerHubRepository,
   DockerHubSearchResult,
   DockerHubTag,
@@ -234,6 +235,10 @@ export async function requestDockerHubTags(
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {
   return requestJson('/api/v1/docker/inventory', {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
+}
+
+export async function requestDockerResources(fetcher: typeof fetch = fetch): Promise<DockerResources> {
+  return requestJson('/api/v1/docker/resources', {}, isDockerResources, fetcher, 'DOCKER_RESOURCES_RESPONSE_INVALID')
 }
 
 export async function requestServices(fetcher: typeof fetch = fetch): Promise<ServiceListResponse> {
@@ -572,6 +577,26 @@ function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResu
 
 function isDockerInventory(value: unknown): value is DockerInventory {
   return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
+}
+
+function isDockerResources(value: unknown): value is DockerResources {
+  return isRecord(value) &&
+    typeof value.collectedAt === 'string' &&
+    Array.isArray(value.networks) &&
+    value.networks.every((network) => isRecord(network) &&
+      typeof network.id === 'string' &&
+      typeof network.name === 'string' &&
+      typeof network.driver === 'string' &&
+      typeof network.scope === 'string' &&
+      typeof network.internal === 'boolean' &&
+      Array.isArray(network.subnets) && network.subnets.every((item) => typeof item === 'string') &&
+      Array.isArray(network.gateways) && network.gateways.every((item) => typeof item === 'string')) &&
+    Array.isArray(value.volumes) &&
+    value.volumes.every((volume) => isRecord(volume) &&
+      typeof volume.name === 'string' &&
+      typeof volume.driver === 'string' &&
+      typeof volume.scope === 'string' &&
+      typeof volume.mountpoint === 'string')
 }
 
 function isServiceListResponse(value: unknown): value is ServiceListResponse {

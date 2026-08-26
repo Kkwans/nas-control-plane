@@ -44,6 +44,7 @@ export {
   requestContainerLogs,
   requestDockerHubTags,
   requestDockerInventory,
+  requestDockerResources,
   requestDockerImages,
   requestDockerProjectAction,
   requestJobs,
@@ -52,6 +53,8 @@ export {
   searchDockerHub,
   validateComposeConfig,
 } from './docker'
+
+export { requestPathEntries } from './filesystem'
 
 export interface SystemCapabilities {
   hostname?: string
@@ -453,6 +456,46 @@ export interface DockerInventory {
     serviceName: string
   }>
   projects: DockerProject[]
+}
+
+export interface DockerNetworkResource {
+  id: string
+  name: string
+  driver: string
+  scope: string
+  internal: boolean
+  subnets: string[]
+  gateways: string[]
+}
+
+export interface DockerVolumeResource {
+  name: string
+  driver: string
+  scope: string
+  mountpoint: string
+}
+
+export interface DockerResources {
+  collectedAt: string
+  networks: DockerNetworkResource[]
+  volumes: DockerVolumeResource[]
+}
+
+export type FileEntryType = 'directory' | 'file' | 'symlink' | 'other'
+
+export interface FileEntry {
+  name: string
+  path: string
+  type: FileEntryType
+  readable: boolean
+}
+
+export interface FileEntriesPage {
+  path: string
+  parent: string
+  entries: FileEntry[]
+  nextCursor?: string
+  collectedAt: string
 }
 
 export interface RealtimeSnapshot {

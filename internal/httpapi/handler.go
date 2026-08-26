@@ -15,6 +15,7 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/filesystem"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,16 @@ type AgentClient interface {
 	ControlContainer(context.Context, string, docker.ContainerActionRequest) (docker.ContainerActionResult, error)
 	ReadContainerLogs(context.Context, string, docker.ContainerLogsRequest) (docker.ContainerLogsResult, error)
 	QueryJournal(context.Context, string, journal.Query) (journal.Page, error)
+}
+
+// Optional Agent capabilities keep existing fakes source-compatible while
+// Docker resource and NAS path browsing roll out through explicit RPCs.
+type DockerResourcesAgentClient interface {
+	CollectDockerResources(context.Context, string) (docker.Resources, error)
+}
+
+type FilesystemAgentClient interface {
+	ListPath(context.Context, string, filesystem.Request) (filesystem.Page, error)
 }
 
 type WebProbeAgentClient interface {
@@ -105,6 +116,8 @@ type Config struct {
 	DatabaseAgent       DatabaseAgentClient
 	DatabaseConnections DatabaseConnectionCoordinator
 	DockerImages        DockerImageAgentClient
+	DockerResources     DockerResourcesAgentClient
+	Filesystem          FilesystemAgentClient
 	Compose             ComposeAgentClient
 	AgentSocketPath     string
 	AgentTimeout        time.Duration
@@ -146,6 +159,8 @@ type handler struct {
 	databaseAgent       DatabaseAgentClient
 	databaseConnections DatabaseConnectionCoordinator
 	dockerImages        DockerImageAgentClient
+	dockerResources     DockerResourcesAgentClient
+	filesystem          FilesystemAgentClient
 	compose             ComposeAgentClient
 	agentSocketPath     string
 	agentTimeout        time.Duration
@@ -277,6 +292,12 @@ func NewHandler(config Config) http.Handler {
 	if config.DockerImages == nil {
 		config.DockerImages = socketAgentClient{}
 	}
+	if config.DockerResources == nil {
+		config.DockerResources = socketAgentClient{}
+	}
+	if config.Filesystem == nil {
+		config.Filesystem = socketAgentClient{}
+	}
 	if config.Compose == nil {
 		config.Compose = socketAgentClient{}
 	}
@@ -301,6 +322,8 @@ func NewHandler(config Config) http.Handler {
 		databaseAgent:       config.DatabaseAgent,
 		databaseConnections: config.DatabaseConnections,
 		dockerImages:        config.DockerImages,
+		dockerResources:     config.DockerResources,
+		filesystem:           config.Filesystem,
 		compose:             config.Compose,
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
@@ -353,6 +376,8 @@ func NewHandler(config Config) http.Handler {
 			protected.Put("/users/{userID}/password", api.updateUserPassword)
 			protected.Delete("/users/{userID}", api.deleteUser)
 			protected.Get("/docker/inventory", api.dockerInventory)
+			protected.Get("/docker/resources", api.dockerResourcesInventory)
+			protected.Get("/files/entries", api.fileEntries)
 			protected.Get("/docker/images", api.dockerImageInventory)
 			protected.Get("/docker/hub/search", api.searchDockerHub)
 			protected.Get("/docker/hub/tags", api.dockerHubTags)

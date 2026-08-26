@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// Docker Engine network and volume inventory used by the create-container UI.
+service AgentDockerResourcesService {
+  rpc ListResources(google.protobuf.Empty) returns (google.protobuf.Struct);
+}

@@ -15,6 +15,7 @@ import (
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/filesystem"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
@@ -46,6 +47,8 @@ type SocketConfig struct {
 	DockerControl       DockerControlProvider
 	DockerLogs          DockerLogsProvider
 	DockerImages        DockerImageProvider
+	DockerResources     DockerResourcesProvider
+	Filesystem          FilesystemProvider
 	OutboundProxy       string
 	ComposeRegistryPath string
 	Compose             ComposeProvider
@@ -96,6 +99,17 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		if err != nil {
 			return coded("AGENT_DOCKER_IMAGES_INITIALIZATION_FAILED", err)
 		}
+	}
+	dockerResources := config.DockerResources
+	if dockerResources == nil {
+		dockerResources, err = docker.NewLiveDockerResourceCollector()
+		if err != nil {
+			return coded("AGENT_DOCKER_RESOURCES_INITIALIZATION_FAILED", err)
+		}
+	}
+	filesystemProvider := config.Filesystem
+	if filesystemProvider == nil {
+		filesystemProvider = filesystem.NewBrowser()
 	}
 	composeProvider := config.Compose
 	if composeProvider == nil {
@@ -172,6 +186,8 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerControlServiceServer(grpcServer, newDockerControlService(dockerControl, composeProvider))
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
+	RegisterAgentDockerResourcesServiceServer(grpcServer, newDockerResourcesService(dockerResources))
+	RegisterAgentFilesystemServiceServer(grpcServer, newFilesystemService(filesystemProvider))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
 	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package ncp.agent.v1;
+
+option go_package = "github.com/Kkwans/nas-control-plane/api/gen/go/ncp/agent/v1;agentv1";
+
+import "google/protobuf/struct.proto";
+
+// Root Agent path browsing is an explicit read-only operation. The request
+// carries an absolute path and pagination cursor; it is never a shell command.
+service AgentFilesystemService {
+  rpc ListPath(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

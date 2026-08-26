@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { Box, Cpu, HardDrive, Network, Plus, Shield, Trash2 } from '@lucide/vue'
-import { ElDrawer, ElInput, ElInputNumber, ElMessage, ElSwitch, ElTooltip } from 'element-plus'
+import { ElAlert, ElDialog, ElDrawer, ElEmpty, ElInput, ElInputNumber, ElMessage, ElSwitch, ElTooltip } from 'element-plus'
 
 import {
   NcpApiError,
   createDockerContainer,
+  requestDockerInventory,
+  requestDockerResources,
+  requestPathEntries,
   type DockerContainerCreateInput,
+  type DockerInventory,
   type DockerImageSummary,
+  type DockerResources,
+  type FileEntriesPage,
+  type FileEntry,
 } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
@@ -26,6 +33,18 @@ const emit = defineEmits<{
 
 const submitting = ref<'create' | 'start' | null>(null)
 const advancedOpen = ref(false)
+const previewOpen = ref(false)
+const pendingRunContainer = ref(false)
+const pendingInput = ref<DockerContainerCreateInput | null>(null)
+const resourcesLoading = ref(false)
+const resourcesError = ref('')
+const dockerResources = ref<DockerResources | null>(null)
+const dockerInventory = ref<DockerInventory | null>(null)
+const pathBrowserOpen = ref(false)
+const pathBrowserLoading = ref(false)
+const pathBrowserError = ref('')
+const pathBrowserPage = ref<FileEntriesPage | null>(null)
+const pathBrowserTarget = ref<number | null>(null)
 const environment = ref<EnvironmentRow[]>([])
 const mounts = ref<MountRow[]>([])
 const ports = ref<PortRow[]>([])
@@ -55,6 +74,7 @@ const form = reactive({
   restartMaxRetries: 0,
   networkEnabled: false,
   networkName: 'bridge',
+  networkCreateDedicated: false,
   networkDriver: '',
   networkSubnet: '',
   networkGateway: '',
@@ -70,10 +90,63 @@ const form = reactive({
 
 const imageReference = computed(() => props.image?.repoTags[0] || props.image?.id || '')
 const drawerTitle = computed(() => imageReference.value ? `从 ${imageReference.value} 创建容器` : '创建容器')
+const networkOptions = computed<NcpSelectOption[]>(() => {
+  const options = (dockerResources.value?.networks || []).map((network) => ({
+    label: `${network.name} · ${network.driver || '默认驱动'}`,
+    value: network.name,
+  }))
+  for (const builtin of [
+    { label: 'bridge · Docker 默认网络', value: 'bridge' },
+    { label: 'host · 使用主机网络', value: 'host' },
+    { label: 'none · 禁用容器网络', value: 'none' },
+  ]) {
+    if (!options.some((option) => option.value === builtin.value)) options.push(builtin)
+  }
+  if (form.networkName && !options.some((option) => option.value === form.networkName)) {
+    options.unshift({ label: `${form.networkName} · 手动输入`, value: form.networkName })
+  }
+  return options
+})
+const volumeOptions = computed<NcpSelectOption[]>(() => {
+  const options = (dockerResources.value?.volumes || []).map((volume) => ({
+    label: `${volume.name} · ${volume.driver || 'local'}`,
+    value: volume.name,
+  }))
+  if (mounts.value.some((mount) => mount.type === 'volume' && mount.source && !options.some((option) => option.value === mount.source))) {
+    for (const mount of mounts.value) {
+      if (mount.type === 'volume' && mount.source && !options.some((option) => option.value === mount.source)) {
+        options.push({ label: `${mount.source} · 手动输入`, value: mount.source })
+      }
+    }
+  }
+  return options
+})
+const portConflictNotice = computed(() => {
+  const bindings = new Set(
+    (dockerInventory.value?.containers || [])
+      .flatMap((container) => container.ports || [])
+      .filter((port) => port.publicPort > 0)
+      .map((port) => `${port.hostIp || '0.0.0.0'}:${port.publicPort}/${port.protocol || 'tcp'}`),
+  )
+  const conflicts = ports.value
+    .filter((port) => Number.isInteger(port.hostPort) && Number(port.hostPort) > 0)
+    .map((port) => `${port.hostIp.trim() || '0.0.0.0'}:${port.hostPort}/${port.protocol}`)
+    .filter((binding) => bindings.has(binding))
+  return [...new Set(conflicts)]
+})
+const currentPath = computed(() => pathBrowserPage.value?.path || '/')
+const pathEntries = computed(() => pathBrowserPage.value?.entries || [])
+const previewInput = computed(() => pendingInput.value)
 
 watch(() => props.modelValue, (open) => {
-  if (open) resetForm()
-})
+  if (open) {
+    resetForm()
+    void loadResources()
+  } else {
+    previewOpen.value = false
+    pathBrowserOpen.value = false
+  }
+}, { immediate: true })
 
 function resetForm() {
   form.name = suggestedName(imageReference.value)
@@ -83,6 +156,7 @@ function resetForm() {
   form.restartMaxRetries = 0
   form.networkEnabled = false
   form.networkName = 'bridge'
+  form.networkCreateDedicated = false
   form.networkDriver = ''
   form.networkSubnet = ''
   form.networkGateway = ''
@@ -100,6 +174,29 @@ function resetForm() {
   devices.value = []
   commandText.value = ''
   advancedOpen.value = false
+  pendingInput.value = null
+  pendingRunContainer.value = false
+  resourcesError.value = ''
+  pathBrowserError.value = ''
+  pathBrowserPage.value = null
+  pathBrowserTarget.value = null
+}
+
+async function loadResources() {
+  resourcesLoading.value = true
+  resourcesError.value = ''
+  const [resourceResult, inventoryResult] = await Promise.allSettled([requestDockerResources(), requestDockerInventory()])
+  if (resourceResult.status === 'fulfilled') {
+    dockerResources.value = resourceResult.value
+    if (!resourceResult.value.networks.some((network) => network.name === form.networkName)) {
+      form.networkName = resourceResult.value.networks[0]?.name || 'bridge'
+    }
+  } else {
+    dockerResources.value = null
+    resourcesError.value = 'Docker 网络和卷清单暂不可用，可继续使用高级手输。'
+  }
+  dockerInventory.value = inventoryResult.status === 'fulfilled' ? inventoryResult.value : null
+  resourcesLoading.value = false
 }
 
 function suggestedName(reference: string) {
@@ -113,6 +210,61 @@ function addPort() { ports.value.push({ hostIp: '', hostPort: undefined, contain
 function addDevice() { devices.value.push({ hostPath: '', containerPath: '', permissions: 'rwm' }) }
 
 function removeRow<T>(rows: T[], index: number) { rows.splice(index, 1) }
+
+function setMountType(row: MountRow, value: string) {
+  row.type = value as MountRow['type']
+  if (row.type === 'tmpfs') row.source = ''
+}
+
+function setNetworkName(value: string) {
+  form.networkName = value
+  if (value === 'host' || value === 'none') form.networkCreateDedicated = false
+}
+
+async function openPathBrowser(index: number) {
+  pathBrowserTarget.value = index
+  pathBrowserOpen.value = true
+  await loadPath('/')
+}
+
+async function loadPath(path: string, cursor = '') {
+  pathBrowserLoading.value = true
+  pathBrowserError.value = ''
+  try {
+    pathBrowserPage.value = await requestPathEntries(path, cursor, 100)
+  } catch (caught) {
+    pathBrowserError.value = caught instanceof NcpApiError ? caught.message : 'NAS 目录暂不可读取，请重试。'
+    pathBrowserPage.value = null
+  } finally {
+    pathBrowserLoading.value = false
+  }
+}
+
+function choosePath(entry: FileEntry) {
+  const target = pathBrowserTarget.value
+  if (target === null) return
+  const row = mounts.value[target]
+  if (!row || row.type !== 'bind') return
+  row.source = entry.path
+  pathBrowserOpen.value = false
+}
+
+function previewLabel(value: string | undefined, fallback: string) {
+  return value?.trim() || fallback
+}
+
+function openSubmitPreview(runContainer: boolean) {
+  if (submitting.value) return
+  const input = buildInput(runContainer)
+  const message = validationMessage(input)
+  if (message) {
+    ElMessage.warning(message)
+    return
+  }
+  pendingInput.value = input
+  pendingRunContainer.value = runContainer
+  previewOpen.value = true
+}
 
 function commaList(value: string) {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
@@ -158,10 +310,10 @@ function buildInput(runContainer: boolean): DockerContainerCreateInput {
   if (form.networkEnabled) {
     input.network = {
       name: form.networkName.trim(),
-      driver: form.networkDriver.trim() || undefined,
-      subnet: form.networkSubnet.trim() || undefined,
-      gateway: form.networkGateway.trim() || undefined,
-      ip: form.networkIp.trim() || undefined,
+      driver: form.networkCreateDedicated ? form.networkDriver.trim() || undefined : undefined,
+      subnet: form.networkCreateDedicated ? form.networkSubnet.trim() || undefined : undefined,
+      gateway: form.networkCreateDedicated ? form.networkGateway.trim() || undefined : undefined,
+      ip: form.networkCreateDedicated ? form.networkIp.trim() || undefined : undefined,
     }
   }
   return input
@@ -179,6 +331,7 @@ function validationMessage(input: DockerContainerCreateInput) {
   const portTargets = input.ports?.map((port) => `${port.containerPort}/${port.protocol ?? 'tcp'}`) ?? []
   if (new Set(portTargets).size !== portTargets.length) return '同一个容器端口和协议不能重复映射。'
   if (input.network && !input.network.name) return '启用网络配置后必须填写网络名称。'
+  if (form.networkCreateDedicated && input.network && !input.network.subnet) return '创建专用网络时必须填写子网。'
   if (input.network && ['host', 'none'].includes(input.network.name) && (input.network.driver || input.network.subnet || input.network.gateway || input.network.ip)) return 'host 和 none 网络不能配置驱动、子网、网关或固定 IP。'
   if (input.devices?.some((device) => !device.hostPath.startsWith('/') || !device.containerPath.startsWith('/'))) return '设备路径必须使用绝对路径。'
   const deviceTargets = input.devices?.map((device) => device.containerPath) ?? []
@@ -186,14 +339,15 @@ function validationMessage(input: DockerContainerCreateInput) {
   return ''
 }
 
-async function submit(runContainer: boolean) {
+async function executeSubmit() {
   if (submitting.value) return
-  const input = buildInput(runContainer)
-  const message = validationMessage(input)
-  if (message) {
-    ElMessage.warning(message)
+  const input = pendingInput.value
+  if (!input) {
+    previewOpen.value = false
     return
   }
+  const runContainer = pendingRunContainer.value
+  previewOpen.value = false
   submitting.value = runContainer ? 'start' : 'create'
   try {
     const result = await createDockerContainer(input)
@@ -204,6 +358,7 @@ async function submit(runContainer: boolean) {
     ElMessage.error(caught instanceof NcpApiError ? caught.message : '容器创建失败，请检查配置后重试。')
   } finally {
     submitting.value = null
+    pendingInput.value = null
   }
 }
 </script>
@@ -219,7 +374,7 @@ async function submit(runContainer: boolean) {
       <div class="drawer-heading"><span><Box :size="21" /></span><div><strong>{{ drawerTitle }}</strong><small>取消不会创建任何 Docker 对象</small></div></div>
     </template>
 
-    <form class="container-form" @submit.prevent="submit(true)">
+    <form class="container-form" @submit.prevent="openSubmitPreview(true)">
       <section class="form-section">
         <SectionHeader title="基础信息" description="设置名称、资源限制和重启策略" :icon="Box" heading-tag="h3" />
         <div class="form-grid">
@@ -243,8 +398,13 @@ async function submit(runContainer: boolean) {
         </div>
         <div class="row-group">
           <div v-for="(row, index) in mounts" :key="`mount-${index}`" class="repeat-row repeat-row--mount">
-            <NcpSelect :model-value="row.type" :options="mountTypeOptions" :accessible-label="`第 ${index + 1} 个挂载类型`" @update:model-value="row.type = $event as MountRow['type']" />
-            <ElInput v-if="row.type !== 'tmpfs'" v-model="row.source" :placeholder="row.type === 'bind' ? '/volume2/data' : 'volume-name'" />
+            <NcpSelect :model-value="row.type" :options="mountTypeOptions" :accessible-label="`第 ${index + 1} 个挂载类型`" @update:model-value="setMountType(row, $event)" />
+            <div v-if="row.type === 'bind'" class="source-picker">
+              <ElInput v-model="row.source" placeholder="/volume2/data" />
+              <button type="button" class="browse-button" @click="openPathBrowser(index)">浏览</button>
+            </div>
+            <NcpSelect v-else-if="row.type === 'volume' && volumeOptions.length" v-model="row.source" :options="volumeOptions" :accessible-label="`第 ${index + 1} 个 Docker 卷`" filterable clearable placeholder="选择已有卷" />
+            <ElInput v-else-if="row.type === 'volume'" v-model="row.source" placeholder="volume-name" />
             <span v-else class="row-placeholder">无需来源</span>
             <ElInput v-model="row.target" placeholder="容器路径，例如 /data" />
             <label class="inline-switch"><ElSwitch v-model="row.readOnly" />只读</label>
@@ -259,12 +419,19 @@ async function submit(runContainer: boolean) {
           <template #actions><ElSwitch v-model="form.networkEnabled" aria-label="启用自定义网络" /></template>
         </SectionHeader>
         <div v-if="form.networkEnabled" class="form-grid">
-          <label class="field"><span>网络名称</span><ElInput v-model="form.networkName" placeholder="bridge" /></label>
-          <label class="field"><span>驱动</span><ElInput v-model="form.networkDriver" placeholder="默认 bridge" /></label>
-          <label class="field"><span>子网</span><ElInput v-model="form.networkSubnet" placeholder="172.30.0.0/24" /></label>
-          <label class="field"><span>网关</span><ElInput v-model="form.networkGateway" placeholder="172.30.0.1" /></label>
-          <label class="field field--wide"><span>容器固定 IP</span><ElInput v-model="form.networkIp" placeholder="留空自动分配" /></label>
+          <label v-if="!form.networkCreateDedicated" class="field field--wide"><span>现有网络</span><NcpSelect :model-value="form.networkName" :options="networkOptions" accessible-label="选择现有 Docker 网络" filterable @update:model-value="setNetworkName" /></label>
+          <label class="switch-line network-mode-switch field--wide"><span><strong>创建专用网络（高级）</strong><small>仅填写子网时创建新的 Docker 网络；不会修改现有网络。</small></span><ElSwitch v-model="form.networkCreateDedicated" /></label>
+          <template v-if="form.networkCreateDedicated">
+            <label class="field"><span>专用网络名称</span><ElInput v-model="form.networkName" placeholder="例如 media-net" /></label>
+            <label class="field"><span>驱动</span><ElInput v-model="form.networkDriver" placeholder="默认 bridge" /></label>
+            <label class="field"><span>子网</span><ElInput v-model="form.networkSubnet" placeholder="172.30.0.0/24" /></label>
+            <label class="field"><span>网关</span><ElInput v-model="form.networkGateway" placeholder="172.30.0.1" /></label>
+            <label class="field field--wide"><span>容器固定 IP</span><ElInput v-model="form.networkIp" placeholder="留空自动分配" /></label>
+          </template>
         </div>
+        <ElAlert v-if="resourcesLoading" title="正在读取 Docker 网络、卷和端口清单…" type="info" :closable="false" />
+        <ElAlert v-else-if="resourcesError" :title="resourcesError" type="warning" :closable="false" />
+        <ElAlert v-if="portConflictNotice.length" :title="`检测到可能的主机端口冲突：${portConflictNotice.join('、')}`" description="提交时 Root Agent 仍会进行最终校验；可更换主机端口后重试。" type="warning" :closable="false" />
         <div class="row-group">
           <div v-for="(row, index) in ports" :key="`port-${index}`" class="repeat-row repeat-row--port">
             <ElInput v-model="row.hostIp" placeholder="主机 IP（可选）" />
@@ -311,21 +478,60 @@ async function submit(runContainer: boolean) {
     <template #footer>
       <div class="drawer-actions">
         <ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="emit('update:modelValue', false)">取消</ActionButton>
-        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting)" @click="submit(false)">仅创建</ActionButton>
-        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting)" @click="submit(true)">创建并启动</ActionButton>
+        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting)" @click="openSubmitPreview(false)">仅创建</ActionButton>
+        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting)" @click="openSubmitPreview(true)">创建并启动</ActionButton>
       </div>
     </template>
   </ElDrawer>
+
+  <ElDialog v-model="pathBrowserOpen" title="选择 NAS 路径" width="min(640px, 92vw)" append-to-body>
+    <div class="path-browser">
+      <div class="path-browser__toolbar">
+        <code>{{ currentPath }}</code>
+        <button type="button" class="browse-button" :disabled="currentPath === '/' || pathBrowserLoading" @click="loadPath(pathBrowserPage?.parent || '/')">上一级</button>
+      </div>
+      <ElAlert v-if="pathBrowserError" :title="pathBrowserError" type="error" :closable="false" />
+      <div v-if="pathBrowserLoading" class="path-browser__state">正在读取目录…</div>
+      <ElEmpty v-else-if="!pathEntries.length" description="当前目录为空" />
+      <div v-else class="path-browser__entries">
+        <div v-for="entry in pathEntries" :key="entry.path" class="path-entry">
+          <button v-if="entry.type === 'directory'" type="button" class="path-entry__name" @click="loadPath(entry.path)"><span class="path-entry__icon">DIR</span>{{ entry.name }}</button>
+          <span v-else class="path-entry__name"><span class="path-entry__icon">{{ entry.type === 'symlink' ? 'LINK' : 'FILE' }}</span>{{ entry.name }}</span>
+          <button type="button" class="browse-button" :disabled="!entry.readable" @click="choosePath(entry)">选择</button>
+        </div>
+      </div>
+      <button v-if="pathBrowserPage?.nextCursor" type="button" class="load-more" :disabled="pathBrowserLoading" @click="loadPath(currentPath, pathBrowserPage?.nextCursor || '')">加载更多</button>
+    </div>
+  </ElDialog>
+
+  <ElDialog v-model="previewOpen" title="确认容器配置" width="min(680px, 92vw)" append-to-body>
+    <div v-if="previewInput" class="create-preview">
+      <p class="preview-intro">请确认以下配置；取消不会创建任何 Docker 对象。</p>
+      <dl class="preview-grid">
+        <dt>镜像</dt><dd><code>{{ previewInput.image }}</code></dd>
+        <dt>容器名称</dt><dd>{{ previewLabel(previewInput.name, '自动生成') }}</dd>
+        <dt>挂载</dt><dd>{{ previewInput.mounts?.length || 0 }} 项<span v-if="previewInput.mounts?.length">：{{ previewInput.mounts.map((mount) => `${mount.type} ${mount.source || 'tmpfs'} → ${mount.target}`).join('；') }}</span></dd>
+        <dt>网络</dt><dd>{{ previewInput.network?.name || 'Docker 默认网络' }}<span v-if="previewInput.network?.subnet">（{{ previewInput.network.subnet }}）</span></dd>
+        <dt>端口</dt><dd>{{ previewInput.ports?.length ? previewInput.ports.map((port) => `${port.hostPort || '随机'} → ${port.containerPort}/${port.protocol || 'tcp'}`).join('；') : '未映射' }}</dd>
+        <dt>启动参数</dt><dd><code>{{ previewInput.command?.length ? previewInput.command.join(' ') : '使用镜像默认命令' }}</code></dd>
+        <dt>权限与硬件</dt><dd>{{ previewInput.privileged ? 'privileged；' : '' }}{{ (previewInput.capAdd?.length || 0) + (previewInput.capDrop?.length || 0) + (previewInput.devices?.length || 0) + (previewInput.gpus?.length || 0) }} 项高级设置</dd>
+      </dl>
+    </div>
+    <template #footer>
+      <div class="dialog-actions"><ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="previewOpen = false">返回修改</ActionButton><ActionButton variant="primary" :loading="Boolean(submitting)" @click="executeSubmit">确认{{ pendingRunContainer ? '创建并启动' : '创建' }}</ActionButton></div>
+    </template>
+  </ElDialog>
 </template>
 
 <style scoped>
 .drawer-heading{display:flex;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;gap:2px}.drawer-heading strong{font-size:.96rem}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
 .container-form{display:grid;gap:12px}.form-section{display:grid;gap:15px;padding:17px 18px;border:1px solid var(--ncp-line);border-radius:14px;background:#fff}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}.section-heading__main{display:flex;min-width:0;align-items:center;gap:11px;color:var(--ncp-primary-strong)}.section-heading__icon{display:grid;width:34px;height:34px;flex:0 0 auto;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.section-heading__copy{display:grid;min-width:0;gap:4px}.section-heading strong,.advanced-toggle strong{color:var(--ncp-text);font-size:.86rem;line-height:1.25}.section-heading small,.advanced-toggle small{color:var(--ncp-text-subtle);font-size:.7rem;font-weight:500;line-height:1.4}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field{display:grid;min-width:0;gap:7px}.field--wide{grid-column:1/-1}.field>span{color:var(--ncp-text-muted);font-size:.72rem;font-weight:700}.field :deep(.ncp-select),.repeat-row :deep(.ncp-select){width:100%;min-width:0}
-.row-group{display:grid;gap:8px}.repeat-row{display:grid;align-items:center;gap:8px}.repeat-row--env{grid-template-columns:minmax(150px,.8fr) minmax(220px,1.4fr) 40px}.repeat-row--mount{grid-template-columns:120px minmax(150px,1fr) minmax(150px,1fr) 82px 40px}.repeat-row--port{grid-template-columns:minmax(140px,1fr) 140px 22px 140px 90px 40px}.repeat-row--device{grid-template-columns:1fr 1fr 100px 40px}.row-remove{display:grid;width:40px;height:40px;place-items:center;border:1px solid var(--ncp-danger-border);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.add-row{display:flex;width:max-content;min-height:34px;align-items:center;gap:6px;padding:0 10px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.row-placeholder{display:flex;min-height:40px;align-items:center;padding:0 11px;border:1px dashed var(--ncp-line-strong);border-radius:10px;color:var(--ncp-text-subtle);font-size:.7rem}.inline-switch{display:flex;align-items:center;gap:7px;color:var(--ncp-text-muted);font-size:.7rem}.port-arrow{text-align:center;color:var(--ncp-text-subtle)}
+.row-group{display:grid;gap:8px}.repeat-row{display:grid;align-items:center;gap:8px}.repeat-row--env{grid-template-columns:minmax(150px,.8fr) minmax(220px,1.4fr) 40px}.repeat-row--mount{grid-template-columns:120px minmax(180px,1fr) minmax(150px,1fr) 82px 40px}.repeat-row--port{grid-template-columns:minmax(140px,1fr) 140px 22px 140px 90px 40px}.repeat-row--device{grid-template-columns:1fr 1fr 100px 40px}.source-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;min-width:0}.browse-button,.load-more{min-height:40px;padding:0 11px;border:1px solid var(--ncp-control-border);border-radius:10px;background:var(--ncp-control-surface);color:var(--ncp-primary-strong);font-size:.72rem;font-weight:700;white-space:nowrap}.browse-button:hover,.load-more:hover{background:var(--ncp-primary-soft)}.browse-button:focus-visible,.load-more:focus-visible,.path-entry__name:focus-visible{outline:2px solid var(--ncp-focus-ring);outline-offset:2px}.browse-button:disabled,.load-more:disabled{cursor:not-allowed;opacity:.55}.row-remove{display:grid;width:40px;height:40px;place-items:center;border:1px solid var(--ncp-danger-border);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.add-row{display:flex;width:max-content;min-height:34px;align-items:center;gap:6px;padding:0 10px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.row-placeholder{display:flex;min-height:40px;align-items:center;padding:0 11px;border:1px dashed var(--ncp-line-strong);border-radius:10px;color:var(--ncp-text-subtle);font-size:.7rem}.inline-switch{display:flex;align-items:center;gap:7px;color:var(--ncp-text-muted);font-size:.7rem}.network-mode-switch{align-items:center}.port-arrow{text-align:center;color:var(--ncp-text-subtle)}
 textarea{width:100%;resize:vertical;padding:11px 12px;border:1px solid var(--ncp-control-border);border-radius:10px;background:var(--ncp-control-surface);color:var(--ncp-text);font-family:'JetBrains Mono Variable',monospace;font-size:.76rem;line-height:1.55;outline:none}textarea:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}
 .form-section--advanced{padding:0;overflow:hidden}.advanced-toggle{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;text-align:left}.advanced-toggle>span:last-child{color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.advanced-body{display:grid;gap:13px;padding:0 18px 17px;border-top:1px solid var(--ncp-line)}.switch-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:13px}.switch-line>span{display:grid;gap:2px}.switch-line strong{font-size:.76rem}.switch-line small{color:var(--ncp-text-subtle);font-size:.68rem}
 .drawer-actions{display:flex;justify-content:flex-end;gap:8px}
+.path-browser{display:grid;gap:12px}.path-browser__toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.path-browser__toolbar code{min-width:0;overflow:hidden;color:var(--ncp-text);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.path-browser__state{padding:30px;text-align:center;color:var(--ncp-text-subtle);font-size:.78rem}.path-browser__entries{display:grid;max-height:360px;overflow:auto;border:1px solid var(--ncp-line);border-radius:10px}.path-entry{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid var(--ncp-line)}.path-entry:last-child{border-bottom:0}.path-entry__name{display:flex;min-width:0;align-items:center;gap:8px;color:var(--ncp-text);font-size:.78rem;overflow:hidden;text-align:left;text-overflow:ellipsis;white-space:nowrap}.path-entry__icon{display:inline-grid;min-width:38px;height:22px;place-items:center;border-radius:6px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.58rem;font-weight:800;letter-spacing:.03em}.path-entry>span.path-entry__name .path-entry__icon{background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.load-more{width:100%}.create-preview{display:grid;gap:12px}.preview-intro{margin:0;color:var(--ncp-text-muted);font-size:.78rem}.preview-grid{display:grid;grid-template-columns:110px minmax(0,1fr);gap:0;margin:0;border:1px solid var(--ncp-line);border-radius:10px;overflow:hidden}.preview-grid dt,.preview-grid dd{margin:0;padding:10px 11px;border-bottom:1px solid var(--ncp-line);font-size:.76rem;line-height:1.45}.preview-grid dt{background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-weight:750}.preview-grid dd{min-width:0;overflow-wrap:anywhere}.preview-grid dt:last-of-type,.preview-grid dd:last-of-type{border-bottom:0}.preview-grid code{font-family:'JetBrains Mono Variable',monospace;font-size:.7rem}.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
 @media(max-width:760px){.form-grid{grid-template-columns:1fr}.field--wide{grid-column:auto}.repeat-row{grid-template-columns:1fr}.row-remove{justify-self:end}.repeat-row--port .port-arrow{display:none}.drawer-actions{display:grid;grid-template-columns:1fr 1fr}.drawer-actions>:last-child{grid-column:1/-1}.inline-switch{min-height:40px}.form-section{padding:14px}}
 </style>
 
