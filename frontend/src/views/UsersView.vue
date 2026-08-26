@@ -128,7 +128,10 @@ async function submitPassword() {
 async function toggleStatus(user: ManagedUser) {
   const action = user.disabled ? '启用' : '禁用'
   try {
-    await ElMessageBox.confirm(`${action}账号“${user.username}”？${user.disabled ? '' : '其现有会话将立即失效。'}`, `${action}账号`, {
+    const impact = user.disabled
+      ? '账号会恢复登录，历史数据和配置保留。'
+      : '账号会立即停止登录，现有会话同时失效；历史数据和配置保留，可随时重新启用。'
+    await ElMessageBox.confirm(`确定${action}账号“${user.username}”？${impact}`, `${action}账号`, {
       confirmButtonText: action,
       cancelButtonText: '取消',
       type: user.disabled ? 'info' : 'warning',
@@ -143,7 +146,7 @@ async function toggleStatus(user: ManagedUser) {
 
 async function removeUser(user: ManagedUser) {
   try {
-    await ElMessageBox.confirm(`永久删除账号“${user.username}”？该账号的所有会话会同时失效。`, '删除账号', {
+    await ElMessageBox.confirm(`将永久删除账号“${user.username}”，并使该账号的全部会话失效。不会删除 Docker、数据库或站点数据，账号本身无法恢复。`, '删除账号', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'error',

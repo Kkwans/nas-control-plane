@@ -229,7 +229,7 @@ async function submitRow() {
 async function removeRow(row: Record<string, DatabaseValue>) {
   if (!table.value || !canEditRows.value) return
   try {
-    await ElMessageBox.confirm('将删除当前数据行，此操作会立即写入数据库。', '确认删除', {
+    await ElMessageBox.confirm('将永久删除当前数据行并立即写入数据库；不会影响其他行，但删除本身无法在控制面撤销。', '确认删除', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning',
