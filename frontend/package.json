@@ -1,6 +1,6 @@
 {
   "name": "ncp-console",
-  "version": "2026.8.24-v1",
+  "version": "2026.8.27-v1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.9.0",
