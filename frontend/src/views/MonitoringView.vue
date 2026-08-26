@@ -7,6 +7,7 @@ import { requestMetricSamples, type MetricSample } from '@/api/control'
 import type { SystemSummary } from '@/api/system'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
+import ResourceState from '@/components/ResourceState.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
@@ -268,7 +269,7 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
       </template>
     </WorkspaceHeader>
 
-    <div v-if="error" class="monitor-error" role="alert" aria-live="assertive" aria-atomic="true">{{ error }}</div>
+    <ResourceState v-if="error" state="error" title="监控历史加载失败" :message="error" next-step="确认 Agent 可用后重试。" @retry="load" />
     <div v-if="loading && samples.length" class="monitor-loading" role="status" aria-live="polite">
       <LoaderCircle :size="16" aria-hidden="true" />正在更新监控历史…
     </div>

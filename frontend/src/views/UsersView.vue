@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { KeyRound, MoreHorizontal, Plus, ShieldCheck, UserRound, UserRoundCheck, UserRoundX } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, Plus, ShieldCheck, UserRound, UserRoundCheck } from '@lucide/vue'
 import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElInput, ElInputNumber, ElMessage, ElMessageBox, ElSwitch } from 'element-plus'
 
 import {
@@ -15,6 +15,7 @@ import {
   type PasswordPolicy,
 } from '@/api/control'
 import WorkspaceHeader from '@/components/WorkspaceHeader.vue'
+import ResourceState from '@/components/ResourceState.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -197,8 +198,8 @@ onMounted(() => void loadUsers())
       <div v-if="loading" class="user-skeleton" aria-label="正在加载账号">
         <div v-for="item in 4" :key="item"><span class="ncp-skeleton"></span><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></div>
       </div>
-      <div v-else-if="error" class="users-empty"><UserRoundX :size="28" /><strong>{{ error }}</strong><ElButton @click="loadUsers">重试</ElButton></div>
-      <div v-else-if="users.length === 0" class="users-empty"><UserRound :size="28" /><strong>暂无账号</strong></div>
+      <ResourceState v-else-if="error" state="error" title="账号列表加载失败" :message="error" next-step="确认 Agent 可用后重试。" @retry="loadUsers" />
+      <ResourceState v-else-if="users.length === 0" state="empty" title="暂无账号" message="创建第一个 Root 管理账号后即可登录控制面。" />
       <div v-else class="user-table">
         <div class="user-table__head">
           <span>账号</span><span>状态</span><span>最近登录</span><span>创建时间</span><span>操作</span>

@@ -5,6 +5,7 @@ import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTooltip } 
 
 import { followLogs, requestLogs, type LogEntry } from '@/api/control'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
+import ResourceState from '@/components/ResourceState.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
@@ -248,7 +249,7 @@ function followStateDescription(value: FollowState) {
       <span class="log-stream-status__time">最近接收 {{ lastReceivedAt ? formatLocalTimestamp(lastReceivedAt, { fractional: true }) : '尚未接收' }}</span>
     </div>
 
-    <div v-if="error" class="log-error">{{ error }}</div>
+    <ResourceState v-if="error" state="error" title="日志读取失败" :message="error" next-step="确认目标服务正在运行后重试。" @retry="refreshLogs" />
     <section class="log-console panel">
       <div class="log-head"><span>时间</span><span>级别</span><span>消息</span><span>操作</span></div>
       <template v-if="showSkeleton && !entries.length">
@@ -260,7 +261,7 @@ function followStateDescription(value: FollowState) {
         <div class="log-message" :title="entry.message"><small>{{ entryContext(entry) }}</small><span class="log-message__text"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></span></div>
         <button class="log-detail-button" type="button" title="查看日志详情" @click="selectedEntry = entry"><Eye :size="16" /></button>
       </div>
-      <div v-if="!loading && !entries.length" class="log-empty">当前筛选条件下没有日志记录</div>
+      <ResourceState v-if="!loading && !entries.length" state="empty" title="当前筛选条件下没有日志记录" message="可以调整日志来源、时间范围或搜索关键词。" />
       <footer v-if="entries.length" class="log-pagination">
         <div class="log-history-note" role="status">
           <Info :size="14" />
