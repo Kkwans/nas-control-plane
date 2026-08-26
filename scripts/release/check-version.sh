@@ -63,8 +63,21 @@ check_binary() {
 	local label=$2
 	[[ -x "$binary" ]] || { echo "$label 不可执行：$binary" >&2; exit 1; }
 	local binary_version
-	binary_version=$("$binary" --version)
-	[[ "$binary_version" == "$version" ]] || { echo "$label 版本不一致：$binary_version != $version" >&2; exit 1; }
+	if binary_version=$("$binary" --version 2>/dev/null); then
+		[[ "$binary_version" == "$version" ]] || { echo "$label 版本不一致：$binary_version != $version" >&2; exit 1; }
+		return
+	fi
+
+	# Release runners are usually x86_64 while the published artifact is ARM64.
+	# In that case the binary cannot be executed (exec format error), so verify
+	# the exact ldflags-injected version string embedded in the ELF instead of
+	# silently skipping the artifact check.
+	if LC_ALL=C grep -a -F -m 1 -- "$version" "$binary" >/dev/null 2>&1; then
+		echo "$label 无法在当前架构执行，已验证嵌入版本：$version" >&2
+		return
+	fi
+	echo "$label 无法读取版本：$binary" >&2
+	exit 1
 }
 
 [[ -z "$server_binary" ]] || check_binary "$server_binary" ncp-server
