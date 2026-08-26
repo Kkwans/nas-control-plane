@@ -1952,7 +1952,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /ws/terminal:
     get:
-      operationId: openTerminalPOCWebSocket
+      operationId: openTerminalWebSocket
       summary: 打开 NAS 主机或 Docker 容器终端 WebSocket
       description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
       tags: [terminal]
@@ -1993,6 +1993,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: 终端通道未启用
+        '503':
+          description: Root Agent 终端能力不可用或终端会话初始化失败；WebSocket 错误帧使用稳定 code 与用户可读 message。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
     UserPreferences:
