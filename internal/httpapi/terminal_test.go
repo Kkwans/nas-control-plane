@@ -19,9 +19,9 @@ import (
 func TestTerminalWebSocketProxiesInputResizeAndTermination(t *testing.T) {
 	stream := newFakeTerminalStream()
 	handler := NewHandler(Config{
-		TerminalPOCEnabled: true,
-		Terminal:           fakeTerminalClient{stream: stream},
-		RequestID:          func() string { return "req-terminal" },
+		TerminalEnabled: true,
+		Terminal:        fakeTerminalClient{stream: stream},
+		RequestID:       func() string { return "req-terminal" },
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -87,9 +87,9 @@ func TestTerminalWebSocketProxiesInputResizeAndTermination(t *testing.T) {
 func TestTerminalWebSocketReclaimsAgentStreamOnBrowserDisconnect(t *testing.T) {
 	stream := newFakeTerminalStream()
 	handler := NewHandler(Config{
-		TerminalPOCEnabled: true,
-		Terminal:           fakeTerminalClient{stream: stream},
-		TerminalTimeout:    3 * time.Second,
+		TerminalEnabled: true,
+		Terminal:        fakeTerminalClient{stream: stream},
+		TerminalTimeout: 3 * time.Second,
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()
@@ -123,8 +123,8 @@ func TestTerminalWebSocketIsAbsentUnlessExplicitlyEnabled(t *testing.T) {
 
 func TestTerminalWebSocketReportsFormalInitializationError(t *testing.T) {
 	handler := NewHandler(Config{
-		TerminalPOCEnabled: true,
-		Terminal:           failingTerminalClient{err: grpcstatus.Error(codes.Unavailable, "TERMINAL_POC_UNAVAILABLE")},
+		TerminalEnabled: true,
+		Terminal:        failingTerminalClient{err: grpcstatus.Error(codes.Unavailable, "TERMINAL_POC_UNAVAILABLE")},
 	})
 	server := httptest.NewServer(handler)
 	defer server.Close()

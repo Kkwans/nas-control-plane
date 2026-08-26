@@ -128,13 +128,22 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	databasePath := flags.String("database", defaultDatabasePath, "SQLite 数据库路径")
 	databaseKeyPath := flags.String("database-key", os.Getenv("NCP_DATABASE_KEY_PATH"), "数据库凭据密钥环路径；未配置时不启用自动凭据保存")
 	secureCookie := flags.Bool("secure-cookie", false, "仅通过 HTTPS 发送登录 Cookie")
-	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 WebSocket 通道")
+	terminalEnabled := flags.Bool("terminal", true, "启用主机与容器终端 WebSocket 通道")
+	legacyTerminalPOC := flags.Bool("terminal-poc", true, "兼容旧版本的终端开关（已弃用）")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected serve arguments")
 	}
+	// Existing service units may still pass --terminal-poc. When that legacy
+	// flag is explicitly present, preserve its boolean semantics for one
+	// release while making --terminal the documented option.
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "terminal-poc" {
+			*terminalEnabled = *legacyTerminalPOC
+		}
+	})
 	authService, err := auth.Open(*databasePath, auth.Options{})
 	if err != nil {
 		return err
@@ -183,7 +192,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 			DatabaseConnections: databaseConnections,
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,
-			TerminalPOCEnabled:  *terminalPOC,
+			TerminalEnabled:     *terminalEnabled,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

@@ -25,7 +25,7 @@ const (
 	defaultAgentTimeout                 = 5 * time.Second
 	defaultDockerContainerActionTimeout = 45 * time.Second
 	defaultComposeLifecycleTimeout      = 90 * time.Second
-	defaultTerminalPOCTimeout           = 30 * time.Minute
+	defaultTerminalTimeout              = 30 * time.Minute
 	defaultRealtimeInterval             = 5 * time.Second
 	defaultDatabaseTimeout              = 20 * time.Second
 	defaultDockerImageTimeout           = 10 * time.Minute
@@ -126,9 +126,12 @@ type Config struct {
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
 	Terminal            TerminalClient
-	TerminalPOCEnabled  bool
-	TerminalTimeout     time.Duration
-	RequestID           func() string
+	TerminalEnabled     bool
+	// TerminalPOCEnabled is kept for one compatibility window for callers that
+	// still use the pre-release field name.
+	TerminalPOCEnabled bool
+	TerminalTimeout    time.Duration
+	RequestID          func() string
 }
 
 type HealthResponse struct {
@@ -201,11 +204,12 @@ func NewHandler(config Config) http.Handler {
 	if config.AgentTimeout <= 0 {
 		config.AgentTimeout = defaultAgentTimeout
 	}
-	if config.TerminalPOCEnabled && config.Terminal == nil {
+	terminalEnabled := config.TerminalEnabled || config.TerminalPOCEnabled
+	if terminalEnabled && config.Terminal == nil {
 		config.Terminal = socketTerminalClient{}
 	}
 	if config.TerminalTimeout <= 0 {
-		config.TerminalTimeout = defaultTerminalPOCTimeout
+		config.TerminalTimeout = defaultTerminalTimeout
 	}
 	if config.RequestID == nil {
 		config.RequestID = defaultRequestID
@@ -226,7 +230,7 @@ func NewHandler(config Config) http.Handler {
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
 		terminal:            config.Terminal,
-		terminalEnabled:     config.TerminalPOCEnabled,
+		terminalEnabled:     terminalEnabled,
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
 		jobs:                newJobRegistry(config.ControlStore),

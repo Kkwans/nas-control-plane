@@ -58,8 +58,8 @@ func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
 	}
 
 	server := httptest.NewServer(NewHandler(Config{
-		AgentSocketPath:    socketPath,
-		TerminalPOCEnabled: true,
+		AgentSocketPath: socketPath,
+		TerminalEnabled: true,
 	}))
 	defer server.Close()
 	connection := dialHostTerminal(t, ctx, server.URL)
