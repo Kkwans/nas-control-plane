@@ -2,6 +2,13 @@ import { defineConfig, devices } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
+  // NAS-local Chromium is resource constrained; keep CI deterministic while
+  // allowing an explicit override for faster runners.
+  workers: process.env.NCP_E2E_WORKERS
+    ? Number.parseInt(process.env.NCP_E2E_WORKERS, 10)
+    : process.env.CI
+      ? 2
+      : undefined,
   timeout: 60_000,
   expect: {
     // GitHub Chromium and the NAS acceptance Chromium rasterize fonts slightly

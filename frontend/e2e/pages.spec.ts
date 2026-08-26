@@ -27,17 +27,17 @@ const viewports = [
 ]
 
 for (const viewport of viewports) {
-  test(`主要页面在 ${viewport.name} 可进入且无横向失控`, async ({ page }) => {
-    test.setTimeout(120_000)
-    const browserErrors: string[] = []
-    page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
-    page.on('console', (message) => {
-      if (message.type() === 'error') browserErrors.push(`console.error: ${message.text()}`)
-    })
-    await installMockApi(page)
-    await page.setViewportSize({ width: viewport.width, height: viewport.height })
+  for (const route of routes) {
+    test(`${route.path} 在 ${viewport.name} 可进入且无横向失控`, async ({ page }) => {
+      test.setTimeout(120_000)
+      const browserErrors: string[] = []
+      page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
+      page.on('console', (message) => {
+        if (message.type() === 'error') browserErrors.push(`console.error: ${message.text()}`)
+      })
+      await installMockApi(page)
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
 
-    for (const route of routes) {
       await page.goto(route.path, { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
       await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
       const layout = await page.evaluate(() => ({
@@ -47,8 +47,8 @@ for (const viewport of viewports) {
       }))
       expect(layout.bodyWidth, `${route.path} body 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
       expect(layout.mainWidth, `${route.path} main 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
-    }
 
-    expect(browserErrors).toEqual([])
-  })
+      expect(browserErrors).toEqual([])
+    })
+  }
 }
