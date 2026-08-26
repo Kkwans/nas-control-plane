@@ -63,7 +63,7 @@ function updateBoolean(value: string) {
       v-if="kind === 'boolean'"
       :model-value="booleanValue"
       :options="booleanOptions"
-      :disabled="disabled"
+      :disabled="disabled && !(kind === 'boolean' && nullSelected)"
       accessible-label="布尔字段值"
       placeholder="请选择 true / false"
       @update:model-value="updateBoolean"
