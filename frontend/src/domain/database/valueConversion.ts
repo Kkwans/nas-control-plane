@@ -3,8 +3,25 @@ import type { DatabaseColumn, DatabaseValue } from '@/api/database'
 const integerTypePattern = /\b(?:tinyint|smallint|mediumint|int|integer|bigint|serial|bigserial)\b/i
 const decimalTypePattern = /\b(?:decimal|numeric|real|double|float)\b/i
 const booleanTypePattern = /\b(?:bool|boolean)\b/i
+const jsonTypePattern = /\bjson(?:b)?\b/i
+const blobTypePattern = /\b(?:blob|binary|varbinary|bytea|longblob|mediumblob|tinyblob)\b/i
 const integerLiteralPattern = /^[+-]?\d+$/
 const decimalLiteralPattern = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[+-]?\d+)?$/i
+
+export type DatabaseEditorKind = 'text' | 'integer' | 'decimal' | 'boolean' | 'date' | 'datetime' | 'time' | 'json' | 'blob'
+
+export function databaseEditorKind(dataType: string): DatabaseEditorKind {
+  const type = dataType.toLowerCase()
+  if (blobTypePattern.test(type)) return 'blob'
+  if (jsonTypePattern.test(type)) return 'json'
+  if (booleanTypePattern.test(type)) return 'boolean'
+  if (integerTypePattern.test(type)) return 'integer'
+  if (decimalTypePattern.test(type)) return 'decimal'
+  if (/\bdatetime\b|\btimestamp\b/.test(type)) return 'datetime'
+  if (/\bdate\b/.test(type)) return 'date'
+  if (/\btime\b/.test(type)) return 'time'
+  return 'text'
+}
 
 export class DatabaseValueError extends Error {
   readonly code = 'DATABASE_VALUE_INVALID'
@@ -42,6 +59,14 @@ export function resolveDatabaseValue(value: string, column: DatabaseColumn, null
     if (normalized === 'true' || normalized === '1') return true
     if (normalized === 'false' || normalized === '0') return false
     throw new DatabaseValueError(`字段「${column.name}」需要填写 true/false 或 1/0。`)
+  }
+
+  if (jsonTypePattern.test(column.dataType)) {
+    try {
+      JSON.parse(value)
+    } catch {
+      throw new DatabaseValueError(`字段「${column.name}」需要填写有效 JSON。`)
+    }
   }
 
   return value

@@ -23,7 +23,6 @@ import {
   ElDialog,
   ElForm,
   ElFormItem,
-  ElInput,
   ElMessage,
   ElMessageBox,
   ElSwitch,
@@ -44,9 +43,10 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
-import { DatabaseValueError, resolveDatabaseValue } from '@/domain/database/valueConversion'
+import { DatabaseValueError, databaseEditorKind, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
+import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -278,6 +278,10 @@ function isSensitiveColumn(name: string) {
   return /(password|passwd|token|secret|cookie|api[_-]?key|private[_-]?key)/i.test(name)
 }
 
+function isBooleanColumn(column: DatabaseColumn) {
+  return databaseEditorKind(column.dataType) === 'boolean'
+}
+
 function displayValue(column: string, value: DatabaseValue | undefined) {
   if (isSensitiveColumn(column) && value !== null && value !== undefined) return '••••••••'
   return value
@@ -479,8 +483,8 @@ function clearError() {
       <div class="row-dialog-context"><component :is="tableTypeIcon(table.type)" :size="18" /><span><strong>{{ table.name }}</strong><small>保存后将直接写入数据库</small></span></div>
       <ElForm class="row-form" label-position="top">
         <ElFormItem v-for="column in columns" :key="column.name">
-          <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable" v-model="rowNullFields[column.name]" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
-          <ElInput v-model="rowForm[column.name]" :disabled="rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :type="isSensitiveColumn(column.name) ? 'password' : /text|json|blob/i.test(column.dataType) ? 'textarea' : 'text'" :autosize="{ minRows: 2, maxRows: 5 }" :placeholder="rowNullFields[column.name] ? '将写入 NULL' : column.default !== undefined ? `留空使用默认值 ${column.default}` : '请输入字段值'" />
+          <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable && !isBooleanColumn(column)" v-model="rowNullFields[column.name]" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
+          <DatabaseCellEditor v-model="rowForm[column.name]" v-model:null-selected="rowNullFields[column.name]" :column="column" :disabled="rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" />
         </ElFormItem>
       </ElForm>
       <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
