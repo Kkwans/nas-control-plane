@@ -125,6 +125,11 @@ func (api *handler) requireAuthentication(next http.Handler) http.Handler {
 			api.writeError(response, request, http.StatusUnauthorized, "AUTH_UNAUTHORIZED", "请先以 Root 账号登录。")
 			return
 		}
+		if metadata := requestMetadataFromContext(request.Context()); metadata != nil {
+			if principal.Username != "" {
+				metadata.actor = principal.Username
+			}
+		}
 		contextWithPrincipal := context.WithValue(request.Context(), principalContextKey{}, principal)
 		next.ServeHTTP(response, request.WithContext(contextWithPrincipal))
 	})

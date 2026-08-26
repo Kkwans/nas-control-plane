@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -193,6 +194,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,
 			TerminalEnabled:     *terminalEnabled,
+			Logger:              slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

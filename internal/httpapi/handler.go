@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
@@ -132,6 +132,9 @@ type Config struct {
 	TerminalPOCEnabled bool
 	TerminalTimeout    time.Duration
 	RequestID          func() string
+	// Logger receives one structured record per HTTP request. It is optional so
+	// embedders and tests can provide a sink appropriate to their environment.
+	Logger *slog.Logger
 }
 
 type HealthResponse struct {
@@ -176,6 +179,7 @@ type handler struct {
 	terminalEnabled     bool
 	terminalTimeout     time.Duration
 	newRequestID        func() string
+	logger              *slog.Logger
 	jobs                *jobRegistry
 }
 
@@ -214,6 +218,9 @@ func NewHandler(config Config) http.Handler {
 	if config.RequestID == nil {
 		config.RequestID = defaultRequestID
 	}
+	if config.Logger == nil {
+		config.Logger = slog.Default()
+	}
 
 	api := &handler{
 		agent:               config.Agent,
@@ -233,6 +240,7 @@ func NewHandler(config Config) http.Handler {
 		terminalEnabled:     terminalEnabled,
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
+		logger:              config.Logger,
 		jobs:                newJobRegistry(config.ControlStore),
 	}
 	router := chi.NewRouter()
@@ -336,18 +344,6 @@ func NewHandler(config Config) http.Handler {
 		api.writeError(response, request, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请求方法不受支持。")
 	})
 	return router
-}
-
-func (api *handler) withRequestID(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		requestID := api.newRequestID()
-		if requestID == "" {
-			requestID = defaultRequestID()
-		}
-		response.Header().Set("X-Request-ID", requestID)
-		contextWithRequestID := context.WithValue(request.Context(), requestIDContextKey{}, requestID)
-		next.ServeHTTP(response, request.WithContext(contextWithRequestID))
-	})
 }
 
 func (api *handler) healthz(response http.ResponseWriter, _ *http.Request) {
@@ -690,6 +686,9 @@ func (api *handler) recordMetricSample(ctx context.Context, summary system.Summa
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {
+	if metadata := requestMetadataFromContext(request.Context()); metadata != nil {
+		metadata.errorCode = code
+	}
 	writeJSON(response, status, ErrorResponse{
 		Code:      code,
 		Message:   message,
@@ -701,17 +700,4 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	response.WriteHeader(status)
 	_ = json.NewEncoder(response).Encode(value)
-}
-
-type requestIDContextKey struct{}
-
-func requestIDFromContext(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
-	return requestID
-}
-
-var requestIDSequence atomic.Uint64
-
-func defaultRequestID() string {
-	return fmt.Sprintf("req-%d", requestIDSequence.Add(1))
 }
