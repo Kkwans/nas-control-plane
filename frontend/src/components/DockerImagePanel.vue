@@ -1,30 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ArrowDown, ArrowUp, ArrowUpDown, Box, Download, Eye, HardDrive, Image as ImageIcon, PackagePlus, RefreshCw, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
-import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
+import { ElInput, ElTooltip } from 'element-plus'
 
 import {
-  NcpApiError,
   type DockerImageSummary,
   type DockerInventory,
   type JobSnapshot,
 } from '@/api/system'
-import {
-  cancelJob,
-  deleteJob,
-  followJob,
-  requestJobs,
-  retryJob,
-  removeDockerImages,
-  requestDockerImages,
-} from '@/api/docker'
 import ActionButton from '@/components/ActionButton.vue'
 import CreateContainerDrawer from '@/components/CreateContainerDrawer.vue'
 import DockerHubBrowser from '@/components/DockerHubBrowser.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
-import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
-import { useListPreference } from '@/composables/useListPreference'
+import NcpSelect from '@/components/NcpSelect.vue'
+import { useDockerImageDownloads } from '@/composables/useDockerImageDownloads'
+import { useDockerLocalImages } from '@/composables/useDockerLocalImages'
 import { formatBytes } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 
@@ -34,109 +25,23 @@ type ImageMode = 'local' | 'hub' | 'downloads'
 const systemStore = useSystemStore()
 
 const mode = ref<ImageMode>('local')
-const images = ref<DockerImageSummary[]>([])
-const loading = ref(false)
-const error = ref<string | null>(null)
-const removePendingIds = ref<string[]>([])
-const removeFailures = ref<Array<{ id: string; name: string; message: string }>>([])
 const createImage = ref<DockerImageSummary | null>(null)
 const createDrawerOpen = ref(false)
-const selectedImageIds = ref<string[]>([])
-const localPage = ref(1)
-const downloadJobs = ref<JobSnapshot[]>([])
-const invalidDownloadJobCount = ref(0)
-const downloadStatus = ref('all')
-const downloadQuery = ref('')
-const downloadPage = ref(1)
-const downloadStatusOptions: NcpSelectOption[] = [
-  { label: '全部状态', value: 'all' },
-  { label: '排队中', value: 'queued' },
-  { label: '下载中', value: 'running' },
-  { label: '已完成', value: 'completed' },
-  { label: '已停止', value: 'cancelled' },
-  { label: '已删除', value: 'deleted' },
-  { label: '失败', value: 'failed' },
-  { label: '已中断', value: 'interrupted' },
-]
-const { preference: localPreference, setSort: setLocalSort } = useListPreference('docker.images.local')
-const { pageSize: downloadPageSize } = useListPreference('docker.image-downloads')
-
-const filteredImages = computed(() => {
-  const term = props.query.trim().toLowerCase()
-  const matching = term
-    ? images.value.filter((image) => [image.id, ...image.repoTags, ...image.repoDigests].some((value) => value.toLowerCase().includes(term)))
-    : images.value
-  const key = localPreference.value.sortKey
-  if (!key) return matching
-  const direction = localPreference.value.sortDirection === 'desc' ? -1 : 1
-  return [...matching].sort((left, right) => {
-    if (key === 'size') return (left.sizeBytes - right.sizeBytes) * direction
-    if (key === 'created') return (new Date(left.createdAt).valueOf() - new Date(right.createdAt).valueOf()) * direction
-    if (key === 'containers') return (containerReferenceCount(left) - containerReferenceCount(right)) * direction
-    return displayName(left).localeCompare(displayName(right), 'zh-CN') * direction
-  })
-})
-const localPageCount = computed(() => Math.max(1, Math.ceil(filteredImages.value.length / props.pageSize)))
-const pagedImages = computed(() => {
-  const start = (localPage.value - 1) * props.pageSize
-  return filteredImages.value.slice(start, start + props.pageSize)
-})
-const visibleImageIds = computed(() => pagedImages.value.map((image) => image.id))
-const allVisibleSelected = computed(() => visibleImageIds.value.length > 0 && visibleImageIds.value.every((id) => selectedImageIds.value.includes(id)))
-const someVisibleSelected = computed(() => visibleImageIds.value.some((id) => selectedImageIds.value.includes(id)))
-const selectedImageCount = computed(() => selectedImageIds.value.length)
-const bulkRemovePending = computed(() => removePendingIds.value.length > 0)
-const activePullCount = computed(() => downloadJobs.value.filter((job) => job.status === 'queued' || job.status === 'running').length)
-const filteredDownloadJobs = computed(() => {
-  const term = downloadQuery.value.trim().toLowerCase()
-  return downloadJobs.value.filter((job) =>
-    (downloadStatus.value === 'all' || downloadState(job) === downloadStatus.value) &&
-    (!term || `${job.reference ?? ''} ${job.message} ${job.error ?? ''}`.toLowerCase().includes(term)),
-  )
-})
-const downloadPageCount = computed(() => Math.max(1, Math.ceil(filteredDownloadJobs.value.length / downloadPageSize.value)))
-const pagedDownloadJobs = computed(() => {
-  const start = (downloadPage.value - 1) * downloadPageSize.value
-  return filteredDownloadJobs.value.slice(start, start + downloadPageSize.value)
-})
-
-watch(() => [props.query, props.pageSize], () => { localPage.value = 1 })
-watch(localPageCount, (count) => {
-  if (localPage.value > count) localPage.value = count
-})
-watch([downloadStatus, downloadPageSize, downloadQuery], () => { downloadPage.value = 1 })
-watch(downloadPageCount, (count) => {
-  if (downloadPage.value > count) downloadPage.value = count
-})
-
-function toggleVisibleSelection(checked: boolean) {
-  const visible = new Set(visibleImageIds.value)
-  if (checked) {
-    selectedImageIds.value = [...new Set([...selectedImageIds.value, ...visible])]
-  } else {
-    selectedImageIds.value = selectedImageIds.value.filter((id) => !visible.has(id))
-  }
-}
-
-function toggleImageSelection(imageId: string, checked: boolean) {
-  if (checked) {
-    if (!selectedImageIds.value.includes(imageId)) selectedImageIds.value = [...selectedImageIds.value, imageId]
-  } else {
-    selectedImageIds.value = selectedImageIds.value.filter((id) => id !== imageId)
-  }
-}
-
-function handleVisibleSelectionChange(event: Event) {
-  toggleVisibleSelection((event.currentTarget as HTMLInputElement).checked)
-}
-
-function handleImageSelectionChange(imageId: string, event: Event) {
-  toggleImageSelection(imageId, (event.currentTarget as HTMLInputElement).checked)
-}
-
-function isRemovePending(imageId: string) {
-  return removePendingIds.value.includes(imageId)
-}
+const localImages = useDockerLocalImages({ query: computed(() => props.query), containers: computed(() => props.containers), pageSize: computed(() => props.pageSize) })
+const downloads = useDockerImageDownloads(localImages.images)
+const {
+  images, loading, error, removeFailures, selectedImageIds, localPage, localPreference,
+  filteredImages, localPageCount, pagedImages, visibleImageIds, allVisibleSelected,
+  someVisibleSelected, selectedImageCount, bulkRemovePending, toggleLocalSort, refresh,
+  handleVisibleSelectionChange, handleImageSelectionChange, isRemovePending, confirmRemove,
+  confirmRemoveSelected, containerReferenceCount, displayName, shortId, dateLabel,
+} = localImages
+const {
+  invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage, downloadPageSize,
+  downloadStatusOptions, activePullCount, filteredDownloadJobs, downloadPageCount,
+  pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
+  confirmDeleteJob, downloadState, downloadStateLabel, effectiveTotal,
+} = downloads
 
 function openCreateDrawer(image: DockerImageSummary) {
   createImage.value = image
@@ -148,44 +53,11 @@ async function handleContainerCreated() {
   await refresh()
 }
 
-async function toggleLocalSort(key: 'name' | 'size' | 'created' | 'containers') {
-  if (localPreference.value.sortKey !== key) {
-    await setLocalSort(key, 'asc')
-    return
-  }
-  if (localPreference.value.sortDirection === 'asc') {
-    await setLocalSort(key, 'desc')
-    return
-  }
-  await setLocalSort('', 'asc')
-}
-
-async function refresh() {
-  loading.value = true
-  error.value = null
-  try {
-    images.value = (await requestDockerImages()).images
-    const availableIds = new Set(images.value.map((image) => image.id))
-    selectedImageIds.value = selectedImageIds.value.filter((id) => availableIds.has(id))
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : '本地镜像读取失败。'
-  } finally {
-    loading.value = false
-  }
-}
-
-function upsertDownloadJob(job: JobSnapshot) {
-  const index = downloadJobs.value.findIndex((item) => item.id === job.id)
-  if (index >= 0) downloadJobs.value[index] = job
-  else downloadJobs.value.unshift(job)
-  downloadJobs.value = [...downloadJobs.value]
-}
-
-function handleHubJobCreated(job: JobSnapshot) {
+function handleHubJobCreated(job: Parameters<typeof upsertDownloadJob>[0]) {
   upsertDownloadJob(job)
 }
 
-function handleHubJobProgress(job: JobSnapshot) {
+function handleHubJobProgress(job: Parameters<typeof upsertDownloadJob>[0]) {
   upsertDownloadJob(job)
 }
 
@@ -193,153 +65,14 @@ async function handleHubLocalRefresh() {
   await refresh()
 }
 
-async function loadDownloadJobs() {
-  try {
-    const result = await requestJobs('docker-image-pull')
-    downloadJobs.value = result.jobs
-    invalidDownloadJobCount.value = result.invalidCount
-    for (const job of downloadJobs.value.filter((item) => item.status === 'queued' || item.status === 'running')) {
-      void followJob(job.id, upsertDownloadJob).catch(() => undefined)
-    }
-  } catch {
-    downloadJobs.value = []
-    invalidDownloadJobCount.value = 0
-  }
-}
-
-async function retryDownload(job: JobSnapshot) {
-  try {
-    const next = await retryJob(job.id)
-    upsertDownloadJob(next)
-    void followJob(next.id, upsertDownloadJob).catch(() => undefined)
-  } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '任务重试失败。')
-  }
-}
-
-async function stopDownload(job: JobSnapshot) {
-  try {
-    await cancelJob(job.id)
-    ElMessage.success('已发送停止下载请求')
-  } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '停止下载失败。')
-  }
-}
-
-async function confirmDeleteJob(job: JobSnapshot) {
-  try {
-    await ElMessageBox.confirm(`仅删除“${job.reference || '未命名镜像'}”的下载记录，不会删除本地镜像。`, '删除下载记录', {
-      confirmButtonText: '删除记录', cancelButtonText: '取消', type: 'warning',
-    })
-  } catch { return }
-  try {
-    await deleteJob(job.id)
-    downloadJobs.value = downloadJobs.value.filter((item) => item.id !== job.id)
-    ElMessage.success('下载记录已删除')
-  } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '下载记录删除失败。')
-  }
-}
-
-function containerReferenceCount(image: DockerImageSummary) {
-  const inventoryCount = props.containers.filter((container) => image.repoTags.includes(container.image) || container.image === image.id).length
-  return Math.max(Number.isFinite(image.containers) ? image.containers : 0, inventoryCount)
-}
-
-function failureMessage(caught: unknown) {
-  return caught instanceof NcpApiError ? caught.message : '镜像删除失败，请稍后重试。'
-}
-
-async function confirmRemove(image: DockerImageSummary) {
-  await confirmRemoveImages([image])
-}
-
-async function confirmRemoveSelected() {
-  const selected = images.value.filter((image) => selectedImageIds.value.includes(image.id))
-  await confirmRemoveImages(selected)
-}
-
-async function confirmRemoveImages(requested: DockerImageSummary[]) {
-  if (!requested.length) return
-  const inUse = requested.filter((image) => containerReferenceCount(image) > 0)
-  const removable = requested.filter((image) => containerReferenceCount(image) === 0)
-  if (!removable.length) {
-    ElMessage.warning('所选镜像都正在被容器引用，已跳过删除；不会强制删除。')
-    return
-  }
-  const skippedMessage = inUse.length
-    ? `其中 ${inUse.length} 个镜像正在被容器引用，会跳过且不会 force 删除。`
-    : ''
-  const names = removable.length === 1 ? `“${displayName(removable[0] as DockerImageSummary)}”` : `${removable.length} 个未被引用的镜像`
-  try {
-    await ElMessageBox.confirm(`将从 NAS 删除 ${names}。${skippedMessage}`, '删除本地镜像', {
-      confirmButtonText: removable.length === 1 ? '确认删除' : `删除 ${removable.length} 个`, cancelButtonText: '取消', type: 'warning',
-    })
-  } catch { return }
-
-  removeFailures.value = []
-  removePendingIds.value = removable.map((image) => image.id)
-  try {
-    const batches: DockerImageSummary[][] = []
-    for (let index = 0; index < removable.length; index += 50) batches.push(removable.slice(index, index + 50))
-    const results = await Promise.allSettled(batches.map((batch) => removeDockerImages(batch.map((image) => image.id))))
-    const failures: Array<{ id: string; name: string; message: string }> = []
-    let succeededCount = 0
-    results.forEach((result, batchIndex) => {
-      const batch = batches[batchIndex] ?? []
-      if (result.status === 'rejected') {
-        failures.push(...batch.map((image) => ({ id: image.id, name: displayName(image), message: failureMessage(result.reason) })))
-        return
-      }
-      succeededCount += result.value.removedCount
-      const imageById = new Map(batch.map((image) => [image.id, image]))
-      for (const item of result.value.items) {
-        if (item.removed) continue
-        const image = imageById.get(item.imageId)
-        if (!image) continue
-        failures.push({ id: image.id, name: displayName(image), message: item.errorCode ? `删除失败（${item.errorCode}）` : '镜像删除失败，请稍后重试。' })
-      }
-    })
-    removeFailures.value = failures
-    if (succeededCount) ElMessage.success(`已删除 ${succeededCount} 个本地镜像`)
-    if (failures.length) ElMessage.error(`${failures.length} 个镜像删除失败，请查看列表中的错误。`)
-    selectedImageIds.value = failures.map((failure) => failure.id)
-    await refresh()
-  } finally {
-    removePendingIds.value = []
-  }
-}
-
-function displayName(image: DockerImageSummary) { return image.repoTags[0] ?? '未标记镜像' }
-function shortId(imageId: string) { return imageId.replace(/^sha256:/, '').slice(0, 12) }
-function localImageForJob(job: JobSnapshot) {
-  const reference = (job.reference ?? '').replace(/^docker\.io\//, '')
-  return images.value.find((image) => image.repoTags.some((tag) => tag === reference || tag.replace(/^docker\.io\//, '') === reference))
-}
-function downloadState(job: JobSnapshot) {
-  if (job.artifactState === 'deleted') return 'deleted'
-  if (job.status === 'completed' && job.artifactState !== 'present' && !localImageForJob(job)) return 'deleted'
-  return job.status
-}
-function downloadStateLabel(job: JobSnapshot) {
-  const state = downloadState(job)
-  return state === 'queued' ? '排队中' : state === 'running' ? '下载中' : state === 'completed' ? '已完成' : state === 'deleted' ? '已删除' : state === 'cancelled' ? '已停止' : state === 'interrupted' ? '已中断' : '失败'
-}
-function effectiveTotal(job: JobSnapshot) {
-  return job.totalBytes || localImageForJob(job)?.sizeBytes || 0
-}
-function sortIcon(key: 'name' | 'size' | 'created' | 'containers') {
-  if (localPreference.value.sortKey !== key) return ArrowUpDown
-  return localPreference.value.sortDirection === 'desc' ? ArrowDown : ArrowUp
-}
-function dateLabel(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.valueOf()) ? '—' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
-}
-
 function showDownloadedImage(job: JobSnapshot) {
   mode.value = 'local'
   emit('update:query', (job.reference ?? '').split('@')[0] ?? '')
+}
+
+function sortIcon(key: 'name' | 'size' | 'created' | 'containers') {
+  if (localPreference.value.sortKey !== key) return ArrowUpDown
+  return localPreference.value.sortDirection === 'desc' ? ArrowDown : ArrowUp
 }
 
 onMounted(() => {
