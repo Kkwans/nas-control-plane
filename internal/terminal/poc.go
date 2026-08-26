@@ -37,7 +37,7 @@ type POCResult struct {
 // RunPOC 只发送固定验证指令，验证 PTY、resize、控制字符和会话关闭，不接受外部命令。
 func RunPOC(ctx context.Context, manager *Manager, target Target) (POCResult, error) {
 	if manager == nil {
-		return POCResult{}, coded("TERMINAL_POC_UNAVAILABLE", errors.New("terminal manager is required"))
+		return POCResult{}, coded("TERMINAL_UNAVAILABLE", errors.New("terminal manager is required"))
 	}
 	opened, err := manager.Open(ctx, StartRequest{Target: target, Rows: pocInitialRows, Cols: pocInitialCols})
 	if err != nil {
@@ -144,10 +144,10 @@ func waitForTerminalMarker(ctx context.Context, results <-chan terminalReadResul
 	for {
 		select {
 		case <-ctx.Done():
-			return coded("TERMINAL_POC_TIMEOUT", ctx.Err())
+			return coded("TERMINAL_INITIALIZATION_TIMEOUT", ctx.Err())
 		case result, ok := <-results:
 			if !ok {
-				return coded("TERMINAL_POC_OUTPUT_CLOSED", io.EOF)
+				return coded("TERMINAL_OUTPUT_CLOSED", io.EOF)
 			}
 			if len(result.data) > 0 {
 				_, _ = observed.Write(result.data)
@@ -156,7 +156,7 @@ func waitForTerminalMarker(ctx context.Context, results <-chan terminalReadResul
 				}
 			}
 			if result.err != nil {
-				return coded("TERMINAL_POC_OUTPUT_FAILED", result.err)
+				return coded("TERMINAL_OUTPUT_FAILED", result.err)
 			}
 		}
 	}
@@ -167,7 +167,7 @@ func waitForTerminalSettle(ctx context.Context) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return coded("TERMINAL_POC_TIMEOUT", ctx.Err())
+		return coded("TERMINAL_INITIALIZATION_TIMEOUT", ctx.Err())
 	case <-timer.C:
 		return nil
 	}

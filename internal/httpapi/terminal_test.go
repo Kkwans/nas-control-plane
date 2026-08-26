@@ -12,6 +12,8 @@ import (
 
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"github.com/coder/websocket"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func TestTerminalWebSocketProxiesInputResizeAndTermination(t *testing.T) {
@@ -119,8 +121,42 @@ func TestTerminalWebSocketIsAbsentUnlessExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestTerminalWebSocketReportsFormalInitializationError(t *testing.T) {
+	handler := NewHandler(Config{
+		TerminalPOCEnabled: true,
+		Terminal:           failingTerminalClient{err: grpcstatus.Error(codes.Unavailable, "TERMINAL_POC_UNAVAILABLE")},
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/terminal?target=host"
+	connection, _, err := websocket.Dial(ctx, endpoint, nil)
+	if err != nil {
+		t.Fatalf("dial terminal websocket: %v", err)
+	}
+	defer connection.CloseNow()
+
+	messageType, payload, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("read terminal error: %v", err)
+	}
+	if messageType != websocket.MessageText || !strings.Contains(string(payload), `"code":"TERMINAL_UNAVAILABLE"`) {
+		t.Fatalf("terminal error payload = %q", payload)
+	}
+}
+
 type fakeTerminalClient struct {
 	stream *fakeTerminalStream
+}
+
+type failingTerminalClient struct {
+	err error
+}
+
+func (f failingTerminalClient) Open(context.Context, string) (TerminalStream, error) {
+	return nil, f.err
 }
 
 func (f fakeTerminalClient) Open(context.Context, string) (TerminalStream, error) {

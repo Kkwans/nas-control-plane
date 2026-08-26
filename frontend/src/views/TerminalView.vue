@@ -29,6 +29,14 @@ import { useSystemStore } from '@/stores/system'
 
 type Target = 'host' | 'container'
 type PendingPaste = { text: string; lineCount: number; safe: boolean }
+const terminalErrorMessages: Record<string, string> = {
+  TERMINAL_UNAVAILABLE: '终端服务暂不可用，请确认 Root Agent 正常运行。',
+  TERMINAL_INITIALIZATION_FAILED: '终端会话初始化失败，请检查 Agent 终端能力。',
+  TERMINAL_INITIALIZATION_TIMEOUT: '终端初始化超时，请稍后重试。',
+  TERMINAL_TARGET_UNAVAILABLE: '当前终端目标不可用，请确认主机或容器状态。',
+  TERMINAL_INPUT_INVALID: '终端输入无效或超出允许范围。',
+  TERMINAL_SESSION_FAILED: '终端会话异常结束，请重新连接。',
+}
 const systemStore = useSystemStore()
 const target = ref<Target>('host')
 const containerId = ref('')
@@ -178,6 +186,7 @@ async function connect() {
         enhancement?: string
         reason?: string
         message?: string
+        code?: string
         capabilities?: unknown
         rows?: number
         cols?: number
@@ -203,7 +212,7 @@ async function connect() {
         scheduleResize()
         terminal?.focus()
       } else if (control.type === 'error') {
-        failTerminal(control.message ?? '终端会话建立失败。')
+        failTerminal(terminalErrorMessages[control.code ?? ''] ?? control.message ?? '终端会话建立失败。')
         socket?.close()
       } else if (control.type === 'closed') {
         window.clearTimeout(handshakeTimer)

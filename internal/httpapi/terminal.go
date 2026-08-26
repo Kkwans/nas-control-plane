@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"github.com/coder/websocket"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 const (
@@ -41,7 +43,7 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		return
 	}
 	if api.terminal == nil {
-		api.writeError(response, request, http.StatusServiceUnavailable, "TERMINAL_POC_UNAVAILABLE", "终端验证通道暂不可用。")
+		api.writeError(response, request, http.StatusServiceUnavailable, "TERMINAL_UNAVAILABLE", "终端服务暂不可用，请确认 Root Agent 正常运行。")
 		return
 	}
 
@@ -56,6 +58,7 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 	defer cancel()
 	stream, err := api.terminal.Open(sessionContext, api.agentSocketPath)
 	if err != nil {
+		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_UNAVAILABLE")
 		_ = connection.Close(websocket.StatusInternalError, "终端验证通道不可用")
 		return
 	}
@@ -68,11 +71,16 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		Rows:        rows,
 		Cols:        cols,
 	}); err != nil {
+		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
 	}
 	started, err := stream.Recv()
 	if err != nil || started.Type != terminal.MessageStarted || started.SessionID == "" {
+		if err == nil {
+			err = errors.New("terminal started response is invalid")
+		}
+		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
 		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
 		return
 	}
@@ -106,6 +114,7 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 				return
 			}
 			if err := stream.Send(incoming.message); err != nil {
+				_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_SESSION_FAILED")
 				_ = connection.Close(websocket.StatusInternalError, "终端输入无法转发")
 				return
 			}
@@ -208,6 +217,7 @@ func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream
 	for {
 		message, err := stream.Recv()
 		if err != nil {
+			_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
 			done <- err
 			return
 		}
@@ -225,7 +235,9 @@ func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream
 			done <- nil
 			return
 		default:
-			done <- errors.New("terminal response type is invalid")
+			err := errors.New("terminal response type is invalid")
+			_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
+			done <- err
 			return
 		}
 	}
@@ -239,6 +251,8 @@ type terminalControl struct {
 	Shell        string                       `json:"shell,omitempty"`
 	Enhancement  string                       `json:"enhancement,omitempty"`
 	Reason       string                       `json:"reason,omitempty"`
+	Code         string                       `json:"code,omitempty"`
+	Message      string                       `json:"message,omitempty"`
 	Capabilities terminal.SessionCapabilities `json:"capabilities,omitempty"`
 }
 
@@ -256,6 +270,48 @@ func writeTerminalControl(ctx context.Context, connection *websocket.Conn, contr
 		return err
 	}
 	return connection.Write(ctx, websocket.MessageText, encoded)
+}
+
+func writeTerminalError(ctx context.Context, connection *websocket.Conn, err error, fallbackCode string) error {
+	code := terminalErrorCode(err, fallbackCode)
+	return writeTerminalControl(ctx, connection, terminalControl{Type: "error", Code: code, Message: terminalErrorMessage(code)})
+}
+
+func terminalErrorCode(err error, fallback string) string {
+	code := grpcstatus.Convert(err).Message()
+	if strings.HasPrefix(code, "TERMINAL_") {
+		return terminal.NormalizeErrorCode(code)
+	}
+	text := err.Error()
+	for _, candidate := range []string{
+		"TERMINAL_UNAVAILABLE", "TERMINAL_INITIALIZATION_FAILED", "TERMINAL_INITIALIZATION_TIMEOUT",
+		"TERMINAL_TARGET_UNAVAILABLE", "TERMINAL_SESSION_FAILED", "TERMINAL_INPUT_INVALID",
+		"TERMINAL_OUTPUT_CLOSED", "TERMINAL_OUTPUT_FAILED", "TERMINAL_STREAM_FAILED",
+		"TERMINAL_POC_UNAVAILABLE", "TERMINAL_POC_INITIALIZATION_FAILED", "TERMINAL_POC_TIMEOUT",
+		"TERMINAL_POC_OUTPUT_CLOSED", "TERMINAL_POC_OUTPUT_FAILED",
+	} {
+		if strings.Contains(text, candidate) {
+			return terminal.NormalizeErrorCode(candidate)
+		}
+	}
+	return terminal.NormalizeErrorCode(fallback)
+}
+
+func terminalErrorMessage(code string) string {
+	switch code {
+	case "TERMINAL_UNAVAILABLE":
+		return "终端服务暂不可用，请确认 Root Agent 正常运行。"
+	case "TERMINAL_INITIALIZATION_TIMEOUT":
+		return "终端初始化超时，请稍后重试。"
+	case "TERMINAL_INITIALIZATION_FAILED":
+		return "终端会话初始化失败，请检查 Agent 终端能力。"
+	case "TERMINAL_TARGET_UNAVAILABLE":
+		return "当前终端目标不可用，请确认主机或容器状态。"
+	case "TERMINAL_INPUT_INVALID":
+		return "终端输入无效或超出允许范围。"
+	default:
+		return "终端会话异常结束，请重新连接。"
+	}
 }
 
 func terminalDimensions(rows, cols int) (uint16, uint16, error) {

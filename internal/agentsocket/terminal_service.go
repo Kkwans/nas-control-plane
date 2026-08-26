@@ -23,7 +23,7 @@ func newTerminalPOCService(manager *terminal.Manager) *terminalPOCService {
 
 func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) error {
 	if s.manager == nil {
-		return grpcstatus.Error(codes.FailedPrecondition, "TERMINAL_POC_UNAVAILABLE")
+		return grpcstatus.Error(codes.FailedPrecondition, "TERMINAL_UNAVAILABLE")
 	}
 	startFrame, err := stream.Recv()
 	if err != nil {

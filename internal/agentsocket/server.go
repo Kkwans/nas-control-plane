@@ -200,7 +200,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			manager, err = terminal.NewPOCManager()
 			if err != nil {
 				cleanup()
-				return coded("TERMINAL_POC_INITIALIZATION_FAILED", err)
+				return coded("TERMINAL_INITIALIZATION_FAILED", err)
 			}
 		}
 		RegisterAgentTerminalPOCServiceServer(grpcServer, newTerminalPOCService(manager))
