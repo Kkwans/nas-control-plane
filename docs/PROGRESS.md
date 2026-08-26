@@ -37,7 +37,7 @@ go test ./internal/httpapi ./internal/agentsocket ./internal/terminal
 pnpm run typecheck
 ```
 
-2026-08-24 产品化收敛的统一门禁和 NAS 只读 smoke 已完成；详细证据位于 `docs/qa/NCP-2026.8.24-v1-validation.md`。当前仍明确延期：全站 lint/format、所有主要页面的全量状态截图、Docker HostPath/Network/Volume 选择器、后端大模块拆分、bundle/gzip、基础镜像 pin 和首次 tag release。
+2026-08-27 第二轮产品化收敛的统一门禁、发布与 NAS 部署已完成；详细证据位于 `docs/qa/NCP-2026.8.27-v1-validation.md`。当前仍明确延期：数据库 keyset pagination、Blob 下载新协议、全量 OpenAPI DTO 生成、站点 probe 缓存，以及没有测量依据的深度 bundle 重写。
 
 - `go test ./...`
 - Linux ARM64 Agent / Server 构建
@@ -48,3 +48,10 @@ pnpm run typecheck
 ## 后续范围
 
 本阶段不包含 RBAC、私有 Registry 凭据管理、终端多会话管理、日志导出和高级告警。用户账号当前均为等权 Root，这与 NCP 的局域网 Root 控制台定位一致。
+
+## 2026-08-27 第二轮发布快照
+
+- 版本：`2026.8.27-v1`；Git tag 与 GitHub Release 已创建，server/agent ARM64 assets 和 Compose image 均通过版本校验。
+- 工程门禁：Go test/vet/native+ARM64 build、前端 lint/format/typecheck/102 unit tests/build/bundle budget、72 项 Mock Playwright、Axe critical/serious 基线和 Compose config 均有真实输出。
+- NAS：`ncp-agent`、server、console 已窄范围更新并 healthy；旧 server image 与 `/opt/ncp/rollback/2026.8.24-v1-20260827-0545/ncp-agent` 保留回滚。登录后页面与 disposable container smoke 待临时 Root 凭据后执行。
+- 详细页面矩阵、before/after 截图、smoke 操作和未验证项见已提交的 `docs/qa/NCP-2026.8.27-v1-validation.md`。

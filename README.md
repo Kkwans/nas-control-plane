@@ -480,10 +480,10 @@ docs(readme)：完善部署与故障排查说明
 
 每个提交只包含一个可独立说明和验证的功能模块。
 
-## 2026-08-24 产品化收敛快照
+## 2026-08-27 第二轮产品化收敛快照
 
-- 当前版本为 `2026.8.24-v1`；仓库、Compose、server/agent 二进制和运行容器版本一致。
-- 本轮已完成 P1 正确性与契约门禁、Docker/Database 定向收敛，以及 Infrastructure 页面按 Overview、Network、DNS、Proxy、Listeners、Storage、Services 职责拆分。
-- GitHub Actions run `32686111298` 已通过 Go test/vet/native+ARM64 build、前端 typecheck/unit/build/Mock E2E、Compose config；非 tag push 不发布 ARM64 release。
-- NAS 当前运行 `nas-control-plane:2026.8.24-v1`；回滚镜像保留为 `nas-control-plane:2026.8.11-v5`。详细截图、验证输出、部署边界和回滚步骤见 [`docs/qa/NCP-2026.8.24-v1-validation.md`](docs/qa/NCP-2026.8.24-v1-validation.md)。
+- 当前版本为 `2026.8.27-v1`；VERSION、Compose、前端 package、server/agent 二进制和运行容器版本一致。
+- 本轮已完成 P1 正确性与契约门禁、Docker Create、Database/Logs/Monitoring、主要页面状态与视觉回归、后端职责拆分和发布门禁。
+- GitHub Actions run `33016241264` 已通过 Go test/vet/native+ARM64 build、前端 lint/format/typecheck/unit/build/Mock E2E、Compose config，并发布 ARM64 assets。
+- NAS 当前运行 `nas-control-plane:2026.8.27-v1`；旧镜像 `nas-control-plane:2026.8.24-v1` 与 agent 备份保留用于回滚。详细截图、验证输出、部署边界和回滚步骤见 [`docs/qa/NCP-2026.8.27-v1-validation.md`](docs/qa/NCP-2026.8.27-v1-validation.md)。
 - 本轮不新增 MFA、RBAC、限流或 Root 能力收紧；HostPath、Docker capability 和既有认证边界保持产品决策不变。
