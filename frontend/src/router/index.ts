@@ -87,8 +87,11 @@ const router = createRouter({
   ],
 })
 
-router.afterEach((to) => {
+router.afterEach((to, from) => {
   document.title = `${String(to.meta.title ?? 'NCP')} · NAS 管理面板`
+  // Query-only changes are commonly drawers, filters or pagination controls;
+  // moving focus to the page root would interrupt keyboard workflows there.
+  if (to.path === from.path && from.name) return
   requestAnimationFrame(() => document.getElementById('app-main')?.focus({ preventScroll: true }))
 })
 
