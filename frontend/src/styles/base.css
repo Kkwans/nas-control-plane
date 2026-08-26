@@ -314,6 +314,12 @@ svg {
   color: var(--ncp-primary-strong);
 }
 
+.workspace-page .el-tag.el-tag--primary.is-plain {
+  border-color: var(--ncp-primary-border);
+  background: var(--ncp-primary-soft);
+  color: var(--ncp-primary-strong);
+}
+
 .workspace-page button,
 .workspace-page a,
 .panel {

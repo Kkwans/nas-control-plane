@@ -16,7 +16,7 @@ test('数据库 SQL 工作台在无范围 DELETE 前提示影响并允许取消'
 
   await page.goto('/databases/sqlite-main/tables/settings', { waitUntil: 'domcontentloaded' })
   await expect(page.getByRole('heading', { name: 'settings', exact: true })).toBeVisible({ timeout: 30_000 })
-  await page.getByRole('button', { name: '执行 SQL', exact: true }).click()
+  await page.getByRole('tab', { name: '执行 SQL', exact: true }).click()
   await page.locator('.cm-content').fill('DELETE FROM settings')
 
   await expect(page.getByText('DELETE 未包含 WHERE，可能影响整张表。')).toBeVisible()
