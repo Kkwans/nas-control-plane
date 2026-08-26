@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { KeyRound, MoreHorizontal, Plus, ShieldCheck, UserRound, UserRoundCheck } from '@lucide/vue'
-import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElInput, ElInputNumber, ElMessage, ElMessageBox, ElSwitch } from 'element-plus'
+import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElInput, ElInputNumber, ElMessage, ElSwitch } from 'element-plus'
 
 import {
   createUser,
@@ -16,6 +16,7 @@ import {
 } from '@/api/control'
 import WorkspaceHeader from '@/components/WorkspaceHeader.vue'
 import ResourceState from '@/components/ResourceState.vue'
+import ConfirmDangerDialog from '@/components/ConfirmDangerDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -30,6 +31,10 @@ const createForm = ref({ username: '', password: '' })
 const passwordForm = ref({ currentPassword: '', newPassword: '', confirmation: '' })
 const passwordPolicy = ref<PasswordPolicy>({ minLength: 6, requireUppercase: false, requireLowercase: false, requireDigit: false, requireSpecial: false })
 const policySaving = ref(false)
+const dangerOpen = ref(false)
+const dangerBusy = ref(false)
+const dangerUser = ref<ManagedUser | null>(null)
+const dangerAction = ref<'status' | 'delete'>('status')
 
 const currentUserId = computed(() => authStore.user?.id ?? 0)
 const enabledCount = computed(() => users.value.filter((user) => !user.disabled).length)
@@ -126,37 +131,38 @@ async function submitPassword() {
   }
 }
 
-async function toggleStatus(user: ManagedUser) {
-  const action = user.disabled ? '启用' : '禁用'
-  try {
-    const impact = user.disabled
-      ? '账号会恢复登录，历史数据和配置保留。'
-      : '账号会立即停止登录，现有会话同时失效；历史数据和配置保留，可随时重新启用。'
-    await ElMessageBox.confirm(`确定${action}账号“${user.username}”？${impact}`, `${action}账号`, {
-      confirmButtonText: action,
-      cancelButtonText: '取消',
-      type: user.disabled ? 'info' : 'warning',
-    })
-    const updated = await updateUserStatus(user.id, !user.disabled)
-    users.value = users.value.map((item) => item.id === updated.id ? updated : item)
-    ElMessage.success(`账号已${action}。`)
-  } catch (reason) {
-    if (reason !== 'cancel') ElMessage.error(reason instanceof Error ? reason.message : `${action}失败。`)
-  }
+function requestStatusChange(user: ManagedUser) {
+  dangerUser.value = user
+  dangerAction.value = 'status'
+  dangerOpen.value = true
 }
 
-async function removeUser(user: ManagedUser) {
+function requestDelete(user: ManagedUser) {
+  dangerUser.value = user
+  dangerAction.value = 'delete'
+  dangerOpen.value = true
+}
+
+async function confirmDanger() {
+  const user = dangerUser.value
+  if (!user) return
+  dangerBusy.value = true
   try {
-    await ElMessageBox.confirm(`将永久删除账号“${user.username}”，并使该账号的全部会话失效。不会删除 Docker、数据库或站点数据，账号本身无法恢复。`, '删除账号', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'error',
-    })
-    await deleteUser(user.id)
-    users.value = users.value.filter((item) => item.id !== user.id)
-    ElMessage.success('账号已删除。')
+    if (dangerAction.value === 'status') {
+      const action = user.disabled ? '启用' : '禁用'
+      const updated = await updateUserStatus(user.id, !user.disabled)
+      users.value = users.value.map((item) => item.id === updated.id ? updated : item)
+      ElMessage.success(`账号已${action}。`)
+    } else {
+      await deleteUser(user.id)
+      users.value = users.value.filter((item) => item.id !== user.id)
+      ElMessage.success('账号已删除。')
+    }
+    dangerOpen.value = false
   } catch (reason) {
-    if (reason !== 'cancel') ElMessage.error(reason instanceof Error ? reason.message : '删除失败。')
+    ElMessage.error(reason instanceof Error ? reason.message : dangerAction.value === 'status' ? '账号状态更新失败。' : '删除失败。')
+  } finally {
+    dangerBusy.value = false
   }
 }
 
@@ -218,8 +224,8 @@ onMounted(() => void loadUsers())
               <ElButton :icon="MoreHorizontal" circle aria-label="更多账号操作" />
               <template #dropdown>
                 <ElDropdownMenu>
-                  <ElDropdownItem @click="toggleStatus(user)">{{ user.disabled ? '启用账号' : '禁用账号' }}</ElDropdownItem>
-                  <ElDropdownItem divided class="danger-action" @click="removeUser(user)">删除账号</ElDropdownItem>
+                  <ElDropdownItem @click="requestStatusChange(user)">{{ user.disabled ? '启用账号' : '禁用账号' }}</ElDropdownItem>
+                  <ElDropdownItem divided class="danger-action" @click="requestDelete(user)">删除账号</ElDropdownItem>
                 </ElDropdownMenu>
               </template>
             </ElDropdown>
@@ -245,6 +251,19 @@ onMounted(() => void loadUsers())
       </div>
       <template #footer><ElButton @click="passwordOpen = false">取消</ElButton><ElButton type="primary" :loading="saving" @click="submitPassword">保存新密码</ElButton></template>
     </ElDialog>
+
+    <ConfirmDangerDialog
+      v-model="dangerOpen"
+      :title="dangerAction === 'delete' ? '删除账号' : `${dangerUser?.disabled ? '启用' : '禁用'}账号`"
+      :description="dangerAction === 'delete' ? `账号“${dangerUser?.username}”的全部会话会失效，删除后账号本身无法恢复。` : `确认${dangerUser?.disabled ? '启用' : '禁用'}账号“${dangerUser?.username}”？`"
+      :impact="dangerAction === 'delete' ? ['永久删除该 Root 账号', '使该账号的全部会话失效'] : dangerUser?.disabled ? ['恢复该账号的登录能力'] : ['立即停止该账号登录', '使该账号的现有会话失效']"
+      :retained="['不会删除 Docker、数据库或站点数据', '历史数据和配置保持不变']"
+      :action-label="dangerAction === 'delete' ? '永久删除' : dangerUser?.disabled ? '启用账号' : '禁用账号'"
+      :confirmation-target="dangerAction === 'delete' ? (dangerUser?.username ?? '') : ''"
+      :confirmation-label="dangerAction === 'delete' ? '输入账号名确认' : undefined"
+      :busy="dangerBusy"
+      @confirm="confirmDanger"
+    />
   </div>
 </template>
 

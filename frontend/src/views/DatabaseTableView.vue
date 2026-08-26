@@ -24,7 +24,6 @@ import {
   ElForm,
   ElFormItem,
   ElMessage,
-  ElMessageBox,
   ElSwitch,
   ElTable,
   ElTableColumn,
@@ -47,6 +46,7 @@ import { DatabaseValueError, databaseEditorKind, resolveDatabaseValue } from '@/
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
+import ConfirmDangerDialog from '@/components/ConfirmDangerDialog.vue'
 import SqlEditor from '@/components/SqlEditor.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -107,6 +107,11 @@ const sql = ref('')
 const queryResult = ref<QueryResult | null>(null)
 const queryPending = ref(false)
 const queryError = ref<DatabaseErrorState | null>(null)
+const dangerOpen = ref(false)
+const dangerBusy = ref(false)
+const dangerAction = ref<'delete-row' | 'sql'>('delete-row')
+const pendingRow = ref<Record<string, DatabaseValue> | null>(null)
+const pendingSql = ref('')
 
 const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
@@ -124,6 +129,12 @@ const queryRows = computed(() => {
     Object.fromEntries(queryResult.value!.columns.map((column, index) => [column, row[index]])))
 })
 const sqlRisk = computed(() => classifySqlRisk(sql.value))
+const dangerTitle = computed(() => dangerAction.value === 'sql' ? (classifySqlRisk(pendingSql.value)?.title ?? '确认执行 SQL') : '确认删除数据行')
+const dangerDescription = computed(() => dangerAction.value === 'sql'
+  ? (classifySqlRisk(pendingSql.value)?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
+  : '将永久删除当前数据行并立即写入数据库；删除本身无法在控制面撤销。')
+const dangerImpact = computed(() => dangerAction.value === 'sql' ? ['执行当前 SQL 语句', '结果可能影响多行数据或表结构'] : ['永久删除选中的数据行'])
+const dangerRetained = computed(() => dangerAction.value === 'sql' ? ['NCP 不会限制 Root 的正常 SQL 能力', '其他数据库和表不受影响'] : ['其他数据行不会被删除'])
 
 onMounted(() => void initialize())
 
@@ -228,50 +239,68 @@ async function submitRow() {
 
 async function removeRow(row: Record<string, DatabaseValue>) {
   if (!table.value || !canEditRows.value) return
+  pendingRow.value = row
+  pendingSql.value = ''
+  dangerAction.value = 'delete-row'
+  dangerOpen.value = true
+}
+
+async function executeSQL(statement: string) {
+  queryPending.value = true
+  queryError.value = null
   try {
-    await ElMessageBox.confirm('将永久删除当前数据行并立即写入数据库；不会影响其他行，但删除本身无法在控制面撤销。', '确认删除', {
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
-  const keys = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
-  clearError()
-  try {
-    await deleteDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, keys })
-    ElMessage.success('数据行已删除')
-    await refreshRows()
+    queryResult.value = await executeDatabaseSQL({ ...connection(), sql: statement })
+    if (!queryResult.value.columns.length) await refreshRows()
+    return true
   } catch (error) {
-    setError(error, '数据删除失败。')
+    queryResult.value = null
+    queryError.value = toErrorState(error, 'SQL 执行失败。')
+    return false
+  } finally {
+    queryPending.value = false
+  }
+}
+
+async function confirmDanger() {
+  if (!table.value || dangerBusy.value) return
+  dangerBusy.value = true
+  let succeeded = false
+  try {
+    if (dangerAction.value === 'delete-row') {
+      const row = pendingRow.value
+      if (!row) return
+      const keys = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
+      clearError()
+      await deleteDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, keys })
+      ElMessage.success('数据行已删除')
+      await refreshRows()
+      succeeded = true
+    } else {
+      succeeded = await executeSQL(pendingSql.value)
+      if (succeeded) ElMessage.success('SQL 执行完成')
+    }
+  } catch (error) {
+    if (dangerAction.value === 'delete-row') setError(error, '数据删除失败。')
+  } finally {
+    dangerBusy.value = false
+    if (succeeded) {
+      dangerOpen.value = false
+      pendingRow.value = null
+      pendingSql.value = ''
+    }
   }
 }
 
 async function runSQL() {
   if (!sql.value.trim()) return
   if (sqlRisk.value) {
-    try {
-      await ElMessageBox.confirm(sqlRisk.value.confirmation, sqlRisk.value.title, {
-        confirmButtonText: '确认执行',
-        cancelButtonText: '取消',
-        type: 'warning',
-      })
-    } catch {
-      return
-    }
+    pendingSql.value = sql.value
+    pendingRow.value = null
+    dangerAction.value = 'sql'
+    dangerOpen.value = true
+    return
   }
-  queryPending.value = true
-  queryError.value = null
-  try {
-    queryResult.value = await executeDatabaseSQL({ ...connection(), sql: sql.value })
-    if (!queryResult.value.columns.length) await refreshRows()
-  } catch (error) {
-    queryResult.value = null
-    queryError.value = toErrorState(error, 'SQL 执行失败。')
-  } finally {
-    queryPending.value = false
-  }
+  await executeSQL(sql.value)
 }
 
 function isSensitiveColumn(name: string) {
@@ -367,14 +396,14 @@ function clearError() {
       <span><strong>连接说明</strong>当前连接已完成认证并读取对象目录，表数据操作沿用此连接上下文。</span>
     </div>
 
-    <nav class="table-tabs panel" aria-label="数据表工作区">
+    <nav class="table-tabs panel" role="tablist" aria-label="数据表工作区">
       <button v-for="item in [
         { value: 'data', label: '表数据', icon: Rows3 },
         { value: 'overview', label: '表信息', icon: Info },
         { value: 'structure', label: '表结构', icon: Columns3 },
         { value: 'definition', label: 'SQL 定义', icon: FileCode2 },
         { value: 'sql', label: '执行 SQL', icon: Braces },
-      ]" :key="item.value" type="button" :class="{ active: mode === item.value }" :aria-selected="mode === item.value" @click="mode = item.value as TableMode">
+      ]" :key="item.value" type="button" role="tab" :class="{ active: mode === item.value }" :aria-selected="mode === item.value" @click="mode = item.value as TableMode">
         <component :is="item.icon" :size="16" />{{ item.label }}
       </button>
     </nav>
@@ -489,6 +518,17 @@ function clearError() {
       </ElForm>
       <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
     </ElDialog>
+
+    <ConfirmDangerDialog
+      v-model="dangerOpen"
+      :title="dangerTitle"
+      :description="dangerDescription"
+      :impact="dangerImpact"
+      :retained="dangerRetained"
+      :action-label="dangerAction === 'sql' ? '确认执行' : '永久删除'"
+      :busy="dangerBusy || queryPending"
+      @confirm="confirmDanger"
+    />
   </div>
 
   <div v-else class="page"><section class="missing-table panel"><Table2 :size="26" /><h1>数据表不存在或数据库尚未连接</h1><a href="/databases">返回数据库列表</a></section></div>

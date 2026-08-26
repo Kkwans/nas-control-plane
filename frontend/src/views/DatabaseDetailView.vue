@@ -269,8 +269,10 @@ function clearError() {
     <dl class="source-summary panel">
       <div class="source-summary__status">
         <dt>连接状态</dt>
-        <dd><span :class="['connection-pill', `connection-pill--${connectionState.tone}`]">{{ connectionState.label }}</span></dd>
-        <small>{{ connectionState.detail }}</small>
+        <dd>
+          <span :class="['connection-pill', `connection-pill--${connectionState.tone}`]">{{ connectionState.label }}</span>
+          <small>{{ connectionState.detail }}</small>
+        </dd>
       </div>
       <div><dt>数据库类型</dt><dd>{{ driverLabel(source.driver) }}</dd></div>
       <div><dt>来源分类</dt><dd>{{ source.category === 'system' ? '系统数据库' : '项目数据库' }}</dd></div>
@@ -431,6 +433,12 @@ function clearError() {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-summary__status dd {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
 }
 
 .source-summary small {

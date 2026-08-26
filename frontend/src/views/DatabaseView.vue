@@ -524,7 +524,7 @@ onMounted(() => {
   color: currentColor;
   font-size: .62rem;
   font-weight: 600;
-  opacity: .82;
+  opacity: 1;
 }
 
 .source-status--success {
