@@ -307,7 +307,7 @@ export function followLogs(
   },
   intervalSeconds: number,
   onLogs: (result: LogResponse) => void,
-  onError: () => void,
+  onError: (state?: 'reconnecting' | 'failed') => void,
 ): EventSource {
   const parameters = logParameters(input)
   parameters.set('interval', String(intervalSeconds))
@@ -319,11 +319,11 @@ export function followLogs(
       onLogs(payload)
     } catch {
       source.close()
-      onError()
+      onError('failed')
     }
   })
-  source.addEventListener('unavailable', onError)
-  source.onerror = onError
+  source.addEventListener('unavailable', () => onError('reconnecting'))
+  source.onerror = () => onError(source.readyState === EventSource.CLOSED ? 'failed' : 'reconnecting')
   return source
 }
 

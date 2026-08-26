@@ -12,6 +12,7 @@ import { formatLocalTimestamp } from '@/lib/datetime'
 import { logTokens } from '@/utils/logTokens'
 
 type LogSource = 'system' | 'agent' | 'container'
+type FollowState = 'paused' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
 const systemStore = useSystemStore()
 const { pageSize } = useListPreference('logs.events')
 const source = ref<LogSource>('system')
@@ -20,6 +21,8 @@ const level = ref('all')
 const hours = ref(6)
 const query = ref('')
 const following = ref(false)
+const followState = ref<FollowState>('paused')
+const lastReceivedAt = ref<string | null>(null)
 const loading = ref(false)
 const error = ref('')
 const entries = ref<LogEntry[]>([])
@@ -37,7 +40,7 @@ const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '当前记录', value: entries.value.length },
   { label: '错误', value: entries.value.filter((item) => item.level === 'error').length, tone: 'warning' },
-  { label: '实时跟随', value: following.value ? '已开启' : '已暂停', tone: following.value ? 'success' : undefined },
+  { label: '实时跟随', value: followStateLabel(followState.value), tone: followState.value === 'connected' ? 'success' : followState.value === 'failed' ? 'warning' : undefined },
 ])
 const sortedEntries = computed(() => [...entries.value].sort((left, right) => new Date(right.timestamp).valueOf() - new Date(left.timestamp).valueOf()))
 const pageCount = computed(() => Math.max(1, Math.ceil(sortedEntries.value.length / pageSize.value)))
@@ -78,6 +81,7 @@ async function load(silent = false) {
     if (requestSequence !== loadSequence) return
     entries.value = result.entries
     nextCursor.value = result.nextCursor
+    lastReceivedAt.value = result.collectedAt
     page.value = 1
   } catch (caught) {
     if (caught instanceof DOMException && caught.name === 'AbortError') return
@@ -123,7 +127,12 @@ async function loadMore() {
 function syncFollowStream() {
   logSource?.close()
   logSource = null
-  if (!following.value || (source.value === 'container' && !containerId.value)) return
+  if (!following.value || (source.value === 'container' && !containerId.value)) {
+    followState.value = 'paused'
+    return
+  }
+  followState.value = 'connecting'
+  error.value = ''
   logSource = followLogs({
     source: source.value, containerId: containerId.value, level: level.value,
     query: query.value, hours: hours.value, limit: pageSize.value,
@@ -131,9 +140,14 @@ function syncFollowStream() {
     const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
     for (const entry of result.entries) merged.set(entry.id, entry)
     entries.value = [...merged.values()].sort((left, right) => new Date(right.timestamp).valueOf() - new Date(left.timestamp).valueOf()).slice(0, 500)
+    followState.value = 'connected'
+    lastReceivedAt.value = result.collectedAt
     error.value = ''
-  }, () => {
-    error.value = '实时日志连接已中断，可暂停后重新开启。'
+  }, (state = 'reconnecting') => {
+    followState.value = state
+    error.value = state === 'failed'
+      ? '实时日志连接失败，请暂停后重新开启。'
+      : '实时日志正在重新连接，期间不会丢失已加载的历史记录。'
   })
 }
 
@@ -181,6 +195,22 @@ function entryContext(entry: LogEntry) {
   const stream = entry.source === 'container' && entry.stream ? ` · ${entry.stream}` : ''
   return entry.unit ? `${sourceLabel(entry.source)}${stream} · ${entry.unit}` : `${sourceLabel(entry.source)}${stream}`
 }
+
+function followStateLabel(value: FollowState) {
+  return value === 'connected' ? '已连接' : value === 'connecting' ? '连接中' : value === 'reconnecting' ? '重连中' : value === 'failed' ? '连接失败' : '已暂停'
+}
+
+function followStateDescription(value: FollowState) {
+  return value === 'connected'
+    ? '实时日志已连接'
+    : value === 'connecting'
+      ? '正在连接实时日志'
+      : value === 'reconnecting'
+        ? '实时日志连接中断，正在重连'
+        : value === 'failed'
+          ? '实时日志连接失败，请重新开启'
+          : '实时日志跟随已暂停'
+}
 </script>
 
 <template>
@@ -210,6 +240,13 @@ function entryContext(entry: LogEntry) {
         <ElButton class="log-refresh-button" :loading="loading" title="刷新当前日志" @click="refreshLogs"><RefreshCw :size="16" />刷新</ElButton>
       </div>
     </section>
+
+    <div class="log-stream-status" role="status" :data-state="followState" :aria-label="followStateDescription(followState)">
+      <span class="log-stream-status__dot" aria-hidden="true"></span>
+      <strong>{{ followStateLabel(followState) }}</strong>
+      <span>{{ followStateDescription(followState) }}</span>
+      <span class="log-stream-status__time">最近接收 {{ lastReceivedAt ? formatLocalTimestamp(lastReceivedAt, { fractional: true }) : '尚未接收' }}</span>
+    </div>
 
     <div v-if="error" class="log-error">{{ error }}</div>
     <section class="log-console panel">
@@ -337,5 +374,66 @@ function entryContext(entry: LogEntry) {
   .log-row { grid-template-columns: minmax(0, 1fr) auto; }
   .log-row .level-badge { grid-column: 1; justify-self: start; }
   .log-row .log-detail-button { grid-column: 2; }
+}
+
+.log-stream-status {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px;
+  color: var(--ncp-text-subtle);
+  font-size: .73rem;
+}
+
+.log-stream-status strong {
+  color: var(--ncp-text-muted);
+  font-weight: 720;
+}
+
+.log-stream-status__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--ncp-text-subtle);
+}
+
+.log-stream-status[data-state="connected"] .log-stream-status__dot {
+  background: var(--ncp-success);
+  box-shadow: 0 0 0 4px var(--ncp-success-soft);
+}
+
+.log-stream-status[data-state="connecting"] .log-stream-status__dot,
+.log-stream-status[data-state="reconnecting"] .log-stream-status__dot {
+  background: var(--ncp-warning);
+  box-shadow: 0 0 0 4px var(--ncp-warning-soft);
+}
+
+.log-stream-status[data-state="failed"] .log-stream-status__dot {
+  background: var(--ncp-danger);
+  box-shadow: 0 0 0 4px var(--ncp-danger-soft);
+}
+
+.log-stream-status__time {
+  margin-left: auto;
+  overflow: hidden;
+  font-family: var(--ncp-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media(max-width:700px) {
+  .log-stream-status {
+    flex-wrap: wrap;
+    gap: 5px 7px;
+    padding-inline: 2px;
+  }
+
+  .log-stream-status__time {
+    width: 100%;
+    margin-left: 15px;
+  }
 }
 </style>

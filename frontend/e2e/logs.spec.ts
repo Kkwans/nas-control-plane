@@ -34,6 +34,7 @@ test('日志历史结果明确分页并可加载服务端后续页面', async ({
 
   await page.goto('/logs', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
   await expect(page.getByRole('heading', { name: '日志中心', exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
+  await expect(page.getByRole('status', { name: '实时日志跟随已暂停' })).toContainText('最近接收')
   await expect(page.getByText('当前已载入 1 条')).toBeVisible()
   await expect(page.getByRole('button', { name: '加载更多结果' })).toBeVisible()
 
