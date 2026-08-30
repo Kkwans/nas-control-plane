@@ -42,7 +42,7 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
-import { DatabaseValueError, databaseEditorKind, databaseEditorValue, resolveDatabaseValue } from '@/domain/database/valueConversion'
+import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWriteMode, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
@@ -273,10 +273,11 @@ async function submitRow() {
     const values = Object.fromEntries(columns.value.flatMap((column) => {
       const rawValue = rowForm.value[column.name] ?? ''
       const nullSelected = rowNullFields.value[column.name] === true
-      if (rowDialogMode.value === 'insert' && rawValue.trim() === '' && column.writeMode === 'required' && !nullSelected) {
+      const writeMode = databaseWriteMode(column)
+      if (rowDialogMode.value === 'insert' && rawValue.trim() === '' && writeMode === 'required' && !nullSelected) {
         throw new DatabaseValueError(`字段「${column.name}」为必填项，请填写值或显式选择 NULL。`)
       }
-      if (rowDialogMode.value === 'insert' && rawValue === '' && column.writeMode !== 'required') return []
+      if (rowDialogMode.value === 'insert' && rawValue === '' && writeMode !== 'required') return []
       return [[column.name, resolveDatabaseValue(rawValue, column, nullSelected)]]
     }))
     if (rowDialogMode.value === 'insert') {

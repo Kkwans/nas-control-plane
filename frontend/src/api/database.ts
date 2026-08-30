@@ -63,8 +63,10 @@ export interface DatabaseColumn {
   primaryKey: boolean
   default?: DatabaseValue
   position: number
-  writeMode?: 'required' | 'optional-default' | 'server-generated'
+  writeMode?: DatabaseWriteMode
 }
+
+export type DatabaseWriteMode = 'required' | 'optional-default' | 'server-generated'
 
 export interface DatabaseTable {
   schema: string

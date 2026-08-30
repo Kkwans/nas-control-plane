@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { DatabaseColumn } from '@/api/database'
 
-import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWireValue, resolveDatabaseValue } from './valueConversion'
+import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWireValue, databaseWriteMode, resolveDatabaseValue } from './valueConversion'
 
 function column(dataType: string, nullable = true): DatabaseColumn {
   return { name: 'value', dataType, nullable, primaryKey: false, position: 1 }
@@ -46,6 +46,14 @@ describe('databaseEditorKind', () => {
     ['bytea', 'blob'],
   ] as const)('maps %s to %s', (dataType, kind) => {
     expect(databaseEditorKind(dataType)).toBe(kind)
+  })
+})
+
+describe('database write metadata', () => {
+  it('fails closed when a legacy response omits writeMode', () => {
+    expect(databaseWriteMode(column('text'))).toBe('required')
+    expect(databaseWriteMode({ ...column('text'), writeMode: 'optional-default' })).toBe('optional-default')
+    expect(databaseWriteMode({ ...column('integer'), writeMode: 'server-generated' })).toBe('server-generated')
   })
 })
 

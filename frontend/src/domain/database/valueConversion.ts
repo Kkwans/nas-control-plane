@@ -1,4 +1,4 @@
-import type { DatabaseColumn, DatabaseValue } from '@/api/database'
+import type { DatabaseColumn, DatabaseValue, DatabaseWriteMode } from '@/api/database'
 
 const integerTypePattern = /\b(?:tinyint|smallint|mediumint|int|integer|bigint|serial|bigserial)\b/i
 const decimalTypePattern = /\b(?:decimal|numeric|real|double|float)\b/i
@@ -9,6 +9,15 @@ const integerLiteralPattern = /^[+-]?\d+$/
 const decimalLiteralPattern = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[+-]?\d+)?$/i
 
 export type DatabaseEditorKind = 'text' | 'integer' | 'decimal' | 'boolean' | 'date' | 'datetime' | 'time' | 'json' | 'blob'
+
+/**
+ * Missing write metadata is treated as required so older or malformed
+ * responses cannot make a primary key/default column silently disappear from
+ * an insert request.
+ */
+export function databaseWriteMode(column: DatabaseColumn): DatabaseWriteMode {
+  return column.writeMode ?? 'required'
+}
 
 export function databaseEditorKind(dataType: string): DatabaseEditorKind {
   const type = dataType.toLowerCase()
