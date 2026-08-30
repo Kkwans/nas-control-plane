@@ -12,6 +12,7 @@ import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 import { mergeMetricSampleWindow } from '@/domain/monitoring/series'
 import { useSystemStore } from '@/stores/system'
+import { isAbortError } from '@/session/sessionLifecycle'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 const rangeMilliseconds: Record<TimeRange, number> = {
@@ -135,7 +136,7 @@ async function load() {
     samples.value = result
     loadedRangeKey.value = rangeKey
   } catch (caught) {
-    if (sequence !== loadSequence || (caught instanceof DOMException && caught.name === 'AbortError')) return
+    if (sequence !== loadSequence || isAbortError(caught)) return
     error.value = '监控历史加载失败，请稍后重试。'
   } finally {
     if (sequence === loadSequence) loading.value = false
