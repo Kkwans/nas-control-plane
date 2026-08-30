@@ -24,6 +24,8 @@ type Source struct {
 	DefaultDatabase string   `json:"defaultDatabase,omitempty"`
 	RequiresLogin   bool     `json:"requiresLogin"`
 	Status          string   `json:"status"`
+	Reachability    string   `json:"reachability"`
+	Evidence        string   `json:"evidence"`
 	Tags            []string `json:"tags"`
 }
 
@@ -83,6 +85,7 @@ type Column struct {
 	PrimaryKey bool   `json:"primaryKey"`
 	Default    any    `json:"default,omitempty"`
 	Position   int    `json:"position"`
+	WriteMode  string `json:"writeMode"`
 }
 
 type Table struct {
@@ -129,11 +132,20 @@ type RowsRequest struct {
 }
 
 type RowsResult struct {
-	Table   Table `json:"table"`
-	Rows    []Row `json:"rows"`
-	Limit   int   `json:"limit"`
-	Offset  int   `json:"offset"`
-	HasMore bool  `json:"hasMore"`
+	Table    Table    `json:"table"`
+	Rows     []Row    `json:"rows"`
+	Limit    int      `json:"limit"`
+	Offset   int      `json:"offset"`
+	HasMore  bool     `json:"hasMore"`
+	Ordering Ordering `json:"ordering"`
+}
+
+// Ordering describes the server-side ordering used for a paged table read.
+// Stable is false when the table has no key that can make OFFSET pagination
+// deterministic; callers must not offer a next page in that case.
+type Ordering struct {
+	Stable  bool     `json:"stable"`
+	Columns []string `json:"columns"`
 }
 
 type Row map[string]any

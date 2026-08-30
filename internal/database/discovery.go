@@ -4,13 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	mobycontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
@@ -47,20 +45,35 @@ func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) 
 		image := strings.ToLower(inspection.Container.Config.Image)
 		if driver, port, ok := databaseImage(image); ok {
 			publicPort := publishedDatabasePort(item.Ports, port)
-			if publicPort > 0 {
-				defaultDatabase := safeEnvironmentValue(inspection.Container.Config.Env, defaultDatabaseKey(driver))
-				location := "127.0.0.1:" + strconv.Itoa(publicPort)
-				if defaultDatabase != "" {
-					location += "/" + defaultDatabase
-				}
-				sources = append(sources, Source{
-					ID: sourceID(driver, project+":"+location), Name: project + " · " + driverName(driver),
-					Driver: driver, Category: "project", Project: project, Module: service + " 容器",
-					Location: location, Host: "127.0.0.1", Port: publicPort,
-					DefaultDatabase: defaultDatabase, RequiresLogin: true, Status: "credentials_required",
-					Tags: []string{"容器发现", driverName(driver)},
-				})
+			reachability, evidence := "host", "published-port"
+			if publicPort == 0 && inspection.Container.HostConfig != nil && string(inspection.Container.HostConfig.NetworkMode) == "host" {
+				publicPort = port
+				evidence = "host-network"
 			}
+			if publicPort == 0 {
+				reachability = "unreachable"
+				evidence = "none"
+			}
+			defaultDatabase := safeEnvironmentValue(inspection.Container.Config.Env, defaultDatabaseKey(driver))
+			location := "容器内部（未发布端口）"
+			status := "unreachable"
+			host := ""
+			if publicPort > 0 {
+				location = "127.0.0.1:" + strconv.Itoa(publicPort)
+				status = "credentials_required"
+				host = "127.0.0.1"
+			}
+			if defaultDatabase != "" {
+				location += "/" + defaultDatabase
+			}
+			sources = append(sources, Source{
+				ID: sourceID(driver, project+":"+location), Name: project + " · " + driverName(driver),
+				Driver: driver, Category: "project", Project: project, Module: service + " 容器",
+				Location: location, Host: host, Port: publicPort,
+				DefaultDatabase: defaultDatabase, RequiresLogin: true, Status: status,
+				Reachability: reachability, Evidence: evidence,
+				Tags: []string{"容器发现", driverName(driver)},
+			})
 		}
 
 		for _, environment := range inspection.Container.Config.Env {
@@ -69,6 +82,18 @@ func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) 
 				continue
 			}
 			if source, ok := sourceFromDatabaseURL(value, project, service); ok {
+				source = resolveDatabaseURLSource(source, item.Ports, inspection.Container.HostConfig)
+				if source.Reachability == "container-internal" || source.Reachability == "unreachable" {
+					// A Compose service hostname and its private port are valid only
+					// inside that network. Do not expose them as a host endpoint to
+					// the Root Agent or render a connect form for a fake address.
+					source.Host = ""
+					source.Port = 0
+					source.Location = "容器内部（未发布端口）"
+					if source.DefaultDatabase != "" {
+						source.Location += "/" + source.DefaultDatabase
+					}
+				}
 				sources = append(sources, source)
 			}
 		}
@@ -88,6 +113,29 @@ func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) 
 	return sources, candidates
 }
 
+func resolveDatabaseURLSource(source Source, ports []mobycontainer.PortSummary, hostConfig *mobycontainer.HostConfig) Source {
+	if source.Reachability != "container-internal" {
+		return source
+	}
+	publicPort := publishedDatabasePort(ports, source.Port)
+	evidence := "published-port"
+	if publicPort == 0 && hostConfig != nil && string(hostConfig.NetworkMode) == "host" {
+		publicPort = source.Port
+		evidence = "host-network"
+	}
+	if publicPort == 0 {
+		return source
+	}
+	databaseName := source.DefaultDatabase
+	location := "127.0.0.1:" + strconv.Itoa(publicPort)
+	if databaseName != "" {
+		location += "/" + databaseName
+	}
+	source.Location, source.Host, source.Port = location, "127.0.0.1", publicPort
+	source.Reachability, source.Evidence, source.Status = "host", evidence, "credentials_required"
+	return source
+}
+
 func databaseImage(image string) (Driver, int, bool) {
 	switch {
 	case strings.Contains(image, "mariadb"), strings.Contains(image, "mysql"):
@@ -101,12 +149,14 @@ func databaseImage(image string) (Driver, int, bool) {
 
 func publishedDatabasePort(ports []mobycontainer.PortSummary, privatePort int) int {
 	for _, port := range ports {
-		if int(port.PrivatePort) == privatePort && port.PublicPort > 0 {
+		// A database endpoint must be a TCP binding. Docker also reports UDP
+		// and SCTP mappings for the same private port; treating those as a
+		// database connection would create an endpoint that can never speak the
+		// selected driver protocol.
+		if int(port.PrivatePort) == privatePort && port.PublicPort > 0 &&
+			(strings.TrimSpace(port.Type) == "" || strings.EqualFold(port.Type, "tcp")) {
 			return int(port.PublicPort)
 		}
-	}
-	if portOpen(context.Background(), "127.0.0.1:"+strconv.Itoa(privatePort)) {
-		return privatePort
 	}
 	return 0
 }
@@ -149,9 +199,16 @@ func sourceFromDatabaseURL(value, project, service string) (Source, bool) {
 		return Source{}, false
 	}
 	host := parsed.Hostname()
-	if host == "" || host == "localhost" {
-		host = "127.0.0.1"
+	if host == "" {
+		return Source{}, false
 	}
+	// A DATABASE_URL read from a container environment is scoped to that
+	// container's network namespace. Resolve it to a host endpoint only after
+	// inspecting a published binding or host-network mode below.
+	reachability := "container-internal"
+	evidence := "database-url"
+	status := "unreachable"
+	host = strings.TrimSpace(host)
 	port := defaultPort
 	if parsed.Port() != "" {
 		if parsedPort, parseErr := strconv.Atoi(parsed.Port()); parseErr == nil {
@@ -163,7 +220,8 @@ func sourceFromDatabaseURL(value, project, service string) (Source, bool) {
 		ID: sourceID(driver, project+":"+location), Name: project + " · " + databaseName,
 		Driver: driver, Category: "project", Project: project, Module: service + " 使用的数据库",
 		Location: location, Host: host, Port: port, DefaultDatabase: databaseName,
-		RequiresLogin: true, Status: "credentials_required", Tags: []string{"项目配置发现", driverName(driver)},
+		RequiresLogin: true, Status: status, Reachability: reachability, Evidence: evidence,
+		Tags: []string{"项目配置发现", driverName(driver)},
 	}, true
 }
 
@@ -176,16 +234,6 @@ func driverName(driver Driver) string {
 	default:
 		return "SQLite"
 	}
-}
-
-func portOpen(ctx context.Context, address string) bool {
-	dialer := net.Dialer{Timeout: 150 * time.Millisecond}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
-	if err != nil {
-		return false
-	}
-	_ = connection.Close()
-	return true
 }
 
 func isSQLiteFile(ctx context.Context, path string) bool {

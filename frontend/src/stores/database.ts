@@ -14,6 +14,7 @@ import {
   type DatabaseCredentials,
   type DatabaseSource,
 } from '@/api/database'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 
 export function databaseProjectKey(source: DatabaseSource) {
   const project = source.project?.trim() || source.module?.trim() || '未关联项目'
@@ -27,6 +28,7 @@ export const useDatabaseStore = defineStore('database', () => {
   const loading = ref(false)
   const collectedAt = ref('')
   const archivedProjectKeys = ref<string[]>([])
+  let discoverySequence = 0
 
   const systemCount = computed(() => sources.value.filter((source) => source.category === 'system').length)
   const projectCount = computed(() => sources.value.filter((source) => source.category === 'project').length)
@@ -48,7 +50,9 @@ export const useDatabaseStore = defineStore('database', () => {
   }
 
   async function loadProjectPreferences() {
-    const preferences = await requestDatabaseProjectPreferences()
+    const session = captureSession()
+    const preferences = await requestDatabaseProjectPreferences(session.signal)
+    if (!isCurrentSession(session.generation)) return
     archivedProjectKeys.value = preferences.filter((item) => item.archived).map((item) => item.projectKey)
   }
 
@@ -66,42 +70,64 @@ export const useDatabaseStore = defineStore('database', () => {
     }
   }
 
-  async function refreshDiscovery() {
+  async function refreshDiscovery(force = false) {
+    const sequence = ++discoverySequence
+    const session = captureSession()
     loading.value = true
     try {
       const [result] = await Promise.all([
-        discoverDatabases(),
+        discoverDatabases(force, session.signal),
         loadProjectPreferences(),
       ])
+      if (sequence !== discoverySequence || !isCurrentSession(session.generation)) return
       sources.value = result.sources
       collectedAt.value = result.collectedAt
+    } catch (error) {
+      if (!isAbortError(error) && sequence === discoverySequence && isCurrentSession(session.generation)) throw error
     } finally {
-      loading.value = false
+      if (sequence === discoverySequence && isCurrentSession(session.generation)) loading.value = false
     }
   }
 
-  async function loadCatalog(sourceId: string) {
-    const catalog = await loadDatabaseCatalog(connection(sourceId))
+  async function loadCatalog(sourceId: string, signal?: AbortSignal) {
+    const session = captureSession()
+    const requestSignal = signal ?? session.signal
+    const catalog = await loadDatabaseCatalog(connection(sourceId), requestSignal)
+    if (requestSignal.aborted || !isCurrentSession(session.generation)) throw new DOMException('Session invalidated', 'AbortError')
     catalogs.value = { ...catalogs.value, [sourceId]: catalog }
     return catalog
   }
 
   async function connect(sourceId: string, input: DatabaseCredentials) {
+    const session = captureSession()
     credentials.value = { ...credentials.value, [sourceId]: { ...input } }
     try {
       const hasCredentials = Object.values(input).some((value) => typeof value === 'string' && value.trim() !== '')
-      const diagnostic = await connectDatabase(hasCredentials ? { sourceId, credentials: input } : { sourceId })
+      const diagnostic = await connectDatabase(hasCredentials ? { sourceId, credentials: input } : { sourceId }, session.signal)
+      if (!isCurrentSession(session.generation)) throw new DOMException('Session invalidated', 'AbortError')
       if (!diagnostic.connected) {
         throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
       }
       const catalog = await loadCatalog(sourceId)
       return { catalog, diagnostic }
     } catch (error) {
-      const next = { ...credentials.value }
-      delete next[sourceId]
-      credentials.value = next
+      if (isCurrentSession(session.generation)) {
+        const next = { ...credentials.value }
+        delete next[sourceId]
+        credentials.value = next
+      }
       throw error
     }
+  }
+
+  function resetSessionState() {
+    discoverySequence += 1
+    sources.value = []
+    catalogs.value = {}
+    credentials.value = {}
+    loading.value = false
+    collectedAt.value = ''
+    archivedProjectKeys.value = []
   }
 
   return {
@@ -122,5 +148,6 @@ export const useDatabaseStore = defineStore('database', () => {
     refreshDiscovery,
     loadCatalog,
     connect,
+    resetSessionState,
   }
 })

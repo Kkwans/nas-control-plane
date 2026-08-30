@@ -131,14 +131,17 @@ function sourceStatus(source: DatabaseSource) {
   if (databaseStore.catalogs[source.id]) {
     return { label: '已连接', tone: 'success' as StatusTone, detail: '认证通过 · 目录已读' }
   }
+  if (source.reachability === 'container-internal') {
+    return { label: '容器内部', tone: 'danger' as StatusTone, detail: '未发布宿主端口，无法从 Agent 连接' }
+  }
+  if (source.status === 'unreachable' || source.reachability === 'unreachable') {
+    return { label: '不可达', tone: 'danger' as StatusTone, detail: '未发现可验证的宿主端点' }
+  }
   if (source.status === 'credentials_required' || source.requiresLogin) {
     return { label: '需要凭据', tone: 'warning' as StatusTone, detail: '认证后读取目录' }
   }
   if (source.status === 'available') {
     return { label: '可用', tone: 'success' as StatusTone, detail: '已发现 · 尚未连接' }
-  }
-  if (source.status === 'unreachable') {
-    return { label: '不可达', tone: 'danger' as StatusTone, detail: '检查地址和端口' }
   }
   return { label: source.status || '未知', tone: 'neutral' as StatusTone, detail: '需要检查连接' }
 }
@@ -165,10 +168,10 @@ function clearError() {
   errorState.value = null
 }
 
-async function refreshDiscovery() {
+async function refreshDiscovery(force = true) {
   clearError()
   try {
-    await databaseStore.refreshDiscovery()
+    await databaseStore.refreshDiscovery(force)
   } catch (error) {
     setError(error, '数据库发现失败，请确认 Root Agent 正常运行。')
   }
@@ -202,7 +205,7 @@ function toggleArchiveByKey(key: string) {
 }
 
 onMounted(() => {
-  if (!databaseStore.sources.length) void refreshDiscovery()
+  if (!databaseStore.sources.length) void refreshDiscovery(false)
 })
 </script>
 

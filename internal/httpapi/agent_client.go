@@ -96,6 +96,10 @@ func (socketAgentClient) DiscoverDatabases(ctx context.Context, socketPath strin
 	return agentsocket.DiscoverDatabases(ctx, socketPath)
 }
 
+func (socketAgentClient) RefreshDatabases(ctx context.Context, socketPath string) (database.Discovery, error) {
+	return agentsocket.RefreshDatabases(ctx, socketPath)
+}
+
 func (socketAgentClient) CatalogDatabase(ctx context.Context, socketPath string, request database.CatalogRequest) (database.Catalog, error) {
 	return agentsocket.CatalogDatabase(ctx, socketPath, request)
 }

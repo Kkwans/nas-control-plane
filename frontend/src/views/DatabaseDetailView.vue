@@ -70,6 +70,9 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 const connectionState = computed(() => {
   if (catalog.value) return { label: '已连接', tone: 'success' as StatusTone, detail: '已读取对象目录，可打开数据表或视图。' }
+  if (source.value?.reachability === 'container-internal' || source.value?.reachability === 'unreachable') {
+    return { label: '主机不可达', tone: 'danger' as StatusTone, detail: '该数据库仅在容器内部可见，未发现可由 Root Agent 访问的宿主端口。' }
+  }
   if (diagnostic.value?.connected) return { label: '诊断通过', tone: 'success' as StatusTone, detail: '凭据可用，提交连接后读取对象目录。' }
   if (source.value?.status === 'credentials_required' || source.value?.requiresLogin) {
     return { label: '需要凭据', tone: 'warning' as StatusTone, detail: '输入凭据后测试连接或读取对象目录。' }
@@ -78,6 +81,7 @@ const connectionState = computed(() => {
   if (source.value?.status === 'unreachable') return { label: '不可达', tone: 'danger' as StatusTone, detail: '请检查数据库服务状态。' }
   return { label: source.value?.status || '未知', tone: 'neutral' as StatusTone, detail: '连接状态尚未确认。' }
 })
+const sourceReachabilityBlocked = computed(() => source.value?.reachability === 'container-internal' || source.value?.reachability === 'unreachable')
 
 onMounted(() => void initialize())
 watch(sourceId, () => void initialize())
@@ -301,7 +305,8 @@ function clearError() {
           </div>
         </div>
       </div>
-      <ElForm class="connection-form" label-position="top" @submit.prevent="connectDatabase">
+      <div v-if="sourceReachabilityBlocked" class="connection-unavailable" role="alert">{{ source.reachability === 'container-internal' ? 'DATABASE_URL 使用了容器内部 service hostname，Root Agent 无法从宿主机直接连接。请发布数据库端口或改用 host network。' : '未发现已发布的数据库端口，NCP 不会伪造宿主连接地址。' }}</div>
+      <ElForm v-else class="connection-form" label-position="top" @submit.prevent="connectDatabase">
         <ElFormItem label="用户名"><ElInput v-model="credentialDraft.username" autocomplete="username" placeholder="输入数据库用户名" /></ElFormItem>
         <ElFormItem label="密码"><ElInput v-model="credentialDraft.password" type="password" show-password autocomplete="current-password" placeholder="输入数据库密码" /></ElFormItem>
         <ElFormItem label="数据库名"><ElInput v-model="credentialDraft.database" :placeholder="source.defaultDatabase || '输入数据库名称'" /></ElFormItem>
@@ -488,6 +493,17 @@ function clearError() {
   grid-template-columns: minmax(280px, .82fr) minmax(420px, 1.18fr);
   gap: 28px;
   padding: 24px;
+}
+
+.connection-unavailable {
+  grid-column: 1 / -1;
+  padding: 14px 16px;
+  border: 1px solid var(--ncp-danger-border);
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-danger-soft);
+  color: var(--ncp-danger-strong);
+  font-size: .82rem;
+  line-height: 1.6;
 }
 
 .connection-intro {

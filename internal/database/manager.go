@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -37,7 +38,19 @@ type sqliteCandidate struct {
 }
 
 type Manager struct {
-	now func() time.Time
+	now        func() time.Time
+	registry   sourceRegistry
+	discoverFn func(context.Context) (Discovery, error)
+}
+
+const discoveryTTL = 10 * time.Second
+
+type sourceRegistry struct {
+	mu         sync.Mutex
+	snapshot   Discovery
+	expiresAt  time.Time
+	refreshing bool
+	wait       chan struct{}
 }
 
 func NewManager() *Manager {
@@ -63,6 +76,62 @@ func (m *Manager) TestConnection(ctx context.Context, request Connection) (Conne
 }
 
 func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
+	return m.discover(ctx, false)
+}
+
+// DiscoverWithOptions serves the explicit UI "重新发现" action. Normal
+// operations use the short-lived snapshot returned by Discover instead of
+// rescanning Docker and the filesystem for every request.
+func (m *Manager) DiscoverWithOptions(ctx context.Context, force bool) (Discovery, error) {
+	return m.discover(ctx, force)
+}
+
+func (m *Manager) discover(ctx context.Context, force bool) (Discovery, error) {
+	now := m.now().UTC()
+	m.registry.mu.Lock()
+	if !force && !m.registry.snapshot.CollectedAt.IsZero() && now.Before(m.registry.expiresAt) {
+		result := m.registry.snapshot
+		m.registry.mu.Unlock()
+		return result, nil
+	}
+	if m.registry.refreshing {
+		wait := m.registry.wait
+		m.registry.mu.Unlock()
+		select {
+		case <-wait:
+			m.registry.mu.Lock()
+			result, expiresAt := m.registry.snapshot, m.registry.expiresAt
+			m.registry.mu.Unlock()
+			if !result.CollectedAt.IsZero() && m.now().UTC().Before(expiresAt) {
+				return result, nil
+			}
+			return Discovery{}, errors.New("database discovery refresh failed")
+		case <-ctx.Done():
+			return Discovery{}, ctx.Err()
+		}
+	}
+	m.registry.refreshing = true
+	m.registry.wait = make(chan struct{})
+	wait := m.registry.wait
+	m.registry.mu.Unlock()
+
+	discoverFn := m.discoverFn
+	if discoverFn == nil {
+		discoverFn = m.discoverFresh
+	}
+	result, err := discoverFn(ctx)
+	m.registry.mu.Lock()
+	m.registry.refreshing = false
+	if err == nil {
+		m.registry.snapshot = result
+		m.registry.expiresAt = m.now().UTC().Add(discoveryTTL)
+	}
+	close(wait)
+	m.registry.mu.Unlock()
+	return result, err
+}
+
+func (m *Manager) discoverFresh(ctx context.Context) (Discovery, error) {
 	sources := make([]Source, 0, 12)
 	sourceIDs := make(map[string]struct{})
 	addSource := func(source Source) {
@@ -79,7 +148,7 @@ func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
 		addSource(Source{
 			ID: sourceID(DriverSQLite, path), Name: name, Driver: DriverSQLite,
 			Category: category, Project: project, Module: module, Location: path,
-			Path: path, Status: "available", Tags: tags,
+			Path: path, Status: "available", Reachability: "host", Evidence: "host-path", Tags: tags,
 		})
 	}
 
@@ -130,25 +199,6 @@ func (m *Manager) Discover(ctx context.Context) (Discovery, error) {
 		for _, path := range discoverSQLiteFiles(ctx, candidate.root) {
 			addSQLite(path, candidate.project+" · "+filepath.Base(path), "project", candidate.project, candidate.module, "容器挂载", "自动发现")
 		}
-	}
-
-	if portOpen(ctx, "127.0.0.1:5432") {
-		addSource(Source{
-			ID: sourceID(DriverPostgreSQL, "127.0.0.1:5432/nasdb"), Name: "绿联 NAS 核心数据库",
-			Driver: DriverPostgreSQL, Category: "system", Project: "绿联 NAS",
-			Module: "共享文件夹、用户与系统服务", Location: "127.0.0.1:5432/nasdb",
-			Host: "127.0.0.1", Port: 5432, DefaultDatabase: "nasdb",
-			RequiresLogin: true, Status: "credentials_required", Tags: []string{"系统数据库", "PostgreSQL"},
-		})
-	}
-	if portOpen(ctx, "127.0.0.1:3306") && !hasDriver(sources, DriverMySQL) {
-		addSource(Source{
-			ID: sourceID(DriverMySQL, "127.0.0.1:3306"), Name: "本机 MySQL 实例",
-			Driver: DriverMySQL, Category: "project", Project: "未关联项目",
-			Module: "尚未关联到具体项目", Location: "127.0.0.1:3306",
-			Host: "127.0.0.1", Port: 3306, RequiresLogin: true,
-			Status: "credentials_required", Tags: []string{"MySQL", "端口发现"},
-		})
 	}
 
 	sort.Slice(sources, func(i, j int) bool {
@@ -210,12 +260,13 @@ func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult,
 		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
 	result := QueryResult{Columns: columns, Rows: make([][]any, 0), DurationMs: 0}
+	columnTypes, _ := rows.ColumnTypes()
 	for rows.Next() {
 		if len(result.Rows) >= maxQueryRows {
 			result.Truncated = true
 			break
 		}
-		values, scanErr := scanValues(rows, len(columns))
+		values, scanErr := scanValues(rows, len(columns), columnTypes)
 		if scanErr != nil {
 			return QueryResult{}, MapError(ctx, source, "query", scanErr)
 		}
@@ -248,16 +299,9 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	if request.Offset < 0 {
 		request.Offset = 0
 	}
-	order := ""
-	if request.SortColumn != "" {
-		if !hasColumn(table.Columns, request.SortColumn) {
-			return RowsResult{}, newDatabaseError(CodeSQLInvalid, source, "rows", errors.New("sort column does not exist"))
-		}
-		direction := "ASC"
-		if strings.EqualFold(request.SortDirection, "desc") {
-			direction = "DESC"
-		}
-		order = " ORDER BY " + quote(source.Driver, request.SortColumn) + " " + direction
+	order, ordering := rowsOrder(source.Driver, table, request)
+	if ordering.Columns == nil {
+		return RowsResult{}, newDatabaseError(CodeSQLInvalid, source, "rows", errors.New("sort column does not exist"))
 	}
 	query := "SELECT * FROM " + qualified(source.Driver, table.Schema, table.Name) + order +
 		" LIMIT " + strconv.Itoa(limit+1) + " OFFSET " + strconv.Itoa(request.Offset)
@@ -270,14 +314,15 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	if err != nil {
 		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
-	result := RowsResult{Table: table, Rows: make([]Row, 0, limit), Limit: limit, Offset: request.Offset}
+	result := RowsResult{Table: table, Rows: make([]Row, 0, limit), Limit: limit, Offset: request.Offset, Ordering: ordering}
+	columnTypes, _ := rows.ColumnTypes()
 	for rows.Next() {
-		values, scanErr := scanValues(rows, len(names))
+		values, scanErr := scanValues(rows, len(names), columnTypes)
 		if scanErr != nil {
 			return RowsResult{}, MapError(ctx, source, "rows", scanErr)
 		}
 		if len(result.Rows) == limit {
-			result.HasMore = true
+			result.HasMore = ordering.Stable
 			break
 		}
 		row := make(Row, len(names))
@@ -303,6 +348,16 @@ func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationRe
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "insert", err)
 	}
+	if len(columns) == 0 {
+		statement := "INSERT INTO " + qualified(source.Driver, table.Schema, table.Name)
+		if source.Driver == DriverMySQL {
+			statement += " () VALUES ()"
+		} else {
+			statement += " DEFAULT VALUES"
+		}
+		result, execErr := execMutation(ctx, db, statement, nil)
+		return result, MapError(ctx, source, "insert", execErr)
+	}
 	placeholders := make([]string, len(columns))
 	for index := range placeholders {
 		placeholders[index] = placeholder(source.Driver, index+1)
@@ -327,6 +382,9 @@ func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationRe
 	columns, args, err := mutationValues(table, request.Values)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "update", err)
+	}
+	if len(columns) == 0 {
+		return MutationResult{}, MapError(ctx, source, "update", errors.New("没有需要写入的字段"))
 	}
 	setParts := make([]string, len(columns))
 	for index, column := range columns {
@@ -395,6 +453,9 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 }
 
 func connectionString(source Source, credentials Credentials) (string, string, error) {
+	if source.Reachability == "container-internal" || source.Reachability == "unreachable" || source.Evidence == "none" {
+		return "", "", errors.New("database source is not reachable from the host agent")
+	}
 	switch source.Driver {
 	case DriverSQLite:
 		if strings.TrimSpace(source.Path) == "" {
@@ -545,16 +606,43 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			if err := rows.Scan(&position, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
 				return nil, err
 			}
-			result = append(result, Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primaryKey > 0, Default: normalizeValue(defaultValue), Position: position + 1})
+			primary := primaryKey > 0
+			result = append(result, Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primary, Default: normalizeValue(defaultValue), Position: position + 1})
 		}
-		return result, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		primaryCount := 0
+		for _, column := range result {
+			if column.PrimaryKey {
+				primaryCount++
+			}
+		}
+		for index := range result {
+			column := &result[index]
+			identityGeneration := ""
+			// SQLite's exact INTEGER PRIMARY KEY aliases the rowid only for a
+			// single-column key. Composite integer keys are ordinary required
+			// values and must never be inferred as generated.
+			if primaryCount == 1 && column.PrimaryKey && strings.EqualFold(strings.TrimSpace(column.DataType), "INTEGER") {
+				identityGeneration = "sqlite-rowid"
+			}
+			column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, "")
+		}
+		return result, nil
 	}
 	placeholderSchema, placeholderTable := "?", "?"
 	if driver == DriverPostgreSQL {
 		placeholderSchema, placeholderTable = "$1", "$2"
 	}
+	generatedSelect := "'' AS identity_generation, '' AS generated_kind"
+	if driver == DriverMySQL {
+		generatedSelect = "c.extra, '' AS generated_kind"
+	} else if driver == DriverPostgreSQL {
+		generatedSelect = "c.is_identity, c.is_generated"
+	}
 	query := `SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, c.ordinal_position,
-		CASE WHEN k.column_name IS NULL THEN 0 ELSE 1 END
+		CASE WHEN k.column_name IS NULL THEN 0 ELSE 1 END, ` + generatedSelect + `
 		FROM information_schema.columns c
 		LEFT JOIN (
 			SELECT ku.table_schema, ku.table_name, ku.column_name
@@ -575,12 +663,14 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		var column Column
 		var nullable string
 		var primaryKey int
-		if err := rows.Scan(&column.Name, &column.DataType, &nullable, &column.Default, &column.Position, &primaryKey); err != nil {
+		var identityGeneration, generatedKind string
+		if err := rows.Scan(&column.Name, &column.DataType, &nullable, &column.Default, &column.Position, &primaryKey, &identityGeneration, &generatedKind); err != nil {
 			return nil, err
 		}
 		column.Nullable = nullable == "YES"
 		column.PrimaryKey = primaryKey == 1
 		column.Default = normalizeValue(column.Default)
+		column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, generatedKind)
 		result = append(result, column)
 	}
 	return result, rows.Err()
@@ -610,9 +700,6 @@ func loadTable(ctx context.Context, db *sql.DB, driver Driver, schema, name stri
 }
 
 func mutationValues(table Table, values map[string]any) ([]string, []any, error) {
-	if len(values) == 0 {
-		return nil, nil, errors.New("没有需要写入的字段")
-	}
 	columns := make([]string, 0, len(values))
 	for name := range values {
 		if !hasColumn(table.Columns, name) {
@@ -657,7 +744,7 @@ func execMutation(ctx context.Context, db *sql.DB, statement string, args []any)
 	return MutationResult{RowsAffected: affected}, nil
 }
 
-func scanValues(rows *sql.Rows, count int) ([]any, error) {
+func scanValues(rows *sql.Rows, count int, columnTypes ...[]*sql.ColumnType) ([]any, error) {
 	raw := make([]any, count)
 	targets := make([]any, count)
 	for index := range raw {
@@ -666,13 +753,57 @@ func scanValues(rows *sql.Rows, count int) ([]any, error) {
 	if err := rows.Scan(targets...); err != nil {
 		return nil, err
 	}
+	var types []*sql.ColumnType
+	if len(columnTypes) > 0 {
+		types = columnTypes[0]
+	}
 	for index := range raw {
-		raw[index] = normalizeValue(raw[index])
+		databaseType := ""
+		if index < len(types) && types[index] != nil {
+			databaseType = types[index].DatabaseTypeName()
+		}
+		raw[index] = normalizeDatabaseValue(raw[index], databaseType)
 	}
 	return raw, nil
 }
 
 func normalizeValue(value any) any {
+	return normalizeDatabaseValue(value, "")
+}
+
+func normalizeDatabaseValue(value any, databaseType string) any {
+	if isExactDecimalType(databaseType) {
+		switch typed := value.(type) {
+		case []byte:
+			return string(typed)
+		case string:
+			return typed
+		case float32:
+			return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+		case float64:
+			return strconv.FormatFloat(typed, 'f', -1, 64)
+		case int:
+			return strconv.Itoa(typed)
+		case int8:
+			return strconv.FormatInt(int64(typed), 10)
+		case int16:
+			return strconv.FormatInt(int64(typed), 10)
+		case int32:
+			return strconv.FormatInt(int64(typed), 10)
+		case int64:
+			return strconv.FormatInt(typed, 10)
+		case uint:
+			return strconv.FormatUint(uint64(typed), 10)
+		case uint8:
+			return strconv.FormatUint(uint64(typed), 10)
+		case uint16:
+			return strconv.FormatUint(uint64(typed), 10)
+		case uint32:
+			return strconv.FormatUint(uint64(typed), 10)
+		case uint64:
+			return strconv.FormatUint(typed, 10)
+		}
+	}
 	switch typed := value.(type) {
 	case []byte:
 		if utf8.Valid(typed) {
@@ -680,10 +811,85 @@ func normalizeValue(value any) any {
 		}
 		return "base64:" + base64.StdEncoding.EncodeToString(typed)
 	case time.Time:
-		return typed.Format(time.RFC3339Nano)
+		return formatDatabaseTime(typed, databaseType)
+	case int64:
+		if typed > maxSafeInteger || typed < -maxSafeInteger {
+			return strconv.FormatInt(typed, 10)
+		}
+		return typed
+	case uint64:
+		if typed > maxSafeUnsignedInteger {
+			return strconv.FormatUint(typed, 10)
+		}
+		return typed
 	default:
 		return value
 	}
+}
+
+const (
+	maxSafeInteger         int64  = 1<<53 - 1
+	maxSafeUnsignedInteger uint64 = 1<<53 - 1
+)
+
+func isExactDecimalType(databaseType string) bool {
+	typeName := strings.ToUpper(strings.TrimSpace(databaseType))
+	return strings.Contains(typeName, "DECIMAL") || strings.Contains(typeName, "NUMERIC")
+}
+
+func formatDatabaseTime(value time.Time, databaseType string) string {
+	typeName := strings.ToUpper(strings.TrimSpace(databaseType))
+	switch {
+	case typeName == "DATE":
+		return value.Format("2006-01-02")
+	case strings.Contains(typeName, "TIMESTAMPTZ"), strings.Contains(typeName, "WITH TIME ZONE"), strings.Contains(typeName, "DATETIMEOFFSET"):
+		return value.Format(time.RFC3339Nano)
+	case typeName == "TIME" || strings.HasPrefix(typeName, "TIME "):
+		return value.Format("15:04:05.999999999")
+	case typeName != "":
+		// DATETIME and TIMESTAMP without an explicit zone are wall-clock
+		// values. Do not append a misleading Z suffix that would make the UI
+		// reinterpret them as instants.
+		return value.Format("2006-01-02 15:04:05.999999999")
+	default:
+		return value.Format(time.RFC3339Nano)
+	}
+}
+
+func rowsOrder(driver Driver, table Table, request RowsRequest) (string, Ordering) {
+	primaryKeys := make([]string, 0)
+	for _, column := range table.Columns {
+		if column.PrimaryKey {
+			primaryKeys = append(primaryKeys, column.Name)
+		}
+	}
+	if request.SortColumn != "" && !hasColumn(table.Columns, request.SortColumn) {
+		return "", Ordering{}
+	}
+	columns := make([]string, 0, len(primaryKeys)+1)
+	orderParts := make([]string, 0, len(primaryKeys)+1)
+	if request.SortColumn != "" {
+		direction := "ASC"
+		if strings.EqualFold(request.SortDirection, "desc") {
+			direction = "DESC"
+		}
+		columns = append(columns, request.SortColumn)
+		orderParts = append(orderParts, quote(driver, request.SortColumn)+" "+direction)
+	}
+	for _, primaryKey := range primaryKeys {
+		if primaryKey == request.SortColumn {
+			continue
+		}
+		columns = append(columns, primaryKey)
+		orderParts = append(orderParts, quote(driver, primaryKey)+" ASC")
+	}
+	stable := len(primaryKeys) > 0
+	// A table without a primary key may still be sorted for the first page,
+	// but that ordering cannot make OFFSET pagination stable across writes.
+	if len(orderParts) == 0 {
+		return "", Ordering{Stable: stable, Columns: columns}
+	}
+	return " ORDER BY " + strings.Join(orderParts, ", "), Ordering{Stable: stable, Columns: columns}
 }
 
 func quote(driver Driver, identifier string) string {
@@ -716,6 +922,20 @@ func hasColumn(columns []Column, name string) bool {
 	return false
 }
 
+func writeModeForColumn(primaryKey bool, dataType string, defaultValue any, identityGeneration, generatedKind string) string {
+	generation := strings.ToLower(strings.TrimSpace(identityGeneration))
+	generated := generation == "yes" || generation == "sqlite-rowid" || strings.Contains(generation, "auto_increment") || strings.Contains(generation, "generated") ||
+		(strings.ToLower(strings.TrimSpace(generatedKind)) != "never" && strings.TrimSpace(generatedKind) != "") ||
+		strings.Contains(strings.ToLower(fmt.Sprint(defaultValue)), "nextval(")
+	if generated {
+		return "server-generated"
+	}
+	if defaultValue != nil && strings.TrimSpace(fmt.Sprint(defaultValue)) != "" {
+		return "optional-default"
+	}
+	return "required"
+}
+
 func returnsRows(statement string) bool {
 	fields := strings.Fields(strings.ToUpper(statement))
 	if len(fields) == 0 {
@@ -732,13 +952,4 @@ func returnsRows(statement string) bool {
 func sourceID(driver Driver, location string) string {
 	sum := sha256.Sum256([]byte(string(driver) + ":" + location))
 	return string(driver) + "-" + fmt.Sprintf("%x", sum[:8])
-}
-
-func hasDriver(sources []Source, driver Driver) bool {
-	for _, source := range sources {
-		if source.Driver == driver {
-			return true
-		}
-	}
-	return false
 }

@@ -16,7 +16,17 @@ const maxDatabaseBodySize = 1024 * 1024
 func (api *handler) databaseDiscovery(response http.ResponseWriter, request *http.Request) {
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
-	result, err := api.databaseAgent.DiscoverDatabases(ctx, api.agentSocketPath)
+	var result ncpdatabase.Discovery
+	var err error
+	if request.URL.Query().Get("refresh") == "true" {
+		if refresher, ok := api.databaseAgent.(DatabaseDiscoveryRefreshAgentClient); ok {
+			result, err = refresher.RefreshDatabases(ctx, api.agentSocketPath)
+		} else {
+			result, err = api.databaseAgent.DiscoverDatabases(ctx, api.agentSocketPath)
+		}
+	} else {
+		result, err = api.databaseAgent.DiscoverDatabases(ctx, api.agentSocketPath)
+	}
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
 		return

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -42,7 +42,7 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
-import { DatabaseValueError, databaseEditorKind, resolveDatabaseValue } from '@/domain/database/valueConversion'
+import { DatabaseValueError, databaseEditorKind, databaseEditorValue, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
@@ -52,6 +52,7 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useListPreference } from '@/composables/useListPreference'
+import { isAbortError } from '@/session/sessionLifecycle'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
@@ -112,9 +113,19 @@ const dangerBusy = ref(false)
 const dangerAction = ref<'delete-row' | 'sql'>('delete-row')
 const pendingRow = ref<Record<string, DatabaseValue> | null>(null)
 const pendingSql = ref('')
+let routeSequence = 0
+let rowsSequence = 0
+let querySequence = 0
+let mutationSequence = 0
+let rowsController: AbortController | null = null
+let initializeController: AbortController | null = null
+let queryController: AbortController | null = null
+let mutationController: AbortController | null = null
 
 const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
+const routeKey = computed(() => `${sourceId.value}|${schema.value}|${tableName.value}`)
+const stablePagination = computed(() => tableRows.value?.ordering?.stable !== false)
 const isView = computed(() => table.value?.type.toLowerCase() === 'view')
 const canInsertRows = computed(() => Boolean(table.value) && !isView.value)
 const canEditRows = computed(() => Boolean(table.value) && !isView.value && primaryKeyColumns.value.length > 0)
@@ -136,16 +147,22 @@ const dangerDescription = computed(() => dangerAction.value === 'sql'
 const dangerImpact = computed(() => dangerAction.value === 'sql' ? ['执行当前 SQL 语句', '结果可能影响多行数据或表结构'] : ['永久删除选中的数据行'])
 const dangerRetained = computed(() => dangerAction.value === 'sql' ? ['NCP 不会限制 Root 的正常 SQL 能力', '其他数据库和表不受影响'] : ['其他数据行不会被删除'])
 
-onMounted(() => void initialize())
-
 async function initialize() {
+  const sequence = ++routeSequence
+  resetRouteState()
+  initializeController?.abort()
+  const localController = new AbortController()
+  initializeController = localController
   try {
     if (!databaseStore.sources.length) await databaseStore.refreshDiscovery()
-    if (!catalog.value && source.value && !source.value.requiresLogin) await databaseStore.loadCatalog(sourceId.value)
+    if (sequence !== routeSequence) return
+    if (!catalog.value && source.value && !source.value.requiresLogin) await databaseStore.loadCatalog(sourceId.value, localController.signal)
   } catch (error) {
+    if (sequence !== routeSequence || isAbortError(error)) return
     setError(error, '数据库对象目录读取失败。')
     return
   }
+  if (sequence !== routeSequence) return
   if (!catalog.value && source.value?.requiresLogin) {
     await router.replace({ name: 'database-detail', params: { sourceId: sourceId.value }, query: { sourceName: source.value.name } })
     return
@@ -155,16 +172,45 @@ async function initialize() {
   await refreshRows()
 }
 
+function resetRouteState() {
+  querySequence += 1
+  mutationSequence += 1
+  rowsController?.abort()
+  initializeController?.abort()
+  queryController?.abort()
+  mutationController?.abort()
+  initializeController = null
+  rowsController = null
+  queryController = null
+  mutationController = null
+  tableRows.value = null
+  errorState.value = null
+  queryResult.value = null
+  queryError.value = null
+  offset.value = 0
+  sortColumn.value = ''
+  sortDirection.value = ''
+  mode.value = 'data'
+  rowDialogOpen.value = false
+  dangerOpen.value = false
+  dangerBusy.value = false
+}
+
 function connection() {
   return databaseStore.connection(sourceId.value)
 }
 
 async function refreshRows() {
   if (!table.value) return
+  const sequence = ++rowsSequence
+  const requestKey = routeKey.value
+  rowsController?.abort()
+  const controller = new AbortController()
+  rowsController = controller
   rowsLoading.value = true
   clearError()
   try {
-    tableRows.value = await loadDatabaseRows({
+    const result = await loadDatabaseRows({
       ...connection(),
       schema: table.value.schema,
       table: table.value.name,
@@ -172,11 +218,14 @@ async function refreshRows() {
       offset: offset.value,
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
-    })
+    }, controller.signal)
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted) return
+    tableRows.value = result
   } catch (error) {
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || isAbortError(error)) return
     setError(error, '表数据读取失败。')
   } finally {
-    rowsLoading.value = false
+    if (sequence === rowsSequence) rowsLoading.value = false
   }
 }
 
@@ -201,7 +250,7 @@ function openEdit(row: Record<string, DatabaseValue>) {
   rowDialogMode.value = 'edit'
   rowForm.value = Object.fromEntries(columns.value.map((column) => [
     column.name,
-    row[column.name] === null || row[column.name] === undefined ? '' : String(row[column.name]),
+    databaseEditorValue(row[column.name], column),
   ]))
   rowNullFields.value = Object.fromEntries(columns.value.map((column) => [
     column.name,
@@ -213,27 +262,36 @@ function openEdit(row: Record<string, DatabaseValue>) {
 
 async function submitRow() {
   if (!table.value || !canInsertRows.value) return
+  const sequence = ++mutationSequence
+  const requestKey = routeKey.value
+  mutationController?.abort()
+  const controller = new AbortController()
+  mutationController = controller
   mutationPending.value = true
   clearError()
   try {
     const values = Object.fromEntries(columns.value.flatMap((column) => {
       const rawValue = rowForm.value[column.name] ?? ''
-      if (rowDialogMode.value === 'insert' && rawValue === '' && (column.primaryKey || column.default !== undefined)) return []
-      return [[column.name, resolveDatabaseValue(rawValue, column, rowNullFields.value[column.name] === true)]]
+      const nullSelected = rowNullFields.value[column.name] === true
+      if (rowDialogMode.value === 'insert' && rawValue.trim() === '' && column.writeMode === 'required' && !nullSelected) {
+        throw new DatabaseValueError(`字段「${column.name}」为必填项，请填写值或显式选择 NULL。`)
+      }
+      if (rowDialogMode.value === 'insert' && rawValue === '' && column.writeMode !== 'required') return []
+      return [[column.name, resolveDatabaseValue(rawValue, column, nullSelected)]]
     }))
     if (rowDialogMode.value === 'insert') {
-      await insertDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values })
-      ElMessage.success('数据行已新增')
+      await insertDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values }, controller.signal)
     } else {
-      await updateDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values, keys: originalKeys.value })
-      ElMessage.success('数据行已更新')
+      await updateDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values, keys: originalKeys.value }, controller.signal)
     }
+    if (sequence !== mutationSequence || routeKey.value !== requestKey || controller.signal.aborted) return
+    ElMessage.success(rowDialogMode.value === 'insert' ? '数据行已新增' : '数据行已更新')
     rowDialogOpen.value = false
     await refreshRows()
   } catch (error) {
-    setError(error, '数据写入失败。')
+    if (sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据写入失败。')
   } finally {
-    mutationPending.value = false
+    if (sequence === mutationSequence) mutationPending.value = false
   }
 }
 
@@ -246,23 +304,36 @@ async function removeRow(row: Record<string, DatabaseValue>) {
 }
 
 async function executeSQL(statement: string) {
+  const sequence = ++querySequence
+  const requestKey = routeKey.value
+  queryController?.abort()
+  const controller = new AbortController()
+  queryController = controller
   queryPending.value = true
   queryError.value = null
   try {
-    queryResult.value = await executeDatabaseSQL({ ...connection(), sql: statement })
-    if (!queryResult.value.columns.length) await refreshRows()
+    const result = await executeDatabaseSQL({ ...connection(), sql: statement }, controller.signal)
+    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted) return false
+    queryResult.value = result
+    if (!result.columns.length) await refreshRows()
     return true
   } catch (error) {
+    if (sequence !== querySequence || routeKey.value !== requestKey || isAbortError(error)) return false
     queryResult.value = null
     queryError.value = toErrorState(error, 'SQL 执行失败。')
     return false
   } finally {
-    queryPending.value = false
+    if (sequence === querySequence) queryPending.value = false
   }
 }
 
 async function confirmDanger() {
   if (!table.value || dangerBusy.value) return
+  const sequence = ++mutationSequence
+  const requestKey = routeKey.value
+  mutationController?.abort()
+  const controller = dangerAction.value === 'delete-row' ? new AbortController() : null
+  if (controller) mutationController = controller
   dangerBusy.value = true
   let succeeded = false
   try {
@@ -271,19 +342,23 @@ async function confirmDanger() {
       if (!row) return
       const keys = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
       clearError()
-      await deleteDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, keys })
+      await deleteDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, keys }, controller?.signal)
+      if (sequence !== mutationSequence || routeKey.value !== requestKey || controller?.signal.aborted) return
       ElMessage.success('数据行已删除')
       await refreshRows()
+      if (sequence !== mutationSequence || routeKey.value !== requestKey) return
       succeeded = true
     } else {
       succeeded = await executeSQL(pendingSql.value)
-      if (succeeded) ElMessage.success('SQL 执行完成')
+      if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) ElMessage.success('SQL 执行完成')
     }
   } catch (error) {
-    if (dangerAction.value === 'delete-row') setError(error, '数据删除失败。')
+    if (dangerAction.value === 'delete-row' && sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据删除失败。')
   } finally {
-    dangerBusy.value = false
-    if (succeeded) {
+    if (sequence === mutationSequence) {
+      dangerBusy.value = false
+    }
+    if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) {
       dangerOpen.value = false
       pendingRow.value = null
       pendingSql.value = ''
@@ -379,6 +454,25 @@ function setError(error: unknown, fallback: string) {
 function clearError() {
   errorState.value = null
 }
+
+watch(routeKey, () => { void initialize() }, { immediate: true })
+watch(pageSize, (next, previous) => {
+  if (next === previous) return
+  offset.value = 0
+  sql.value = table.value ? `SELECT * FROM ${sqlTableName()} LIMIT ${next}` : sql.value
+  void refreshRows()
+})
+onBeforeUnmount(() => {
+  routeSequence += 1
+  rowsSequence += 1
+  querySequence += 1
+  mutationSequence += 1
+  rowsController?.abort()
+  initializeController?.abort()
+  queryController?.abort()
+  mutationController?.abort()
+  initializeController = null
+})
 </script>
 
 <template>
@@ -421,7 +515,8 @@ function clearError() {
         </div>
       </div>
       <div v-if="isView" class="object-warning">当前对象是视图，只读展示，新增、编辑和删除已停用。</div>
-      <div v-else-if="!primaryKeyColumns.length" class="object-warning">当前表没有主键，为避免误改多行，编辑和删除已停用。</div>
+      <div v-else-if="!primaryKeyColumns.length" class="object-warning">当前表没有主键，为避免误改多行，编辑和删除已停用；同时禁用跨页浏览，首批数据仅供查看。</div>
+      <div v-if="tableRows && !stablePagination" class="object-warning">当前表缺少稳定分页键，仅显示首批数据；如需完整浏览，请在 SQL Workbench 中使用自定义排序查询。</div>
       <div class="data-table-hint"><span>表数据</span><small>左右滑动查看字段，编号和行操作已固定</small></div>
       <div class="data-table">
         <div v-if="rowsLoading && !tableRows" class="data-table-skeleton">
@@ -446,7 +541,7 @@ function clearError() {
       </div>
       <footer class="data-pagination">
         <ListPageSizeControl list-key="database.table.rows" />
-        <div><ElButton :disabled="offset === 0 || rowsLoading" @click="offset = Math.max(0, offset - pageSize); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading" @click="offset += pageSize; refreshRows()">下一页</ElButton></div>
+        <div><ElButton :disabled="offset === 0 || rowsLoading || !stablePagination" @click="offset = Math.max(0, offset - pageSize); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading || !stablePagination" @click="offset += pageSize; refreshRows()">下一页</ElButton></div>
       </footer>
     </section>
 

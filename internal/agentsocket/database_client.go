@@ -12,8 +12,16 @@ import (
 )
 
 func DiscoverDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
+	return discoverDatabases(ctx, socketPath, false)
+}
+
+func RefreshDatabases(ctx context.Context, socketPath string) (ncpdatabase.Discovery, error) {
+	return discoverDatabases(ctx, socketPath, true)
+}
+
+func discoverDatabases(ctx context.Context, socketPath string, force bool) (ncpdatabase.Discovery, error) {
 	var result ncpdatabase.Discovery
-	err := callDatabase(ctx, socketPath, struct{}{}, &result, func(client AgentDatabaseServiceClient, request *structpb.Struct) (*structpb.Struct, error) {
+	err := callDatabase(ctx, socketPath, map[string]any{"refresh": force}, &result, func(client AgentDatabaseServiceClient, request *structpb.Struct) (*structpb.Struct, error) {
 		return client.Discover(ctx, request)
 	})
 	return result, err

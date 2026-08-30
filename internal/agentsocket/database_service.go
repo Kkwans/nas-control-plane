@@ -20,6 +20,10 @@ type DatabaseProvider interface {
 	Delete(context.Context, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+type DatabaseDiscoveryOptionsProvider interface {
+	DiscoverWithOptions(context.Context, bool) (ncpdatabase.Discovery, error)
+}
+
 // DatabaseConnectionProvider is optional to keep the existing database
 // provider contract source-compatible while newer Agents expose diagnostics.
 type DatabaseConnectionProvider interface {
@@ -34,8 +38,23 @@ func newDatabaseService(provider DatabaseProvider) *databaseService {
 	return &databaseService{provider: provider}
 }
 
-func (s *databaseService) Discover(ctx context.Context, _ *structpb.Struct) (*structpb.Struct, error) {
-	result, err := s.provider.Discover(ctx)
+func (s *databaseService) Discover(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	force := false
+	if request != nil {
+		var options struct {
+			Refresh bool `json:"refresh"`
+		}
+		if err := decodeDatabaseRequest(request, &options); err == nil {
+			force = options.Refresh
+		}
+	}
+	var result ncpdatabase.Discovery
+	var err error
+	if provider, ok := s.provider.(DatabaseDiscoveryOptionsProvider); ok {
+		result, err = provider.DiscoverWithOptions(ctx, force)
+	} else {
+		result, err = s.provider.Discover(ctx)
+	}
 	return databaseResponse(result, err)
 }
 

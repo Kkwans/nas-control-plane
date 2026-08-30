@@ -73,6 +73,10 @@ type DatabaseAgentClient interface {
 	DeleteDatabaseRow(context.Context, string, ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error)
 }
 
+type DatabaseDiscoveryRefreshAgentClient interface {
+	RefreshDatabases(context.Context, string) (ncpdatabase.Discovery, error)
+}
+
 type DatabaseConnectionCoordinator interface {
 	Connect(context.Context, ncpdatabase.Source, *ncpdatabase.Credentials) (ncpdatabase.ConnectionDiagnostic, error)
 }

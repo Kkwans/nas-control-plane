@@ -23,6 +23,35 @@ export function databaseEditorKind(dataType: string): DatabaseEditorKind {
   return 'text'
 }
 
+function isTimezoneAware(dataType: string) {
+  return /timestamptz|timestamp\s+with\s+time\s+zone|datetimeoffset|with\s+time\s+zone/i.test(dataType)
+}
+
+function pad(value: number) {
+  return String(value).padStart(2, '0')
+}
+
+/** Convert a wire timestamp into the browser's datetime-local wall clock. */
+export function databaseEditorValue(value: DatabaseValue | undefined, column: DatabaseColumn): string {
+  if (value === null || value === undefined) return ''
+  const text = String(value)
+  if (databaseEditorKind(column.dataType) !== 'datetime') return text
+  if (!isTimezoneAware(column.dataType)) return text.replace(' ', 'T').replace(/Z$/i, '')
+  const date = new Date(text)
+  if (!Number.isFinite(date.valueOf())) return text.replace(' ', 'T')
+  const milliseconds = date.getMilliseconds()
+  const fraction = milliseconds ? `.${String(milliseconds).padStart(3, '0')}` : ''
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${fraction}`
+}
+
+/** Convert datetime-local input back to an instant or a timezone-naive value. */
+export function databaseWireValue(value: string, column: DatabaseColumn): string {
+  if (databaseEditorKind(column.dataType) !== 'datetime' || !value.trim()) return value
+  if (!isTimezoneAware(column.dataType)) return value.replace('T', ' ')
+  const date = new Date(value)
+  return Number.isFinite(date.valueOf()) ? date.toISOString() : value
+}
+
 export class DatabaseValueError extends Error {
   readonly code = 'DATABASE_VALUE_INVALID'
 
@@ -59,6 +88,10 @@ export function resolveDatabaseValue(value: string, column: DatabaseColumn, null
     if (normalized === 'true' || normalized === '1') return true
     if (normalized === 'false' || normalized === '0') return false
     throw new DatabaseValueError(`字段「${column.name}」需要填写 true/false 或 1/0。`)
+  }
+
+  if (databaseEditorKind(column.dataType) === 'datetime') {
+    return databaseWireValue(value, column)
   }
 
   if (jsonTypePattern.test(column.dataType)) {

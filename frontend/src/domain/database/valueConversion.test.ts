@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { DatabaseColumn } from '@/api/database'
 
-import { DatabaseValueError, databaseEditorKind, resolveDatabaseValue } from './valueConversion'
+import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWireValue, resolveDatabaseValue } from './valueConversion'
 
 function column(dataType: string, nullable = true): DatabaseColumn {
   return { name: 'value', dataType, nullable, primaryKey: false, position: 1 }
@@ -46,5 +46,20 @@ describe('databaseEditorKind', () => {
     ['bytea', 'blob'],
   ] as const)('maps %s to %s', (dataType, kind) => {
     expect(databaseEditorKind(dataType)).toBe(kind)
+  })
+})
+
+describe('database datetime adapters', () => {
+  it('keeps timezone-naive values as local wall time', () => {
+    const timestamp = column('timestamp')
+    expect(databaseEditorValue('2026-08-30 12:34:56.123', timestamp)).toBe('2026-08-30T12:34:56.123')
+    expect(databaseWireValue('2026-08-30T12:34:56.123', timestamp)).toBe('2026-08-30 12:34:56.123')
+  })
+
+  it('converts timezone-aware values to the browser local editor and back to an instant', () => {
+    const timestamp = column('timestamp with time zone')
+    const editorValue = databaseEditorValue('2026-08-30T04:34:56.123Z', timestamp)
+    expect(new Date(editorValue).valueOf()).toBe(new Date('2026-08-30T04:34:56.123Z').valueOf())
+    expect(databaseWireValue(editorValue, timestamp)).toBe('2026-08-30T04:34:56.123Z')
   })
 })

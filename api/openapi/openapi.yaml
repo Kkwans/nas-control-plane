@@ -394,6 +394,11 @@ paths:
       summary: 发现宿主机和项目数据库
       tags: [databases]
       security: [{RootSession: []}]
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
       responses:
         '200':
           description: 数据库来源列表
@@ -2075,7 +2080,7 @@ components:
         - $ref: '#/components/schemas/DatabaseConnection'
     DatabaseSource:
       type: object
-      required: [id, name, driver, category, project, module, location, requiresLogin, status, tags]
+      required: [id, name, driver, category, project, module, location, requiresLogin, status, reachability, evidence, tags]
       properties:
         id: { type: string }
         name: { type: string }
@@ -2090,6 +2095,8 @@ components:
         defaultDatabase: { type: string }
         requiresLogin: { type: boolean }
         status: { type: string }
+        reachability: { type: string, enum: [host, container-internal, unreachable] }
+        evidence: { type: string, enum: [published-port, host-network, host-path, database-url, none] }
         tags: { type: array, items: { type: string } }
     DatabaseDiscovery:
       type: object
@@ -2112,7 +2119,7 @@ components:
         durationMs: { type: integer, minimum: 0 }
     DatabaseColumn:
       type: object
-      required: [name, dataType, nullable, primaryKey, position]
+      required: [name, dataType, nullable, primaryKey, position, writeMode]
       properties:
         name: { type: string }
         dataType: { type: string }
@@ -2120,6 +2127,7 @@ components:
         primaryKey: { type: boolean }
         default: {}
         position: { type: integer, minimum: 0 }
+        writeMode: { type: string, enum: [required, optional-default, server-generated] }
     DatabaseTable:
       type: object
       required: [schema, name, type, columns]
@@ -2174,7 +2182,7 @@ components:
             sortDirection: { type: string, enum: [asc, desc] }
     DatabaseRowsResult:
       type: object
-      required: [table, rows, limit, offset, hasMore]
+      required: [table, rows, limit, offset, hasMore, ordering]
       properties:
         table: { $ref: '#/components/schemas/DatabaseTable' }
         rows:
@@ -2183,6 +2191,12 @@ components:
         limit: { type: integer, minimum: 1 }
         offset: { type: integer, minimum: 0 }
         hasMore: { type: boolean }
+        ordering:
+          type: object
+          required: [stable, columns]
+          properties:
+            stable: { type: boolean }
+            columns: { type: array, items: { type: string } }
     DatabaseInsertRequest:
       allOf:
         - $ref: '#/components/schemas/DatabaseConnection'

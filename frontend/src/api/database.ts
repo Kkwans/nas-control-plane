@@ -17,6 +17,8 @@ export interface DatabaseSource {
   defaultDatabase?: string
   requiresLogin: boolean
   status: string
+  reachability?: 'host' | 'container-internal' | 'unreachable'
+  evidence?: 'published-port' | 'host-network' | 'host-path' | 'database-url' | 'none'
   tags: string[]
 }
 
@@ -61,6 +63,7 @@ export interface DatabaseColumn {
   primaryKey: boolean
   default?: DatabaseValue
   position: number
+  writeMode?: 'required' | 'optional-default' | 'server-generated'
 }
 
 export interface DatabaseTable {
@@ -90,6 +93,7 @@ export interface DatabaseRows {
   limit: number
   offset: number
   hasMore: boolean
+  ordering?: { stable: boolean; columns: string[] }
 }
 
 export interface QueryResult {
@@ -100,20 +104,20 @@ export interface QueryResult {
   durationMs: number
 }
 
-export async function discoverDatabases(): Promise<DatabaseDiscovery> {
-  return request<DatabaseDiscovery>('/api/v1/databases/discovery')
+export async function discoverDatabases(force = false, signal?: AbortSignal): Promise<DatabaseDiscovery> {
+  return request<DatabaseDiscovery>(force ? '/api/v1/databases/discovery?refresh=true' : '/api/v1/databases/discovery', undefined, signal)
 }
 
-export async function testDatabaseConnection(connection: DatabaseConnection): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/test-connection', connection)
+export async function testDatabaseConnection(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
+  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/test-connection', connection, signal)
 }
 
-export async function connectDatabase(connection: DatabaseConnection): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/connect', connection)
+export async function connectDatabase(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
+  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/connect', connection, signal)
 }
 
-export async function loadDatabaseCatalog(connection: DatabaseConnection): Promise<DatabaseCatalog> {
-  return request<DatabaseCatalog>('/api/v1/databases/catalog', connection)
+export async function loadDatabaseCatalog(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseCatalog> {
+  return request<DatabaseCatalog>('/api/v1/databases/catalog', connection, signal)
 }
 
 export async function loadDatabaseRows(input: DatabaseConnection & {
@@ -123,20 +127,20 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
   offset?: number
   sortColumn?: string
   sortDirection?: string
-}): Promise<DatabaseRows> {
-  return request<DatabaseRows>('/api/v1/databases/rows', input)
+}, signal?: AbortSignal): Promise<DatabaseRows> {
+  return request<DatabaseRows>('/api/v1/databases/rows', input, signal)
 }
 
-export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string }): Promise<QueryResult> {
-  return request<QueryResult>('/api/v1/databases/query', input)
+export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string }, signal?: AbortSignal): Promise<QueryResult> {
+  return request<QueryResult>('/api/v1/databases/query', input, signal)
 }
 
 export async function insertDatabaseRow(input: DatabaseConnection & {
   schema?: string
   table: string
   values: Record<string, DatabaseValue>
-}): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/insert', input)
+}, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
+  return request('/api/v1/databases/rows/insert', input, signal)
 }
 
 export async function updateDatabaseRow(input: DatabaseConnection & {
@@ -144,19 +148,19 @@ export async function updateDatabaseRow(input: DatabaseConnection & {
   table: string
   values: Record<string, DatabaseValue>
   keys: Record<string, DatabaseValue>
-}): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/update', input)
+}, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
+  return request('/api/v1/databases/rows/update', input, signal)
 }
 
 export async function deleteDatabaseRow(input: DatabaseConnection & {
   schema?: string
   table: string
   keys: Record<string, DatabaseValue>
-}): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/delete', input)
+}, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
+  return request('/api/v1/databases/rows/delete', input, signal)
 }
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
+async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method: body === undefined ? 'GET' : 'POST',
     credentials: 'same-origin',
@@ -165,6 +169,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   })
   if (!response.ok) {
     try {
