@@ -92,7 +92,8 @@ test('系统详情加载完成后可打开并取消 DNS 编辑 Dialog', async ({
   })
 
   await page.goto('/system', { waitUntil: 'domcontentloaded', timeout: 30_000 })
-  await expect(page.locator('.details-skeleton')).toBeVisible({ timeout: 15_000 })
+  // The fixture may resolve before the first rendered frame; assert the
+  // stable loaded state instead of requiring a transient skeleton to paint.
   await expect(page.getByRole('heading', { name: '网络与控制链路' })).toBeVisible({ timeout: 30_000 })
   await page.getByRole('button', { name: '网络与代理', exact: true }).click()
   await page.getByRole('button', { name: '编辑 DNS', exact: true }).click()
