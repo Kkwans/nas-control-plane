@@ -924,7 +924,13 @@ func hasColumn(columns []Column, name string) bool {
 
 func writeModeForColumn(primaryKey bool, dataType string, defaultValue any, identityGeneration, generatedKind string) string {
 	generation := strings.ToLower(strings.TrimSpace(identityGeneration))
-	generated := generation == "yes" || generation == "sqlite-rowid" || strings.Contains(generation, "auto_increment") || strings.Contains(generation, "generated") ||
+	// MySQL reports DEFAULT_GENERATED in information_schema.columns.extra for
+	// ordinary columns that merely have a default expression. That is an
+	// optional default, not a generated column whose value the server forbids
+	// callers from supplying. Only identity/auto-increment and explicit
+	// generated-column markers belong to server-generated.
+	explicitGenerated := strings.Contains(generation, "generated") && !strings.Contains(generation, "default_generated")
+	generated := generation == "yes" || generation == "sqlite-rowid" || strings.Contains(generation, "auto_increment") || strings.Contains(generation, "identity") || explicitGenerated ||
 		(strings.ToLower(strings.TrimSpace(generatedKind)) != "never" && strings.TrimSpace(generatedKind) != "") ||
 		strings.Contains(strings.ToLower(fmt.Sprint(defaultValue)), "nextval(")
 	if generated {

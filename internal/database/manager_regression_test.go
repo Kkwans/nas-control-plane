@@ -76,6 +76,12 @@ func TestWriteModeRecognizesEmptyDefault(t *testing.T) {
 	if got := writeModeForColumn(false, "TEXT", "", "", ""); got != "optional-default" {
 		t.Fatalf("empty default write mode = %q", got)
 	}
+	if got := writeModeForColumn(false, "TIMESTAMP", nil, "DEFAULT_GENERATED", ""); got != "required" {
+		t.Fatalf("default-generated without exposed default = %q", got)
+	}
+	if got := writeModeForColumn(false, "TIMESTAMP", "CURRENT_TIMESTAMP", "DEFAULT_GENERATED", ""); got != "optional-default" {
+		t.Fatalf("default-generated write mode = %q", got)
+	}
 }
 
 func TestCompositeIntegerKeysRemainRequired(t *testing.T) {
