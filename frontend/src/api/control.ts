@@ -156,7 +156,11 @@ export function requestListPreference(listKey: string, signal?: AbortSignal): Pr
   return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`, signal ? { signal } : {})
 }
 
-export function updateListPreference(listKey: string, input: Omit<ListPreference, 'listKey'>, signal?: AbortSignal): Promise<ListPreference> {
+export function updateListPreference(
+  listKey: string,
+  input: Omit<ListPreference, 'listKey'>,
+  signal?: AbortSignal,
+): Promise<ListPreference> {
   return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`, {
     method: 'PUT',
     body: JSON.stringify({ listKey, ...input }),
@@ -168,8 +172,15 @@ export function requestDatabaseProjectPreferences(signal?: AbortSignal): Promise
   return request('/api/v1/databases/project-preferences', signal ? { signal } : {})
 }
 
-export function updateDatabaseProjectPreference(input: DatabaseProjectPreference): Promise<DatabaseProjectPreference> {
-  return request('/api/v1/databases/project-preferences', { method: 'PUT', body: JSON.stringify(input) })
+export function updateDatabaseProjectPreference(
+  input: DatabaseProjectPreference,
+  signal?: AbortSignal,
+): Promise<DatabaseProjectPreference> {
+  return request('/api/v1/databases/project-preferences', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    ...(signal ? { signal } : {}),
+  })
 }
 
 export function requestSites(signal?: AbortSignal): Promise<SiteListResponse> {
@@ -181,10 +192,12 @@ export function requestSites(signal?: AbortSignal): Promise<SiteListResponse> {
       candidateCount: result.discovery?.candidateCount ?? result.sites?.length ?? 0,
       verifiedCount: result.discovery?.verifiedCount ?? result.sites?.length ?? 0,
       failedCount: result.discovery?.failedCount ?? 0,
-      issues: Array.isArray(result.discovery?.issues) ? result.discovery.issues.map((issue) => ({
-        ...issue,
-        ports: Array.isArray(issue.ports) ? issue.ports : [],
-      })) : [],
+      issues: Array.isArray(result.discovery?.issues)
+        ? result.discovery.issues.map((issue) => ({
+            ...issue,
+            ports: Array.isArray(issue.ports) ? issue.ports : [],
+          }))
+        : [],
     },
     sites: (result.sites ?? []).map((site) => ({
       ...site,
@@ -197,38 +210,66 @@ export function requestSites(signal?: AbortSignal): Promise<SiteListResponse> {
   }))
 }
 
-export function updateSite(siteId: string, input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'PUT', body: JSON.stringify(input) })
+export function updateSite(
+  siteId: string,
+  input: SiteProfileInput,
+  signal?: AbortSignal,
+): Promise<SiteProfileInput & { projectId: string }> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+    ...(signal ? { signal } : {}),
+  })
 }
 
-export function createSite(input: SiteProfileInput): Promise<SiteProfileInput & { projectId: string }> {
-  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input) })
+export function createSite(
+  input: SiteProfileInput,
+  signal?: AbortSignal,
+): Promise<SiteProfileInput & { projectId: string }> {
+  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input), ...(signal ? { signal } : {}) })
 }
 
-export function deleteSite(siteId: string): Promise<void> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE' })
+export function deleteSite(siteId: string, signal?: AbortSignal): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE', ...(signal ? { signal } : {}) })
 }
 
 export function requestIgnoredSites(signal?: AbortSignal): Promise<Array<SiteProfileInput & { projectId: string }>> {
   return request('/api/v1/sites/ignored', signal ? { signal } : {})
 }
 
-export function restoreSite(siteId: string): Promise<void> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/restore`, { method: 'POST' })
+export function restoreSite(siteId: string, signal?: AbortSignal): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/restore`, {
+    method: 'POST',
+    ...(signal ? { signal } : {}),
+  })
 }
 
-export function uploadSiteIcon(siteId: string, icon: File): Promise<{ siteId: string; iconUrl: string }> {
+export function uploadSiteIcon(
+  siteId: string,
+  icon: File,
+  signal?: AbortSignal,
+): Promise<{ siteId: string; iconUrl: string }> {
   const body = new FormData()
   body.append('icon', icon)
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, { method: 'POST', body })
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, {
+    method: 'POST',
+    body,
+    ...(signal ? { signal } : {}),
+  })
 }
 
-export function deleteSiteIcon(siteId: string): Promise<void> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, { method: 'DELETE' })
+export function deleteSiteIcon(siteId: string, signal?: AbortSignal): Promise<void> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, {
+    method: 'DELETE',
+    ...(signal ? { signal } : {}),
+  })
 }
 
-export function recordSiteVisit(siteId: string): Promise<{ siteId: string; lastVisitedAt: string }> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/visit`, { method: 'POST' })
+export function recordSiteVisit(
+  siteId: string,
+  signal?: AbortSignal,
+): Promise<{ siteId: string; lastVisitedAt: string }> {
+  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/visit`, { method: 'POST', ...(signal ? { signal } : {}) })
 }
 
 export function requestComposeDraft(projectId: string, configPath: string): Promise<ComposeDraft> {
@@ -236,7 +277,9 @@ export function requestComposeDraft(projectId: string, configPath: string): Prom
   return request(`/api/v1/docker/compose/drafts?${parameters}`)
 }
 
-export function saveComposeDraft(input: Pick<ComposeDraft, 'projectId' | 'configPath' | 'content'>): Promise<ComposeDraft> {
+export function saveComposeDraft(
+  input: Pick<ComposeDraft, 'projectId' | 'configPath' | 'content'>,
+): Promise<ComposeDraft> {
   return request('/api/v1/docker/compose/drafts', { method: 'PUT', body: JSON.stringify(input) })
 }
 
@@ -244,22 +287,29 @@ export function requestComposeRevisions(projectId: string): Promise<ComposeRevis
   return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
 }
 
-export function requestMetricSamples(input: '1h' | '6h' | '24h' | '7d' | { from: string; to: string }, signal?: AbortSignal): Promise<MetricSample[]> {
-  const parameters = typeof input === 'string'
-    ? new URLSearchParams({ range: input })
-    : new URLSearchParams({ from: input.from, to: input.to })
+export function requestMetricSamples(
+  input: '1h' | '6h' | '24h' | '7d' | { from: string; to: string },
+  signal?: AbortSignal,
+): Promise<MetricSample[]> {
+  const parameters =
+    typeof input === 'string'
+      ? new URLSearchParams({ range: input })
+      : new URLSearchParams({ from: input.from, to: input.to })
   return request(`/api/v1/monitoring/samples?${parameters}`, signal ? { signal } : {})
 }
 
-export function requestLogs(input: {
-  source: 'system' | 'agent' | 'container'
-  containerId?: string
-  level?: string
-  query?: string
-  hours?: number
-  limit?: number
-  cursor?: string
-}, signal?: AbortSignal): Promise<LogResponse> {
+export function requestLogs(
+  input: {
+    source: 'system' | 'agent' | 'container'
+    containerId?: string
+    level?: string
+    query?: string
+    hours?: number
+    limit?: number
+    cursor?: string
+  },
+  signal?: AbortSignal,
+): Promise<LogResponse> {
   return request(`/api/v1/logs?${logParameters(input)}`, { signal })
 }
 
@@ -287,10 +337,13 @@ export function updateUserPassword(
   userId: number,
   input: { currentPassword?: string; newPassword: string },
 ): Promise<void> {
-  return request(`/api/v1/users/${userId}/password`, { method: 'PUT', body: JSON.stringify({
-    currentPassword: input.currentPassword || '',
-    newPassword: input.newPassword,
-  }) })
+  return request(`/api/v1/users/${userId}/password`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      currentPassword: input.currentPassword || '',
+      newPassword: input.newPassword,
+    }),
+  })
 }
 
 export function deleteUser(userId: number): Promise<void> {
@@ -316,7 +369,8 @@ export function followLogs(
   source.addEventListener('logs', (event) => {
     try {
       const payload = JSON.parse((event as MessageEvent<string>).data) as LogResponse
-      if (!Array.isArray(payload.entries) || typeof payload.collectedAt !== 'string') throw new Error('invalid log stream')
+      if (!Array.isArray(payload.entries) || typeof payload.collectedAt !== 'string')
+        throw new Error('invalid log stream')
       onLogs(payload)
     } catch {
       source.close()
@@ -332,10 +386,10 @@ function logParameters(input: {
   source: 'system' | 'agent' | 'container'
   containerId?: string
   level?: string
-    query?: string
-    hours?: number
-    limit?: number
-    cursor?: string
+  query?: string
+  hours?: number
+  limit?: number
+  cursor?: string
 }) {
   const parameters = new URLSearchParams({
     source: input.source,
@@ -362,8 +416,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   })
   if (!response.ok) {
     try {
-      const payload = await response.json() as { code?: string; message?: string; requestId?: string }
-      throw new NcpApiError(payload.code || 'CONTROL_REQUEST_FAILED', payload.message || '控制面请求失败。', payload.requestId)
+      const payload = (await response.json()) as { code?: string; message?: string; requestId?: string }
+      throw new NcpApiError(
+        payload.code || 'CONTROL_REQUEST_FAILED',
+        payload.message || '控制面请求失败。',
+        payload.requestId,
+      )
     } catch (error) {
       if (error instanceof NcpApiError) throw error
       throw new NcpApiError('CONTROL_REQUEST_FAILED', '控制面请求失败。')
@@ -371,7 +429,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   try {
-    return await response.json() as T
+    return (await response.json()) as T
   } catch {
     throw new NcpApiError('CONTROL_RESPONSE_INVALID', '控制面返回了无法识别的数据。')
   }

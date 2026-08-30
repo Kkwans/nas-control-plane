@@ -16,7 +16,7 @@ import {
   type SiteProfileInput,
 } from '@/api/control'
 import { NcpApiError } from '@/api/system'
-import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 export class SiteSyncError extends Error {
   readonly code = 'SITES_SYNC_FAILED'
@@ -32,17 +32,21 @@ export const useSitesStore = defineStore('sites', () => {
   const collectedAt = ref('')
   const error = ref<string | null>(null)
   const discovery = ref<SiteDiscoverySummary>({
-    status: 'unavailable', probeAvailable: false, candidateCount: 0,
-    verifiedCount: 0, failedCount: 0, issues: [],
+    status: 'unavailable',
+    probeAvailable: false,
+    candidateCount: 0,
+    verifiedCount: 0,
+    failedCount: 0,
+    issues: [],
   })
   const ignoredSites = ref<Array<SiteProfileInput & { projectId: string }>>([])
   let refreshSequence = 0
 
   const visibleSites = computed(() => sites.value.filter((site) => !site.hidden))
 
-  async function refresh(): Promise<boolean> {
+  async function refresh(existingSession?: SessionContext): Promise<boolean> {
     const sequence = ++refreshSequence
-    const session = captureSession()
+    const session = existingSession ?? captureSession()
     loading.value = true
     error.value = null
     try {
@@ -54,9 +58,8 @@ export const useSitesStore = defineStore('sites', () => {
       collectedAt.value = result.collectedAt
     } catch (caught) {
       if (isAbortError(caught) || sequence !== refreshSequence || !isCurrentSession(session.generation)) return false
-      error.value = caught instanceof NcpApiError
-        ? caught.message
-        : '无法读取站点目录，请检查 NCP Server 与 Root Agent 的连接。'
+      error.value =
+        caught instanceof NcpApiError ? caught.message : '无法读取站点目录，请检查 NCP Server 与 Root Agent 的连接。'
       return false
     } finally {
       if (sequence === refreshSequence && isCurrentSession(session.generation)) loading.value = false
@@ -65,51 +68,59 @@ export const useSitesStore = defineStore('sites', () => {
   }
 
   async function save(siteId: string, input: SiteProfileInput) {
-    await updateSite(siteId, input)
-    await refresh()
+    const session = captureSession()
+    await updateSite(siteId, input, session.signal)
+    if (!isCurrentSession(session.generation)) return
+    await refresh(session)
   }
 
   async function create(input: SiteProfileInput, icon?: File | null) {
-    const result = await createSite(input)
+    const session = captureSession()
+    const result = await createSite(input, session.signal)
     try {
-      if (icon) await uploadSiteIcon(result.projectId, icon)
+      if (icon) await uploadSiteIcon(result.projectId, icon, session.signal)
     } catch (error) {
       // Creating a site and uploading its icon are exposed as two HTTP calls.
       // Roll the first call back so a failed icon upload cannot leave a
       // successfully-created record that the user then submits again.
-      await deleteSite(result.projectId).catch(() => undefined)
-      await refresh()
+      if (isCurrentSession(session.generation)) {
+        await deleteSite(result.projectId, session.signal).catch(() => undefined)
+        await refresh(session)
+      }
       throw error
     }
-    await refresh()
+    if (isCurrentSession(session.generation)) await refresh(session)
     return result
   }
 
   async function remove(siteId: string) {
     const session = captureSession()
-    await deleteSite(siteId)
-    if (isCurrentSession(session.generation) && !(await refresh())) throw new SiteSyncError()
+    await deleteSite(siteId, session.signal)
+    if (isCurrentSession(session.generation) && !(await refresh(session))) throw new SiteSyncError()
   }
 
   async function restore(siteId: string) {
-    await restoreSite(siteId)
-    await refresh()
+    const session = captureSession()
+    await restoreSite(siteId, session.signal)
+    if (isCurrentSession(session.generation)) await refresh(session)
   }
 
   async function uploadIcon(siteId: string, icon: File) {
-    const result = await uploadSiteIcon(siteId, icon)
-    await refresh()
+    const session = captureSession()
+    const result = await uploadSiteIcon(siteId, icon, session.signal)
+    if (isCurrentSession(session.generation)) await refresh(session)
     return result
   }
 
   async function removeIcon(siteId: string) {
-    await deleteSiteIcon(siteId)
-    await refresh()
+    const session = captureSession()
+    await deleteSiteIcon(siteId, session.signal)
+    if (isCurrentSession(session.generation)) await refresh(session)
   }
 
   async function visit(siteId: string) {
     const session = captureSession()
-    const result = await recordSiteVisit(siteId)
+    const result = await recordSiteVisit(siteId, session.signal)
     const site = sites.value.find((item) => item.id === siteId)
     if (site && isCurrentSession(session.generation)) site.lastVisitedAt = result.lastVisitedAt
   }
@@ -121,8 +132,12 @@ export const useSitesStore = defineStore('sites', () => {
     collectedAt.value = ''
     error.value = null
     discovery.value = {
-      status: 'unavailable', probeAvailable: false, candidateCount: 0,
-      verifiedCount: 0, failedCount: 0, issues: [],
+      status: 'unavailable',
+      probeAvailable: false,
+      candidateCount: 0,
+      verifiedCount: 0,
+      failedCount: 0,
+      issues: [],
     }
     ignoredSites.value = []
   }

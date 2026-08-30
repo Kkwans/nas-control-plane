@@ -1,10 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import {
-  requestDatabaseProjectPreferences,
-  updateDatabaseProjectPreference,
-} from '@/api/control'
+import { requestDatabaseProjectPreferences, updateDatabaseProjectPreference } from '@/api/control'
 import {
   connectDatabase,
   discoverDatabases,
@@ -14,7 +11,7 @@ import {
   type DatabaseCredentials,
   type DatabaseSource,
 } from '@/api/database'
-import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 export function databaseProjectKey(source: DatabaseSource) {
   const project = source.project?.trim() || source.module?.trim() || '未关联项目'
@@ -49,23 +46,25 @@ export const useDatabaseStore = defineStore('database', () => {
     return archivedProjectKeys.value.includes(projectKey)
   }
 
-  async function loadProjectPreferences() {
-    const session = captureSession()
+  async function loadProjectPreferences(existingSession?: SessionContext) {
+    const session = existingSession ?? captureSession()
     const preferences = await requestDatabaseProjectPreferences(session.signal)
     if (!isCurrentSession(session.generation)) return
     archivedProjectKeys.value = preferences.filter((item) => item.archived).map((item) => item.projectKey)
   }
 
   async function setProjectArchived(projectKey: string, archived: boolean) {
+    const session = captureSession()
     const previous = archivedProjectKeys.value
     const keys = new Set(archivedProjectKeys.value)
     if (archived) keys.add(projectKey)
     else keys.delete(projectKey)
     archivedProjectKeys.value = [...keys]
     try {
-      await updateDatabaseProjectPreference({ projectKey, archived })
+      await updateDatabaseProjectPreference({ projectKey, archived }, session.signal)
     } catch (error) {
-      archivedProjectKeys.value = previous
+      if (isCurrentSession(session.generation)) archivedProjectKeys.value = previous
+      if (isAbortError(error) || !isCurrentSession(session.generation)) return
       throw error
     }
   }
@@ -75,10 +74,7 @@ export const useDatabaseStore = defineStore('database', () => {
     const session = captureSession()
     loading.value = true
     try {
-      const [result] = await Promise.all([
-        discoverDatabases(force, session.signal),
-        loadProjectPreferences(),
-      ])
+      const [result] = await Promise.all([discoverDatabases(force, session.signal), loadProjectPreferences(session)])
       if (sequence !== discoverySequence || !isCurrentSession(session.generation)) return
       sources.value = result.sources
       collectedAt.value = result.collectedAt
@@ -93,7 +89,8 @@ export const useDatabaseStore = defineStore('database', () => {
     const session = captureSession()
     const requestSignal = signal ?? session.signal
     const catalog = await loadDatabaseCatalog(connection(sourceId), requestSignal)
-    if (requestSignal.aborted || !isCurrentSession(session.generation)) throw new DOMException('Session invalidated', 'AbortError')
+    if (requestSignal.aborted || !isCurrentSession(session.generation))
+      throw new DOMException('Session invalidated', 'AbortError')
     catalogs.value = { ...catalogs.value, [sourceId]: catalog }
     return catalog
   }
@@ -103,7 +100,10 @@ export const useDatabaseStore = defineStore('database', () => {
     credentials.value = { ...credentials.value, [sourceId]: { ...input } }
     try {
       const hasCredentials = Object.values(input).some((value) => typeof value === 'string' && value.trim() !== '')
-      const diagnostic = await connectDatabase(hasCredentials ? { sourceId, credentials: input } : { sourceId }, session.signal)
+      const diagnostic = await connectDatabase(
+        hasCredentials ? { sourceId, credentials: input } : { sourceId },
+        session.signal,
+      )
       if (!isCurrentSession(session.generation)) throw new DOMException('Session invalidated', 'AbortError')
       if (!diagnostic.connected) {
         throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
