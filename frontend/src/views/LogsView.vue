@@ -32,6 +32,8 @@ const selectedEntry = ref<LogEntry | null>(null)
 const page = ref(1)
 const showSkeleton = ref(false)
 const loadingMore = ref(false)
+const pendingQueryKey = ref('')
+const loadedQueryKey = ref('')
 let logSource: EventSource | null = null
 let loadController: AbortController | null = null
 let skeletonTimer: ReturnType<typeof setTimeout> | null = null
@@ -57,13 +59,22 @@ const logHistoryNote = computed(() => {
 
 async function load(silent = false) {
   const requestSequence = ++loadSequence
+  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
   loadController?.abort()
   if (source.value === 'container' && !containerId.value) {
     entries.value = []
     nextCursor.value = ''
     loading.value = false
     showSkeleton.value = false
+    pendingQueryKey.value = queryKey
+    loadedQueryKey.value = queryKey
     return
+  }
+  pendingQueryKey.value = queryKey
+  if (loadedQueryKey.value !== queryKey) {
+    entries.value = []
+    nextCursor.value = ''
+    page.value = 1
   }
   if (!silent) {
     loading.value = true
@@ -84,6 +95,7 @@ async function load(silent = false) {
     nextCursor.value = result.nextCursor
     lastReceivedAt.value = result.collectedAt
     page.value = 1
+    loadedQueryKey.value = queryKey
   } catch (caught) {
     if (caught instanceof DOMException && caught.name === 'AbortError') return
     if (requestSequence !== loadSequence) return
