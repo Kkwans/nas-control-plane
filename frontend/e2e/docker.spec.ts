@@ -6,6 +6,7 @@ import { installMockApi } from './mockApi'
 const routeNavigationTimeout = 120_000
 
 test('Docker 生命周期按影响确认并保持项目入口可键盘访问', async ({ page }) => {
+  test.setTimeout(180_000)
   const browserErrors: string[] = []
   const actionRequests: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))

@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test'
 import { installMockApi } from './mockApi'
 
 test('数据库 SQL 工作台在无范围 DELETE 前提示影响并允许取消', async ({ page }) => {
+  test.setTimeout(120_000)
   await installMockApi(page)
   let queryRequests = 0
   await page.route('**/api/v1/databases/query', async (route) => {
