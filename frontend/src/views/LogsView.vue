@@ -11,6 +11,7 @@ import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatLocalTimestamp } from '@/lib/datetime'
 import { logTokens } from '@/utils/logTokens'
+import { isAbortError } from '@/session/sessionLifecycle'
 
 type LogSource = 'system' | 'agent' | 'container'
 type FollowState = 'paused' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
@@ -38,6 +39,7 @@ let logSource: EventSource | null = null
 let loadController: AbortController | null = null
 let skeletonTimer: ReturnType<typeof setTimeout> | null = null
 let loadSequence = 0
+let followSequence = 0
 
 const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
@@ -97,7 +99,7 @@ async function load(silent = false) {
     page.value = 1
     loadedQueryKey.value = queryKey
   } catch (caught) {
-    if (caught instanceof DOMException && caught.name === 'AbortError') return
+    if (isAbortError(caught)) return
     if (requestSequence !== loadSequence) return
     error.value = '日志读取失败，请确认目标服务正在运行。'
   } finally {
@@ -129,7 +131,7 @@ async function loadMore() {
     entries.value = [...merged.values()]
     nextCursor.value = result.nextCursor
   } catch (caught) {
-    if (caught instanceof DOMException && caught.name === 'AbortError') return
+    if (isAbortError(caught)) return
     if (requestSequence !== loadSequence) return
     error.value = '更多日志读取失败，请重试。'
   } finally {
@@ -138,6 +140,8 @@ async function loadMore() {
 }
 
 function syncFollowStream() {
+  const sequence = ++followSequence
+  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
   logSource?.close()
   logSource = null
   if (!following.value || (source.value === 'container' && !containerId.value)) {
@@ -150,6 +154,7 @@ function syncFollowStream() {
     source: source.value, containerId: containerId.value, level: level.value,
     query: query.value, hours: hours.value, limit: pageSize.value,
   }, systemStore.refreshIntervalSeconds, (result) => {
+    if (sequence !== followSequence || queryKey !== `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`) return
     const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
     for (const entry of result.entries) merged.set(entry.id, entry)
     entries.value = [...merged.values()].sort((left, right) => new Date(right.timestamp).valueOf() - new Date(left.timestamp).valueOf()).slice(0, 500)
@@ -183,6 +188,7 @@ onMounted(() => {
   void load()
 })
 onBeforeUnmount(() => {
+  followSequence += 1
   loadController?.abort()
   logSource?.close()
   if (skeletonTimer) clearTimeout(skeletonTimer)
