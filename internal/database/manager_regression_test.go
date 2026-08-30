@@ -71,6 +71,12 @@ func TestWriteModeDoesNotGuessNonGeneratedIntegerKeys(t *testing.T) {
 	}
 }
 
+func TestWriteModeRecognizesEmptyDefault(t *testing.T) {
+	if got := writeModeForColumn(false, "TEXT", "", "", ""); got != "optional-default" {
+		t.Fatalf("empty default write mode = %q", got)
+	}
+}
+
 func TestCompositeIntegerKeysRemainRequired(t *testing.T) {
 	columns := []Column{
 		{Name: "tenant_id", DataType: "INTEGER", PrimaryKey: true},

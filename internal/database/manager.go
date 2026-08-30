@@ -930,7 +930,10 @@ func writeModeForColumn(primaryKey bool, dataType string, defaultValue any, iden
 	if generated {
 		return "server-generated"
 	}
-	if defaultValue != nil && strings.TrimSpace(fmt.Sprint(defaultValue)) != "" {
+	// A non-nil default is authoritative even when its literal value is an
+	// empty string or whitespace. NULL from information_schema/PRAGMA remains
+	// nil and therefore means the column has no default expression.
+	if defaultValue != nil {
 		return "optional-default"
 	}
 	return "required"
