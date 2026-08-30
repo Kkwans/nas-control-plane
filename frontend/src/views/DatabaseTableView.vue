@@ -173,6 +173,7 @@ async function initialize() {
 }
 
 function resetRouteState() {
+  rowsSequence += 1
   querySequence += 1
   mutationSequence += 1
   rowsController?.abort()
@@ -184,8 +185,10 @@ function resetRouteState() {
   queryController = null
   mutationController = null
   tableRows.value = null
+  rowsLoading.value = false
   errorState.value = null
   queryResult.value = null
+  queryPending.value = false
   queryError.value = null
   offset.value = 0
   sortColumn.value = ''
@@ -194,6 +197,7 @@ function resetRouteState() {
   rowDialogOpen.value = false
   dangerOpen.value = false
   dangerBusy.value = false
+  mutationPending.value = false
 }
 
 function connection() {
