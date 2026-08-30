@@ -5,26 +5,28 @@ import {
 } from './systemTransport'
 import type { AuthSession, AuthStatus, RootUser } from './system'
 
-export async function requestAuthStatus(fetcher: typeof fetch = fetch): Promise<AuthStatus> {
-  return requestJson('/api/v1/auth/status', {}, isAuthStatus, fetcher, 'AUTH_STATUS_RESPONSE_INVALID')
+export async function requestAuthStatus(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<AuthStatus> {
+  return requestJson('/api/v1/auth/status', signal ? { signal } : {}, isAuthStatus, fetcher, 'AUTH_STATUS_RESPONSE_INVALID')
 }
 
 export async function bootstrapRoot(
   credentials: { username: string; password: string },
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<AuthSession> {
-  return requestCredentials('/api/v1/auth/bootstrap', credentials, fetcher)
+  return requestCredentials('/api/v1/auth/bootstrap', credentials, fetcher, signal)
 }
 
 export async function loginRoot(
   credentials: { username: string; password: string },
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<AuthSession> {
-  return requestCredentials('/api/v1/auth/login', credentials, fetcher)
+  return requestCredentials('/api/v1/auth/login', credentials, fetcher, signal)
 }
 
-export async function logoutRoot(fetcher: typeof fetch = fetch): Promise<void> {
-  const response = await fetcher('/api/v1/auth/logout', requestOptions({ method: 'POST' }))
+export async function logoutRoot(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<void> {
+  const response = await fetcher('/api/v1/auth/logout', requestOptions({ method: 'POST', ...(signal ? { signal } : {}) }))
   if (!response.ok) {
     throw await responseError(response)
   }
@@ -34,6 +36,7 @@ async function requestCredentials(
   path: string,
   credentials: { username: string; password: string },
   fetcher: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<AuthSession> {
   return requestJson(
     path,
@@ -41,6 +44,7 @@ async function requestCredentials(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
+      ...(signal ? { signal } : {}),
     },
     isAuthSession,
     fetcher,

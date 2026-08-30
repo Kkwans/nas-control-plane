@@ -35,7 +35,7 @@ describe('createManualRefreshRegistry', () => {
     registry.register(failing)
     registry.register(healthy)
 
-    await expect(registry.refresh()).resolves.toBeUndefined()
+    await expect(registry.refresh()).resolves.toMatchObject({ requested: 2, succeeded: 1, failed: [{ error: expect.any(Error) }] })
     expect(healthy).toHaveBeenCalledOnce()
   })
 })

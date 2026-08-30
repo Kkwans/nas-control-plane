@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import { useSystemStore } from './system'
+import { RefreshFailureError, useSystemStore } from './system'
 
 const apiMocks = vi.hoisted(() => ({
   requestCapabilities: vi.fn(),
@@ -86,11 +86,14 @@ describe('useSystemStore.refresh', () => {
     apiMocks.requestDockerInventory.mockRejectedValueOnce(new Error('inventory unavailable'))
 
     const store = useSystemStore()
-    await store.refresh({ summary: true, inventory: true })
+    const result = await store.refresh({ summary: true, inventory: true })
 
     expect(store.summary).toEqual(summary)
     expect(store.inventory).toBeNull()
     expect(store.connectionState).toBe('degraded')
     expect(store.errorCode).toBe('NETWORK_UNAVAILABLE')
+    expect(result.failed).toHaveLength(1)
+    apiMocks.requestDockerInventory.mockRejectedValueOnce(new Error('inventory unavailable'))
+    await expect(store.refreshStrict({ inventory: true })).rejects.toBeInstanceOf(RefreshFailureError)
   })
 })

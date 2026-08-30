@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
-import { ElConfigProvider } from 'element-plus'
+import { ElConfigProvider, ElMessage } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { LoaderCircle } from '@lucide/vue'
 
@@ -10,20 +10,35 @@ import LoginView from './views/LoginView.vue'
 import { createManualRefreshRegistry, provideManualRefreshRegistry } from '@/composables/manualRefresh'
 import { useAuthStore } from './stores/auth'
 import { useSystemStore } from './stores/system'
+import { useDatabaseStore } from './stores/database'
+import { useSitesStore } from './stores/sites'
 import type { RealtimeScope } from './stores/system'
+import { beginSession, captureSession, invalidateSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const systemStore = useSystemStore()
+const databaseStore = useDatabaseStore()
+const sitesStore = useSitesStore()
 const manualRefreshRegistry = createManualRefreshRegistry()
 const manualRefreshInFlight = ref(false)
 provideManualRefreshRegistry(manualRefreshRegistry)
 let sessionStartPromise: Promise<void> | null = null
+let sessionStartGeneration: number | null = null
 
-watch(() => authStore.isAuthenticated, (authenticated) => {
-  if (authenticated) void startAuthenticatedSession()
-})
+watch(() => authStore.isAuthenticated, (authenticated, previous) => {
+  if (authenticated) {
+    beginSession()
+    void startAuthenticatedSession()
+  } else if (previous) {
+    invalidateSession()
+    systemStore.stopRealtime()
+    databaseStore.resetSessionState()
+    sitesStore.resetSessionState()
+    systemStore.clear()
+  }
+}, { flush: 'sync' })
 watch(() => route.fullPath, () => {
   if (authStore.isAuthenticated) void syncRouteData()
 })
@@ -51,17 +66,22 @@ async function handleAuthenticated() {
 }
 
 function startAuthenticatedSession() {
-  if (sessionStartPromise) return sessionStartPromise
+  const session = captureSession()
+  if (sessionStartPromise && sessionStartGeneration === session.generation) return sessionStartPromise
+  sessionStartGeneration = session.generation
   sessionStartPromise = (async () => {
     try {
       await systemStore.loadPreferences()
     } catch {
       // 偏好读取失败不应阻塞首次实时数据加载。
     }
-    await syncRouteData()
+    if (isCurrentSession(session.generation)) await syncRouteData(session)
   })()
   return sessionStartPromise.finally(() => {
-    sessionStartPromise = null
+    if (sessionStartGeneration === session.generation) {
+      sessionStartPromise = null
+      sessionStartGeneration = null
+    }
   })
 }
 
@@ -69,8 +89,12 @@ async function handleRefresh() {
   if (manualRefreshInFlight.value) return
   manualRefreshInFlight.value = true
   try {
-    await systemStore.refresh()
-    await manualRefreshRegistry.refresh()
+    const systemResult = await systemStore.refresh()
+    const manualResult = await manualRefreshRegistry.refresh()
+    const failureCount = systemResult.failed.length + manualResult.failed.length
+    if (failureCount > 0) {
+      ElMessage.warning(`${failureCount} 个资源刷新失败，已保留可用数据。`)
+    }
     if (systemStore.errorCode === 'AUTH_UNAUTHORIZED') {
       await authStore.refresh()
     }
@@ -80,9 +104,13 @@ async function handleRefresh() {
 }
 
 async function handleLogout() {
+  invalidateSession()
   systemStore.stopRealtime()
-  await authStore.logout()
+  databaseStore.resetSessionState()
+  sitesStore.resetSessionState()
   systemStore.clear()
+  const result = await authStore.logout()
+  if (!result.serverRevoked) ElMessage.warning('本地已退出，但服务端会话尚未确认。')
   await router.replace('/')
 }
 
@@ -93,12 +121,13 @@ function handleVisibilityChange() {
   }
 }
 
-async function syncRouteData() {
+async function syncRouteData(session = captureSession()) {
+  if (!isCurrentSession(session.generation)) return
   const scopes = Array.isArray(route.meta.realtime)
     ? route.meta.realtime.filter((scope): scope is RealtimeScope => scope === 'summary' || scope === 'docker')
     : []
   systemStore.startRealtime(scopes)
-  if (route.meta.capabilities && !systemStore.capabilities) {
+  if (route.meta.capabilities && !systemStore.capabilities && isCurrentSession(session.generation)) {
     await systemStore.refresh({ capabilities: true })
   }
 }

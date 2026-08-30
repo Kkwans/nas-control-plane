@@ -9,6 +9,7 @@ import {
   requestAuthStatus,
   type RootUser,
 } from '@/api/system'
+import { isAbortError } from '@/session/sessionLifecycle'
 
 export type AuthenticationState = 'checking' | 'setup' | 'anonymous' | 'authenticated' | 'unavailable'
 
@@ -18,45 +19,99 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<RootUser | null>(null)
   const errorCode = ref<string | null>(null)
   const errorMessage = ref<string | null>(null)
+  let operationSequence = 0
+  let operationController: AbortController | null = null
+
+  function beginOperation() {
+    operationController?.abort()
+    const controller = new AbortController()
+    operationController = controller
+    return { sequence: ++operationSequence, signal: controller.signal }
+  }
+
+  function isCurrent(sequence: number) {
+    return sequence === operationSequence
+  }
+
+  function finishOperation(sequence: number) {
+    if (isCurrent(sequence)) operationController = null
+  }
 
   const isAuthenticated = computed(() => state.value === 'authenticated' && user.value !== null)
 
   async function refresh() {
+    const operation = beginOperation()
     state.value = 'checking'
     try {
-      const status = await requestAuthStatus()
+      const status = await requestAuthStatus(fetch, operation.signal)
+      if (!isCurrent(operation.sequence)) return
       initialized.value = status.initialized
       user.value = status.user ?? null
       errorCode.value = null
       errorMessage.value = null
       state.value = status.authenticated && status.user ? 'authenticated' : status.initialized ? 'anonymous' : 'setup'
     } catch (error) {
+      if (!isCurrent(operation.sequence) || isAbortError(error)) return
       setUnavailable(error)
+    } finally {
+      finishOperation(operation.sequence)
     }
   }
 
   async function bootstrap(credentials: { username: string; password: string }) {
-    const session = await bootstrapRoot(credentials)
-    initialized.value = true
-    user.value = session.user
-    state.value = 'authenticated'
-    errorCode.value = null
-    errorMessage.value = null
+    const operation = beginOperation()
+    try {
+      const session = await bootstrapRoot(credentials, fetch, operation.signal)
+      if (!isCurrent(operation.sequence)) return
+      initialized.value = true
+      user.value = session.user
+      state.value = 'authenticated'
+      errorCode.value = null
+      errorMessage.value = null
+    } finally {
+      finishOperation(operation.sequence)
+    }
   }
 
   async function login(credentials: { username: string; password: string }) {
-    const session = await loginRoot(credentials)
-    initialized.value = true
-    user.value = session.user
-    state.value = 'authenticated'
-    errorCode.value = null
-    errorMessage.value = null
+    const operation = beginOperation()
+    try {
+      const session = await loginRoot(credentials, fetch, operation.signal)
+      if (!isCurrent(operation.sequence)) return
+      initialized.value = true
+      user.value = session.user
+      state.value = 'authenticated'
+      errorCode.value = null
+      errorMessage.value = null
+    } finally {
+      finishOperation(operation.sequence)
+    }
   }
 
-  async function logout() {
-    await logoutRoot()
-    user.value = null
-    state.value = initialized.value ? 'anonymous' : 'setup'
+  async function logout(): Promise<{ serverRevoked: boolean }> {
+    const operation = beginOperation()
+    let serverRevoked = false
+    let failure: unknown
+    try {
+      await logoutRoot(fetch, operation.signal)
+      serverRevoked = true
+    } catch (error) {
+      if (!isAbortError(error)) failure = error
+    } finally {
+      if (isCurrent(operation.sequence)) {
+        user.value = null
+        state.value = initialized.value ? 'anonymous' : 'setup'
+        if (failure) {
+          errorCode.value = failure instanceof NcpApiError ? failure.code : 'LOGOUT_UNCONFIRMED'
+          errorMessage.value = '本地已退出，但服务端会话尚未确认。'
+        } else {
+          errorCode.value = null
+          errorMessage.value = null
+        }
+      }
+      finishOperation(operation.sequence)
+    }
+    return { serverRevoked }
   }
 
   function setUnavailable(error: unknown) {

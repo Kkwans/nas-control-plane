@@ -52,22 +52,22 @@ export interface DNSChangeResult {
   errorCode: string
 }
 
-export async function requestCapabilities(fetcher: typeof fetch = fetch): Promise<SystemCapabilities> {
+export async function requestCapabilities(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<SystemCapabilities> {
   return requestJson(
     '/api/v1/system/capabilities',
-    {},
+    signal ? { signal } : {},
     isSystemCapabilities,
     fetcher,
     'SYSTEM_CAPABILITIES_RESPONSE_INVALID',
   )
 }
 
-export async function requestSystemSummary(fetcher: typeof fetch = fetch): Promise<SystemSummary> {
-  return requestJson('/api/v1/system/summary', {}, isSystemSummary, fetcher, 'SYSTEM_SUMMARY_RESPONSE_INVALID')
+export async function requestSystemSummary(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<SystemSummary> {
+  return requestJson('/api/v1/system/summary', signal ? { signal } : {}, isSystemSummary, fetcher, 'SYSTEM_SUMMARY_RESPONSE_INVALID')
 }
 
-export async function requestSystemDetails(fetcher: typeof fetch = fetch): Promise<SystemDetails> {
-  return requestJson('/api/v1/system/details', {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+export async function requestSystemDetails(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<SystemDetails> {
+  return requestJson('/api/v1/system/details', signal ? { signal } : {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
 }
 
 export async function requestDNSCapability(fetcher: typeof fetch = fetch): Promise<DNSCapability> {
