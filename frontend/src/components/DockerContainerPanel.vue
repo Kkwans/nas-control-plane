@@ -7,7 +7,9 @@ import type { ContainerAction, DockerInventory } from '@/api/system'
 import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import StatusPill from '@/components/StatusPill.vue'
+import ResourcePagination from '@/components/ResourcePagination.vue'
 import { dockerContainerStateDetail, dockerContainerStateLabel, dockerContainerTimingLabel } from '@/domain/docker'
+import { presentDockerPorts } from '@/domain/dockerPorts'
 
 type DockerContainer = DockerInventory['containers'][number]
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
@@ -54,15 +56,7 @@ watch(pageCount, (count) => {
 })
 
 function publicPorts(container: DockerContainer) {
-  return container.ports
-    .filter((port) => port.publicPort > 0)
-    .filter(
-      (port, index, ports) =>
-        ports.findIndex(
-          (candidate) =>
-            Number(candidate.publicPort) === Number(port.publicPort),
-        ) === index,
-    )
+  return presentDockerPorts(container.ports)
 }
 
 function pending(containerId: string, action: ContainerAction) {
@@ -90,7 +84,7 @@ function stateTone(container: DockerContainer) {
       <span class="cell-ellipsis">{{ container.projectName || '独立容器' }}</span>
       <span class="cell-ellipsis mono">{{ container.image }}</span>
       <div class="port-list">
-        <span v-for="port in publicPorts(container).slice(0, 3)" :key="`${port.publicPort}/${port.protocol}`">{{ port.publicPort }}</span>
+        <span v-for="port in publicPorts(container).slice(0, 3)" :key="port.key" :title="port.label">{{ port.hostPort }}</span>
         <small v-if="!publicPorts(container).length">无公开端口</small>
       </div>
       <div class="container-actions">
@@ -111,11 +105,7 @@ function stateTone(container: DockerContainer) {
     <div v-if="!filteredContainers.length" class="table-empty">没有匹配的 Docker 容器。</div>
     <footer v-else class="container-pagination">
       <ListPageSizeControl list-key="docker.containers" />
-      <div>
-        <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
-        <strong>{{ page }} / {{ pageCount }}</strong>
-        <button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
-      </div>
+      <ResourcePagination v-model:page="page" :page-count="pageCount" />
     </footer>
   </section>
 
@@ -131,7 +121,7 @@ function stateTone(container: DockerContainer) {
       <dl>
         <div><dt>镜像</dt><dd>{{ container.image }}</dd></div>
         <div><dt>状态</dt><dd>{{ dockerContainerStateDetail(container) }}</dd></div>
-        <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.publicPort).join('、') || '无' }}</dd></div>
+        <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.label).join('、') || '无' }}</dd></div>
       </dl>
       <div class="mobile-actions">
         <button v-if="container.state !== 'running'" type="button" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'start')"><Play :size="16" />启动</button>
@@ -143,10 +133,7 @@ function stateTone(container: DockerContainer) {
     <p v-if="!filteredContainers.length" class="table-empty panel">没有匹配的 Docker 容器。</p>
     <footer v-else class="container-pagination panel">
       <ListPageSizeControl list-key="docker.containers" />
-      <div>
-        <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
-        <button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button>
-      </div>
+      <ResourcePagination v-model:page="page" :page-count="pageCount" />
     </footer>
   </section>
 </template>

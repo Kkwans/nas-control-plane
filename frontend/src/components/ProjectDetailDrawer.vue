@@ -21,6 +21,7 @@ import StatusPill from '@/components/StatusPill.vue'
 import { dockerContainerStateDetail, dockerContainerStateLabel, dockerContainerTimingLabel } from '@/domain/docker'
 import { projectStateTone } from '@/domain/overview'
 import type { ContainerAction, DockerInventory, DockerProject } from '@/api/system'
+import { presentDockerPorts } from '@/domain/dockerPorts'
 
 type DockerContainer = DockerInventory['containers'][number]
 type ProjectActionError = { containerId: string; name: string; message: string; scope?: 'project' | 'container' }
@@ -30,6 +31,7 @@ const props = withDefaults(defineProps<{
   project: DockerProject | null
   containers: DockerContainer[]
   hostName: string
+  verifiedWebUrls?: Record<string, string>
   allowOperations?: boolean
   actionPending?: string | null
   projectActionPending?: ContainerAction | null
@@ -41,6 +43,7 @@ const props = withDefaults(defineProps<{
   projectActionPending: null,
   projectActionErrors: () => [],
   containerActionError: '',
+  verifiedWebUrls: () => ({}),
 })
 
 const emit = defineEmits<{
@@ -53,10 +56,10 @@ const emit = defineEmits<{
 
 const isMobile = ref(window.innerWidth < 768)
 const drawerSize = computed(() => isMobile.value ? '100%' : 'min(720px, 94vw)')
-const publicPorts = computed(() => [...new Set(props.containers
-  .flatMap((container) => container.ports)
-  .filter((port) => port.publicPort > 0)
-  .map((port) => port.publicPort))])
+const publicPorts = computed(() => presentDockerPorts(
+  props.containers.flatMap((container) => container.ports),
+  { webUrls: props.verifiedWebUrls },
+))
 
 function stateLabel(state: DockerProject['state']) {
   return state === 'running' ? '运行中' : state === 'degraded' ? '需关注' : '已停止'
@@ -145,10 +148,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
       <section class="detail-section">
         <header><div><h3>访问入口</h3><p>在新的浏览器标签页打开服务</p></div><span>{{ publicPorts.length }} 个端口</span></header>
         <div v-if="publicPorts.length" class="port-links">
-          <ElTooltip v-for="port in publicPorts" :key="port" :content="`打开端口 ${port}`">
-            <a :href="`http://${hostName}:${port}`" target="_blank" rel="noreferrer">
-              <span>{{ port }}</span><ArrowUpRight :size="15" />
+          <ElTooltip v-for="port in publicPorts" :key="port.key" :content="port.webUrl ? '打开已验证站点入口' : '端口信息（仅复制使用）'">
+            <a v-if="port.webUrl" :href="port.webUrl" target="_blank" rel="noreferrer">
+              <span>{{ port.label }}</span><ArrowUpRight :size="15" />
             </a>
+            <span v-else class="port-text"><span>{{ port.label }}</span></span>
           </ElTooltip>
         </div>
         <p v-else class="detail-empty">此项目没有对局域网公开端口。</p>
@@ -174,7 +178,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
             <dl>
               <div><dt><Image :size="14" />镜像</dt><dd :title="container.image">{{ container.image }}</dd></div>
               <div><dt><CalendarClock :size="14" />创建时间</dt><dd>{{ formatTime(container.createdAt) }}</dd></div>
-              <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ container.ports.filter((port) => port.publicPort > 0).map((port) => port.publicPort).join('、') || '无公开端口' }}</dd></div>
+              <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ presentDockerPorts(container.ports).map((port) => port.label).join('、') || '无公开端口' }}</dd></div>
             </dl>
             <div v-if="allowOperations" class="container-card__actions">
               <ElTooltip :content="container.state === 'running' ? '停止容器' : '启动容器'">
@@ -238,6 +242,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .detail-section p { margin: 3px 0 0; color: var(--ncp-text-subtle); font-size: .72rem; }
 .detail-section>header>span { padding: 4px 8px; border-radius: 99px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .7rem; font-weight: 700; }
 .port-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.port-links .port-text { display: flex; min-height: 44px; align-items: center; padding: 0 14px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-family: 'JetBrains Mono Variable', monospace; font-size: .72rem; }
 .port-links a { display: flex; min-height: 44px; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid rgba(36,104,216,.16); border-radius: 10px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); font-family: 'JetBrains Mono Variable', monospace; font-size: .72rem; font-weight: 750; transition: background-color var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .port-links a:hover { background: var(--ncp-primary-hover); transform: translateY(-1px); }
 .container-cards { display: grid; gap: 10px; }

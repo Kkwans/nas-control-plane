@@ -1,4 +1,4 @@
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
@@ -9,9 +9,10 @@ import {
 import {
   cancelJob,
   deleteJob,
-  followJob,
   requestJobs,
   retryJob,
+  subscribeJob,
+  type JobSubscription,
 } from '@/api/docker'
 import { useListPreference } from '@/composables/useListPreference'
 
@@ -32,6 +33,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     { label: '已中断', value: 'interrupted' },
   ]
   const { pageSize: downloadPageSize } = useListPreference('docker.image-downloads')
+  const subscriptions = new Map<string, JobSubscription>()
 
   const activePullCount = computed(() => downloadJobs.value.filter((job) => job.status === 'queued' || job.status === 'running').length)
   const filteredDownloadJobs = computed(() => {
@@ -84,15 +86,37 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     return Number.isNaN(date.valueOf()) ? '—' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
   }
 
+  function closeSubscription(jobId: string) {
+    const subscription = subscriptions.get(jobId)
+    if (!subscription) return
+    subscriptions.delete(jobId)
+    subscription.close()
+  }
+
+  function followDownloadJob(job: JobSnapshot) {
+    if (job.status !== 'queued' && job.status !== 'running') {
+      closeSubscription(job.id)
+      return
+    }
+    if (subscriptions.has(job.id)) return
+    const subscription = subscribeJob(job.id, upsertDownloadJob)
+    subscriptions.set(job.id, subscription)
+    void subscription.done.catch(() => undefined).finally(() => {
+      if (subscriptions.get(job.id) === subscription) subscriptions.delete(job.id)
+    })
+  }
+
   async function loadDownloadJobs() {
     try {
       const result = await requestJobs('docker-image-pull')
       downloadJobs.value = result.jobs
       invalidDownloadJobCount.value = result.invalidCount
-      for (const job of downloadJobs.value.filter((item) => item.status === 'queued' || item.status === 'running')) {
-        void followJob(job.id, upsertDownloadJob).catch(() => undefined)
-      }
+      const activeIds = new Set(downloadJobs.value.filter((item) => item.status === 'queued' || item.status === 'running').map((item) => item.id))
+      for (const jobId of subscriptions.keys()) if (!activeIds.has(jobId)) closeSubscription(jobId)
+      for (const job of downloadJobs.value) followDownloadJob(job)
     } catch {
+      for (const subscription of subscriptions.values()) subscription.close()
+      subscriptions.clear()
       downloadJobs.value = []
       invalidDownloadJobCount.value = 0
     }
@@ -102,7 +126,8 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     try {
       const next = await retryJob(job.id)
       upsertDownloadJob(next)
-      void followJob(next.id, upsertDownloadJob).catch(() => undefined)
+      closeSubscription(next.id)
+      followDownloadJob(next)
     } catch (caught) {
       ElMessage.error(caught instanceof NcpApiError ? caught.message : '任务重试失败。')
     }
@@ -125,12 +150,18 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     } catch { return }
     try {
       await deleteJob(job.id)
+      closeSubscription(job.id)
       downloadJobs.value = downloadJobs.value.filter((item) => item.id !== job.id)
       ElMessage.success('下载记录已删除')
     } catch (caught) {
       ElMessage.error(caught instanceof NcpApiError ? caught.message : '下载记录删除失败。')
     }
   }
+
+  onBeforeUnmount(() => {
+    for (const subscription of subscriptions.values()) subscription.close()
+    subscriptions.clear()
+  })
 
   return {
     downloadJobs,

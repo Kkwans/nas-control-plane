@@ -15,6 +15,9 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import ProjectDetailDrawer from '@/components/ProjectDetailDrawer.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
+import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
+import ResourcePagination from '@/components/ResourcePagination.vue'
 import { useListPreference } from '@/composables/useListPreference'
 import {
   dockerActionLabel,
@@ -27,6 +30,8 @@ import {
 } from '@/domain/dockerLifecycle'
 import { projectStateTone as projectStateToneBase } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
+import { useSitesStore } from '@/stores/sites'
+import { presentDockerPorts } from '@/domain/dockerPorts'
 
 type StateFilter = 'all' | DockerProject['state']
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
@@ -37,6 +42,7 @@ type ProjectActionError = { containerId: string; name: string; message: string; 
 const route = useRoute()
 const router = useRouter()
 const systemStore = useSystemStore()
+const sitesStore = useSitesStore()
 const hostName = window.location.hostname
 const query = ref('')
 const stateFilter = ref<StateFilter>('all')
@@ -102,12 +108,42 @@ const searchPlaceholder = computed(() => {
   if (activeView.value === 'images') return '搜索镜像名称、标签或 ID'
   return '搜索项目或工作目录'
 })
+const dockerViewTabs: SectionTab[] = [
+  { value: 'projects', label: '项目', icon: Boxes },
+  { value: 'containers', label: '容器', icon: Box },
+  { value: 'images', label: '镜像', icon: Images },
+]
+const dockerStateFilters = [
+  { value: 'all', label: '全部' },
+  { value: 'running', label: '运行中' },
+  { value: 'stopped', label: '已停止' },
+]
 
 function containersFor(projectId: string) {
   return inventory.value?.containers.filter((container) => container.projectId === projectId) ?? []
 }
 function portsFor(projectId: string) {
-  return [...new Set(containersFor(projectId).flatMap((container) => container.ports).filter((port) => port.publicPort > 0).map((port) => port.publicPort))]
+  const site = sitesStore.visibleSites.find((candidate) => candidate.projectId === projectId && candidate.launchUrl)
+  const webUrls: Record<string, string> = {}
+  const mappings = containersFor(projectId).flatMap((container) => container.ports)
+  if (site?.launchUrl && site.primaryPort > 0) {
+    for (const port of mappings) {
+      if (port.publicPort === site.primaryPort) webUrls[`${port.hostIp || '0.0.0.0'}:${port.publicPort}/${(port.protocol || 'tcp').toLowerCase()}->${port.privatePort}`] = site.launchUrl
+    }
+  }
+  return presentDockerPorts(mappings, { webUrls })
+}
+function portLabelsFor(projectId: string) {
+  return portsFor(projectId).map((port) => port.label)
+}
+function verifiedWebUrlsFor(projectId: string) {
+  const site = sitesStore.visibleSites.find((candidate) => candidate.projectId === projectId && candidate.launchUrl)
+  if (!site?.launchUrl || site.primaryPort <= 0) return {}
+  const urls: Record<string, string> = {}
+  for (const port of portsFor(projectId)) {
+    if (port.hostPort === site.primaryPort) urls[port.key] = site.launchUrl
+  }
+  return urls
 }
 function stateLabel(state: DockerProject['state']) {
   return state === 'running' ? '运行中' : state === 'degraded' ? '需关注' : '已停止'
@@ -203,8 +239,9 @@ async function performAction(containerId: string, action: ContainerAction) {
   let failure: string | null = null
   try {
     await requestContainerAction(containerId, action)
-    await systemStore.refresh({ inventory: true })
-    ElMessage.success(`容器已${dockerActionLabel(action)}`)
+    const refreshResult = await systemStore.refresh({ inventory: true })
+    if (refreshResult.failed.length) ElMessage.warning(`容器已${dockerActionLabel(action)}，但状态刷新失败，请手动重新加载。`)
+    else ElMessage.success(`容器已${dockerActionLabel(action)}`)
   } catch (error) {
     failure = errorMessage(error, '容器操作失败，请稍后重试。')
     ElMessage.error(failure)
@@ -270,11 +307,8 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
       ElMessage.success(`项目“${project.name}”已${dockerActionLabel(action)}`)
     }
-    try {
-      await systemStore.refresh({ inventory: true })
-    } catch (error) {
-      actionError.value = errorMessage(error, '项目状态刷新失败，请手动重新加载。')
-    }
+    const refreshResult = await systemStore.refresh({ inventory: true })
+    if (refreshResult.failed.length) actionError.value = '项目操作已完成，但状态刷新失败，请手动重新加载。'
   } catch (error) {
     actionError.value = errorMessage(error, `项目${dockerActionLabel(action)}失败，请稍后重试。`)
   } finally {
@@ -299,13 +333,14 @@ async function confirmDeleteProject(project: DockerProject) {
   try {
     await deleteDockerProject(project)
     if (selectedProject.value?.id === project.id) await updateSelectedProject(null)
-    await systemStore.refresh({ inventory: true })
-    ElMessage.success(`项目“${project.name}”已删除；镜像、卷和配置文件均已保留。`)
+    const refreshResult = await systemStore.refresh({ inventory: true })
+    if (refreshResult.failed.length) ElMessage.warning(`项目“${project.name}”已删除，但状态刷新失败，请手动重新加载。`)
+    else ElMessage.success(`项目“${project.name}”已删除；镜像、卷和配置文件均已保留。`)
   } catch (error) {
     const message = errorMessage(error, '项目删除失败，未确认的资源不会继续删除。')
     actionError.value = message
     ElMessage.error(message)
-    try { await systemStore.refresh({ inventory: true }) } catch { /* 页面错误区保留原始失败信息 */ }
+    await systemStore.refresh({ inventory: true })
   } finally {
     projectDeletePending.value = null
   }
@@ -345,21 +380,9 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
   <div class="page workspace-page docker-page">
     <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、镜像和运行状态" :icon="Boxes" :stats="stats">
       <template #filters>
-        <div class="docker-view-tabs" aria-label="Docker 管理视图">
-          <button type="button" :class="{ active: activeView === 'projects' }" @click="activeView = 'projects'"><Boxes :size="16" />项目</button>
-          <button type="button" :class="{ active: activeView === 'containers' }" @click="activeView = 'containers'"><Box :size="16" />容器</button>
-          <button type="button" :class="{ active: activeView === 'images' }" @click="activeView = 'images'"><Images :size="16" />镜像</button>
-        </div>
-        <div v-if="activeView === 'projects'" class="state-filter" aria-label="Docker 项目状态筛选">
-          <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: stateFilter === item.value }" @click="stateFilter = item.value as StateFilter">
-            {{ item.label }}
-          </button>
-        </div>
-        <div v-else-if="activeView === 'containers'" class="state-filter" aria-label="Docker 容器状态筛选">
-          <button v-for="item in [{ value: 'all', label: '全部' }, { value: 'running', label: '运行中' }, { value: 'stopped', label: '已停止' }]" :key="item.value" type="button" :class="{ active: containerStateFilter === item.value }" @click="containerStateFilter = item.value as ContainerStateFilter">
-            {{ item.label }}
-          </button>
-        </div>
+        <SectionTabs v-model="activeView" :tabs="dockerViewTabs" accessible-label="Docker 管理视图" />
+        <CompactSegmentedFilter v-if="activeView === 'projects'" v-model="stateFilter" :options="dockerStateFilters" accessible-label="Docker 项目状态筛选" />
+        <CompactSegmentedFilter v-else-if="activeView === 'containers'" v-model="containerStateFilter" :options="dockerStateFilters" accessible-label="Docker 容器状态筛选" />
       </template>
       <template v-if="activeView !== 'images'" #tools>
         <ElInput v-model="query" class="docker-search" clearable :placeholder="searchPlaceholder" aria-label="搜索 Docker 资源">
@@ -406,8 +429,9 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           <span class="mono">{{ project.runningCount }}/{{ project.containerCount }}</span>
           <div class="port-cell">
             <template v-if="portsFor(project.id).length">
-              <ElTooltip v-for="port in portsFor(project.id).slice(0, 3)" :key="port" :content="`打开端口 ${port}`">
-                <a :href="`http://${hostName}:${port}`" target="_blank" rel="noreferrer" @click.stop>{{ port }}<ExternalLink :size="12" /></a>
+              <ElTooltip v-for="port in portsFor(project.id).slice(0, 3)" :key="port.key" :content="port.webUrl ? `打开已验证站点入口` : `复制端口 ${port.label}`">
+                <a v-if="port.webUrl" :href="port.webUrl" target="_blank" rel="noreferrer" @click.stop>{{ port.hostPort }}<ExternalLink :size="12" /></a>
+                <span v-else class="port-text" :title="port.label">{{ port.hostPort }}</span>
               </ElTooltip>
               <span v-if="portsFor(project.id).length > 3">+{{ portsFor(project.id).length - 3 }}</span>
             </template>
@@ -440,11 +464,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <div v-if="!projects.length" class="table-empty">没有匹配的 Docker 项目。</div>
         <footer v-else class="resource-pagination">
           <ListPageSizeControl list-key="docker.projects" />
-          <div>
-            <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
-            <strong>{{ projectPage }} / {{ projectPageCount }}</strong>
-            <button type="button" :disabled="projectPage >= projectPageCount" @click="projectPage += 1">下一页</button>
-          </div>
+          <ResourcePagination v-model:page="projectPage" :page-count="projectPageCount" />
         </footer>
       </section>
 
@@ -459,7 +479,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           </header>
           <dl>
             <div><dt>容器</dt><dd>{{ project.runningCount }}/{{ project.containerCount }} 运行</dd></div>
-            <div><dt>公开端口</dt><dd>{{ portsFor(project.id).join('、') || '无' }}</dd></div>
+            <div><dt>公开端口</dt><dd>{{ portLabelsFor(project.id).join('、') || '无' }}</dd></div>
             <div><dt>工作目录</dt><dd :title="project.workingDirectory">{{ project.workingDirectory || '自动发现' }}</dd></div>
           </dl>
           <div class="mobile-project-actions" @click.stop>
@@ -480,10 +500,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
         <p v-if="!projects.length" class="table-empty panel">没有匹配的 Docker 项目。</p>
         <footer v-else class="resource-pagination panel">
           <ListPageSizeControl list-key="docker.projects" />
-          <div>
-            <button type="button" :disabled="projectPage <= 1" @click="projectPage -= 1">上一页</button>
-            <button type="button" :disabled="projectPage >= projectPageCount" @click="projectPage += 1">下一页</button>
-          </div>
+          <ResourcePagination v-model:page="projectPage" :page-count="projectPageCount" />
         </footer>
       </section>
 
@@ -504,6 +521,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       :project="selectedProject"
       :containers="selectedContainers"
       :host-name="hostName"
+      :verified-web-urls="verifiedWebUrlsFor(selectedProject?.id ?? '')"
       :allow-operations="true"
       :action-pending="effectiveActionPending"
       :project-action-pending="projectActionFor(selectedProject?.id ?? '')"

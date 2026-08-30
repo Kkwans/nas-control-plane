@@ -19,6 +19,7 @@ import {
 import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
+import { hostPortBindingKey } from '@/domain/dockerPorts'
 
 type EnvironmentRow = { key: string; value: string }
 type MountRow = { type: 'bind' | 'volume' | 'tmpfs'; source: string; target: string; readOnly: boolean }
@@ -45,6 +46,8 @@ const pathBrowserLoading = ref(false)
 const pathBrowserError = ref('')
 const pathBrowserPage = ref<FileEntriesPage | null>(null)
 const pathBrowserTarget = ref<number | null>(null)
+let pathRequestSequence = 0
+let pathRequestKey = ''
 const environment = ref<EnvironmentRow[]>([])
 const mounts = ref<MountRow[]>([])
 const ports = ref<PortRow[]>([])
@@ -126,11 +129,11 @@ const portConflictNotice = computed(() => {
     (dockerInventory.value?.containers || [])
       .flatMap((container) => container.ports || [])
       .filter((port) => port.publicPort > 0)
-      .map((port) => `${port.hostIp || '0.0.0.0'}:${port.publicPort}/${port.protocol || 'tcp'}`),
+        .map((port) => hostPortBindingKey(port.hostIp, port.publicPort, port.protocol)),
   )
   const conflicts = ports.value
     .filter((port) => Number.isInteger(port.hostPort) && Number(port.hostPort) > 0)
-    .map((port) => `${port.hostIp.trim() || '0.0.0.0'}:${port.hostPort}/${port.protocol}`)
+    .map((port) => hostPortBindingKey(port.hostIp, port.hostPort, port.protocol))
     .filter((binding) => bindings.has(binding))
   return [...new Set(conflicts)]
 })
@@ -149,6 +152,8 @@ watch(() => props.modelValue, (open) => {
 }, { immediate: true })
 
 function resetForm() {
+  pathRequestSequence += 1
+  pathRequestKey = ''
   form.name = suggestedName(imageReference.value)
   form.cpu = undefined
   form.memoryMiB = undefined
@@ -228,15 +233,31 @@ async function openPathBrowser(index: number) {
 }
 
 async function loadPath(path: string, cursor = '') {
+  const requestKey = `${path}|${cursor}`
+  pathRequestKey = requestKey
+  const requestSequence = ++pathRequestSequence
+  const append = Boolean(cursor)
+  const previous = pathBrowserPage.value
   pathBrowserLoading.value = true
   pathBrowserError.value = ''
   try {
-    pathBrowserPage.value = await requestPathEntries(path, cursor, 100)
+    const result = await requestPathEntries(path, cursor, 100)
+    if (requestSequence !== pathRequestSequence || pathRequestKey !== requestKey) return
+    if (append && previous?.path === result.path) {
+      const seen = new Set(previous.entries.map((entry) => entry.path))
+      pathBrowserPage.value = {
+        ...result,
+        entries: [...previous.entries, ...result.entries.filter((entry) => !seen.has(entry.path))],
+      }
+    } else {
+      pathBrowserPage.value = result
+    }
   } catch (caught) {
+    if (requestSequence !== pathRequestSequence || pathRequestKey !== requestKey) return
     pathBrowserError.value = caught instanceof NcpApiError ? caught.message : 'NAS 目录暂不可读取，请重试。'
-    pathBrowserPage.value = null
+    if (!append) pathBrowserPage.value = null
   } finally {
-    pathBrowserLoading.value = false
+    if (requestSequence === pathRequestSequence) pathBrowserLoading.value = false
   }
 }
 

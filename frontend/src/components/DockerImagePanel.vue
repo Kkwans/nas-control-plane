@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ArrowDown, ArrowUp, ArrowUpDown, Box, Download, Eye, HardDrive, Image as ImageIcon, PackagePlus, RefreshCw, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
-import { ElInput, ElTooltip } from 'element-plus'
+import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
 import {
   type DockerImageSummary,
@@ -14,6 +14,7 @@ import DockerHubBrowser from '@/components/DockerHubBrowser.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import NcpSelect from '@/components/NcpSelect.vue'
+import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
 import { useDockerImageDownloads } from '@/composables/useDockerImageDownloads'
 import { useDockerLocalImages } from '@/composables/useDockerLocalImages'
 import { formatBytes } from '@/domain/overview'
@@ -42,6 +43,11 @@ const {
   pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
   confirmDeleteJob, downloadState, downloadStateLabel, effectiveTotal,
 } = downloads
+const imageModeTabs = computed<SectionTab[]>(() => [
+  { value: 'local', label: '本地镜像', icon: HardDrive, count: images.value.length },
+  { value: 'hub', label: '线上仓库', icon: Box },
+  { value: 'downloads', label: '下载任务', icon: Download, count: activePullCount.value },
+])
 
 function openCreateDrawer(image: DockerImageSummary) {
   createImage.value = image
@@ -49,7 +55,10 @@ function openCreateDrawer(image: DockerImageSummary) {
 }
 
 async function handleContainerCreated() {
-  await systemStore.refresh({ inventory: true })
+  const refreshResult = await systemStore.refresh({ inventory: true })
+  if (refreshResult.failed.length) {
+    ElMessage.warning('容器已创建，但状态刷新失败，请手动重新加载。')
+  }
   await refresh()
 }
 
@@ -84,11 +93,7 @@ onMounted(() => {
 <template>
   <section class="image-workspace">
     <header class="image-modebar">
-      <nav aria-label="镜像来源">
-        <button :class="{ active: mode === 'local' }" type="button" @click="mode = 'local'"><HardDrive :size="17" />本地镜像 <span>{{ images.length }}</span></button>
-        <button :class="{ active: mode === 'hub' }" type="button" @click="mode = 'hub'"><Box :size="17" />线上仓库</button>
-        <button :class="{ active: mode === 'downloads' }" type="button" @click="mode = 'downloads'"><Download :size="17" />下载任务 <span>{{ activePullCount }}</span></button>
-      </nav>
+      <SectionTabs v-model="mode" :tabs="imageModeTabs" accessible-label="镜像来源" />
       <div v-if="mode === 'local'" class="mode-actions">
         <ElInput :model-value="query" clearable aria-label="搜索本地镜像" placeholder="搜索镜像名称、标签或 ID" @update:model-value="emit('update:query', String($event))">
           <template #prefix><Search :size="17" /></template>

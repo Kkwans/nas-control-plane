@@ -87,29 +87,57 @@ export async function pullDockerImage(
   )
 }
 
-export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void): Promise<JobSnapshot> {
-  return new Promise((resolve, reject) => {
-    const source = new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events`)
-    source.addEventListener('progress', (event) => {
-      try {
-        const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
-        const job = parseJobSnapshot(payload)
-        if (!job) throw new Error('任务进度格式无效')
-        onProgress(job)
-        if (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') {
-          source.close()
-          resolve(job)
-        }
-      } catch (error) {
-        source.close()
-        reject(error)
-      }
-    })
-    source.onerror = () => {
+export interface JobSubscription {
+  close: () => void
+  done: Promise<JobSnapshot>
+}
+
+export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => void): JobSubscription {
+  let settled = false
+  let resolveDone!: (job: JobSnapshot) => void
+  let rejectDone!: (error: unknown) => void
+  const done = new Promise<JobSnapshot>((resolve, reject) => {
+    resolveDone = resolve
+    rejectDone = reject
+  })
+  const source = new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events`)
+  const close = () => {
+    if (settled) return
+    settled = true
+    source.close()
+    rejectDone(new DOMException('Job subscription closed', 'AbortError'))
+  }
+  const finish = (job: JobSnapshot) => {
+    if (settled) return
+    settled = true
+    source.close()
+    resolveDone(job)
+  }
+  source.addEventListener('progress', (event) => {
+    try {
+      const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
+      const job = parseJobSnapshot(payload)
+      if (!job) throw new Error('任务进度格式无效')
+      onProgress(job)
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') finish(job)
+    } catch (error) {
+      if (settled) return
+      settled = true
       source.close()
-      reject(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
+      rejectDone(error)
     }
   })
+  source.onerror = () => {
+    if (settled) return
+    settled = true
+    source.close()
+    rejectDone(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
+  }
+  return { close, done }
+}
+
+export function followJob(jobId: string, onProgress: (job: JobSnapshot) => void): Promise<JobSnapshot> {
+  return subscribeJob(jobId, onProgress).done
 }
 
 export async function requestJobs(type = '', fetcher: typeof fetch = fetch): Promise<JobListResult> {
@@ -233,8 +261,8 @@ export async function requestDockerHubTags(
   }
 }
 
-export async function requestDockerInventory(fetcher: typeof fetch = fetch): Promise<DockerInventory> {
-  return requestJson('/api/v1/docker/inventory', {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
+export async function requestDockerInventory(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerInventory> {
+  return requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
 }
 
 export async function requestDockerResources(fetcher: typeof fetch = fetch): Promise<DockerResources> {
