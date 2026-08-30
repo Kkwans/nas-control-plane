@@ -9,6 +9,7 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import { deriveOverviewState, formatBytes, formatOneDecimal, formatUptime, totalStorage, usagePercent } from '@/domain/overview'
 import { useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
+import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 
 const systemStore = useSystemStore()
 const sitesStore = useSitesStore()
@@ -46,15 +47,15 @@ const metrics = computed(() => {
 })
 
 const resourceSeries = computed<TrendSeries[]>(() => [
-  { name: 'CPU', color: '#2468d8', values: systemStore.resourceHistory.map((sample) => sample.cpuPercent) },
-  { name: '内存', color: '#7657d6', values: systemStore.resourceHistory.map((sample) => sample.memoryPercent) },
+  { name: 'CPU', color: monitoringChartTokens.cpu, values: systemStore.resourceHistory.map((sample) => sample.cpuPercent), unit: '%' },
+  { name: '内存', color: monitoringChartTokens.memory, values: systemStore.resourceHistory.map((sample) => sample.memoryPercent), unit: '%' },
 ])
 const loadSeries = computed<TrendSeries[]>(() => [
-  { name: '1 分钟负载', color: '#d48113', values: systemStore.resourceHistory.map((sample) => sample.load1) },
+  { name: '1 分钟负载', color: monitoringChartTokens.load, values: systemStore.resourceHistory.map((sample) => sample.load1), unit: '', decimals: 2 },
 ])
 const networkSeries = computed<TrendSeries[]>(() => [
-  { name: '下载', color: '#16866a', values: systemStore.resourceHistory.map((sample) => sample.networkReceiveBps / 1024) },
-  { name: '上传', color: '#2468d8', values: systemStore.resourceHistory.map((sample) => sample.networkTransmitBps / 1024) },
+  { name: '下载', color: monitoringChartTokens.receive, values: systemStore.resourceHistory.map((sample) => sample.networkReceiveBps / 1024), unit: 'KB/s' },
+  { name: '上传', color: monitoringChartTokens.transmit, values: systemStore.resourceHistory.map((sample) => sample.networkTransmitBps / 1024), unit: 'KB/s' },
 ])
 
 function formatTimestamp(value: string | null) {
@@ -97,7 +98,7 @@ onMounted(() => {
         <RouterLink to="/sites">管理站点<ArrowUpRight :size="16" /></RouterLink>
       </header>
       <div v-if="favoriteSites.length" class="favorite-grid">
-        <a v-for="site in favoriteSites" :key="site.id" class="favorite-site" :href="siteURL(site)" :target="linkTarget" rel="noreferrer" @click="sitesStore.visit(site.projectId)">
+        <a v-for="site in favoriteSites" :key="site.id" class="favorite-site" :href="siteURL(site)" :target="linkTarget" rel="noreferrer" @click="sitesStore.visit(site.id)">
           <span class="favorite-site__logo">
             <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site.id)" />
             <b v-else>{{ site.name.slice(0, 1).toUpperCase() }}</b>

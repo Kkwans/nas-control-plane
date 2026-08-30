@@ -43,7 +43,7 @@ import NcpSelect from '@/components/NcpSelect.vue'
 import SegmentedTabs, { type SegmentedTab } from '@/components/SegmentedTabs.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
-import { useSitesStore } from '@/stores/sites'
+import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
 
 type SiteFilter = 'running' | 'all' | 'hidden' | 'ignored'
@@ -278,7 +278,10 @@ async function removeSite(site: Site) {
     await sitesStore.remove(site.id)
     ElMessage.success(site.source === 'manual' ? '站点已删除' : '站点已忽略')
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error('站点删除失败')
+    if (error !== 'cancel' && error !== 'close') {
+      if (error instanceof SiteSyncError) ElMessage.warning('站点操作已完成，但列表同步失败，请重新识别。')
+      else ElMessage.error('站点删除失败')
+    }
   }
 }
 
