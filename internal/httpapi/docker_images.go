@@ -19,7 +19,7 @@ func (socketAgentClient) CreateDockerContainer(ctx context.Context, socketPath s
 }
 
 func (api *handler) dockerImageInventory(response http.ResponseWriter, request *http.Request) {
-	requestContext, cancel := context.WithTimeout(request.Context(), api.agentTimeout)
+	requestContext, cancel := context.WithTimeout(request.Context(), defaultDockerImageListTimeout)
 	defer cancel()
 	result, err := api.dockerImages.ListDockerImages(requestContext, api.agentSocketPath)
 	if err != nil {

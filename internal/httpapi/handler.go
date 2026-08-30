@@ -28,10 +28,14 @@ const (
 	defaultTerminalTimeout              = 30 * time.Minute
 	defaultRealtimeInterval             = 5 * time.Second
 	defaultDatabaseTimeout              = 20 * time.Second
-	defaultDockerImageTimeout           = 10 * time.Minute
-	defaultDNSControlTimeout            = 45 * time.Second
-	defaultPublicEgressTimeout          = 15 * time.Second
-	defaultProxyInspectionTimeout       = 20 * time.Second
+	// Listing the local image catalogue can be slower than the lightweight
+	// system probes on hosts with many images. Keep it separate from the
+	// short defaultAgentTimeout used by those probes.
+	defaultDockerImageListTimeout = 30 * time.Second
+	defaultDockerImageTimeout     = 10 * time.Minute
+	defaultDNSControlTimeout      = 45 * time.Second
+	defaultPublicEgressTimeout    = 15 * time.Second
+	defaultProxyInspectionTimeout = 20 * time.Second
 )
 
 type AgentClient interface {
