@@ -143,7 +143,7 @@ function verifiedWebUrlsFor(projectId: string) {
   if (!site?.launchUrl || site.primaryPort <= 0) return {}
   const urls: Record<string, string> = {}
   for (const port of portsFor(projectId)) {
-    if (port.hostPort === site.primaryPort) urls[port.key] = site.launchUrl
+    if (port.protocol === 'tcp' && port.hostPort === site.primaryPort) urls[port.key] = site.launchUrl
   }
   return urls
 }

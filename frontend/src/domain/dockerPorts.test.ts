@@ -27,4 +27,12 @@ describe('Docker port presentation', () => {
     expect(port?.webUrl).toBe('https://nas.example.test/')
     expect(hostPortBindingKey('', 8080, 'tcp')).toBe('0.0.0.0:8080/tcp')
   })
+
+  it('never turns a UDP mapping into a web link', () => {
+    const [port] = presentDockerPorts(
+      [{ hostIp: '', publicPort: 8080, privatePort: 80, protocol: 'udp' }],
+      { webUrls: { '0.0.0.0:8080/udp->80': 'https://nas.example.test/' } },
+    )
+    expect(port?.webUrl).toBeUndefined()
+  })
 })

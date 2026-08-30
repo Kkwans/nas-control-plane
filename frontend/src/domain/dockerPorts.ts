@@ -37,7 +37,7 @@ export function presentDockerPorts(
     if (seen.has(key)) continue
     seen.add(key)
     const hostPort = Number(port.publicPort)
-    const webUrl = options.webUrls?.[key]
+    const webUrl = protocol === 'tcp' ? options.webUrls?.[key] : undefined
     const presentation: PortPresentation = {
       key,
       hostIp,
