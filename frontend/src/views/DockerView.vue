@@ -128,7 +128,9 @@ function portsFor(projectId: string) {
   const mappings = containersFor(projectId).flatMap((container) => container.ports)
   if (site?.launchUrl && site.primaryPort > 0) {
     for (const port of mappings) {
-      if (port.publicPort === site.primaryPort) webUrls[`${port.hostIp || '0.0.0.0'}:${port.publicPort}/${(port.protocol || 'tcp').toLowerCase()}->${port.privatePort}`] = site.launchUrl
+      if (port.publicPort === site.primaryPort && (port.protocol || 'tcp').toLowerCase() === 'tcp') {
+        webUrls[`${port.hostIp || '0.0.0.0'}:${port.publicPort}/tcp->${port.privatePort}`] = site.launchUrl
+      }
     }
   }
   return presentDockerPorts(mappings, { webUrls })
