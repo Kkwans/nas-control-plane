@@ -59,6 +59,11 @@ test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向
     if (message.type() === 'error' && !message.text().includes('status of 502 (Bad Gateway)')) browserErrors.push(`console.error: ${message.text()}`)
   })
   await installMockApi(page)
+  // Repository logos are decorative remote assets. Keep Mock screenshots
+  // deterministic and offline instead of making the visual gate depend on
+  // CDN timing or availability.
+  const transparentLogo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+  await page.route('https://cdn.simpleicons.org/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: transparentLogo }))
 
   for (const viewport of [
     { name: 'desktop-wide', width: 1440, height: 900 },
