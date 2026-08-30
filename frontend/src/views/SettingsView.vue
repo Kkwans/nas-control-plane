@@ -17,6 +17,7 @@ const draft = ref<UserPreferences>(clonePreferences(systemStore.preferences))
 const persisted = ref<UserPreferences>(clonePreferences(systemStore.preferences))
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const changed = computed(() => JSON.stringify(draft.value) !== JSON.stringify(persisted.value))
+const hasNonDefaultPreferences = computed(() => JSON.stringify(draft.value) !== JSON.stringify(DEFAULT_USER_PREFERENCES))
 const draggingNavigationID = ref<string | null>(null)
 const dragOverNavigationID = ref<string | null>(null)
 const normalizedNavigationOrder = computed(() => {
@@ -40,6 +41,9 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 let saving = false
 let pending = false
 let suppressDraftWatch = false
+let draftRevision = 0
+let persistedRevision = 0
+let savingRevision = 0
 
 const chineseDeviceCandidates = [
   { value: 'microsoft-yahei', label: '微软雅黑 UI', family: 'Microsoft YaHei UI' },
@@ -72,28 +76,48 @@ function browserHasFont(family: string) {
 watch(draft, (value) => {
   if (suppressDraftWatch) return
   systemStore.previewPreferences(value)
+  draftRevision += 1
   pending = true
   saveState.value = 'idle'
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => void flushSave(), 400)
 }, { deep: true })
 
+// Preferences are loaded after the authenticated shell mounts. Hydrate the
+// local editor when that request completes, but never overwrite edits or a
+// save already in flight.
+watch(() => systemStore.preferences, (value) => {
+  if (draftRevision > 0 || saving || pending) return
+  suppressDraftWatch = true
+  draft.value = clonePreferences(value)
+  persisted.value = clonePreferences(value)
+  persistedRevision = draftRevision
+  suppressDraftWatch = false
+}, { deep: true })
+
 async function flushSave() {
   if (saving || !pending || !changed.value) return
   saving = true
+  const revision = savingRevision = draftRevision
   pending = false
   saveState.value = 'saving'
   const snapshot = clonePreferences(draft.value)
   try {
     const saved = await systemStore.setPreferences(snapshot)
-    persisted.value = clonePreferences(saved)
-    saveState.value = pending ? 'idle' : 'saved'
+    if (revision >= persistedRevision) {
+      persisted.value = clonePreferences(saved)
+      persistedRevision = revision
+    }
+    if (draftRevision > revision) {
+      pending = true
+      saveState.value = 'idle'
+    } else {
+      saveState.value = 'saved'
+    }
   } catch {
-    suppressDraftWatch = true
-    draft.value = clonePreferences(persisted.value)
-    systemStore.previewPreferences(persisted.value)
-    suppressDraftWatch = false
-    pending = false
+    // Keep the user's latest draft visible. A failed request must never roll
+    // back edits made while an earlier snapshot was in flight.
+    pending = draftRevision > savingRevision
     saveState.value = 'error'
   } finally {
     saving = false
@@ -106,6 +130,7 @@ async function flushSave() {
 
 function retrySave() {
   pending = true
+  if (saveTimer) clearTimeout(saveTimer)
   void flushSave()
 }
 
@@ -209,7 +234,7 @@ onBeforeUnmount(() => {
     <WorkspaceHeader title="设置" description="统一调整数据更新、界面密度、字体与站点打开方式" :icon="Settings2" :stats="[]">
       <template #actions>
         <div class="settings-header-actions">
-          <ElButton text :disabled="!changed" @click="restoreAllDefaults">恢复全部默认</ElButton>
+          <ElButton text :disabled="!hasNonDefaultPreferences" @click="restoreAllDefaults">恢复全部默认</ElButton>
           <div :class="['save-state', `save-state--${saveState}`]" role="status" aria-live="polite">
           <LoaderCircle v-if="saveState === 'saving'" class="save-state__spinner" :size="16" />
           <CircleAlert v-else-if="saveState === 'error'" :size="16" />
