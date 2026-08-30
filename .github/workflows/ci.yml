@@ -29,7 +29,16 @@ jobs:
           cache: true
       - name: Test
         # Host PTY integration tests exercise the root Agent boundary (/root).
-        run: sudo -n -E "$(command -v go)" test ./...
+        # Keep sudo-owned caches away from the runner user's Go caches so the
+        # following vet/build steps can read and update their own cache.
+        env:
+          NCP_ROOT_GOCACHE: ${{ runner.temp }}/go-build-root
+          NCP_ROOT_GOMODCACHE: ${{ runner.temp }}/go-mod-root
+        run: |
+          sudo -n env \
+            GOCACHE="$NCP_ROOT_GOCACHE" \
+            GOMODCACHE="$NCP_ROOT_GOMODCACHE" \
+            "$(command -v go)" test ./...
       - name: Vet
         run: go vet ./...
       - name: Build native commands
