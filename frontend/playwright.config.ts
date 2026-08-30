@@ -24,7 +24,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `corepack pnpm dev --host 127.0.0.1 --port ${e2ePort} --strictPort`,
+    // Build once before the suite so lazy-route compilation cannot starve the
+    // NAS-local Chromium process during a multi-page run. Preview still uses
+    // the validated dedicated port and strict binding below.
+    command: `corepack pnpm run build && corepack pnpm exec vite preview --host 127.0.0.1 --port ${e2ePort} --strictPort`,
     url: e2eURL,
     // Never attach to an unrelated service that happens to answer on the
     // configured port (for example NAS File Browser on 4173).
