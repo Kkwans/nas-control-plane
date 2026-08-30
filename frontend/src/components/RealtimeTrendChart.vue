@@ -16,12 +16,15 @@ export interface TrendSeries {
   name: string
   color: string
   values: number[]
+  unit?: string
+  decimals?: number
+  axis?: 'left' | 'right'
 }
 
 const props = withDefaults(defineProps<{
   timestamps: string[]
   series: TrendSeries[]
-  unit: string
+  unit?: string
   decimals?: number
   emptyMessage?: string
 }>(), {
@@ -31,6 +34,7 @@ const props = withDefaults(defineProps<{
 
 const reducedMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const availableSeries = computed(() => props.series.filter((item) => item.values.length > 0))
+const hasRightSeries = computed(() => availableSeries.value.some((item) => item.axis === 'right'))
 const hasFiniteValue = computed(() => availableSeries.value.some((item) => item.values.some((value) => Number.isFinite(value))))
 const enoughData = computed(() => props.timestamps.length >= 2 && hasFiniteValue.value)
 const stateMessage = computed(() => {
@@ -92,13 +96,14 @@ function shouldShowAxisLabel(index: number, values: string[]) {
   return index % step === 0
 }
 
-function formatValue(value: number) {
+function formatSeriesValue(value: number, series?: TrendSeries) {
   if (!Number.isFinite(value)) return '暂无数据'
   const formatted = new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: props.decimals,
-    maximumFractionDigits: props.decimals,
+    minimumFractionDigits: series?.decimals ?? props.decimals,
+    maximumFractionDigits: series?.decimals ?? props.decimals,
   }).format(value)
-  return props.unit ? `${formatted} ${props.unit}` : formatted
+  const unit = series?.unit ?? props.unit
+  return unit ? `${formatted} ${unit}` : formatted
 }
 
 function latestFiniteValue(values: number[]) {
@@ -131,7 +136,10 @@ function formatTooltip(value: unknown) {
   const dataIndex = entries.find((entry) => Number.isInteger(entry.dataIndex))?.dataIndex
   const timestamp = props.timestamps[dataIndex ?? 0]
   const title = formatFullTimestamp(timestamp ?? '')
-  const lines = entries.map((entry) => `${entry.marker ?? ''}${entry.seriesName ?? '监控指标'}：${formatValue(tooltipNumber(entry.value))}`)
+  const lines = entries.map((entry) => {
+    const series = availableSeries.value.find((item) => item.name === entry.seriesName)
+    return `${entry.marker ?? ''}${entry.seriesName ?? '监控指标'}：${formatSeriesValue(tooltipNumber(entry.value), series)}`
+  })
   return [title, ...lines].join('<br/>')
 }
 
@@ -184,16 +192,18 @@ const option = computed<EChartsOption>(() => ({
       interval: (index: number) => shouldShowAxisLabel(index, props.timestamps),
     },
   },
-  yAxis: {
-    type: 'value',
-    min: 0,
-    axisLabel: {
-      color: monitoringChartTokens.axis,
-      fontSize: 10,
-      formatter: (value: number) => `${value}${props.unit === '%' ? '%' : ''}`,
+  yAxis: [
+    {
+      type: 'value', min: 0, name: availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit ?? '',
+      axisLabel: { color: monitoringChartTokens.axis, fontSize: 10, formatter: (value: number) => `${value}${(availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit) === '%' ? '%' : ''}` },
+      splitLine: { lineStyle: { color: monitoringChartTokens.grid, type: 'dashed' } },
     },
-    splitLine: { lineStyle: { color: monitoringChartTokens.grid, type: 'dashed' } },
-  },
+    {
+      type: 'value', min: 0, show: hasRightSeries.value, name: availableSeries.value.find((item) => item.axis === 'right')?.unit ?? '',
+      axisLabel: { color: monitoringChartTokens.axis, fontSize: 10, formatter: (value: number) => `${value}${availableSeries.value.find((item) => item.axis === 'right')?.unit === '%' ? '%' : ''}` },
+      splitLine: { show: false },
+    },
+  ],
   series: availableSeries.value.map((item) => ({
     name: item.name,
     type: 'line',
@@ -205,6 +215,7 @@ const option = computed<EChartsOption>(() => ({
     lineStyle: { width: 2.2 },
     areaStyle: { opacity: .07 },
     emphasis: { focus: 'series', showSymbol: true },
+    yAxisIndex: item.axis === 'right' ? 1 : 0,
   })),
 }))
 </script>
@@ -219,7 +230,7 @@ const option = computed<EChartsOption>(() => ({
     </div>
     <ul class="sr-only">
       <li v-for="item in availableSeries" :key="item.name">
-        {{ item.name }}当前值：{{ formatValue(latestFiniteValue(item.values)) }}
+        {{ item.name }}当前值：{{ formatSeriesValue(latestFiniteValue(item.values), item) }}
       </li>
     </ul>
   </div>

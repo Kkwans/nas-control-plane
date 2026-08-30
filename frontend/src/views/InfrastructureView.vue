@@ -19,6 +19,7 @@ import {
 } from '@lucide/vue'
 
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
 import InfrastructureDnsPanel from '@/components/InfrastructureDnsPanel.vue'
@@ -113,11 +114,11 @@ const publicEgressDetails = computed(() => details.value?.publicEgress ?? {
 })
 const publicEgressResult = computed(() => mihomoInspection.value?.publicEgress ?? null)
 
-const tabs: Array<{ id: DetailTab; label: string; icon: typeof Server }> = [
-  { id: 'overview', label: '设备概览', icon: Server },
-  { id: 'network', label: '网络与代理', icon: Network },
-  { id: 'storage', label: '存储与磁盘', icon: HardDrive },
-  { id: 'services', label: '服务与能力', icon: Waypoints },
+const tabs: SectionTab[] = [
+  { value: 'overview', label: '设备概览', icon: Server },
+  { value: 'network', label: '网络与代理', icon: Network },
+  { value: 'storage', label: '存储与磁盘', icon: HardDrive },
+  { value: 'services', label: '服务与能力', icon: Waypoints },
 ]
 
 const headerStats = computed<WorkspaceStat[]>(() => [
@@ -297,7 +298,9 @@ async function checkMihomo(force: boolean) {
 }
 
 function handleManualRefresh() {
-  void loadDetails()
+  return loadDetails().then(() => {
+    if (errorMessage.value) throw new Error(errorMessage.value)
+  })
 }
 
 function tailscaleStatusLabel() {
@@ -354,18 +357,7 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
     <WorkspaceHeader title="系统信息" description="集中查看设备、硬件、网络、存储与控制链路" :icon="Server" :stats="headerStats">
       <template #filters>
         <div class="system-tabs-toolbar">
-          <nav class="detail-tabs" aria-label="系统信息分类">
-            <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              type="button"
-              :class="{ active: activeTab === tab.id }"
-              @click="activeTab = tab.id"
-            >
-              <component :is="tab.icon" :size="16" />
-              {{ tab.label }}
-            </button>
-          </nav>
+          <SectionTabs v-model="activeTab" :tabs="tabs" accessible-label="系统信息分类" />
         </div>
       </template>
     </WorkspaceHeader>

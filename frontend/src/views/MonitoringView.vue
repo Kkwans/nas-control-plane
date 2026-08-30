@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Activity, Cpu, Gauge, HardDrive, LoaderCircle, MemoryStick, Thermometer } from '@lucide/vue'
-import { ElSegmented } from 'element-plus'
 
 import { requestMetricSamples, type MetricSample } from '@/api/control'
 import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import ResourceState from '@/components/ResourceState.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 import { mergeMetricSampleWindow } from '@/domain/monitoring/series'
@@ -37,6 +37,10 @@ const loading = ref(false)
 const error = ref('')
 const manualRefreshRegistry = useManualRefreshRegistry()
 let unregisterManualRefresh: (() => void) | undefined
+let loadSequence = 0
+let loadController: AbortController | null = null
+const loadedRangeKey = ref('')
+const customDuration = ref<number | null>(null)
 const latest = computed(() => samples.value.at(-1))
 const timestamps = computed(() => samples.value.map((item) => item.collectedAt))
 
@@ -78,8 +82,8 @@ const diskIORates = computed(() => {
 })
 const diskIOSeries = computed<TrendSeries[]>(() => {
   const series: TrendSeries[] = []
-  if (diskIORates.value.read.length) series.push({ name: '读取', color: monitoringChartTokens.storage, values: diskIORates.value.read })
-  if (diskIORates.value.write.length) series.push({ name: '写入', color: monitoringChartTokens.load, values: diskIORates.value.write })
+  if (diskIORates.value.read.length) series.push({ name: '读取', color: monitoringChartTokens.storage, values: diskIORates.value.read, unit: 'MB/s', decimals: 2 })
+  if (diskIORates.value.write.length) series.push({ name: '写入', color: monitoringChartTokens.load, values: diskIORates.value.write, unit: 'MB/s', decimals: 2 })
   return series
 })
 const diskIOMessage = computed(() => {
@@ -113,19 +117,28 @@ const temperatureTrendMessage = computed(() => {
 })
 
 async function load() {
+  const sequence = ++loadSequence
+  loadController?.abort()
+  const controller = new AbortController()
+  loadController = controller
+  const preciseRange = customFrom.value && customTo.value
+    ? { from: customFrom.value.toISOString(), to: customTo.value.toISOString() }
+    : range.value
+  const rangeKey = typeof preciseRange === 'string' ? preciseRange : `${preciseRange.from}|${preciseRange.to}`
+  loadedRangeKey.value = ''
+  samples.value = []
   loading.value = true
   error.value = ''
   try {
-    const preciseRange = customFrom.value && customTo.value
-      ? { from: customFrom.value.toISOString(), to: customTo.value.toISOString() }
-      : range.value
-    samples.value = await requestMetricSamples(preciseRange)
-  }
-  catch {
+    const result = await requestMetricSamples(preciseRange, controller.signal)
+    if (sequence !== loadSequence || controller.signal.aborted) return
+    samples.value = result
+    loadedRangeKey.value = rangeKey
+  } catch (caught) {
+    if (sequence !== loadSequence || (caught instanceof DOMException && caught.name === 'AbortError')) return
     error.value = '监控历史加载失败，请稍后重试。'
-  }
-  finally {
-    loading.value = false
+  } finally {
+    if (sequence === loadSequence) loading.value = false
   }
 }
 
@@ -134,6 +147,7 @@ function selectQuickRange(value: TimeRange) {
   customFrom.value = null
   customTo.value = null
   customFollowsNow.value = false
+  customDuration.value = null
   void load()
 }
 
@@ -146,6 +160,7 @@ function applyCustomRange() {
     error.value = '请选择不超过 7 天、且结束时间不晚于当前时间的范围。'
     return
   }
+  customDuration.value = to.valueOf() - from.valueOf()
   customFollowsNow.value = now.valueOf() - to.valueOf() <= 60_000
   void load()
 }
@@ -154,6 +169,7 @@ function clearCustomRange() {
   customFrom.value = null
   customTo.value = null
   customFollowsNow.value = false
+  customDuration.value = null
   error.value = ''
   void load()
 }
@@ -163,6 +179,7 @@ function useNow() {
   customTo.value = now
   customFrom.value ??= new Date(now.valueOf() - rangeMilliseconds[range.value])
   customFollowsNow.value = true
+  customDuration.value = customTo.value.valueOf() - customFrom.value.valueOf()
 }
 
 function summaryToSample(): MetricSample | null {
@@ -190,6 +207,7 @@ function summaryToSample(): MetricSample | null {
 }
 
 function mergeRealtimeSample() {
+  if (!loadedRangeKey.value) return
   const sample = summaryToSample()
   if (!sample) return
   const timestamp = new Date(sample.collectedAt).valueOf()
@@ -198,8 +216,10 @@ function mergeRealtimeSample() {
   let lowerBound: number
   if (customFrom.value && customTo.value) {
     if (!customFollowsNow.value) return
-    lowerBound = customFrom.value.valueOf()
+    const duration = customDuration.value ?? (customTo.value.valueOf() - customFrom.value.valueOf())
     customTo.value = new Date(timestamp)
+    customFrom.value = new Date(timestamp - duration)
+    lowerBound = customFrom.value.valueOf()
   }
   else {
     lowerBound = timestamp - rangeMilliseconds[range.value]
@@ -208,7 +228,9 @@ function mergeRealtimeSample() {
 }
 
 function handleManualRefresh() {
-  void load()
+  return load().then(() => {
+    if (error.value) throw new Error(error.value)
+  })
 }
 
 function sampleSeconds(current: MetricSample, previous: MetricSample) {
@@ -245,7 +267,10 @@ onMounted(() => {
   unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
   void load()
 })
-onBeforeUnmount(() => unregisterManualRefresh?.())
+onBeforeUnmount(() => {
+  unregisterManualRefresh?.()
+  loadController?.abort()
+})
 </script>
 
 <template>
@@ -253,7 +278,7 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
     <WorkspaceHeader title="系统监控" description="查看 CPU、内存、负载、磁盘、网络与温度的历史运行趋势" :icon="Gauge" :stats="stats">
       <template #filters>
         <div class="monitor-range-filter" role="group" aria-label="快速时间范围">
-          <ElSegmented :model-value="customFrom && customTo ? '' : range" :options="quickRanges" aria-label="快速时间范围" @change="selectQuickRange($event as TimeRange)" />
+          <CompactSegmentedFilter :model-value="customFrom && customTo ? '' : range" :options="quickRanges" accessible-label="快速时间范围" @update:model-value="selectQuickRange($event as TimeRange)" />
         </div>
       </template>
       <template #tools>
@@ -282,35 +307,35 @@ onBeforeUnmount(() => unregisterManualRefresh?.())
           <span class="chart-card__icon" aria-hidden="true"><Cpu :size="18" /></span>
           <div><h2 id="cpu-chart-title">处理器与负载</h2><p>CPU 使用率与 1 分钟负载</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'CPU',color:monitoringChartTokens.cpu,values:samples.map(i=>i.cpuPercent)},{name:'负载',color:monitoringChartTokens.load,values:samples.map(i=>i.load1)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" :series="[{name:'CPU',color:monitoringChartTokens.cpu,values:samples.map(i=>i.cpuPercent),unit:'%',axis:'left'},{name:'负载',color:monitoringChartTokens.load,values:samples.map(i=>i.load1),unit:'',decimals:2,axis:'right'}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="memory-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><MemoryStick :size="18" /></span>
           <div><h2 id="memory-chart-title">内存使用</h2><p>已用内存占总容量比例</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'内存',color:monitoringChartTokens.memory,values:samples.map(i=>i.memoryPercent)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" :series="[{name:'内存',color:monitoringChartTokens.memory,values:samples.map(i=>i.memoryPercent),unit:'%'}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="storage-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><HardDrive :size="18" /></span>
           <div><h2 id="storage-chart-title">存储使用</h2><p>所有已采集挂载点的合计占用</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="%" :series="[{name:'磁盘',color:monitoringChartTokens.storage,values:samples.map(i=>i.diskPercent)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" :series="[{name:'磁盘',color:monitoringChartTokens.storage,values:samples.map(i=>i.diskPercent),unit:'%'}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="network-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><Activity :size="18" /></span>
           <div><h2 id="network-chart-title">网络吞吐</h2><p>接收与发送速率</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" unit="KB/s" :series="[{name:'接收',color:monitoringChartTokens.receive,values:networkRates.map(i=>i.receive)},{name:'发送',color:monitoringChartTokens.transmit,values:networkRates.map(i=>i.transmit)}]" />
+        <RealtimeTrendChart :timestamps="timestamps" :series="[{name:'接收',color:monitoringChartTokens.receive,values:networkRates.map(i=>i.receive),unit:'KB/s',decimals:1},{name:'发送',color:monitoringChartTokens.transmit,values:networkRates.map(i=>i.transmit),unit:'KB/s',decimals:1}]" />
       </article>
       <article class="chart-card panel" aria-labelledby="disk-io-chart-title">
         <header>
           <span class="chart-card__icon chart-card__icon--violet" aria-hidden="true"><HardDrive :size="18" /></span>
           <div><h2 id="disk-io-chart-title">磁盘 I/O</h2><p>宿主机磁盘读写速率</p></div>
         </header>
-        <RealtimeTrendChart :timestamps="timestamps" :series="diskIOSeries" unit="MB/s" :empty-message="diskIOMessage" />
+        <RealtimeTrendChart :timestamps="timestamps" :series="diskIOSeries" :empty-message="diskIOMessage" />
       </article>
       <article class="chart-card panel" aria-labelledby="temperature-chart-title">
         <header>

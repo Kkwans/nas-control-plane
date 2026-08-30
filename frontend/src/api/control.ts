@@ -144,35 +144,36 @@ export interface PasswordPolicy {
   requireSpecial: boolean
 }
 
-export function requestPreferences(): Promise<UserPreferences> {
-  return request('/api/v1/preferences')
+export function requestPreferences(signal?: AbortSignal): Promise<UserPreferences> {
+  return request('/api/v1/preferences', signal ? { signal } : {})
 }
 
-export function updatePreferences(input: UserPreferences): Promise<UserPreferences> {
-  return request('/api/v1/preferences', { method: 'PUT', body: JSON.stringify(input) })
+export function updatePreferences(input: UserPreferences, signal?: AbortSignal): Promise<UserPreferences> {
+  return request('/api/v1/preferences', { method: 'PUT', body: JSON.stringify(input), ...(signal ? { signal } : {}) })
 }
 
-export function requestListPreference(listKey: string): Promise<ListPreference> {
-  return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`)
+export function requestListPreference(listKey: string, signal?: AbortSignal): Promise<ListPreference> {
+  return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`, signal ? { signal } : {})
 }
 
-export function updateListPreference(listKey: string, input: Omit<ListPreference, 'listKey'>): Promise<ListPreference> {
+export function updateListPreference(listKey: string, input: Omit<ListPreference, 'listKey'>, signal?: AbortSignal): Promise<ListPreference> {
   return request(`/api/v1/preferences/lists/${encodeURIComponent(listKey)}`, {
     method: 'PUT',
     body: JSON.stringify({ listKey, ...input }),
+    ...(signal ? { signal } : {}),
   })
 }
 
-export function requestDatabaseProjectPreferences(): Promise<DatabaseProjectPreference[]> {
-  return request('/api/v1/databases/project-preferences')
+export function requestDatabaseProjectPreferences(signal?: AbortSignal): Promise<DatabaseProjectPreference[]> {
+  return request('/api/v1/databases/project-preferences', signal ? { signal } : {})
 }
 
 export function updateDatabaseProjectPreference(input: DatabaseProjectPreference): Promise<DatabaseProjectPreference> {
   return request('/api/v1/databases/project-preferences', { method: 'PUT', body: JSON.stringify(input) })
 }
 
-export function requestSites(): Promise<SiteListResponse> {
-  return request<SiteListResponse>('/api/v1/sites').then((result) => ({
+export function requestSites(signal?: AbortSignal): Promise<SiteListResponse> {
+  return request<SiteListResponse>('/api/v1/sites', signal ? { signal } : {}).then((result) => ({
     ...result,
     discovery: {
       status: result.discovery?.status ?? 'unavailable',
@@ -208,8 +209,8 @@ export function deleteSite(siteId: string): Promise<void> {
   return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE' })
 }
 
-export function requestIgnoredSites(): Promise<Array<SiteProfileInput & { projectId: string }>> {
-  return request('/api/v1/sites/ignored')
+export function requestIgnoredSites(signal?: AbortSignal): Promise<Array<SiteProfileInput & { projectId: string }>> {
+  return request('/api/v1/sites/ignored', signal ? { signal } : {})
 }
 
 export function restoreSite(siteId: string): Promise<void> {
@@ -243,11 +244,11 @@ export function requestComposeRevisions(projectId: string): Promise<ComposeRevis
   return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
 }
 
-export function requestMetricSamples(input: '1h' | '6h' | '24h' | '7d' | { from: string; to: string }): Promise<MetricSample[]> {
+export function requestMetricSamples(input: '1h' | '6h' | '24h' | '7d' | { from: string; to: string }, signal?: AbortSignal): Promise<MetricSample[]> {
   const parameters = typeof input === 'string'
     ? new URLSearchParams({ range: input })
     : new URLSearchParams({ from: input.from, to: input.to })
-  return request(`/api/v1/monitoring/samples?${parameters}`)
+  return request(`/api/v1/monitoring/samples?${parameters}`, signal ? { signal } : {})
 }
 
 export function requestLogs(input: {
