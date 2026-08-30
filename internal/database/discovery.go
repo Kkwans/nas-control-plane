@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -44,9 +45,10 @@ func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) 
 
 		image := strings.ToLower(inspection.Container.Config.Image)
 		if driver, port, ok := databaseImage(image); ok {
-			publicPort := publishedDatabasePort(item.Ports, port)
+			publicHost, publicPort := publishedDatabaseEndpoint(item.Ports, port)
 			reachability, evidence := "host", "published-port"
 			if publicPort == 0 && inspection.Container.HostConfig != nil && string(inspection.Container.HostConfig.NetworkMode) == "host" {
+				publicHost = "127.0.0.1"
 				publicPort = port
 				evidence = "host-network"
 			}
@@ -59,9 +61,9 @@ func discoverDockerDatabases(ctx context.Context) ([]Source, []sqliteCandidate) 
 			status := "unreachable"
 			host := ""
 			if publicPort > 0 {
-				location = "127.0.0.1:" + strconv.Itoa(publicPort)
+				host = publicHost
+				location = net.JoinHostPort(publicHost, strconv.Itoa(publicPort))
 				status = "credentials_required"
-				host = "127.0.0.1"
 			}
 			if defaultDatabase != "" {
 				location += "/" + defaultDatabase
@@ -117,9 +119,10 @@ func resolveDatabaseURLSource(source Source, ports []mobycontainer.PortSummary, 
 	if source.Reachability != "container-internal" {
 		return source
 	}
-	publicPort := publishedDatabasePort(ports, source.Port)
+	publicHost, publicPort := publishedDatabaseEndpoint(ports, source.Port)
 	evidence := "published-port"
 	if publicPort == 0 && hostConfig != nil && string(hostConfig.NetworkMode) == "host" {
+		publicHost = "127.0.0.1"
 		publicPort = source.Port
 		evidence = "host-network"
 	}
@@ -127,11 +130,11 @@ func resolveDatabaseURLSource(source Source, ports []mobycontainer.PortSummary, 
 		return source
 	}
 	databaseName := source.DefaultDatabase
-	location := "127.0.0.1:" + strconv.Itoa(publicPort)
+	location := net.JoinHostPort(publicHost, strconv.Itoa(publicPort))
 	if databaseName != "" {
 		location += "/" + databaseName
 	}
-	source.Location, source.Host, source.Port = location, "127.0.0.1", publicPort
+	source.Location, source.Host, source.Port = location, publicHost, publicPort
 	source.Reachability, source.Evidence, source.Status = "host", evidence, "credentials_required"
 	return source
 }
@@ -148,6 +151,16 @@ func databaseImage(image string) (Driver, int, bool) {
 }
 
 func publishedDatabasePort(ports []mobycontainer.PortSummary, privatePort int) int {
+	_, port := publishedDatabaseEndpoint(ports, privatePort)
+	return port
+}
+
+// publishedDatabaseEndpoint returns the host binding that Docker actually
+// reports for the selected container port. A wildcard binding is represented
+// by the loopback address because the Root Agent connects from the host; a
+// specific IPv4 or IPv6 binding must be preserved instead of being rewritten
+// to 127.0.0.1.
+func publishedDatabaseEndpoint(ports []mobycontainer.PortSummary, privatePort int) (string, int) {
 	for _, port := range ports {
 		// A database endpoint must be a TCP binding. Docker also reports UDP
 		// and SCTP mappings for the same private port; treating those as a
@@ -155,10 +168,16 @@ func publishedDatabasePort(ports []mobycontainer.PortSummary, privatePort int) i
 		// selected driver protocol.
 		if int(port.PrivatePort) == privatePort && port.PublicPort > 0 &&
 			(strings.TrimSpace(port.Type) == "" || strings.EqualFold(port.Type, "tcp")) {
-			return int(port.PublicPort)
+			host := "127.0.0.1"
+			if port.IP.IsValid() && !port.IP.IsUnspecified() {
+				host = port.IP.String()
+			} else if port.IP.Is6() {
+				host = "::1"
+			}
+			return host, int(port.PublicPort)
 		}
 	}
-	return 0
+	return "", 0
 }
 
 func defaultDatabaseKey(driver Driver) string {

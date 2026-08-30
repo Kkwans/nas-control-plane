@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -98,6 +99,37 @@ func TestPublishedDatabasePortDoesNotInferContainerMapping(t *testing.T) {
 	}
 	if got := publishedDatabasePort([]mobycontainer.PortSummary{{PrivatePort: 3306, PublicPort: 13306}}, 3306); got != 13306 {
 		t.Fatalf("published port = %d", got)
+	}
+}
+
+func TestPublishedDatabaseEndpointPreservesSpecificBindingAddress(t *testing.T) {
+	v4Host, v4Port := publishedDatabaseEndpoint([]mobycontainer.PortSummary{{
+		IP: netip.MustParseAddr("192.168.5.110"), PrivatePort: 5432, PublicPort: 15432, Type: "tcp",
+	}}, 5432)
+	if v4Host != "192.168.5.110" || v4Port != 15432 {
+		t.Fatalf("ipv4 endpoint = %q:%d", v4Host, v4Port)
+	}
+	v6Host, v6Port := publishedDatabaseEndpoint([]mobycontainer.PortSummary{{
+		IP: netip.MustParseAddr("2001:db8::10"), PrivatePort: 3306, PublicPort: 13306, Type: "tcp",
+	}}, 3306)
+	if v6Host != "2001:db8::10" || v6Port != 13306 {
+		t.Fatalf("ipv6 endpoint = %q:%d", v6Host, v6Port)
+	}
+	wildcardHost, wildcardPort := publishedDatabaseEndpoint([]mobycontainer.PortSummary{{
+		IP: netip.MustParseAddr("::"), PrivatePort: 3306, PublicPort: 13306, Type: "tcp",
+	}}, 3306)
+	if wildcardHost != "::1" || wildcardPort != 13306 {
+		t.Fatalf("ipv6 wildcard endpoint = %q:%d", wildcardHost, wildcardPort)
+	}
+	source, ok := sourceFromDatabaseURL("postgres://postgres:secret@[2001:db8::10]:5432/control", "stack", "api")
+	if !ok {
+		t.Fatal("expected database URL source")
+	}
+	resolved := resolveDatabaseURLSource(source, []mobycontainer.PortSummary{{
+		IP: netip.MustParseAddr("2001:db8::10"), PrivatePort: 5432, PublicPort: 15432, Type: "tcp",
+	}}, nil)
+	if resolved.Host != "2001:db8::10" || resolved.Location != "[2001:db8::10]:15432/control" || resolved.Reachability != "host" {
+		t.Fatalf("resolved ipv6 source = %#v", resolved)
 	}
 }
 
