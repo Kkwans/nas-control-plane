@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { BadgeCheck, ChevronLeft, ChevronRight, Download, RefreshCw, Search, Star } from '@lucide/vue'
 import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
@@ -9,7 +9,7 @@ import {
   type DockerHubTag,
   type JobSnapshot,
 } from '@/api/system'
-import { followJob, pullDockerImage, requestDockerHubTags, searchDockerHub } from '@/api/docker'
+import { pullDockerImage, requestDockerHubTags, searchDockerHub, subscribeJob, type JobSubscription } from '@/api/docker'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { formatBytes } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
@@ -35,6 +35,7 @@ const selectedTag = ref('latest')
 const submittingReference = ref('')
 let hubRequestSequence = 0
 let tagRequestSequence = 0
+const jobSubscriptions = new Map<string, JobSubscription>()
 
 const hubSortOptions: NcpSelectOption[] = [
   { label: '最佳匹配', value: 'relevance' },
@@ -116,7 +117,9 @@ async function submitPull() {
   try {
     const job = await pullDockerImage(reference, selectedTagDetails.value?.fullSize ?? 0)
     emit('job-created', job)
-    void followJob(job.id, (progress) => emit('job-progress', progress)).then((completed) => {
+    const subscription = subscribeJob(job.id, (progress) => emit('job-progress', progress))
+    jobSubscriptions.set(job.id, subscription)
+    void subscription.done.then((completed) => {
       emit('job-progress', completed)
       if (completed.status === 'completed') {
         ElMessage.success(`镜像 ${reference} 已拉取`)
@@ -124,13 +127,20 @@ async function submitPull() {
       } else if (completed.status === 'failed') {
         ElMessage.error(completed.error || completed.message || `镜像 ${reference} 拉取失败`)
       }
-    }).catch(() => undefined)
+    }).catch(() => undefined).finally(() => {
+      if (jobSubscriptions.get(job.id) === subscription) jobSubscriptions.delete(job.id)
+    })
   } catch (caught) {
     ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像拉取失败。')
   } finally {
     submittingReference.value = ''
   }
 }
+
+onBeforeUnmount(() => {
+  for (const subscription of jobSubscriptions.values()) subscription.close()
+  jobSubscriptions.clear()
+})
 
 function normalizeArchitecture(value: string) {
   const normalized = value.trim().toLowerCase().replaceAll('_', '-')
