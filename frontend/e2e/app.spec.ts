@@ -9,10 +9,13 @@ const viewports = [
   { name: 'tablet', width: 768, height: 1024 },
   { name: 'mobile', width: 390, height: 844 },
 ]
-const routeNavigationTimeout = 60_000
+// NAS-local Chromium may spend more than one minute compiling the first lazy
+// route on a cold Vite server. Keep the assertion honest while avoiding a
+// false failure that leaves the next viewport with an unfinished boot.
+const routeNavigationTimeout = 120_000
 
 test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(300_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
@@ -43,7 +46,7 @@ test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
     }
 
-    await expect(page).toHaveScreenshot(`overview-${viewport.name}.png`, { fullPage: false, animations: 'disabled' })
+    await expect(page).toHaveScreenshot(`overview-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
   }
 
   expect(browserErrors).toEqual([])

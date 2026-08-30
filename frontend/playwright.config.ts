@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const configuredPort = Number.parseInt(process.env.NCP_E2E_PORT || '14173', 10)
+const e2ePort = Number.isInteger(configuredPort) && configuredPort > 1024 && configuredPort < 65536 ? configuredPort : 14173
+const e2eURL = `http://127.0.0.1:${e2ePort}`
+
 export default defineConfig({
   testDir: './e2e',
   // NAS-local Chromium is resource constrained; keep CI deterministic while
@@ -16,13 +20,15 @@ export default defineConfig({
     toHaveScreenshot: { maxDiffPixelRatio: process.env.CI ? 0.02 : 0 },
   },
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: e2eURL,
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'corepack pnpm dev --host 127.0.0.1',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
+    command: `corepack pnpm dev --host 127.0.0.1 --port ${e2ePort} --strictPort`,
+    url: e2eURL,
+    // Never attach to an unrelated service that happens to answer on the
+    // configured port (for example NAS File Browser on 4173).
+    reuseExistingServer: false,
   },
   projects: [
     {

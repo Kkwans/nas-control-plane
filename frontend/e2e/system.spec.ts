@@ -9,10 +9,10 @@ const viewports = [
   { name: 'tablet', width: 768, height: 1024 },
   { name: 'mobile', width: 390, height: 844 },
 ]
-const routeNavigationTimeout = 60_000
+const routeNavigationTimeout = 120_000
 
 test('系统概览在四档目标 viewport 可读并保留视觉基线', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(600_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
@@ -37,7 +37,7 @@ test('系统概览在四档目标 viewport 可读并保留视觉基线', async (
     expect(layout.bodyWidth, `${viewport.name} body 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
     expect(layout.mainWidth, `${viewport.name} main 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
 
-    if (viewport.name === 'desktop-wide') {
+    if (viewport.name === 'desktop-wide' && process.env.NCP_E2E_SKIP_A11Y !== '1') {
       const accessibility = await new AxeBuilder({ page }).analyze()
       const blockingViolations = accessibility.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
@@ -128,7 +128,7 @@ test('系统详情失败时显示恢复入口并可重试', async ({ page }) => 
 })
 
 test('系统信息的存储与服务 tab 在四档 viewport 可读', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(600_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {

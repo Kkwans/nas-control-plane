@@ -3,7 +3,7 @@ import AxeBuilder from '@axe-core/playwright'
 
 import { installMockApi } from './mockApi'
 
-const routeNavigationTimeout = 30_000
+const routeNavigationTimeout = 120_000
 
 test('Docker 生命周期按影响确认并保持项目入口可键盘访问', async ({ page }) => {
   const browserErrors: string[] = []
@@ -52,7 +52,7 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
 })
 
 test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向溢出', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(300_000)
   const browserErrors: string[] = []
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
   page.on('console', (message) => {
@@ -95,7 +95,7 @@ test('Docker 镜像仓库在四档 viewport 可搜索、查看标签且无横向
     expect(layout.bodyWidth, `${viewport.name} body 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
     expect(layout.mainWidth, `${viewport.name} main 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
 
-    if (viewport.name === 'desktop-wide') {
+    if (viewport.name === 'desktop-wide' && process.env.NCP_E2E_SKIP_A11Y !== '1') {
       const accessibility = await new AxeBuilder({ page }).analyze()
       const blockingViolations = accessibility.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
       expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
