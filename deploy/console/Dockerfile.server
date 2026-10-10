@@ -23,6 +23,15 @@ FROM alpine:3.23.5@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952
 
 COPY --from=build --chown=1000:100 /out/ncp-server /usr/local/bin/ncp-server
 
+ARG BUILD_VERSION=dev
+ARG BUILD_REVISION=unknown
+ARG BUILD_CREATED=unknown
+
+LABEL org.opencontainers.image.version="${BUILD_VERSION}" \
+      org.opencontainers.image.revision="${BUILD_REVISION}" \
+      org.opencontainers.image.created="${BUILD_CREATED}" \
+      org.opencontainers.image.source="https://github.com/Kkwans/nas-control-plane"
+
 USER 1000:100
 
 ENTRYPOINT ["/usr/local/bin/ncp-server"]

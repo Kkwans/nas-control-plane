@@ -93,6 +93,8 @@ jobs:
         run: corepack pnpm run typecheck
       - name: Unit tests
         run: corepack pnpm test
+      - name: Web artifact regression
+        run: node --test scripts/verify-web-assets.test.mjs
       - name: Production build
         run: corepack pnpm run build
       - name: Install Chromium
