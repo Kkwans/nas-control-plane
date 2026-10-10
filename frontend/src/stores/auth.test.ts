@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { watch } from 'vue'
 
 import { useAuthStore } from './auth'
 
@@ -50,5 +51,36 @@ describe('useAuthStore lifecycle', () => {
     expect(store.isAuthenticated).toBe(false)
     expect(store.state).toBe('anonymous')
     expect(store.errorCode).toBe('LOGOUT_UNCONFIRMED')
+  })
+
+  it('does not invalidate an authenticated session during transient status failures', async () => {
+    const store = useAuthStore()
+    await store.login({ username: 'root', password: 'secret' })
+    const transitions: boolean[] = []
+    const stop = watch(() => store.isAuthenticated, (value) => transitions.push(value), { flush: 'sync' })
+    apiMocks.requestAuthStatus.mockRejectedValueOnce(new Error('temporary failure'))
+    await store.refresh()
+    stop()
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.user).toEqual(user)
+    expect(transitions).toEqual([])
+    expect(store.errorCode).toBe('NETWORK_UNAVAILABLE')
+  })
+
+  it('clears the session when the server confirms it is no longer authenticated', async () => {
+    const store = useAuthStore()
+    await store.login({ username: 'root', password: 'secret' })
+    apiMocks.requestAuthStatus.mockResolvedValueOnce({ initialized: true, authenticated: false })
+    await store.refresh()
+    expect(store.state).toBe('anonymous')
+    expect(store.user).toBeNull()
+  })
+
+  it('does not grant authentication when the initial status request fails', async () => {
+    const store = useAuthStore()
+    apiMocks.requestAuthStatus.mockRejectedValueOnce(new Error('offline'))
+    await store.refresh()
+    expect(store.state).toBe('unavailable')
+    expect(store.isAuthenticated).toBe(false)
   })
 })

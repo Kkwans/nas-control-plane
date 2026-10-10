@@ -2,18 +2,76 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/auth"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
+
+type transientSessionAuth struct {
+	Authenticator
+	err error
+}
+
+func (*transientSessionAuth) Initialized(context.Context) (bool, error) { return true, nil }
+func (a *transientSessionAuth) Authenticate(context.Context, string) (auth.Principal, error) {
+	return auth.Principal{ID: 1, Username: "root-admin", Role: auth.RootRole}, a.err
+}
+
+func TestTemporaryAuthenticationFailureDoesNotMasqueradeAsLogout(t *testing.T) {
+	backend := &transientSessionAuth{err: errors.New("private database failure")}
+	handler := NewHandler(Config{Auth: backend, Agent: &fakeAgentClient{}})
+	for _, path := range []string{"/api/v1/auth/status", "/api/v1/system/summary"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s returned %d, want 503: %s", path, response.Code, response.Body.String())
+		}
+		assertErrorCode(t, response, "AUTH_UNAVAILABLE")
+		if strings.Contains(response.Body.String(), "private") {
+			t.Fatal("authentication response leaked internal error")
+		}
+		if len(response.Result().Cookies()) != 0 {
+			t.Fatal("transient failure must not clear cookies")
+		}
+	}
+	backend.err = nil
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"authenticated":true`) {
+		t.Fatalf("session did not recover: %s", response.Body.String())
+	}
+}
+
+func TestInvalidCookieStillRequiresAuthentication(t *testing.T) {
+	service := openTestAuthService(t)
+	_, unauthorized := service.Authenticate(context.Background(), "not-a-valid-session")
+	backend := &transientSessionAuth{err: unauthorized}
+	handler := NewHandler(Config{Auth: backend})
+	for path, want := range map[string]int{"/api/v1/auth/status": 200, "/api/v1/system/summary": 401} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "not-a-valid-session"})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("%s returned %d, want %d", path, response.Code, want)
+		}
+	}
+}
 
 func TestRootBootstrapLoginSessionProtectsControlPlaneAPIs(t *testing.T) {
 	authService := openTestAuthService(t)

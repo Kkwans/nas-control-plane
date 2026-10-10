@@ -53,7 +53,12 @@ func (api *handler) authStatus(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	status := AuthStatusResponse{Initialized: initialized}
-	if principal, ok := api.optionalPrincipal(request.Context(), request); ok {
+	principal, authenticated, err := api.optionalPrincipal(request.Context(), request)
+	if err != nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", "登录服务暂不可用，请稍后重试。")
+		return
+	}
+	if authenticated {
 		status.Authenticated = true
 		status.User = &principal
 	}
@@ -120,7 +125,11 @@ func (api *handler) requireAuthentication(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		principal, ok := api.optionalPrincipal(request.Context(), request)
+		principal, ok, err := api.optionalPrincipal(request.Context(), request)
+		if err != nil {
+			api.writeError(response, request, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", "登录服务暂不可用，请稍后重试。")
+			return
+		}
 		if !ok {
 			api.writeError(response, request, http.StatusUnauthorized, "AUTH_UNAUTHORIZED", "请先以 Root 账号登录。")
 			return
@@ -135,19 +144,22 @@ func (api *handler) requireAuthentication(next http.Handler) http.Handler {
 	})
 }
 
-func (api *handler) optionalPrincipal(ctx context.Context, request *http.Request) (auth.Principal, bool) {
+func (api *handler) optionalPrincipal(ctx context.Context, request *http.Request) (auth.Principal, bool, error) {
 	if api.auth == nil {
-		return auth.Principal{}, false
+		return auth.Principal{}, false, nil
 	}
 	cookie, err := request.Cookie(sessionCookieName)
 	if err != nil {
-		return auth.Principal{}, false
+		return auth.Principal{}, false, nil
 	}
 	principal, err := api.auth.Authenticate(ctx, cookie.Value)
 	if err != nil {
-		return auth.Principal{}, false
+		if auth.ErrorCode(err) == "AUTH_UNAUTHORIZED" {
+			return auth.Principal{}, false, nil
+		}
+		return auth.Principal{}, false, err
 	}
-	return principal, true
+	return principal, true, nil
 }
 
 func (api *handler) writeSessionCookie(response http.ResponseWriter, session auth.Session) {

@@ -40,8 +40,9 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => state.value === 'authenticated' && user.value !== null)
 
   async function refresh() {
+    const wasAuthenticated = isAuthenticated.value
     const operation = beginOperation()
-    state.value = 'checking'
+    if (!wasAuthenticated) state.value = 'checking'
     try {
       const status = await requestAuthStatus(fetch, operation.signal)
       if (!isCurrent(operation.sequence)) return
@@ -52,7 +53,14 @@ export const useAuthStore = defineStore('auth', () => {
       state.value = status.authenticated && status.user ? 'authenticated' : status.initialized ? 'anonymous' : 'setup'
     } catch (error) {
       if (!isCurrent(operation.sequence) || isAbortError(error)) return
-      setUnavailable(error)
+      if (wasAuthenticated) {
+        // A temporary status-query failure is not evidence that the session was
+        // revoked. Protected APIs still authenticate every request server-side.
+        errorCode.value = error instanceof NcpApiError ? error.code : 'NETWORK_UNAVAILABLE'
+        errorMessage.value = error instanceof NcpApiError ? error.message : '暂时无法确认会话状态，已保留当前页面。'
+      } else {
+        setUnavailable(error)
+      }
     } finally {
       finishOperation(operation.sequence)
     }
