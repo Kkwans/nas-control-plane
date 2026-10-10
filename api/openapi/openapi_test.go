@@ -111,7 +111,7 @@ func parseHTTPRouteDeclarations(t *testing.T) map[string]bool {
 		if err != nil || !strings.HasPrefix(path, "/") {
 			return true
 		}
-		if path != "/healthz" && path != "/ws/terminal" {
+		if path != "/healthz" && path != "/readyz" && path != "/ws/terminal" {
 			path = "/api/v1" + path
 		}
 		routes[strings.ToUpper(selector.Sel.Name)+" "+path] = true

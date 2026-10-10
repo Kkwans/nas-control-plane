@@ -254,6 +254,7 @@ func NewHandler(config Config) http.Handler {
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
 	router.Get("/healthz", api.healthz)
+	router.Get("/readyz", api.readyz)
 	router.Route("/api/v1", func(routes chi.Router) {
 		routes.Get("/auth/status", api.authStatus)
 		routes.Post("/auth/bootstrap", api.bootstrap)

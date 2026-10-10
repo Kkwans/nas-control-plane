@@ -8,7 +8,7 @@ Type=simple
 User=root
 Group=root
 Environment=NCP_PUBLIC_EGRESS_ENDPOINT=https://ipwho.is/?lang=zh-CN&fields=success,ip,country,region,connection
-Environment=NCP_MIHOMO_CONFIG_PATH=/volume2/DockerProject/mihomo/config/config.yaml
+Environment=NCP_MIHOMO_CONFIG_PATH=/volume2/DockerProject/mihomo/data/active.yaml
 # 显式启用受控 UGOS DNS 通道；写入仍需预览确认，并自动备份、复核和支持回滚。
 Environment=NCP_ENABLE_UGOS_DNS_WRITE=true
 RuntimeDirectory=ncp
@@ -18,7 +18,8 @@ RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 ExecStart=/opt/ncp/bin/ncp-agent serve --socket-group users --outbound-proxy http://127.0.0.1:7890
 Restart=on-failure
-RestartSec=3s
+# Bound retries on persistent configuration/host failures; never restart Docker.
+RestartSec=30s
 TimeoutStopSec=15s
 
 [Install]

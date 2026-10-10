@@ -16,6 +16,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /readyz:
+    get:
+      operationId: getServerReadiness
+      summary: 检查 Agent、Docker 与认证数据库的核心就绪状态
+      tags: [system]
+      responses:
+        '200':
+          description: 核心依赖可用；可选代理模块不参与核心就绪判断
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: 核心依赖不可用或共享探测超时；不包含底层错误或宿主机数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
   /api/v1/auth/status:
     get:
       operationId: getAuthStatus
@@ -2419,6 +2437,18 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ReadinessResponse:
+      type: object
+      required: [status, service, checks]
+      properties:
+        status: { type: string, enum: [ready, unavailable] }
+        service: { type: string, const: ncp-server }
+        checks:
+          type: object
+          required: [agent, docker]
+          additionalProperties:
+            type: string
+            enum: [ready, unavailable, not_checked]
     HealthResponse:
       type: object
       required: [status, service]
