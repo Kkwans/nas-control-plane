@@ -165,18 +165,19 @@ func Serve(ctx context.Context, config SocketConfig) error {
 			endpoint = strings.TrimSpace(os.Getenv("MIHOMO_CONTROLLER_ENDPOINT"))
 		}
 		if configPath != "" {
-			proxyProvider, err = NewLiveProxyProviderFromConfig(
-				system.NewOSEnvironment(), configPath, endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"),
-				os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"), config.OutboundProxy,
-			)
-			if err != nil {
-				return coded("AGENT_MIHOMO_INITIALIZATION_FAILED", err)
-			}
+			proxyProvider = newRecoverableProxyProvider(func() (ProxyProvider, error) {
+				return NewLiveProxyProviderFromConfig(
+					system.NewOSEnvironment(), configPath, endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"),
+					os.Getenv("NCP_PUBLIC_EGRESS_ENDPOINT"), config.OutboundProxy,
+				)
+			})
 		} else if endpoint != "" {
-			proxyProvider, err = NewLiveProxyProvider(system.NewOSEnvironment(), endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"))
-			if err != nil {
-				return coded("AGENT_MIHOMO_INITIALIZATION_FAILED", err)
-			}
+			proxyProvider = newRecoverableProxyProvider(func() (ProxyProvider, error) {
+				return NewLiveProxyProvider(system.NewOSEnvironment(), endpoint, os.Getenv("NCP_MIHOMO_CONTROLLER_TOKEN"))
+			})
+		}
+		if recoverable, ok := proxyProvider.(*recoverableProxyProvider); ok {
+			_, _ = recoverable.current(ctx)
 		}
 	}
 

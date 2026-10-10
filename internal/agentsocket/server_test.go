@@ -8,6 +8,9 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
 func TestServeAndProbeOverUnixSocket(t *testing.T) {
@@ -81,6 +84,47 @@ func TestListenUnixSocketRejectsExistingFile(t *testing.T) {
 	content, readErr := os.ReadFile(path)
 	if readErr != nil || string(content) != "keep" {
 		t.Fatalf("已有文件不应被删除或覆盖，content = %q, err = %v", content, readErr)
+	}
+}
+
+func TestServeSurvivesMissingMihomoConfiguration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix sockets")
+	}
+	t.Setenv("NCP_MIHOMO_CONFIG_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
+	socketPath := filepath.Join(t.TempDir(), "agent.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, SocketConfig{SocketPath: socketPath, DashboardProvider: fakeDashboardProvider{
+			summary:   system.Summary{CollectedAt: time.Now(), Host: system.HostSnapshot{Hostname: "test-host"}},
+			inventory: docker.Inventory{CollectedAt: time.Now()},
+		}})
+	}()
+	waitForSocket(t, socketPath)
+	request, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	if _, err := Probe(request, socketPath); err != nil {
+		t.Fatalf("core Agent RPC failed: %v", err)
+	}
+	if _, err := CollectDockerInventory(request, socketPath); err != nil {
+		t.Fatalf("Docker RPC must survive optional dependency failure: %v", err)
+	}
+	if _, err := CollectSystemSummary(request, socketPath); err != nil {
+		t.Fatalf("system summary RPC must survive optional dependency failure: %v", err)
+	}
+	if _, err := ProbeMihomo(request, socketPath); err == nil {
+		t.Fatal("missing optional dependency must remain unavailable")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Agent did not shut down")
 	}
 }
 
