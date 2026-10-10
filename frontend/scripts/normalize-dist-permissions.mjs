@@ -1,7 +1,7 @@
 import { chmod, readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-const distDirectory = resolve(process.cwd(), 'dist')
+const distDirectory = resolve(process.argv[2] ?? resolve(process.cwd(), 'dist'))
 
 async function normalizeDirectory(directory) {
   await chmod(directory, 0o755)
