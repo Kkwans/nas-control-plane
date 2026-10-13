@@ -105,6 +105,7 @@ func (api *handler) siteIcon(response http.ResponseWriter, request *http.Request
 		return
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
+	protectSiteIconResponse(response)
 	http.ServeFile(response, request, target)
 }
 
@@ -166,10 +167,7 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
 	response.Header().Set("Content-Type", contentType)
-	response.Header().Set("X-Content-Type-Options", "nosniff")
-	if contentType == "image/svg+xml" {
-		response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	}
+	protectSiteIconResponse(response)
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(content)
 }
@@ -177,11 +175,17 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 func writeSiteIconFallback(response http.ResponseWriter) {
 	response.Header().Set("Cache-Control", "private, max-age=300")
 	response.Header().Set("Content-Type", "image/svg+xml")
-	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	response.Header().Set("X-Content-Type-Options", "nosniff")
+	protectSiteIconResponse(response)
 	response.Header().Set("X-NCP-Icon-Fallback", "true")
 	response.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(response, siteIconFallbackSVG)
+}
+
+// 图标即使被作为独立文档打开，也不能获得控制台同源脚本权限。
+// 对所有图标统一设置，避免上传、代理和回退路径的策略再次分叉。
+func protectSiteIconResponse(response http.ResponseWriter) {
+	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func validSiteIconProxyTarget(target *url.URL, publicHost string) bool {

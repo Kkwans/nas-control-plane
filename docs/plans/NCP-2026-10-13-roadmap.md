@@ -30,8 +30,8 @@
 | 编号 | 优先级/模块 | 技术边界与实现方向 | 验收/退出条件 | 状态 |
 |---|---|---|---|---|
 | M00 | P0 接手与持续CI | 保留基线，审计与计划；只增加开发分支push CI，不触发release | 文档可追溯，分支CI实际运行，工具限制明确 | 进行中 |
-| M01 | P0 Job快照隔离 | registry锁内深复制Layers及指针字段，返回值/持久化不持有内部可变对象 | 并发progress/get/list/JSON测试+race，无别名写回 | 待实现 |
-| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 待实现 |
+| M01 | P0 Job快照隔离 | registry锁内深复制Layers及指针字段，返回值/持久化不持有内部可变对象 | 并发progress/get/list/JSON测试+race，无别名写回 | 已推送192fed6，CI待确认 |
+| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 代码与响应测试完成，浏览器待验收 |
 | M03 | P1 Compose前端事务 | project/path/session/revision绑定；提交与确认冻结payload；保存期间新编辑仍dirty | 延迟保存、切项目、关闭、编辑后迟到校验、重复确认回归 | 待实现 |
 | M04 | P1 数据库连接隔离 | source变化清空敏感草稿；旧请求无权更新新页面；发现/缺失/错误分态 | A慢B快、卸载、失败重试和深链验证 | 待实现 |
 | M05 | P1 Docker/日志请求隔离 | 详情latest-wins；日志query/cursor/follow/busy同一代次 | A/B详情、筛选中加载更多、迟到实时/历史合并回归 | 待实现 |
