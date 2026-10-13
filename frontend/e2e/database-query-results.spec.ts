@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises'
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { installMockApi } from './mockApi'
 import { waitForPageReady } from './pageReadiness'
@@ -59,10 +60,122 @@ async function expectWorkbenchFits(page: Page, width: number) {
   expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(width)
 }
 
+async function readCaptureState(page: Page) {
+  return page.evaluate(() => {
+    function bounds(element: Element | null) {
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      return { x: rect.x, y: rect.y, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height }
+    }
+    function describe(element: Element | null) {
+      if (!element) return null
+      return {
+        tagName: element.tagName, id: element.id, className: element.getAttribute('class'),
+        role: element.getAttribute('role'), ariaLabel: element.getAttribute('aria-label'),
+        ariaExpanded: element.getAttribute('aria-expanded'), ariaAutocomplete: element.getAttribute('aria-autocomplete'),
+        ariaControls: element.getAttribute('aria-controls'), ariaActiveDescendant: element.getAttribute('aria-activedescendant'),
+        contentEditable: element.getAttribute('contenteditable'), bounds: bounds(element),
+      }
+    }
+    function visible(element: Element) {
+      const style = getComputedStyle(element)
+      return element.getClientRects().length > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0
+    }
+    const topbar = document.querySelector('.topbar')
+    const toolbar = document.querySelector('.sql-toolbar')
+    const modeLabel = document.querySelector('.sql-result-mode > span')
+    const select = document.querySelector('.sql-result-mode select')
+    const execute = document.querySelector('.sql-toolbar__actions button')
+    const editor = document.querySelector('.cm-content')
+    const controls = [
+      { name: 'modeLabel', element: modeLabel }, { name: 'select', element: select }, { name: 'execute', element: execute },
+    ].map(({ name, element }) => {
+      const rect = bounds(element)
+      // 中点及四个内侧采样点均使用当前视口坐标，不用全页截图推断遮挡。
+      const hits = rect ? [[.5, .5], [.25, .5], [.75, .5], [.5, .25], [.5, .75]].map(([xRatio, yRatio]) => {
+        const x = rect.left + rect.width * xRatio!
+        const y = rect.top + rect.height * yRatio!
+        const hit = document.elementFromPoint(x, y)
+        return { x, y, hit: describe(hit), unobscured: Boolean(element && hit && element.contains(hit)) }
+      }) : []
+      return { name, bounds: rect, visible: Boolean(element && visible(element)), hits }
+    })
+    return {
+      scrollX: window.scrollX, scrollY: window.scrollY,
+      viewport: { width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio },
+      documentHeight: document.documentElement.scrollHeight,
+      bounds: {
+        topbar: bounds(topbar), toolbar: bounds(toolbar), modeLabel: bounds(modeLabel), select: bounds(select),
+        execute: bounds(execute), result: bounds(document.querySelector('.query-result')),
+      },
+      controls,
+      focusedElement: describe(document.activeElement),
+      editor: { ...describe(editor), focused: Boolean(editor && document.activeElement && editor.contains(document.activeElement)) },
+      autocomplete: [...document.querySelectorAll('.cm-tooltip-autocomplete')].map((element) => ({
+        ...describe(element), visible: visible(element), text: element.textContent,
+        selectedOption: element.querySelector('[aria-selected="true"]')?.textContent ?? null,
+        optionCount: element.querySelectorAll('[role="option"]').length,
+      })),
+    }
+  })
+}
+
 async function capture(page: Page, info: TestInfo, name: string) {
+  await mkdir(info.outputPath('ui-captures'), { recursive: true })
+  // 先记录真实执行后的焦点和补全菜单，不调用 blur/focus、Escape 或隐藏元素。
+  const initialState = await readCaptureState(page)
+  const initialPath = info.outputPath('ui-captures', `${name}-post-execution-viewport.png`)
+  await page.screenshot({ path: initialPath, fullPage: false, animations: 'disabled' })
+  await info.attach(`${name}-post-execution-viewport`, { path: initialPath, contentType: 'image/png' })
+
+  // 明确把工具栏移到真实 sticky header 下方，避免 locator.screenshot 的隐式滚动。
+  const scrollIntent = await page.evaluate(() => {
+    const header = document.querySelector('.topbar')!
+    const toolbar = document.querySelector('.sql-toolbar')!
+    const stickyBottom = Math.max(0, header.getBoundingClientRect().bottom)
+    const targetToolbarTop = stickyBottom + 12
+    const requestedScrollY = window.scrollY + toolbar.getBoundingClientRect().top - targetToolbarTop
+    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight)
+    const targetScrollY = Math.round(Math.min(maxScrollY, Math.max(0, requestedScrollY)))
+    window.scrollTo({ top: targetScrollY, left: 0, behavior: 'instant' })
+    return { stickyBottom, targetToolbarTop, requestedScrollY, targetScrollY, maxScrollY }
+  })
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeCloseTo(scrollIntent.targetScrollY, 0)
+  const scrolledState = await readCaptureState(page)
+  const viewportPath = info.outputPath('ui-captures', `${name}-scrolled-viewport.png`)
+  await page.screenshot({ path: viewportPath, fullPage: false, animations: 'disabled' })
+  await info.attach(`${name}-scrolled-viewport`, { path: viewportPath, contentType: 'image/png' })
+
+  // 只重置滚动坐标后生成规范全页图；保留交互产生的实际焦点与补全状态。
+  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+  const canonicalState = await readCaptureState(page)
   const path = info.outputPath('ui-captures', `${name}.png`)
-  await page.locator('.sql-workbench').screenshot({ path, animations: 'disabled' })
+  await page.screenshot({ path, fullPage: true, animations: 'disabled' })
   await info.attach(name, { path, contentType: 'image/png' })
+  const afterCaptureState = await readCaptureState(page)
+  const captureState = JSON.stringify({
+    focusPolicy: '保留真实焦点和补全状态；采集过程只主动改变窗口滚动坐标。',
+    screenshots: { postExecutionViewport: initialPath, scrolledViewport: viewportPath, canonicalFullPage: path },
+    initialState, scrollIntent, scrolledState, canonicalState, afterCaptureState,
+  }, null, 2)
+  const statePath = info.outputPath('ui-captures', `${name}-capture-state.json`)
+  await writeFile(statePath, captureState, 'utf8')
+  await info.attach(`${name}-capture-state`, { path: statePath, contentType: 'application/json' })
+
+  // 先保存证据再断言，以便 CI 失败时仍可还原实际滚动和焦点状态。
+  expect(scrolledState.bounds.topbar).not.toBeNull()
+  expect(scrolledState.bounds.topbar!.top).toBeCloseTo(0, 0)
+  for (const control of scrolledState.controls) {
+    expect(control.visible, `${control.name} 应可见`).toBe(true)
+    expect(control.bounds).not.toBeNull()
+    expect(control.bounds!.top).toBeGreaterThanOrEqual(scrolledState.bounds.topbar!.bottom)
+    expect(control.bounds!.bottom).toBeLessThanOrEqual(scrolledState.viewport.height)
+    expect(control.bounds!.left).toBeGreaterThanOrEqual(0)
+    expect(control.bounds!.right).toBeLessThanOrEqual(scrolledState.viewport.width)
+    expect(control.hits).toHaveLength(5)
+    for (const hit of control.hits) expect(hit.unobscured, `${control.name} 视口采样点 (${hit.x}, ${hit.y}) 被遮挡`).toBe(true)
+  }
 }
 
 for (const width of [320, 390]) {
