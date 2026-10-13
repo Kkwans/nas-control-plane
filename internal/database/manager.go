@@ -232,8 +232,10 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 }
 
 func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult, error) {
-	statement := strings.TrimSpace(request.SQL)
-	if statement == "" {
+	if err := ValidateQueryResultMode(request.ResultMode); err != nil {
+		return QueryResult{}, err
+	}
+	if strings.TrimSpace(request.SQL) == "" {
 		return QueryResult{}, newDatabaseError(CodeSQLInvalid, Source{ID: request.SourceID}, "query", errors.New("SQL statement is empty"))
 	}
 	source, db, err := m.connect(ctx, request.Connection)
@@ -241,42 +243,16 @@ func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult,
 		return QueryResult{}, err
 	}
 	defer db.Close()
-	started := time.Now()
-	if !returnsRows(statement) {
-		result, execErr := db.ExecContext(ctx, statement)
-		if execErr != nil {
-			return QueryResult{}, MapError(ctx, source, "query", execErr)
-		}
-		affected, _ := result.RowsAffected()
-		return QueryResult{Columns: []string{}, Rows: [][]any{}, RowsAffected: affected, DurationMs: time.Since(started).Milliseconds()}, nil
-	}
-	rows, err := db.QueryContext(ctx, statement)
+	result, err := executeQuery(ctx, databaseQueryRunner{db}, source.Driver, request)
 	if err != nil {
 		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return QueryResult{}, MapError(ctx, source, "query", err)
-	}
-	result := QueryResult{Columns: columns, Rows: make([][]any, 0), DurationMs: 0}
-	columnTypes, _ := rows.ColumnTypes()
-	for rows.Next() {
-		if len(result.Rows) >= maxQueryRows {
-			result.Truncated = true
-			break
-		}
-		values, scanErr := scanValues(rows, len(columns), columnTypes)
-		if scanErr != nil {
-			return QueryResult{}, MapError(ctx, source, "query", scanErr)
-		}
-		result.Rows = append(result.Rows, values)
-	}
-	if err := rows.Err(); err != nil {
-		return QueryResult{}, MapError(ctx, source, "query", err)
-	}
-	result.DurationMs = time.Since(started).Milliseconds()
 	return result, nil
+}
+
+// QueryWithOptions 显式声明此 Agent 支持结果模式；旧 provider 不会被默默调用。
+func (m *Manager) QueryWithOptions(ctx context.Context, request QueryRequest) (QueryResult, error) {
+	return m.Query(ctx, request)
 }
 
 func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, error) {
@@ -744,7 +720,7 @@ func execMutation(ctx context.Context, db *sql.DB, statement string, args []any)
 	return MutationResult{RowsAffected: affected}, nil
 }
 
-func scanValues(rows *sql.Rows, count int, columnTypes ...[]*sql.ColumnType) ([]any, error) {
+func scanValues(rows interface{ Scan(...any) error }, count int, columnTypes ...[]*sql.ColumnType) ([]any, error) {
 	raw := make([]any, count)
 	targets := make([]any, count)
 	for index := range raw {
@@ -943,19 +919,6 @@ func writeModeForColumn(primaryKey bool, dataType string, defaultValue any, iden
 		return "optional-default"
 	}
 	return "required"
-}
-
-func returnsRows(statement string) bool {
-	fields := strings.Fields(strings.ToUpper(statement))
-	if len(fields) == 0 {
-		return false
-	}
-	switch fields[0] {
-	case "SELECT", "WITH", "PRAGMA", "EXPLAIN", "SHOW", "DESCRIBE", "DESC", "VALUES":
-		return true
-	default:
-		return false
-	}
 }
 
 func sourceID(driver Driver, location string) string {

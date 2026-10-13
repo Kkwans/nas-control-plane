@@ -60,6 +60,10 @@ func (api *handler) databaseQuery(response http.ResponseWriter, request *http.Re
 	if !api.decodeDatabaseBody(response, request, &input) {
 		return
 	}
+	if err := ncpdatabase.ValidateQueryResultMode(input.ResultMode); err != nil {
+		api.writeDatabaseError(response, request, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
 	resolved, err := api.prepareDatabaseConnection(ctx, input.Connection)
@@ -195,6 +199,8 @@ func (api *handler) writeDatabaseError(response http.ResponseWriter, request *ht
 		status, message = http.StatusForbidden, "数据库权限不足。"
 	case ncpdatabase.CodeSQLInvalid:
 		message = "SQL 或数据库请求无效。"
+	case ncpdatabase.CodeResultModeUnsupported:
+		message = "当前 Agent 不支持结果模式，请先升级 Agent。"
 	case ncpdatabase.CodeConstraintFailed:
 		status, message = http.StatusConflict, "数据库约束未满足。"
 	case ncpdatabase.CodeAgentUnavailable:

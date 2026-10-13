@@ -611,7 +611,13 @@ paths:
   /api/v1/databases/query:
     post:
       operationId: queryDatabase
-      summary: 执行受控数据库 SQL
+      summary: 执行 Root 数据库 SQL
+      description: >-
+        结果模式只决定读取返回行还是驱动影响行数，不限制 SQL 写入权限。
+        NCP 对单次请求仅选择一次 Query 或 Exec 调用，不因错误、不支持模式或未知影响行数自动切换路径或重放；不承诺数据库驱动或网络层的 exactly-once。
+        行结果最多展示 500 行，这不是写入行数上限；返回行也不代表只读。
+        SQL 失败或超时不保证未执行或已回滚，应先核对实际状态再决定是否重试。
+        当前响应仅表示驱动暴露的一个结果集，多语句的执行、结果与原子性取决于驱动和数据库。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
@@ -629,8 +635,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseQueryResult'
+        '400':
+          description: 请求格式无效（DATABASE_INPUT_INVALID）、SQL 或模式无效（sql_invalid），或 Agent 不支持显式模式（result_mode_unsupported）；不支持时 SQL 不会执行，应先升级 Agent。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: SQL 无效或约束失败
+          description: SQL 约束失败
           content:
             application/json:
               schema:
@@ -2447,7 +2459,21 @@ components:
         - type: object
           required: [sql]
           properties:
-            sql: { type: string, minLength: 1, maxLength: 1048576 }
+            sql:
+              type: string
+              minLength: 1
+              maxLength: 1048576
+              description: SQL 原文；不拆分、删除注释或重组后执行。
+            resultMode:
+              type: string
+              enum: [auto, rows, exec]
+              default: auto
+              description: >-
+                可选结果模式。省略字段沿用旧 Query 协议；空字符串或 null 也宽容地视为省略。
+                规范客户端应仅省略或发送 auto、rows、exec。显式 auto、rows、exec 使用新 QueryWithOptions 协议，旧 Agent 在执行 SQL 前返回 result_mode_unsupported，不自动降级或重放。
+                auto 跳过可识别的前导普通注释后按首关键字选择路径，不保证自动识别所有 RETURNING 或 CTE 写语句。
+                rows 调用返回行路径，适用于写语句 RETURNING，但仍会执行写入；exec 调用执行路径，获取驱动影响行数并丢弃可能的返回行，适用于无返回行的 CTE 写语句。
+                其他非空值（含大小写变体或前后空格）在准备数据库连接前返回 sql_invalid。
     DatabaseQueryResult:
       type: object
       required: [columns, rows, rowsAffected, truncated, durationMs]
@@ -2456,8 +2482,18 @@ components:
         rows:
           type: array
           items: { type: array, items: {} }
-        rowsAffected: { type: integer, format: int64 }
-        truncated: { type: boolean }
+        rowsAffected:
+          type: integer
+          format: int64
+          description: 仅 rowsAffectedKnown 为 true 时是可信的驱动报告计数；新 Agent 在未知时保留 0 占位。未知值不可解读为实际影响行数，驱动计数也不保证涵盖触发器等全部变化。
+        rowsAffectedKnown:
+          type: boolean
+          description: >-
+            新 Agent 始终返回此字段。仅 true 允许显示影响行数；false 或旧 Agent 缺失此字段均表示未知，不得根据 rowsAffected 非零推断可信。
+            返回行路径始终未知；执行路径在计数不支持、出错、为负或超过 JavaScript 安全整数范围时也未知，但 SQL 本身仍可执行成功。
+        truncated:
+          type: boolean
+          description: 表示返回行超过 500 行展示上限；不限制或推断数据库写入行数。
         durationMs: { type: integer, minimum: 0 }
     DatabaseRowsRequest:
       allOf:

@@ -67,6 +67,7 @@ function confirm() {
         <strong>将执行</strong>
         <ul><li v-for="item in impact" :key="item">{{ item }}</li></ul>
       </div>
+      <slot name="details" />
       <div v-if="retained.length" class="confirm-danger-dialog__section confirm-danger-dialog__section--retained">
         <strong>不会影响</strong>
         <ul><li v-for="item in retained" :key="item">{{ item }}</li></ul>

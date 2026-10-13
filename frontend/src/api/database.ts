@@ -2,6 +2,7 @@ import { NcpApiError } from './system'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
+export type DatabaseQueryResultMode = 'auto' | 'rows' | 'exec'
 
 export interface DatabaseSource {
   id: string
@@ -102,6 +103,7 @@ export interface QueryResult {
   columns: string[]
   rows: DatabaseValue[][]
   rowsAffected: number
+  rowsAffectedKnown?: boolean
   truncated: boolean
   durationMs: number
 }
@@ -133,7 +135,7 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
   return request<DatabaseRows>('/api/v1/databases/rows', input, signal)
 }
 
-export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string }, signal?: AbortSignal): Promise<QueryResult> {
+export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string; resultMode?: DatabaseQueryResultMode }, signal?: AbortSignal): Promise<QueryResult> {
   return request<QueryResult>('/api/v1/databases/query', input, signal)
 }
 

@@ -15,15 +15,16 @@ import (
 type ErrorCode string
 
 const (
-	CodeCredentialsRequired ErrorCode = "credentials_required"
-	CodeAuthFailed          ErrorCode = "auth_failed"
-	CodeUnreachable         ErrorCode = "unreachable"
-	CodeDatabaseNotFound    ErrorCode = "database_not_found"
-	CodePermissionDenied    ErrorCode = "permission_denied"
-	CodeSQLInvalid          ErrorCode = "sql_invalid"
-	CodeConstraintFailed    ErrorCode = "constraint_failed"
-	CodeAgentUnavailable    ErrorCode = "agent_unavailable"
-	CodeTimeout             ErrorCode = "timeout"
+	CodeCredentialsRequired   ErrorCode = "credentials_required"
+	CodeAuthFailed            ErrorCode = "auth_failed"
+	CodeUnreachable           ErrorCode = "unreachable"
+	CodeDatabaseNotFound      ErrorCode = "database_not_found"
+	CodePermissionDenied      ErrorCode = "permission_denied"
+	CodeSQLInvalid            ErrorCode = "sql_invalid"
+	CodeResultModeUnsupported ErrorCode = "result_mode_unsupported"
+	CodeConstraintFailed      ErrorCode = "constraint_failed"
+	CodeAgentUnavailable      ErrorCode = "agent_unavailable"
+	CodeTimeout               ErrorCode = "timeout"
 
 	// These codes describe failures in the server-side credential boundary.
 	// They are intentionally separate from remote database outcomes.
@@ -80,7 +81,7 @@ func CodeFromString(value string) ErrorCode {
 	code := ErrorCode(strings.TrimSpace(value))
 	switch code {
 	case CodeCredentialsRequired, CodeAuthFailed, CodeUnreachable,
-		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid,
+		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid, CodeResultModeUnsupported,
 		CodeConstraintFailed, CodeAgentUnavailable, CodeTimeout,
 		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeKeyUnavailable,
 		CodeKeyRotationFailed, CodeMigrationFailed:

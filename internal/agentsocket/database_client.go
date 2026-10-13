@@ -50,10 +50,29 @@ func CatalogDatabase(ctx context.Context, socketPath string, request ncpdatabase
 
 func QueryDatabase(ctx context.Context, socketPath string, request ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error) {
 	var result ncpdatabase.QueryResult
+	if err := ncpdatabase.ValidateQueryResultMode(request.ResultMode); err != nil {
+		return result, coded(string(ncpdatabase.CodeSQLInvalid), err)
+	}
 	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Query(ctx, payload)
+		return queryDatabaseRPC(ctx, client, payload, request.ResultMode)
 	})
 	return result, err
+}
+
+func queryDatabaseRPC(ctx context.Context, client AgentDatabaseServiceClient, payload *structpb.Struct, mode ncpdatabase.QueryResultMode) (*structpb.Struct, error) {
+	if mode == "" {
+		return client.Query(ctx, payload)
+	}
+	optionsClient, ok := client.(AgentDatabaseQueryOptionsServiceClient)
+	if !ok {
+		return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeResultModeUnsupported))
+	}
+	response, err := optionsClient.QueryWithOptions(ctx, payload)
+	// 只在显式模式调用上识别旧 Agent；绝不移除模式或重放 SQL。
+	if grpcstatus.Code(err) == codes.Unimplemented {
+		return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeResultModeUnsupported))
+	}
+	return response, err
 }
 
 func ReadDatabaseRows(ctx context.Context, socketPath string, request ncpdatabase.RowsRequest) (ncpdatabase.RowsResult, error) {
@@ -97,6 +116,10 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 		return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
 	}
 	defer connection.Close()
+	return callDatabaseClient(NewAgentDatabaseServiceClient(connection), request, result, call)
+}
+
+func callDatabaseClient(client AgentDatabaseServiceClient, request, result any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) error {
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
@@ -122,7 +145,7 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 	if err != nil {
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
-	response, err := call(NewAgentDatabaseServiceClient(connection), payload)
+	response, err := call(client, payload)
 	if err != nil {
 		return databaseRPCError(err)
 	}

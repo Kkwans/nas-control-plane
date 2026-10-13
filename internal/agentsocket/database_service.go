@@ -30,6 +30,11 @@ type DatabaseConnectionProvider interface {
 	TestConnection(context.Context, ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error)
 }
 
+// DatabaseQueryOptionsProvider 显式声明结果模式支持，不能回退到旧 Query。
+type DatabaseQueryOptionsProvider interface {
+	QueryWithOptions(context.Context, ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error)
+}
+
 type databaseService struct {
 	provider DatabaseProvider
 }
@@ -88,6 +93,24 @@ func (s *databaseService) Query(ctx context.Context, request *structpb.Struct) (
 		return nil, err
 	}
 	result, err := s.provider.Query(ctx, decoded)
+	return databaseResponse(result, err)
+}
+
+func (s *databaseService) QueryWithOptions(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	var decoded ncpdatabase.QueryRequest
+	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+		return nil, err
+	}
+	if err := ncpdatabase.ValidateQueryResultMode(decoded.ResultMode); err != nil {
+		return databaseResponse(nil, err)
+	}
+	provider, ok := s.provider.(DatabaseQueryOptionsProvider)
+	if !ok {
+		return databaseResponse(nil, &ncpdatabase.DatabaseError{
+			Code: ncpdatabase.CodeResultModeUnsupported, Operation: "query",
+		})
+	}
+	result, err := provider.QueryWithOptions(ctx, decoded)
 	return databaseResponse(result, err)
 }
 

@@ -37,6 +37,7 @@ import {
   loadDatabaseRows,
   updateDatabaseRow,
   type DatabaseColumn,
+  type DatabaseQueryResultMode,
   type DatabaseRows,
   type DatabaseValue,
   type QueryResult,
@@ -56,6 +57,18 @@ import { isAbortError } from '@/session/sessionLifecycle'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
+type RowsRefreshOutcome = { status: 'success' | 'stale' } | { status: 'failed'; error: DatabaseErrorState }
+
+interface SQLExecutionSnapshot {
+  sql: string
+  resultMode: DatabaseQueryResultMode
+}
+
+const resultModeLabels: Record<DatabaseQueryResultMode, string> = {
+  auto: '自动',
+  rows: '返回行',
+  exec: '执行（不展示返回行）',
+}
 
 interface DatabaseErrorCopy {
   message: string
@@ -105,14 +118,16 @@ const rowNullFields = ref<Record<string, boolean>>({})
 const originalKeys = ref<Record<string, DatabaseValue>>({})
 const mutationPending = ref(false)
 const sql = ref('')
+const resultMode = ref<DatabaseQueryResultMode>('auto')
 const queryResult = ref<QueryResult | null>(null)
 const queryPending = ref(false)
 const queryError = ref<DatabaseErrorState | null>(null)
+const queryRefreshError = ref<DatabaseErrorState | null>(null)
 const dangerOpen = ref(false)
 const dangerBusy = ref(false)
 const dangerAction = ref<'delete-row' | 'sql'>('delete-row')
 const pendingRow = ref<Record<string, DatabaseValue> | null>(null)
-const pendingSql = ref('')
+const pendingQuery = ref<SQLExecutionSnapshot | null>(null)
 let routeSequence = 0
 let rowsSequence = 0
 let querySequence = 0
@@ -140,12 +155,17 @@ const queryRows = computed(() => {
     Object.fromEntries(queryResult.value!.columns.map((column, index) => [column, row[index]])))
 })
 const sqlRisk = computed(() => classifySqlRisk(sql.value))
-const dangerTitle = computed(() => dangerAction.value === 'sql' ? (classifySqlRisk(pendingSql.value)?.title ?? '确认执行 SQL') : '确认删除数据行')
+const affectedSummary = computed(() => queryResult.value?.rowsAffectedKnown === true
+  ? `执行完成；影响 ${queryResult.value.rowsAffected} 行（驱动报告）。`
+  : '执行完成；数据库未提供可用的影响行数。')
+const dangerTitle = computed(() => dangerAction.value === 'sql' ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.title ?? '确认执行 SQL') : '确认删除数据行')
 const dangerDescription = computed(() => dangerAction.value === 'sql'
-  ? (classifySqlRisk(pendingSql.value)?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
+  ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
   : '将永久删除当前数据行并立即写入数据库；删除本身无法在控制面撤销。')
-const dangerImpact = computed(() => dangerAction.value === 'sql' ? ['执行当前 SQL 语句', '结果可能影响多行数据或表结构'] : ['永久删除选中的数据行'])
-const dangerRetained = computed(() => dangerAction.value === 'sql' ? ['NCP 不会限制 Root 的正常 SQL 能力', '其他数据库和表不受影响'] : ['其他数据行不会被删除'])
+const dangerImpact = computed(() => dangerAction.value === 'sql'
+  ? [`结果模式：${resultModeLabels[pendingQuery.value?.resultMode ?? 'auto']}`, '可能影响多行数据、其他表或数据库结构；返回行模式也会执行写操作']
+  : ['永久删除选中的数据行'])
+const dangerRetained = computed(() => dangerAction.value === 'sql' ? [] : ['其他数据行不会被删除'])
 
 async function initialize() {
   const sequence = ++routeSequence
@@ -190,6 +210,10 @@ function resetRouteState() {
   queryResult.value = null
   queryPending.value = false
   queryError.value = null
+  queryRefreshError.value = null
+  resultMode.value = 'auto'
+  pendingQuery.value = null
+  pendingRow.value = null
   offset.value = 0
   sortColumn.value = ''
   sortDirection.value = ''
@@ -204,8 +228,8 @@ function connection() {
   return databaseStore.connection(sourceId.value)
 }
 
-async function refreshRows() {
-  if (!table.value) return
+async function refreshRows(reportError = true): Promise<RowsRefreshOutcome> {
+  if (!table.value) return { status: 'stale' }
   const sequence = ++rowsSequence
   const requestKey = routeKey.value
   rowsController?.abort()
@@ -223,11 +247,15 @@ async function refreshRows() {
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
     }, controller.signal)
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted) return
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted) return { status: 'stale' }
     tableRows.value = result
+    if (reportError) queryRefreshError.value = null
+    return { status: 'success' }
   } catch (error) {
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || isAbortError(error)) return
-    setError(error, '表数据读取失败。')
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted || isAbortError(error)) return { status: 'stale' }
+    const failure = toErrorState(error, '表数据读取失败。')
+    if (reportError) errorState.value = failure
+    return { status: 'failed', error: failure }
   } finally {
     if (sequence === rowsSequence) rowsLoading.value = false
   }
@@ -301,31 +329,41 @@ async function submitRow() {
 }
 
 async function removeRow(row: Record<string, DatabaseValue>) {
-  if (!table.value || !canEditRows.value) return
+  if (!table.value || !canEditRows.value || queryPending.value || dangerBusy.value || dangerOpen.value) return
   pendingRow.value = row
-  pendingSql.value = ''
+  pendingQuery.value = null
   dangerAction.value = 'delete-row'
   dangerOpen.value = true
 }
 
-async function executeSQL(statement: string) {
+async function executeSQL(snapshot: SQLExecutionSnapshot) {
+  if (queryPending.value) return false
   const sequence = ++querySequence
   const requestKey = routeKey.value
   queryController?.abort()
   const controller = new AbortController()
   queryController = controller
   queryPending.value = true
+  queryResult.value = null
   queryError.value = null
+  queryRefreshError.value = null
   try {
-    const result = await executeDatabaseSQL({ ...connection(), sql: statement }, controller.signal)
+    const result = await executeDatabaseSQL({
+      ...connection(),
+      sql: snapshot.sql,
+      ...(snapshot.resultMode === 'auto' ? {} : { resultMode: snapshot.resultMode }),
+    }, controller.signal)
     if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted) return false
     queryResult.value = result
-    if (!result.columns.length) await refreshRows()
+    // 返回行不代表只读；SQL 成功后只刷新数据，绝不重放 SQL。
+    const refresh = await refreshRows(false)
+    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted) return false
+    if (refresh.status === 'failed') queryRefreshError.value = refresh.error
     return true
   } catch (error) {
-    if (sequence !== querySequence || routeKey.value !== requestKey || isAbortError(error)) return false
+    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted || isAbortError(error)) return false
     queryResult.value = null
-    queryError.value = toErrorState(error, 'SQL 执行失败。')
+    queryError.value = toQueryErrorState(error)
     return false
   } finally {
     if (sequence === querySequence) queryPending.value = false
@@ -333,16 +371,19 @@ async function executeSQL(statement: string) {
 }
 
 async function confirmDanger() {
-  if (!table.value || dangerBusy.value) return
+  if (!table.value || !dangerOpen.value || dangerBusy.value || queryPending.value) return
+  const action = dangerAction.value
+  const snapshot = pendingQuery.value
   const sequence = ++mutationSequence
   const requestKey = routeKey.value
   mutationController?.abort()
-  const controller = dangerAction.value === 'delete-row' ? new AbortController() : null
+  const controller = action === 'delete-row' ? new AbortController() : null
   if (controller) mutationController = controller
   dangerBusy.value = true
   let succeeded = false
+  let attemptedSQL = false
   try {
-    if (dangerAction.value === 'delete-row') {
+    if (action === 'delete-row') {
       const row = pendingRow.value
       if (!row) return
       const keys = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
@@ -354,33 +395,36 @@ async function confirmDanger() {
       if (sequence !== mutationSequence || routeKey.value !== requestKey) return
       succeeded = true
     } else {
-      succeeded = await executeSQL(pendingSql.value)
+      if (!snapshot) return
+      attemptedSQL = true
+      succeeded = await executeSQL(snapshot)
       if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) ElMessage.success('SQL 执行完成')
     }
   } catch (error) {
-    if (dangerAction.value === 'delete-row' && sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据删除失败。')
+    if (action === 'delete-row' && sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据删除失败。')
   } finally {
     if (sequence === mutationSequence) {
       dangerBusy.value = false
     }
-    if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) {
+    if ((succeeded || attemptedSQL) && sequence === mutationSequence && routeKey.value === requestKey) {
       dangerOpen.value = false
       pendingRow.value = null
-      pendingSql.value = ''
+      pendingQuery.value = null
     }
   }
 }
 
 async function runSQL() {
-  if (!sql.value.trim()) return
+  if (!sql.value.trim() || queryPending.value || dangerBusy.value || dangerOpen.value) return
+  const snapshot = { sql: sql.value, resultMode: resultMode.value }
   if (sqlRisk.value) {
-    pendingSql.value = sql.value
+    pendingQuery.value = snapshot
     pendingRow.value = null
     dangerAction.value = 'sql'
     dangerOpen.value = true
     return
   }
-  await executeSQL(sql.value)
+  await executeSQL(snapshot)
 }
 
 function isSensitiveColumn(name: string) {
@@ -452,6 +496,20 @@ function toErrorState(error: unknown, fallback: string): DatabaseErrorState {
   }
 }
 
+function toQueryErrorState(error: unknown): DatabaseErrorState {
+  const code = errorCode(error)
+  if (code === 'result_mode_unsupported') {
+    return { code, message: '当前 Agent 不支持结果模式，请先升级 Agent。', nextStep: 'SQL 未提交执行；升级 Agent 后再主动执行。' }
+  }
+  if (code === 'DATABASE_INPUT_INVALID') {
+    return { code, message: 'SQL 请求未通过服务端校验。', nextStep: 'SQL 未提交执行；请核对请求格式及 Server 是否支持所选结果模式。' }
+  }
+  const message = code === 'timeout' ? 'SQL 执行超时。'
+    : code === 'DATABASE_OPERATION_FAILED' ? '未能确认 SQL 执行结果。'
+      : errorMessage(error, 'SQL 执行失败。')
+  return { code, message, nextStep: '写操作可能已生效；请先核对数据库状态，再决定是否重试。' }
+}
+
 function setError(error: unknown, fallback: string) {
   errorState.value = toErrorState(error, fallback)
 }
@@ -515,7 +573,7 @@ onBeforeUnmount(() => {
           <span>{{ columns.length }} 个字段 / 当前加载 {{ tableRows?.rows.length ?? 0 }} 行</span>
         </div>
         <div>
-          <ElButton class="database-header-action" :loading="rowsLoading" @click="refreshRows"><RefreshCw :size="15" />刷新</ElButton>
+          <ElButton class="database-header-action" :loading="rowsLoading" @click="refreshRows()"><RefreshCw :size="15" />刷新</ElButton>
           <ElButton type="primary" :disabled="!canInsertRows" @click="openInsert"><CirclePlus :size="16" />新增行</ElButton>
         </div>
       </div>
@@ -581,16 +639,20 @@ onBeforeUnmount(() => {
 
     <section v-else class="sql-workbench panel">
       <div class="sql-toolbar">
-        <div><strong>SQL 查询</strong><span>{{ tableTypeLabel(table.type) }} / {{ source.name }} / {{ table.name }}</span></div>
+        <div><strong>执行 SQL</strong><span>{{ tableTypeLabel(table.type) }} / {{ source.name }} / {{ table.name }}</span></div>
         <div class="sql-toolbar__actions">
+          <label class="sql-result-mode"><span>结果模式</span><select v-model="resultMode" class="ncp-select" :disabled="queryPending" aria-label="SQL 结果模式"><option v-for="(label, value) in resultModeLabels" :key="value" :value="value">{{ label }}</option></select></label>
           <small v-if="sqlRisk" class="sql-risk-hint" role="status"><CircleAlert :size="14" />{{ sqlRisk.hint }}</small>
           <small v-else>最多返回 500 行</small>
-          <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim()" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton>
+          <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim() || queryPending || dangerOpen || dangerBusy" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton>
         </div>
       </div>
+      <div class="sql-mode-note" role="note">自动模式仅按开头语句类型选择结果方式，不能完整识别 RETURNING 或 CTE 写入。RETURNING 请选“返回行”；无返回行的 CTE 写入请选“执行”以获取驱动影响行数。返回行模式也会执行写操作；500 行仅是展示上限，不限制写入范围。</div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
-        <header><strong>执行结果</strong><span v-if="queryResult">{{ queryResult.rows.length }} 行 / {{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 结果已截断</template></span><span v-else>等待执行</span></header>
+        <header><strong>{{ queryResult?.columns.length ? `返回 ${queryResult.rows.length} 行` : '执行结果' }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryPending ? '正在执行' : '等待执行' }}</span></header>
+        <div v-if="queryRefreshError" class="query-refresh-warning" role="alert"><strong>SQL 已执行，表数据刷新失败。</strong><span>{{ queryRefreshError.message }} 请在“表数据”中重新读取，勿为刷新而重跑 SQL。</span><small>代码 {{ queryRefreshError.code }}</small></div>
+        <div v-if="queryResult?.columns.length" class="query-affected-summary">{{ affectedSummary }}</div>
         <div v-if="queryError" class="query-message query-message--error">
           <CircleAlert :size="22" />
           <div class="query-message__body"><strong>执行失败</strong><span>{{ queryError.message }}</span><small>下一步：{{ queryError.nextStep }}</small></div>
@@ -603,7 +665,7 @@ onBeforeUnmount(() => {
             </ElTableColumn>
           </ElTable>
         </div>
-        <div v-else-if="queryResult" class="query-message query-message--success"><strong>执行成功</strong><span>影响 {{ queryResult.rowsAffected }} 行，用时 {{ queryResult.durationMs }} ms。</span></div>
+        <div v-else-if="queryResult" class="query-message query-message--success"><strong>执行成功</strong><span>{{ affectedSummary }}</span></div>
         <div v-else class="query-message"><Braces :size="24" /><span>输入 SQL 后按 Ctrl + Enter 执行</span></div>
       </div>
     </section>
@@ -628,13 +690,44 @@ onBeforeUnmount(() => {
       :action-label="dangerAction === 'sql' ? '确认执行' : '永久删除'"
       :busy="dangerBusy || queryPending"
       @confirm="confirmDanger"
-    />
+    >
+      <template v-if="dangerAction === 'sql' && pendingQuery" #details>
+        <section class="sql-confirmation-snapshot" aria-label="待执行 SQL 快照">
+          <strong>待执行 SQL（原文）</strong>
+          <pre class="sql-confirmation-preview">{{ pendingQuery.sql }}</pre>
+        </section>
+      </template>
+    </ConfirmDangerDialog>
   </div>
 
   <div v-else class="page"><section class="missing-table panel"><Table2 :size="26" /><h1>数据表不存在或数据库尚未连接</h1><a href="/databases">返回数据库列表</a></section></div>
 </template>
 
 <style scoped>
+.sql-confirmation-snapshot {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  font-size: max(12px, .875rem);
+}
+
+.sql-confirmation-preview {
+  min-width: 0;
+  max-height: min(40vh, 420px);
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--ncp-line);
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-surface-quiet);
+  color: var(--ncp-text);
+  font-family: var(--ncp-font-mono);
+  font-size: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .table-connection-note {
   display: flex;
   min-width: 0;
@@ -705,8 +798,7 @@ onBeforeUnmount(() => {
 
 .data-workbench,
 .structure-workbench,
-.definition-workbench,
-.sql-workbench {
+.definition-workbench {
   height: calc(100dvh - 278px);
   min-height: 560px;
   overflow: hidden;
@@ -1046,12 +1138,16 @@ onBeforeUnmount(() => {
 
 .sql-workbench {
   display: grid;
-  grid-template-rows: 54px minmax(240px, .95fr) minmax(220px, 1.05fr);
+  min-width: 0;
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(240px, 16rem) minmax(360px, 24rem);
 }
 
 .sql-toolbar {
   display: flex;
+  min-height: 54px;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
   padding: 7px 12px;
@@ -1066,8 +1162,56 @@ onBeforeUnmount(() => {
 }
 
 .sql-toolbar__actions {
+  max-width: 100%;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.sql-result-mode {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sql-result-mode select {
+  min-width: 0;
+  min-height: var(--ncp-control-height);
+  width: auto;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--ncp-line);
+  border-radius: var(--ncp-radius-control);
+  background: var(--ncp-surface);
+  color: var(--ncp-text);
+  font-size: max(12px, .875rem);
+}
+
+.sql-mode-note,
+.query-affected-summary {
+  min-width: 0;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ncp-line);
+  color: var(--ncp-text-muted);
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.query-refresh-warning {
+  display: grid;
+  flex-shrink: 0;
+  gap: 3px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--ncp-warning-border);
+  background: var(--ncp-warning-soft);
+  color: var(--ncp-warning-strong);
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .sql-risk-hint {
@@ -1105,6 +1249,11 @@ onBeforeUnmount(() => {
   font-size: .58rem;
 }
 
+.sql-toolbar .sql-risk-hint {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .sql-editor {
   min-height: 0;
   overflow: hidden;
@@ -1115,7 +1264,7 @@ onBeforeUnmount(() => {
   display: flex;
   min-height: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .query-result > header {
@@ -1128,6 +1277,7 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--ncp-line);
   background: var(--ncp-surface-quiet);
   font-size: .75rem;
+  flex-shrink: 0;
 }
 
 .query-result > header span {
@@ -1140,20 +1290,23 @@ onBeforeUnmount(() => {
 }
 
 .query-table {
-  min-height: 0;
+  min-height: 120px;
   flex: 1;
 }
 
 .query-message {
   display: grid;
+  min-width: 0;
   min-height: 150px;
   flex: 1;
   place-content: center;
   justify-items: center;
   gap: 6px;
+  padding: 12px;
   color: var(--ncp-text-subtle);
   font-size: .78rem;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .query-message--error {
@@ -1261,8 +1414,7 @@ onBeforeUnmount(() => {
 
   .data-workbench,
   .structure-workbench,
-  .definition-workbench,
-  .sql-workbench {
+  .definition-workbench {
     height: calc(100dvh - 312px);
   }
 }
@@ -1278,8 +1430,7 @@ onBeforeUnmount(() => {
 
   .data-workbench,
   .structure-workbench,
-  .definition-workbench,
-  .sql-workbench {
+  .definition-workbench {
     height: calc(100dvh - 370px);
     min-height: 540px;
   }
@@ -1339,6 +1490,15 @@ onBeforeUnmount(() => {
 
   .sql-toolbar kbd {
     display: none;
+  }
+
+  .sql-result-mode {
+    width: 100%;
+  }
+
+  .sql-result-mode select {
+    flex: 1 1 190px;
+    width: 100%;
   }
 }
 </style>
