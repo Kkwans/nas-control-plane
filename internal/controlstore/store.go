@@ -178,20 +178,23 @@ type ComposeRevision struct {
 }
 
 type JobRecord struct {
-	ID              string    `json:"id"`
-	Type            string    `json:"type"`
-	Status          string    `json:"status"`
-	Reference       string    `json:"reference"`
-	Message         string    `json:"message"`
-	Progress        int       `json:"progress"`
-	Error           string    `json:"error"`
-	DownloadedBytes int64     `json:"downloadedBytes"`
-	TotalBytes      int64     `json:"totalBytes"`
-	SpeedBytes      int64     `json:"speedBytes"`
-	LayersJSON      string    `json:"layersJson"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	CompletedAt     time.Time `json:"completedAt"`
+	Revision           int64     `json:"-"`
+	CancellationStatus string    `json:"cancellationStatus,omitempty"`
+	ErrorCode          string    `json:"errorCode,omitempty"`
+	ID                 string    `json:"id"`
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	Reference          string    `json:"reference"`
+	Message            string    `json:"message"`
+	Progress           int       `json:"progress"`
+	Error              string    `json:"error"`
+	DownloadedBytes    int64     `json:"downloadedBytes"`
+	TotalBytes         int64     `json:"totalBytes"`
+	SpeedBytes         int64     `json:"speedBytes"`
+	LayersJSON         string    `json:"layersJson"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+	CompletedAt        time.Time `json:"completedAt"`
 }
 
 type MetricSample struct {
@@ -680,91 +683,6 @@ func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Tim
 	return visitedAt, err
 }
 
-func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
-	completedAt := int64(0)
-	if !job.CompletedAt.IsZero() {
-		completedAt = job.CompletedAt.UTC().Unix()
-	}
-	_, err := s.database.ExecContext(ctx, `
-		INSERT INTO jobs (
-			id, type, status, reference, message, error, progress,
-			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			status = excluded.status,
-			message = excluded.message,
-			error = excluded.error,
-			progress = excluded.progress,
-			downloaded_bytes = excluded.downloaded_bytes,
-			total_bytes = excluded.total_bytes,
-			speed_bytes = excluded.speed_bytes,
-			layers_json = excluded.layers_json,
-			updated_at_unix = excluded.updated_at_unix,
-			completed_at_unix = excluded.completed_at_unix
-	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
-		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
-		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt)
-	return err
-}
-
-func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, error) {
-	if limit < 1 || limit > 500 {
-		limit = 100
-	}
-	rows, err := s.database.QueryContext(ctx, `
-		SELECT id, type, status, reference, message, error, progress,
-			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix
-		FROM jobs
-		WHERE (? = '' OR type = ?)
-		ORDER BY created_at_unix DESC
-		LIMIT ?
-	`, kind, kind, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make([]JobRecord, 0)
-	for rows.Next() {
-		var job JobRecord
-		var createdAt, updatedAt, completedAt int64
-		if err := rows.Scan(
-			&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error, &job.Progress,
-			&job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
-			&createdAt, &updatedAt, &completedAt,
-		); err != nil {
-			return nil, err
-		}
-		job.CreatedAt = time.Unix(createdAt, 0).UTC()
-		job.UpdatedAt = time.Unix(updatedAt, 0).UTC()
-		if completedAt > 0 {
-			job.CompletedAt = time.Unix(completedAt, 0).UTC()
-		}
-		result = append(result, job)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) DeleteJob(ctx context.Context, id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return errors.New("job id is required")
-	}
-	_, err := s.database.ExecContext(ctx, `DELETE FROM jobs WHERE id = ?`, id)
-	return err
-}
-
-func (s *Store) MarkRunningJobsInterrupted(ctx context.Context) error {
-	now := s.now().UTC().Unix()
-	_, err := s.database.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'interrupted', message = '服务重启，任务已中断', updated_at_unix = ?, completed_at_unix = ?
-		WHERE status IN ('queued', 'running')
-	`, now, now)
-	return err
-}
-
 func (s *Store) ComposeDraft(ctx context.Context, projectID, configPath string) (ComposeDraft, error) {
 	projectID, configPath = strings.TrimSpace(projectID), strings.TrimSpace(configPath)
 	var draft ComposeDraft
@@ -995,6 +913,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, column := range []struct{ name, definition string }{
+		{"revision", "INTEGER NOT NULL DEFAULT 1"},
+		{"cancellation_status", "TEXT NOT NULL DEFAULT ''"},
+		{"error_code", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "jobs", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
