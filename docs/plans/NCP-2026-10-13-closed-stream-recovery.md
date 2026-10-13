@@ -56,3 +56,13 @@
 body 下可见提示层触发的 `region` 仍是独立、未关闭的可访问性发现。本片只验证指针移开后的稳定流状态，不声称覆盖或修复 hover 状态。日志只给出容器节点，未含提示文字；具体内容需结合该次 artifact 进一步核验。修正后 standalone 严格 TS、文件 ESLint、8 项发现及 diff check 通过；浏览器结果必须由后续实际 CI 确认。
 
 捕获修正的独立精确快照（9f7acee 加两文件）通过 86 文件 / 1655 项单元、全量 lint 和 Vue 类型检查；八项 E2E 严格类型/发现通过。实际运行待后续 CI。
+
+### 实际 CI 与四幅状态截图闭环（2026-10-13 22:14 UTC）
+
+精确提交 `a7ba4bd781cf05598e72dac112e8c4fb0f3ea424` 的 [CI 38474203875](https://github.com/Kkwans/nas-control-plane/actions/runs/38474203875) 已成功：86 文件 / 1655 项单元，359 / 359 项 Chromium（7.9 分钟），Go 与 Compose 全部通过；ARM64 发布跳过。本模块八项浏览器 fixture 均实际通过，包括挂起 GET 期间路由切换及退出登录清理。
+
+从 [官方分片 1 工件 11854325120](https://github.com/Kkwans/nas-control-plane/actions/runs/38474203875/artifacts/11854325120) 下载 10,252,845 字节 ZIP，低于 32 MiB；实际 ZIP SHA256 为 `ed7f2fa3aa326da04881bcba50f7fe7dd82ca85a728f0917b7665d71f66ed67a`，与官方摘要一致。逐幅查看 390px / 1440px 的 `closed-after-get`、`fresh-sse-recovered` 四幅 PNG，并读取四份完整状态 JSON；四份 `sourceSha` 均匹配上述提交，截图 SHA256 均与实际 PNG 字节一致，四份完整 axe 的 `violations` 为空，`denied` 与 `pageErrors` 均为空。
+
+断流画面保留 CPU 31.0%、12:00:01 更新时间及“实时连接中断”，只读 GET 没有伪装流恢复；新鲜 SSE 画面更新为 CPU 42.0%、12:00:02 及“运行稳定”，状态记录分别为 offline / streaming。两种宽度的可见提醒、摘要和顶部恢复按钮可读，没有观察到水平裁切。移动截图为当前视口，未据此声称已目视检查屏幕下方所有卡片。
+
+此闭环只覆盖指针移开后的稳定流状态。此前 `9f7acee8dc88cdf492fb4858ee61306cec2fe98a` 的四幅官方图片中，顶部刷新按钮旁确实显示“立即刷新数据”；其 body popper 对应原始 region 违规。a7 的稳定截图通过不代表该 hover 提示层缺陷已经修复；后续产品修复需以其自身精确提交的开态截图和 axe 另行验收。全部请求、流与退出均为隔离内存 fixture，没有操作真实账号、Docker、NAS，也没有部署验证。

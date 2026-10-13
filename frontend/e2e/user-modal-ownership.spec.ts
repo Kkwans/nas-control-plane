@@ -15,6 +15,7 @@ const dialog = (page: Page) => page.getByRole('dialog')
 const createButton = (page: Page) => page.locator('.users-panel').getByRole('button', { name: '新增账号', exact: true })
 const createSubmit = (page: Page) => dialog(page).getByRole('button', { name: '创建账号', exact: true })
 const passwordSubmit = (page: Page) => dialog(page).getByRole('button', { name: '保存新密码', exact: true })
+const passwordButton = (page: Page, username: string) => row(page, username).getByRole('button', { name: '重置密码', exact: true })
 
 function deferred() {
   let resolve!: () => void
@@ -98,13 +99,25 @@ async function fillPassword(page: Page, value: string) {
   for (const input of await dialog(page).locator('input[type="password"]').all()) await input.fill(value)
 }
 async function openPassword(page: Page, username: string) {
-  await row(page, username).getByRole('button', { name: '重置密码', exact: true }).click()
+  await passwordButton(page, username).click()
   await expect(dialog(page)).toHaveAttribute('aria-label', `重置 ${username} 的密码`)
 }
 async function openDanger(page: Page, username: string, action: '禁用账号' | '删除账号') {
   await row(page, username).getByRole('button', { name: '更多账号操作' }).click()
   await page.getByRole('menuitem', { name: action, exact: true }).click()
   await expect(dialog(page)).toContainText(username)
+}
+
+async function expectPendingAccountLocked(page: Page, username: string) {
+  await expect(passwordButton(page, username)).toBeDisabled()
+  await row(page, username).getByRole('button', { name: '更多账号操作' }).click()
+  const status = page.getByRole('menuitem', { name: '禁用账号', exact: true })
+  const remove = page.getByRole('menuitem', { name: '删除账号', exact: true })
+  await expect(status).toBeDisabled()
+  await expect(remove).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(status).toBeHidden()
+  await expect(dialog(page)).toBeHidden()
 }
 
 for (const mode of ['close', 'cancel', 'escape'] as const) {
@@ -140,7 +153,7 @@ for (const mode of ['close', 'cancel', 'escape'] as const) {
 }
 
 for (const status of [204, 503]) {
-  test(`改密 A 挂起后重开 A/B，${status} 迟到结果不清 B 且保留策略草稿`, async ({ page }) => {
+  test(`改密 A 挂起后锁住 A 并打开 B，${status} 迟到结果不清 B 且保留策略草稿`, async ({ page }) => {
     const api = await fixture(page)
     await ready(page)
     const length = page.locator('.password-policy input[role="spinbutton"]')
@@ -152,17 +165,9 @@ for (const status of [204, 503]) {
     await passwordSubmit(page).click()
     await heldA.received.promise
     await close(page, 'escape')
-    await openPassword(page, userA.username)
-    await blankSecrets(dialog(page))
-    await fillPassword(page, secretB)
-    await expect(passwordSubmit(page)).toBeDisabled()
-    await passwordSubmit(page).dispatchEvent('click')
-    await close(page, 'cancel')
-    // 同账号的改密锁也保护危险写入，关窗不能绕过。
-    await openDanger(page, userA.username, '禁用账号')
-    await dialog(page).getByRole('button', { name: '禁用账号', exact: true }).dispatchEvent('click')
+    // 关窗不解除同账号在途锁；验证实际入口，不强行重开已禁用的动作。
+    await expectPendingAccountLocked(page, userA.username)
     expect(api.writes).toHaveLength(1)
-    await close(page, 'close')
     await openPassword(page, userB.username)
     await blankSecrets(dialog(page))
     await expect(passwordSubmit(page)).toBeEnabled()
@@ -180,6 +185,14 @@ for (const status of [204, 503]) {
     await expect(page.locator('.password-policy [role="status"]')).toContainText('有未保存的规则修改')
     await close(page, 'close')
     await api.release(heldB)
+    if (status === 204) {
+      await openPassword(page, userA.username)
+      await blankSecrets(dialog(page))
+      await close(page, 'cancel')
+    } else {
+      await expect(passwordButton(page, userA.username)).toBeDisabled()
+      await expect(page.locator('.user-write-warning')).toContainText(userA.username)
+    }
     await openPassword(page, userB.username)
     await blankSecrets(dialog(page))
     await expect(passwordSubmit(page)).toBeEnabled()
@@ -200,11 +213,8 @@ for (const status of [200, 503]) {
     await dialog(page).getByRole('button', { name: '禁用账号', exact: true }).click()
     await held.received.promise
     await close(page, 'close')
-    await openDanger(page, userA.username, '删除账号')
-    await dialog(page).getByPlaceholder(userA.username, { exact: true }).fill(userA.username)
-    await dialog(page).getByRole('button', { name: '永久删除', exact: true }).dispatchEvent('click')
+    await expectPendingAccountLocked(page, userA.username)
     expect(api.writes).toHaveLength(1)
-    await close(page, 'escape')
     await openDanger(page, userB.username, '删除账号')
     await dialog(page).getByPlaceholder(userB.username, { exact: true }).fill(userB.username)
     await expect(dialog(page).getByRole('button', { name: '永久删除', exact: true })).toBeEnabled()
@@ -268,13 +278,13 @@ for (const status of [200, 503]) {
     await expect(page.locator('.el-message')).toHaveCount(0)
     await close(page, 'close')
     await expect(page.locator('.user-write-warning')).toContainText(userA.username)
-    await openPassword(page, userA.username)
-    await blankSecrets(dialog(page))
-    await fillPassword(page, secretB)
-    await expect(passwordSubmit(page)).toBeDisabled()
-    await passwordSubmit(page).dispatchEvent('click')
+    await expect(passwordButton(page, userA.username)).toBeDisabled()
+    const read = page.waitForResponse((response) => new URL(response.url()).pathname === usersPath && response.request().method() === 'GET')
+    await page.locator('.user-write-warning').getByRole('button', { name: '只读刷新账号列表' }).click()
+    await read
+    await expect(passwordButton(page, userA.username)).toBeDisabled()
+    await expect(page.locator('.user-write-warning')).toContainText(userA.username)
     expect(api.writes).toHaveLength(1)
-    await close(page, 'cancel')
     await openPassword(page, userB.username)
     await expect(passwordSubmit(page)).toBeEnabled()
     await blankSecrets(dialog(page))
