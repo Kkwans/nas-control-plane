@@ -142,6 +142,10 @@ func (s *Service) Initialized(ctx context.Context) (bool, error) {
 }
 
 func (s *Service) Bootstrap(ctx context.Context, username, password string) (Principal, error) {
+	return s.bootstrap(ctx, username, password, bcrypt.GenerateFromPassword)
+}
+
+func (s *Service) bootstrap(ctx context.Context, username, password string, generateHash func([]byte, int) ([]byte, error)) (Principal, error) {
 	if err := ctx.Err(); err != nil {
 		return Principal{}, err
 	}
@@ -152,7 +156,15 @@ func (s *Service) Bootstrap(ctx context.Context, username, password string) (Pri
 	if err := s.validatePassword(ctx, password); err != nil {
 		return Principal{}, err
 	}
-	passwordHash, err := bcrypt.GenerateFromPassword(passwordMaterial(password), bcrypt.DefaultCost)
+	initialized, err := s.Initialized(ctx)
+	if err != nil {
+		return Principal{}, err
+	}
+	if initialized {
+		return Principal{}, coded("AUTH_ALREADY_INITIALIZED", errors.New("root account already exists"))
+	}
+	// 预检仅节省哈希成本；并发首次初始化仍由下面的原子插入谓词裁决。
+	passwordHash, err := generateHash(passwordMaterial(password), bcrypt.DefaultCost)
 	if err != nil {
 		return Principal{}, coded("AUTH_PASSWORD_HASH_FAILED", err)
 	}

@@ -131,3 +131,41 @@
 ## 2026-10-13 后续认证回退复核
 
 原始nil Auth构造器风险仍是误用边界，但生产入口在auth.Open失败时直接退出，未发现生产故障降级为匿名访问；普通认证暂时失败返回503而非登出，stream不支持provider时也拒绝。既有nil测试/嵌入兼容不在本轮默认修改范围。已用fake/recorder确认独立的bootstrap部分成功恢复缺口，见[认证恢复切片](NCP-2026-10-13-http-origin.md)。
+
+## 2026-10-13 登录尝试与计算成本边界（A 已实施，B 仍为方案）
+
+**代码事实。** `internal/auth/service.go` 的 `Bootstrap` 在 `WHERE NOT EXISTS` 插入检查前执行 bcrypt；因此已初始化的实例仍可被匿名 bootstrap 请求触发哈希计算。`Login` 对存在且启用的账号执行 bcrypt，计算位于 `lifecycleMu` 外；`SetMaxOpenConns(1)` 只约束数据库连接，不限制并行哈希。HTTP 两个入口均无尝试预算；已有 Origin 校验和 8 KiB 请求体限制不能替代它。未知账号/禁用账号较早失败，目前也不是恒定时间验证。
+
+### A：已初始化 bootstrap 跳过无意义 bcrypt（已实施）
+
+- `Service.Bootstrap` 保留 context → normalizeUsername → validatePassword 的既有顺序；在生成 hash 前调用现有 `Initialized(ctx)`。查询失败直接返回原错误，已初始化立即返回既有 `AUTH_ALREADY_INITIALIZED`。不能把预检放在输入校验之前，否则会改变现有输入错误优先级。
+- 保留最终原子 `INSERT INTO users … SELECT … WHERE NOT EXISTS (SELECT 1 FROM users)` 和 RowsAffected 判定，不把它替换为普通 INSERT，也不误称现有代码使用显式事务。预检只是省 CPU，不能承担首次创建互斥；同时通过预检的请求仍可能各做一次 hash，最终只能成功创建一个账号。
+- 公共 `Bootstrap(ctx, username, password)` 签名、Options、HTTP/OpenAPI/UI 无需改变。建议用私有 `bootstrap(ctx, username, password, generateHash func([]byte, int) ([]byte, error))` 实现主体，公共方法传入 `bcrypt.GenerateFromPassword`；同包测试传入计数/阻塞 fake。不要增加可由 HTTP/配置关闭哈希的开关。也可采用等价私有依赖注入，但不扩大公开配置面。
+- 文件清单：运行代码仅 `internal/auth/service.go`，新增定向测试 `internal/auth/bootstrap_cost_test.go`；本审计文档记录验收。已有 HTTP 409、UI 初始化恢复契约与常规真实 bcrypt 测试继续回归，无需为了该优化修改它们。
+- 临时 SQLite + 假凭据测试：已存在账号时计数 hash 为 0 且返回同码；无效用户名/密码在已初始化状态下仍保持原先输入错误；Initialized 查询错误不执行 hash/写入；空库正常请求 hash 一次并创建用户。并发测试用 fake hash 入口 barrier 让两个请求都完成预检，再放行；断言最终一个成功、一个 `AUTH_ALREADY_INITIALIZED`、users 恰好一行，证明保留的原子谓词继续工作。fake hash 故障/取消不插入用户，已有真实 bcrypt 登录用例确认公共方法仍传入真实实现。
+- 此优化只消除已初始化 bootstrap 的已知浪费，不限制首次初始化并发或 Login 尝试，不能宣称已具备防暴力破解/成本限流。
+
+### B：HTTP 共用预算（仅方案，实施另评审）
+
+**最小切片。** 在 `httpapi` 中为同一个 handler 的 login/bootstrap 共用一个无队列准入器，生产入口仅创建一个 handler。建议默认突发 10 次、每 5 秒补充 1 次、最多同时执行 2 个凭据请求；一次 bootstrap 的创建账号和随后 Login 共占一份预算/一个许可。此数值仅是待评审的初始候选，不是目标 NAS 的实测容量，A 不会启用它。实施前须统计现有同一 handler 测试中的凭据请求总数/并发模式，说明按既定 fake clock 推进预算或显式测试依赖注入的改法；不得为通过测试静默取消生产限流，也不能未评审便改变正常 Root 登录频率。仅源代码实现与假数据验证，不新增环境变量、部署参数或代理配置；不修改密码策略、凭据、数据库结构、bootstrap 安装证明或账户锁定策略。
+
+- 顺序保留现有 Origin、Auth 不可用、Content-Type、体积与 JSON 解析错误；成功解析后、首次调用 `Authenticator.Bootstrap/Login` 前原子地检查预算和并发容量。限流拒绝必须发生在任何账号/会话/最后登录时间变更之前，不写/清 Cookie。已取消请求不准入。拒绝不扣预算、不移动补充时间到未来，避免持续失败把等待时间无限延长。
+- 许可跨整个 bootstrap → Login 调用链持有，不在创建账号后重新准入，也不将内部 Login 算为第二次外部尝试。`defer` 释放所有成功/错误/取消返回路径；不启动后台凭据 goroutine，不提前释放尚在 bcrypt 中的请求，不在准入锁内运行后端。bcrypt 本身不可取消，不以 HTTP 超时宣称已经终止计算。
+- 使用固定大小状态（互斥锁、预算、时间、并发计数），不保存 username、密码、token、IP 或任意来访者 map，不启动每请求 timer/清理协程。默认使用保留单调时钟信息的 `time.Now()`，以 `Sub` 计算间隔，不先转 UTC/Unix；独立注入 fake clock。负间隔不补充、不倒退时间锚点，大间隔只补到突发上限；并发数检查与扣预算必须在同一临界区。
+- 返回 HTTP 429、稳定码 `AUTH_RATE_LIMITED` 和统一中文重试提示，携带整数秒 `Retry-After`（预算不足向上取整、最少 1 秒；仅并发饱和可建议 1 秒，但不承诺届时成功）。沿用标准错误 envelope/requestId；不区分账号是否存在，不包含凭据或预算分组标识。同步更新 `api/openapi/openapi.yaml` 的两个入口及契约测试。
+- 不读取 `Forwarded`、`X-Forwarded-For` 或 `X-Real-IP` 决定配额。现有 nginx 设置这些头，但 Server 无 trusted-proxy 身份/地址规则；默认请求的 `RemoteAddr` 是 nginx，而非终端用户。直接引入“按客户端 IP”既可能信任伪造头，也可能误把全部用户归为代理地址。全局固定预算无需用户先提供网络配置；将来确需逐客户端公平性时另行明确代理拓扑与可信跳数/地址范围。
+
+**兼容与明确边界。** 普通成功响应、401/409、现有 400/413/415 和 nil Auth 语义不变；预算耗尽时合法凭据也可收到 429，这是明确新增行为。预算按 handler 隔离、进程重启重置，不是分布式限流；源地址轮换不会增加同一 handler 的配额，但持续攻击仍可能抢占正常登录机会。它限制匿名凭据尝试及 CPU 峰值，不保证登陆公平、不解决首次安装接管、不消除账号时序差异，也不限制 HTTP 连接/慢请求/解析/日志开销。直接调用 auth.Service、已认证的创建用户/改密不在该 HTTP 切片内。不要新增按账号失败锁定；部署防护、TLS、安装证明和多实例策略单列后续工作。
+
+**前端。** 现有 `requestJson`/`NcpApiError` 可传递 429 错误码及提示；store 的 bootstrap 只对指定不确定结果执行状态复核，`AUTH_RATE_LIMITED` 不应进入复核或自动重放凭据。保留 setup/anonymous 状态，显示等待提示并允许用户稍后手动提交；本轮无需倒计时、自动重试、持久化凭据或通用 transport 改造。用 fake fetch 覆盖 login/bootstrap 的 429，以及之后手动成功提交；如果后续改为在创建账号之后限流，必须重新评审部分成功恢复契约，不能套用本设计。
+
+**纯测试验收（无监听器/真实凭据）。**
+
+1. 准入器单元测试：突发边界、精确补充时刻、向上取整 Retry-After、倒退/长时间时钟、拒绝不延长等待；大量不同用户名/转发头不产生键状态。并发 fake/channel 阻塞后端，确认在途上限、即时拒绝而非等待、各种退出释放许可；定向 `-race`。
+2. `httptest.NewRecorder` + fake Authenticator：两路共享预算，未知/已知用户名和伪造代理头均不绕过；429 时 Bootstrap/Login 调用均为零、无 Cookie/账号/会话变更。已获准 bootstrap 必须完成两个后端步骤，不因预算正好耗尽出现新部分成功；原有部分成功错误仍按既有恢复语义返回。
+3. 回归 Origin/不可用/MIME/超大/非法 JSON 优先级，确认这些拒绝不消耗凭据准入预算；`GET auth/status`、logout 和已认证 API 不受此预算影响。失败与成功登录均计入外部尝试，避免正确密码请求绕过成本上限。
+4. OpenAPI 429/header 契约、Vue fake-fetch/store/view 测试；实施后按仓库要求做 Go 编译、类型检查、生产构建与静态 Compose 检查。不运行 NAS、生产端点、用户电脑、浏览器、服务监听器或真实部署。
+
+B 仍为源代码审查后的待实施方案；未启用预算、未修改部署配置或凭据、未运行 NAS 性能基准，不能据此声称已具备防暴力破解能力。A 的实施与验证见下段。
+
+**A 最终验证（2026-10-13 23:18 UTC）**：公开 Bootstrap 固定传入真实 bcrypt，私有 helper 仅方便同包注入计数/barrier；已初始化请求零 hash，查询错误零 hash/零写入，并发两个空库预检后仍由原子 SQL 只创建一个 Root。主任务基于102345a精确两源码文件快照通过新增组 race 三轮、完整 auth 包回归、全部命令构建及 auth vet（归档使用 -buildvcs=false）。独立复审无阻断，TestBootstrap 常规回归和新组 race 十轮通过。所有凭据均为临时测试数据，未访问 NAS 或修改实际账号。此片只消除已初始化 bootstrap 的浪费，不限制 Login 或首次初始化并发；远端 CI 尚待验证。
