@@ -491,14 +491,16 @@ function clearError() {
 
 .source-summary dt {
   color: var(--ncp-text-subtle);
-  font-size: .69rem;
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
 }
 
 .source-summary dd {
   min-width: 0;
   margin: 0;
   color: var(--ncp-text);
-  font-size: .8rem;
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
   font-weight: 700;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -513,7 +515,8 @@ function clearError() {
 .source-summary small {
   min-width: 0;
   color: var(--ncp-text-subtle);
-  font-size: .68rem;
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -530,6 +533,11 @@ function clearError() {
   font-weight: 740;
   line-height: 1;
   white-space: nowrap;
+}
+
+.source-summary .connection-pill {
+  font-size: max(12px, .875rem);
+  line-height: 1.5;
 }
 
 .connection-pill--success {

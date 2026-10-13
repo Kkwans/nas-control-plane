@@ -624,7 +624,7 @@ footer.resource-pagination :deep(.el-select__wrapper) { min-height:44px; }
   .mobile-project header .project-identity { flex: 1; }
   .mobile-project dl { display: grid; gap: 8px; margin: 0; padding: 11px; border-radius: 10px; background: var(--ncp-surface-quiet); }
   .mobile-project dl>div { display: grid; grid-template-columns: 74px minmax(0,1fr); gap: 8px; }
-  .mobile-project dt { color: var(--ncp-text-subtle); font-size: .65rem; }
-  .mobile-project dd { overflow: hidden; margin: 0; color: var(--ncp-text-muted); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-project dt { color: var(--ncp-text-subtle); font-size: max(12px, .875rem); line-height: 1.5; }
+  .mobile-project dd { min-width: 0; margin: 0; color: var(--ncp-text-muted); font-size: max(12px, .875rem); line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 }
 </style>
