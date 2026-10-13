@@ -42,6 +42,7 @@ async function installSiteFixture(page: Page) {
   let ignored = false
   let transportFailure: 'disconnect' | 'gateway' | undefined
   let iconFailure: 'conflict' | 'commit-500' | 'disconnect' | undefined
+  let existingIconFailure: 'commit-500' | 'disconnect' | undefined
   const committed: Array<{ method: string; id: string }> = []
   const committedSites = new Map<string, ReturnType<typeof site>>()
   let gate: { received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; method: string; path?: string } | undefined
@@ -67,6 +68,10 @@ async function installSiteFixture(page: Page) {
           discovery: { status: 'complete', probeAvailable: true, candidateCount: 2, verifiedCount: 2, failedCount: 0, issues: [] },
         } })
       }
+    } else if (existingIconFailure && method === 'POST' && path === `${pathFor(existingId)}/icon`) {
+      committedSites.set(existingId, { ...existingSite, iconUrl: winnerSite.iconUrl })
+      if (existingIconFailure === 'disconnect') await route.abort('connectionfailed')
+      else await route.fulfill({ status: 500, json: { code: 'SITE_ICON_SAVE_FAILED', message: '提交后确认失败', requestId: 'fixture-existing-icon' } })
     } else if (iconFailure && method === 'POST' && path === `${pathFor(createdId)}/icon`) {
       // 冲突由另一个写入者获胜；另两种情况模拟提交后清理失败或确认断线。
       committedSites.set(createdId, { ...winnerSite })
@@ -111,6 +116,7 @@ async function installSiteFixture(page: Page) {
     requests,
     committed,
     persistedSite: () => committedSites.get(createdId),
+    failExistingIcon(value: 'commit-500' | 'disconnect') { existingIconFailure = value },
     failIcon(value: 'conflict' | 'commit-500' | 'disconnect') { iconFailure = value; malformedCreate = false },
     writes: () => requests.filter(({ method }) => method !== 'GET'),
     failAfterCommit(value: 'disconnect' | 'gateway') { transportFailure = value },
@@ -588,3 +594,49 @@ test('迟到图标提交后 500 不污染新编辑器，也不删除已创建的
     { method: 'PUT', path: pathFor(otherId) },
   ])
 })
+
+
+for (const failure of ['commit-500', 'disconnect'] as const) {
+  test(`已有站点图标 ${failure}：在途单飞，未知后核对与重开都不重放`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failExistingIcon(failure)
+    await page.goto('/sites')
+    await page.getByRole('button', { name: '编辑 原有站点', exact: true }).click()
+    const iconPath = `${pathFor(existingId)}/icon`
+    const held = fixture.hold('POST', iconPath)
+    await editor(page).locator('input[type="file"]').setInputFiles({
+      name: 'existing.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+    })
+    await held.received.promise
+    await expect(editor(page).locator('input[type="file"]')).toBeDisabled()
+    await expect(save(page)).toBeDisabled()
+    await expect(editor(page).getByRole('status')).toContainText('图标正在上传，请等待确认。')
+    expect(fixture.writes()).toEqual([{ method: 'POST', path: iconPath }])
+    held.release.resolve()
+    await expect(warning(page)).toContainText('图标上传可能已经执行，结果未确认')
+    await expectHeldEditor(page, '原有说明')
+    await expect(editor(page).getByAltText('待上传图标预览')).toBeVisible()
+    for (const failed of [true, false]) {
+      fixture.failCatalog(failed)
+      const before = fixture.requests.length
+      await retry(page).click()
+      await expect(retry(page)).toBeEnabled()
+      await expect(warning(page)).toContainText(failed ? '本次核对未完成' : '本次在站点目录中发现该 ID')
+      expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
+      await expectHeldEditor(page, '原有说明')
+    }
+    await editor(page).getByRole('button', { name: '关闭并查看目录', exact: true }).click()
+    await expect(editor(page)).toHaveCount(0)
+    await page.getByRole('button', { name: '编辑 原有站点', exact: true }).click()
+    await expectHeldEditor(page, '原有说明')
+    await editor(page).getByRole('button', { name: '关闭并查看目录', exact: true }).click()
+    await expect(editor(page)).toHaveCount(0)
+    await page.getByRole('button', { name: '编辑 其他站点', exact: true }).click()
+    await expect(editor(page).locator('input[type="file"]')).toBeEnabled()
+    await expect(save(page)).toBeEnabled()
+    await expect(warning(page)).toHaveCount(0)
+    expect(fixture.writes()).toEqual([{ method: 'POST', path: iconPath }])
+    await expect(page.getByText('站点图标已上传', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件', { exact: true })).toHaveCount(0)
+  })
+}

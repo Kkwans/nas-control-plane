@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { uploadCreatedSiteIcon } from './control'
-import { SiteCreatedIconError } from './siteCreatedIconOutcome'
+import { uploadCreatedSiteIcon, uploadSiteIcon } from './control'
+import { SiteCreatedIconError, SiteIconUploadError } from './siteCreatedIconOutcome'
 import { useSitesStore } from '@/stores/sites'
 import { invalidateSession } from '@/session/sessionLifecycle'
 
@@ -98,5 +98,27 @@ describe('真实 API→store 图标失败不能删除已创建站点', () => {
     })
     expect(writes).toEqual(['POST /api/v1/sites', 'POST /api/v1/sites/manual%3Afixture/icon'])
     expect(row).toEqual({ name: 'Newer work from other tab', icon: outcome === 'conflict' ? 'winner.svg' : 'committed.svg' })
+  })
+})
+
+
+describe('现有站点复用严格图标上传合同', () => {
+  it('精确成功返回实际本地URL，禁止跳转重放', async () => {
+    const fetch = respond(response(payload))
+    await expect(uploadSiteIcon(id, icon)).resolves.toEqual(payload)
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ redirect: 'error', method: 'POST' })
+  })
+  it.each([[error('SITE_ICON_CONFLICT'), 409, 'rejected'], [error('SITE_ICON_SAVE_FAILED'), 500, 'unknown'], [{ ...payload, siteId: 'wrong' }, 200, 'unknown'], [payload, 201, 'unknown']] as const)('%s/%s 有独立的现有上传结果', async (body, status, outcome) => {
+    respond(response(body, status))
+    const caught = await uploadSiteIcon(id, icon).catch((error: unknown) => error)
+    expect(caught).toBeInstanceOf(SiteIconUploadError)
+    expect(caught).not.toBeInstanceOf(SiteCreatedIconError)
+    expect(caught).toMatchObject({ siteId: id, iconOutcome: outcome })
+    expect(caught).not.toHaveProperty('requestId')
+    expect(caught).not.toHaveProperty('cause')
+  })
+  it('断连仍为未知而非文件格式拒绝', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('response lost')))
+    await expect(uploadSiteIcon(id, icon)).rejects.toMatchObject({ siteId: id, iconOutcome: 'unknown' })
   })
 })

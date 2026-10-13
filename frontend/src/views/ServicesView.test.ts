@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { invalidateSession } from '@/session/sessionLifecycle'
-import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
+import { SiteCreatedIconError, SiteIconUploadError } from '@/api/siteCreatedIconOutcome'
 import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import type { Site, SiteProfileInput } from '@/api/control'
@@ -28,8 +28,10 @@ interface ViewState {
   pendingIcon: File | null
   editOpen: boolean
   saving: boolean
+  iconBusy: boolean
+  unknownIcons: Map<string, SiteIconUploadError>
   syncPending: boolean
-  unknownWrite: SiteWriteUnknownError | SiteCreatedIconError | null
+  unknownWrite: SiteWriteUnknownError | SiteCreatedIconError | SiteIconUploadError | null
   unknownObservation: string
   recheckUnknownWrite(): Promise<void>
   savedSiteId: string | null
@@ -56,6 +58,7 @@ function deferred<T>() {
 beforeEach(async () => {
   invalidateSession()
   vi.clearAllMocks()
+  vi.stubGlobal('URL', class extends URL { static createObjectURL = vi.fn(() => 'blob:fixture-icon'); static revokeObjectURL = vi.fn() })
   const pinia = createPinia()
   setActivePinia(pinia)
   store = useSitesStore()
@@ -404,5 +407,88 @@ describe('已创建站点的图标部分结果保留', () => {
     expect(view.unknownWrite).toBeNull()
     expect(messages.error).not.toHaveBeenCalled()
     if (change === 'switch') { expect(view.draft.name).toBe('Other'); expect(view.savedSiteId).toBe('manual:other') }
+  })
+})
+
+
+describe('现有站点图标上传归属', () => {
+  const file = () => new File(['icon'], 'icon.svg', { type: 'image/svg+xml' })
+  const event = (icon: File) => ({ target: { files: [icon] } }) as unknown as Event
+  it('同一目标单飞，未知保留File；只读核对和重开不重放，其他目标仍可用', async () => {
+    const pending = deferred<{ siteId: string; iconUrl: string }>()
+    const upload = vi.spyOn(store, 'uploadIcon').mockReturnValueOnce(pending.promise)
+    const save = vi.spyOn(store, 'save')
+    view.openEditor(site)
+    const icon = file()
+    const operation = view.uploadIcon(event(icon))
+    expect(view.iconBusy).toBe(true)
+    await view.uploadIcon(event(file()))
+    await view.saveSite()
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(save).not.toHaveBeenCalled()
+    pending.reject(new SiteIconUploadError(site.id, 'unknown'))
+    await operation
+    expect(view.iconBusy).toBe(false)
+    expect(view.pendingIcon).toBe(icon)
+    expect(view.unknownWrite).toBeInstanceOf(SiteIconUploadError)
+    await view.recheckUnknownWrite()
+    await view.uploadIcon(event(file()))
+    await view.saveSite()
+    view.editOpen = false; view.openEditor(site)
+    await view.uploadIcon(event(file()))
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(view.unknownWrite).toBeInstanceOf(SiteIconUploadError)
+    expect(messages.error).not.toHaveBeenCalled()
+    const other = { ...site, id: 'manual:other', projectId: 'manual:other' }
+    view.openEditor(other)
+    upload.mockResolvedValueOnce({ siteId: other.id, iconUrl: `/api/v1/sites/${other.id}/icon` })
+    await view.uploadIcon(event(file()))
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(view.unknownWrite).toBeNull()
+    expect(view.unknownIcons.has(site.id)).toBe(true)
+  })
+
+  it('迟到A未知不覆盖B草稿，A重开受保护且B锁只由B完成清除', async () => {
+    const a = deferred<{ siteId: string; iconUrl: string }>()
+    const b = deferred<{ siteId: string; iconUrl: string }>()
+    vi.spyOn(store, 'uploadIcon').mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    view.openEditor(site)
+    const first = view.uploadIcon(event(file()))
+    const other = { ...site, id: 'manual:other', projectId: 'manual:other' }
+    view.openEditor(other)
+    view.draft.description = 'B draft'
+    const secondFile = file()
+    const second = view.uploadIcon(event(secondFile))
+    a.reject(new SiteIconUploadError(site.id, 'unknown')); await first
+    expect(view.iconBusy).toBe(true)
+    expect(view.pendingIcon).toBe(secondFile)
+    expect(view.draft.description).toBe('B draft')
+    expect(view.unknownWrite).toBeNull()
+    b.resolve({ siteId: other.id, iconUrl: `/api/v1/sites/${other.id}/icon` }); await second
+    expect(view.iconBusy).toBe(false)
+    view.openEditor(site)
+    expect(view.unknownWrite).toBeInstanceOf(SiteIconUploadError)
+  })
+
+  it('明确拒绝保留正常重选能力，不宣称文件格式无效', async () => {
+    vi.spyOn(store, 'uploadIcon').mockRejectedValue(new SiteIconUploadError(site.id, 'rejected'))
+    view.openEditor(site)
+    await view.uploadIcon(event(file()))
+    expect(view.unknownWrite).toBeNull()
+    expect(view.unknownIcons.size).toBe(0)
+    expect(view.iconBusy).toBe(false)
+    expect(messages.error).toHaveBeenCalledWith('本次图标上传未完成，请核对站点和文件后重新选择。')
+  })
+
+  it('退出后的迟到未知不新增页面记录或消息', async () => {
+    const pending = deferred<{ siteId: string; iconUrl: string }>()
+    vi.spyOn(store, 'uploadIcon').mockReturnValue(pending.promise)
+    view.openEditor(site)
+    const operation = view.uploadIcon(event(file()))
+    invalidateSession()
+    pending.reject(new SiteIconUploadError(site.id, 'unknown')); await operation
+    expect(view.unknownIcons.size).toBe(0)
+    expect(view.unknownWrite).toBeNull()
+    expect(messages.error).not.toHaveBeenCalled()
   })
 })

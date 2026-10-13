@@ -183,10 +183,10 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
   })
 
   it('图标上传保留 FormData，交由浏览器生成 multipart boundary', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ siteId: 'fixture', iconUrl: '/icon' })))
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ siteId: 'fixture', iconUrl: '/api/v1/sites/fixture/icon' })))
     vi.stubGlobal('fetch', fetcher)
     const file = new File(['fixture'], 'icon.png', { type: 'image/png' })
-    await expect(control.uploadSiteIcon('fixture', file)).resolves.toEqual({ siteId: 'fixture', iconUrl: '/icon' })
+    await expect(control.uploadSiteIcon('fixture', file)).resolves.toEqual({ siteId: 'fixture', iconUrl: '/api/v1/sites/fixture/icon' })
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]!
     expect(url).toBe('/api/v1/sites/fixture/icon')

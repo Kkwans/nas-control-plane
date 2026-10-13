@@ -36,7 +36,7 @@ import {
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
-import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
+import { SiteCreatedIconError, SiteIconUploadError } from '@/api/siteCreatedIconOutcome'
 import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import ActionButton from '@/components/ActionButton.vue'
 import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
@@ -62,7 +62,10 @@ const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
 const savedSiteId = ref<string | null>(null)
 const syncPending = ref(false)
-const unknownWrite = ref<SiteWriteUnknownError | SiteCreatedIconError | null>(null)
+const unknownWrite = ref<SiteWriteUnknownError | SiteCreatedIconError | SiteIconUploadError | null>(null)
+const iconPending = ref(new Set<string>())
+const unknownIcons = ref(new Map<string, SiteIconUploadError>())
+const iconBusy = computed(() => Boolean(savedSiteId.value && iconPending.value.has(savedSiteId.value)))
 const unknownObservation = ref('')
 const unknownFavorites = ref(new Set<string>())
 let editorGeneration = 0
@@ -250,7 +253,7 @@ function openEditor(site: Site) {
   saving.value = false
   savedSiteId.value = site.id
   syncPending.value = false
-  unknownWrite.value = null
+  unknownWrite.value = unknownIcons.value.get(site.id) ?? null
   unknownObservation.value = ''
   resetPendingIcon()
   selectedSite.value = site
@@ -272,7 +275,7 @@ function openCreator() {
 }
 
 async function saveSite() {
-  if (saving.value || syncPending.value || unknownWrite.value) return
+  if (saving.value || iconBusy.value || syncPending.value || unknownWrite.value) return
   const session = captureSession()
   const generation = editorGeneration
   const current = () => currentView(session.generation) && generation === editorGeneration
@@ -403,7 +406,7 @@ async function restoreIgnoredSite(siteId: string) {
 }
 
 async function uploadIcon(event: Event) {
-  if (saving.value || unknownWrite.value) {
+  if (saving.value || iconBusy.value || unknownWrite.value) {
     if (iconInput.value) iconInput.value.value = ''
     return
   }
@@ -424,17 +427,36 @@ async function uploadIcon(event: Event) {
   const session = captureSession()
   const generation = editorGeneration
   const siteId = savedSiteId.value
+  if (unknownIcons.value.has(siteId)) return
   const current = () => currentView(session.generation) && generation === editorGeneration
+  iconPending.value.add(siteId)
+  pendingIcon.value = file
+  if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
+  pendingIconPreview.value = URL.createObjectURL(file)
   try {
     await sitesStore.uploadIcon(siteId, file)
     if (!current()) return
     failedIcons.value.delete(siteId)
+    if (pendingIcon.value === file) resetPendingIcon()
     ElMessage.success('站点图标已上传')
   } catch (error) {
+    if (!currentView(session.generation)) return
+    if (error instanceof SiteIconUploadError && error.iconOutcome === 'unknown') {
+      unknownIcons.value.set(siteId, error)
+      // 同一站点重开的编辑器也必须受保护，但不覆盖其中的新草稿/预览。
+      if (editOpen.value && savedSiteId.value === siteId) {
+        unknownWrite.value = error
+        unknownObservation.value = ''
+      }
+      return
+    }
     if (!current() || isAbortError(error)) return
+    if (pendingIcon.value === file) resetPendingIcon()
     if (error instanceof SiteSyncError) ElMessage.warning('站点图标已上传，但列表尚未同步，请重新识别。')
-    else ElMessage.error('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件')
+    else if (error instanceof SiteIconUploadError) ElMessage.error(error.message)
+    else ElMessage.error('图标上传未完成，请核对目录后再处理。')
   } finally {
+    if (currentView(session.generation)) iconPending.value.delete(siteId)
     if (current() && iconInput.value) iconInput.value.value = ''
   }
 }
@@ -494,6 +516,11 @@ function sitesForCategory(category: string) {
 
     <div v-if="unknownFavorites.size" class="site-error" role="status">
       <span>部分收藏保存请求可能已经执行，结果未确认。本页已暂停这些站点的重复收藏提交，请只读核对目录。</span>
+      <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
+    </div>
+
+    <div v-if="unknownIcons.size" class="site-error" role="status">
+      <span>部分图标上传结果未确认，本页已暂停这些站点的重复上传。只读核对不会解除保护。</span>
       <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
     </div>
 
@@ -637,15 +664,16 @@ function sitesForCategory(category: string) {
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
           <div class="icon-upload">
-            <input ref="iconInput" :disabled="saving || Boolean(unknownWrite)" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
-            <button class="icon-upload__preview" :disabled="saving || Boolean(unknownWrite)" type="button" @click="iconInput?.click()">
+            <input ref="iconInput" :disabled="saving || iconBusy || Boolean(unknownWrite)" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
+            <button class="icon-upload__preview" :disabled="saving || iconBusy || Boolean(unknownWrite)" type="button" @click="iconInput?.click()">
               <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
               <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
               <Upload v-else :size="20" />
             </button>
             <div>
-              <ElButton :disabled="saving || Boolean(unknownWrite)" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
-              <span>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
+              <ElButton :disabled="saving || iconBusy || Boolean(unknownWrite)" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
+              <span v-if="iconBusy" role="status">图标正在上传，请等待确认。</span>
+              <span v-else>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
             </div>
           </div>
         </ElFormItem>
@@ -672,7 +700,7 @@ function sitesForCategory(category: string) {
         <ElButton @click="editOpen = false">{{ unknownWrite ? '关闭并查看目录' : '取消' }}</ElButton>
         <ElButton v-if="unknownWrite" class="editor-sync-action" type="primary" :loading="saving" @click="recheckUnknownWrite">只读核对结果</ElButton>
         <ElButton v-else-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
-        <ElButton v-else type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
+        <ElButton v-else type="primary" :loading="saving" :disabled="iconBusy" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
     </ElDrawer>
   </div>

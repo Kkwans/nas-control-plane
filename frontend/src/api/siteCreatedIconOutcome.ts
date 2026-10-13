@@ -11,6 +11,24 @@ export class SiteCreatedIconError extends Error {
   }
 }
 
+/** 现有站点的上传结果；不暗示创建发生，也不保留原始响应。 */
+export class SiteIconUploadError extends Error {
+  readonly code = 'SITE_ICON_UPLOAD_OUTCOME'
+  constructor(readonly siteId: string, readonly iconOutcome: 'rejected' | 'unknown') {
+    super(iconOutcome === 'rejected'
+      ? '本次图标上传未完成，请核对站点和文件后重新选择。'
+      : '图标上传可能已经执行，结果未确认。本页已暂停该站点的重复上传，请只读核对目录。')
+    this.name = 'SiteIconUploadError'
+  }
+}
+
+export async function requestCreatedSiteIcon(siteId: string, icon: File, signal?: AbortSignal): Promise<void> {
+  try { await requestSiteIconUpload(siteId, icon, signal) }
+  catch (error) {
+    throw new SiteCreatedIconError(siteId, error instanceof SiteIconUploadError ? error.iconOutcome : 'unknown')
+  }
+}
+
 // 精确配对且合法错误信封才证明此次上传未提交；500 可能发生在 CAS 提交后。
 const rejections: Record<string, number> = {
   AUTH_UNAVAILABLE: 503,
@@ -31,8 +49,8 @@ function matchesIconUrl(value: unknown, siteId: string): boolean {
   try { return decodeURIComponent(component) === siteId } catch { return false }
 }
 
-export async function requestCreatedSiteIcon(siteId: string, icon: File, signal?: AbortSignal): Promise<void> {
-  // 调用只发生在可信创建响应之后，因此本地构造失败也必须保留已创建身份。
+export async function requestSiteIconUpload(siteId: string, icon: File, signal?: AbortSignal): Promise<{ siteId: string; iconUrl: string }> {
+  // 现有和新建站点共用精确上传合同，不自动跳转重放。
   let response: Response
   try {
     const body = new FormData()
@@ -41,20 +59,21 @@ export async function requestCreatedSiteIcon(siteId: string, icon: File, signal?
       method: 'POST', body, credentials: 'same-origin', redirect: 'error',
       headers: { Accept: 'application/json' }, ...(signal ? { signal } : {}),
     })
-  } catch { throw new SiteCreatedIconError(siteId, 'unknown') }
-  if (response.redirected) throw new SiteCreatedIconError(siteId, 'unknown')
+  } catch { throw new SiteIconUploadError(siteId, 'unknown') }
+  if (response.redirected) throw new SiteIconUploadError(siteId, 'unknown')
   let payload: unknown
-  try { payload = await response.json() } catch { throw new SiteCreatedIconError(siteId, 'unknown') }
+  try { payload = await response.json() } catch { throw new SiteIconUploadError(siteId, 'unknown') }
   if (!response.ok) {
     if (!Array.isArray(payload) && isApiErrorResponse(payload)
       && Object.hasOwn(rejections, payload.code) && rejections[payload.code] === response.status) {
-      throw new SiteCreatedIconError(siteId, 'rejected')
+      throw new SiteIconUploadError(siteId, 'rejected')
     }
-    throw new SiteCreatedIconError(siteId, 'unknown')
+    throw new SiteIconUploadError(siteId, 'unknown')
   }
   if (response.status !== 200 || !payload || typeof payload !== 'object' || Array.isArray(payload)
     || !('siteId' in payload) || payload.siteId !== siteId
     || !('iconUrl' in payload) || !matchesIconUrl(payload.iconUrl, siteId)) {
-    throw new SiteCreatedIconError(siteId, 'unknown')
+    throw new SiteIconUploadError(siteId, 'unknown')
   }
+  return { siteId, iconUrl: payload.iconUrl as string }
 }

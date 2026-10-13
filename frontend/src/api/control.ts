@@ -1,6 +1,6 @@
 import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
-import { requestCreatedSiteIcon } from './siteCreatedIconOutcome'
+import { requestCreatedSiteIcon, requestSiteIconUpload } from './siteCreatedIconOutcome'
 import { requestSiteProfileWrite } from './siteWriteOutcome'
 import { requestUserWrite } from './userWriteOutcome'
 import { NcpApiError } from '@/api/system'
@@ -249,13 +249,7 @@ export function uploadSiteIcon(
   icon: File,
   signal?: AbortSignal,
 ): Promise<{ siteId: string; iconUrl: string }> {
-  const body = new FormData()
-  body.append('icon', icon)
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}/icon`, {
-    method: 'POST',
-    body,
-    ...(signal ? { signal } : {}),
-  })
+  return requestSiteIconUpload(siteId, icon, signal)
 }
 
 export function deleteSiteIcon(siteId: string, signal?: AbortSignal): Promise<void> {
