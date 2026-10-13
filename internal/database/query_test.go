@@ -48,6 +48,24 @@ func TestLeadingQueryKeyword(t *testing.T) {
 		{"only comment", DriverSQLite, " /* x */ -- end", "", false},
 		{"eof line", DriverPostgreSQL, "--SELECT 1", "", false},
 		{"sqlite bare cr stays comment", DriverSQLite, "-- comment\rINSERT ignored\nSELECT 1", "SELECT", true},
+		{"pg bare cr select", DriverPostgreSQL, "-- comment\rSELECT 1", "SELECT", true},
+		{"pg bare cr update", DriverPostgreSQL, "-- comment\rUPDATE t SET n=1", "UPDATE", false},
+		{"pg bare cr then block", DriverPostgreSQL, "-- comment\r/* block */\tSELECT 1", "SELECT", true},
+		{"pg repeated bare cr", DriverPostgreSQL, "-- comment\r-- second\rSELECT 1", "SELECT", true},
+		{"pg cr before lf", DriverPostgreSQL, "-- comment\rSELECT 1\nUPDATE ignored", "SELECT", true},
+		{"pg lf before cr", DriverPostgreSQL, "-- comment\nSELECT 1\rUPDATE ignored", "SELECT", true},
+		{"pg lf", DriverPostgreSQL, "-- comment\nSELECT 1", "SELECT", true},
+		{"pg crlf", DriverPostgreSQL, "-- comment\r\nSELECT 1", "SELECT", true},
+		{"pg comment eof", DriverPostgreSQL, "-- comment", "", false},
+		{"pg cr eof", DriverPostgreSQL, "-- comment\r", "", false},
+		{"sqlite bare cr eof", DriverSQLite, "-- comment\rSELECT 1", "", false},
+		// MySQL 用例仅固定现有分类行为，不代表已验证服务端 CR 语义。
+		{"mysql bare cr stays comment", DriverMySQL, "-- comment\rSELECT 1", "", false},
+		{"mysql crlf select", DriverMySQL, "-- comment\r\nSELECT 1", "SELECT", true},
+		{"mysql bare cr dash not comment", DriverMySQL, "--x\rSELECT 1", "", false},
+		{"mysql lf dash not comment", DriverMySQL, "--x\rignored\nSELECT 1", "", false},
+		{"mysql hash bare cr stays comment", DriverMySQL, "# comment\rSELECT 1", "", false},
+		{"mysql hash crlf", DriverMySQL, "# comment\r\nSELECT 1", "SELECT", true},
 		{"empty", DriverSQLite, "", "", false},
 		{"spaces", DriverSQLite, " \n ", "", false},
 		{"dml returning stays exec", DriverSQLite, "INSERT INTO t VALUES(1) RETURNING id", "INSERT", false},
@@ -150,6 +168,44 @@ func TestQueryModeChoosesOnlyOnePathAndPreservesSQL(t *testing.T) {
 				t.Fatalf("mode %q: query=%d exec=%d SQL=%q", mode, runner.queryCalls, runner.execCalls, runner.statement)
 			}
 		}
+	}
+}
+
+// 独立期望值不复用 returnsRows，避免分类器错误被执行路径测试掩盖。
+func TestQueryPostgreSQLCRCommentModesAndErrors(t *testing.T) {
+	const statement = "-- comment\rSELECT 1"
+	for _, tt := range []struct {
+		name           string
+		mode           QueryResultMode
+		queries, execs int
+	}{
+		{"omitted", "", 1, 0},
+		{"auto", QueryResultModeAuto, 1, 0},
+		{"rows", QueryResultModeRows, 1, 0},
+		{"exec", QueryResultModeExec, 0, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, outcome := range []struct {
+				name string
+				err  error
+			}{
+				{"success", nil},
+				{"runner failure", errors.New("runner failed")},
+				{"deadline", context.DeadlineExceeded},
+				{"canceled", context.Canceled},
+			} {
+				t.Run(outcome.name, func(t *testing.T) {
+					runner := &fakeQueryRunner{rows: &fakeQueryRows{}, result: fakeQueryResult{count: 1}, err: outcome.err}
+					_, err := executeQuery(context.Background(), runner, DriverPostgreSQL, QueryRequest{SQL: statement, ResultMode: tt.mode})
+					if !errors.Is(err, outcome.err) {
+						t.Fatalf("error = %v, want %v", err, outcome.err)
+					}
+					if runner.queryCalls != tt.queries || runner.execCalls != tt.execs || runner.statement != statement {
+						t.Fatalf("query=%d exec=%d SQL=%q; want query=%d exec=%d SQL=%q", runner.queryCalls, runner.execCalls, runner.statement, tt.queries, tt.execs, statement)
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -165,11 +165,11 @@ func leadingQueryKeyword(driver Driver, statement string) string {
 		}
 		if strings.HasPrefix(statement, "--") &&
 			(driver != DriverMySQL || (len(statement) > 2 && (statement[2] <= ' ' || statement[2] == 0x7f))) {
-			statement = skipQueryLineComment(statement[2:])
+			statement = skipQueryLineComment(driver, statement[2:])
 			continue
 		}
 		if driver == DriverMySQL && strings.HasPrefix(statement, "#") {
-			statement = skipQueryLineComment(statement[1:])
+			statement = skipQueryLineComment(driver, statement[1:])
 			continue
 		}
 		if strings.HasPrefix(statement, "/*") {
@@ -213,8 +213,13 @@ func queryKeywordByte(value byte) bool {
 		value >= '0' && value <= '9' || value == '_' || value == '$' || value >= 0x80
 }
 
-func skipQueryLineComment(statement string) string {
-	if end := strings.IndexByte(statement, '\n'); end >= 0 {
+func skipQueryLineComment(driver Driver, statement string) string {
+	// PostgreSQL 的 scanner 将 CR/LF 都视为行注释终止符；其他驱动保持现有 LF 行为。
+	terminators := "\n"
+	if driver == DriverPostgreSQL {
+		terminators = "\r\n"
+	}
+	if end := strings.IndexAny(statement, terminators); end >= 0 {
 		return statement[end:]
 	}
 	return ""

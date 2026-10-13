@@ -126,3 +126,24 @@ GOCACHE=/workspace/scratch/a2c31a226a28/ncp-tools/go-cache \
 - 前端分别显示行数/字节截断、完整行未能展示和整页超预算；写SQL结果错误提示先核对数据库状态，不自动重跑SQL。OpenAPI同步可选字段与错误码。
 
 独立审查补齐匿名嵌入字段、JSON编码钩子、protobuf超多null节点及循环fake的负对照，以及排序/页大小失败后的分页状态。临时SQLite确认超大RETURNING可写入完整2 MiB值而展示空前缀，因此展示限制不限制写入范围。真实MySQL/PostgreSQL/NAS和驱动侧峰值内存仍未验证。
+
+## M14-B1 小补丁：PostgreSQL CR 行注释（2026-10-13）
+
+本片仅让前导行注释 helper 按驱动选择终止符：PostgreSQL 在首个 CR 或 LF 处结束，SQLite/MySQL 保持原有 LF 行为，MySQL `--` 后空白/控制字符门槛不变。分类仍只读 SQL；原文、显式 rows/exec、单次执行及错误后不重放契约未改。WITH、RETURNING、EXPLAIN、批次与块注释分类均未扩展。
+
+官方依据（本日复核）：[PostgreSQL REL_18_STABLE scanner](https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/parser/scan.l)，`newline [\n\r]`、`non_newline [^\n\r]` 和 `comment ("--"{non_newline}*)` 定义（该版本文件第 195–198 行）；[SQLite 注释规范](https://www.sqlite.org/lang_comment.html) 规定 `--` 注释到 LF 或输入末尾结束。MySQL 用例只固定本项目现有行为，未验证或宣称其服务端 CR 语义。
+
+新增纯函数独立期望覆盖 PG CR 后 SELECT/UPDATE、连续行注释、块注释、CR/LF 最早位置、LF/CRLF/EOF，以及 SQLite/MySQL 负对照、MySQL `#` 和 `--` 门槛。新增 fake runner 矩阵用 `-- comment\rSELECT 1` 独立断言省略/auto/rows 各 query=1、exec=0，显式 exec 为 query=0、exec=1；成功、预设错误、deadline 和 canceled 均逐字保留 SQL，无另一条路径或重复调用。
+
+验证环境：`source ../ncp-tools/env.sh`，Go 1.26.4 linux/amd64。以下均通过：
+
+```sh
+PURE='^(TestLeadingQueryKeyword|TestQueryPostgreSQLCRCommentModesAndErrors|TestQueryModeChoosesOnlyOnePathAndPreservesSQL|TestQueryExecutionErrorsNeverReplay|TestQueryExecAffectedCountIsTrustworthy|TestQueryRowsBoundariesAndFinalization|TestQueryRowsFailuresCloseAndPreservePrimaryError|TestQueryDurationIncludesCloseAndCancellationCannotSucceed|TestQueryInvalidModeMakesNoCalls)$'
+go test ./internal/database -run "$PURE" -count=1
+go test -race ./internal/database -run "$PURE" -count=1
+go test ./internal/database -run '^$'
+go vet ./internal/database
+git diff --check
+```
+
+测试仅执行选定的纯函数与 fake runner；未运行 Manager、sql.Open/sql.OpenDB 夹具、集成监听器，也未连接实际 SQLite/MySQL/PostgreSQL、NAS 或部署环境。编译检查包含包内全部测试源码，但不执行其他测试。独立审查复核实现及上述纯测试，无阻塞发现；这不是全套数据库集成验证。
