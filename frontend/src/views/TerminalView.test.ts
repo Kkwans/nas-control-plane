@@ -693,6 +693,49 @@ describe('M1b 真正独立的本地终端标签', () => {
     expect(host.querySelector('.terminal-capacity-note')?.textContent).toContain('0/4')
   })
 
+  it.each(['connecting', 'connected'])('关闭 %s 时原按钮禁用导致浏览器失焦，确认仍接收焦点且 Escape 可取消', async state => {
+    mount(); await connectActive()
+    if (state === 'connected') sockets[0]!.started()
+    await flush()
+    const close = closeButton()
+    // jsdom 不实现 Chromium 在禁用活动按钮时自动 blur 的行为；在真实属性写入处补齐。
+    const disabled = Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'disabled')!
+    vi.spyOn(close, 'disabled', 'set').mockImplementation(value => {
+      if (value && document.activeElement === close) close.blur()
+      disabled.set!.call(close, value)
+    })
+    close.focus(); close.click(); await flush()
+    expect(close.disabled).toBe(true)
+    expect(document.activeElement).toBe(button('保留标签'))
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flush()
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(document.activeElement).toBe(tabs()[0])
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
+  })
+
+  it.each(['focused', 'blurred', 'abort', 'pagehide'])('关闭确认渲染前新的外部焦点优先（%s），不抢走焦点', async action => {
+    mount(); await connectActive()
+    closeButton().focus(); closeButton().click()
+    const external = document.createElement('button')
+    document.body.append(external)
+    try {
+      external.focus()
+      if (action === 'blurred') external.blur()
+      if (action === 'abort') invalidateSession()
+      if (action === 'pagehide') window.dispatchEvent(new Event('pagehide'))
+      await flush()
+      expect(document.activeElement).toBe(action === 'blurred' ? document.body : external)
+      if (action === 'abort' || action === 'pagehide') {
+        expect(host.querySelector('[role="alertdialog"]')).toBeNull()
+        expect(sockets[0]!.close).toHaveBeenCalledTimes(1)
+      } else {
+        expect(host.querySelector('[role="alertdialog"]')).not.toBeNull()
+        expect(sockets[0]!.close).not.toHaveBeenCalled()
+      }
+    } finally { external.remove() }
+  })
+
   it('删除再新建不能绕过四个 opening/live/closing lease；准确 onclose 后才重新准入', async () => {
     mount()
     for (let i = 0; i < 4; i++) {

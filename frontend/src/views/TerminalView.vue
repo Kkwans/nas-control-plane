@@ -14,6 +14,8 @@ const containers = computed(() => (systemStore.inventory?.containers ?? []).filt
 const page = createTerminalPageOwner()
 let sequence = 0
 let selectionIntent = 0
+let focusEpoch = 0
+const trackFocus = () => { focusEpoch++ }
 const newTab = (): Tab => ({ id: `terminal-${++sequence}`, summary: { title: 'root@主机', state: 'idle', stateLabel: '未连接', target: 'host' } })
 const tabs = ref<Tab[]>([newTab()])
 const selectedId = ref(tabs.value[0]!.id)
@@ -30,7 +32,10 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 function focusIntent() {
   const origin = document.activeElement
-  return () => document.activeElement === origin || (origin instanceof HTMLElement && !origin.isConnected && document.activeElement === document.body)
+  const epoch = focusEpoch
+  // 禁用触发按钮也会让浏览器把焦点退回 body；这仍属于当前交接，不是用户的新焦点。
+  return () => epoch === focusEpoch && (document.activeElement === origin || (origin instanceof HTMLElement &&
+    (!origin.isConnected || origin.matches(':disabled')) && document.activeElement === document.body))
 }
 function focusTab(id: string) { tablist.value?.querySelector<HTMLButtonElement>(`#tab-${id}`)?.focus() }
 function selectTab(id: string, focus = false) {
@@ -105,11 +110,13 @@ const hidePage = () => { selectionIntent++; pendingClose.value = null; page.inva
 const showPage = () => page.show()
 page.session.signal.addEventListener('abort', abortPage, { once: true })
 onMounted(() => {
+  document.addEventListener('focusin', trackFocus)
   void systemStore.refresh({ inventory: true })
   window.addEventListener('pagehide', hidePage)
   window.addEventListener('pageshow', showPage)
 })
 onBeforeUnmount(() => {
+  document.removeEventListener('focusin', trackFocus)
   page.invalidate('已离开终端页面。', true)
   page.session.signal.removeEventListener('abort', abortPage)
   window.removeEventListener('pagehide', hidePage)
