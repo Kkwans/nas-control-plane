@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { installMockApi } from './mockApi'
@@ -638,5 +639,108 @@ for (const failure of ['commit-500', 'disconnect'] as const) {
     expect(fixture.writes()).toEqual([{ method: 'POST', path: iconPath }])
     await expect(page.getByText('站点图标已上传', { exact: true })).toHaveCount(0)
     await expect(page.getByText('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件', { exact: true })).toHaveCount(0)
+  })
+}
+
+// 实际打开的未知上传编辑器；仅浏览器执行才产出像素，不用空白图标或 DOM 替身。
+for (const width of [390, 1440]) {
+  test(`已有站点图标未知恢复视觉证据：${width}px 预览、警告与只读操作`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 1000 })
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    const fixture = await installSiteFixture(page)
+    fixture.failExistingIcon('commit-500')
+    await page.goto('/sites')
+    await page.getByRole('button', { name: '编辑 原有站点', exact: true }).click()
+    const icon = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="58" height="58" viewBox="0 0 58 58"><rect width="58" height="58" rx="12" fill="#176456"/><path d="M15 19h28v20H15z" fill="#fff"/><path d="M20 24h18M20 29h18M20 34h10" stroke="#176456" stroke-width="3"/></svg>')
+    await editor(page).locator('input[type="file"]').setInputFiles({ name: 'existing-preview.svg', mimeType: 'image/svg+xml', buffer: icon })
+    await expect(warning(page)).toContainText('图标上传可能已经执行，结果未确认')
+    await expectHeldEditor(page, '原有说明')
+    const preview = editor(page).getByAltText('待上传图标预览')
+    await expect(preview).toBeVisible()
+    await preview.evaluate((element) => (element as HTMLImageElement).decode())
+    await page.evaluate(async () => {
+      await document.fonts.ready
+      await Promise.all(document.getAnimations().filter((animation) =>
+        animation.effect?.getComputedTiming().iterations !== Infinity).map((animation) => animation.finished.catch(() => undefined)))
+    })
+    // 保留真实滚动位置、焦点和全部控件；不能隐藏表单或覆盖样式来消除 axe 失败。
+    const state = async () => ({
+      viewport: page.viewportSize(),
+      document: await page.evaluate(() => ({
+        fonts: document.fonts.status, rootFontSize: getComputedStyle(document.documentElement).fontSize,
+        scrollX, scrollY, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+        focus: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') },
+      })),
+      drawerScroll: await editor(page).locator('.el-drawer__body').evaluate((element) => ({ top: element.scrollTop, left: element.scrollLeft })),
+      warning: await controlGeometry(warning(page)),
+      preview: { ...await controlGeometry(preview), ...await preview.evaluate((element) => {
+        const image = element as HTMLImageElement
+        return { src: image.src, complete: image.complete, naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight }
+      }) },
+      footer: await controlGeometry(editor(page).locator('.el-drawer__footer')),
+      retry: await controlGeometry(retry(page)),
+      close: await controlGeometry(editor(page).getByRole('button', { name: '关闭并查看目录', exact: true })),
+      dismiss: await controlGeometry(editor(page).locator('button.el-drawer__close-btn')),
+      draft: await editor(page).getByLabel('简介', { exact: true }).inputValue(),
+      uploadDisabled: await editor(page).locator('input[type="file"]').isDisabled(),
+    })
+    let previous = await state()
+    await expect.poll(async () => {
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      const current = await state()
+      const stable = JSON.stringify(current) === JSON.stringify(previous)
+      previous = current
+      return stable
+    }).toBe(true)
+    const beforeCapture = await state()
+    const requestsBefore = [...fixture.requests]
+    const name = `site-existing-icon-unknown-${width}`
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const png = info.outputPath('ui-captures', `${name}.png`)
+    await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
+    const afterCapture = await state()
+    // 完整页面、所有默认规则、全部原始结果；不限定警告区，不剔除既有表单问题。
+    const axe = await new AxeBuilder({ page }).analyze()
+    const afterAxe = await state()
+    const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex')
+    const capture = {
+      sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      workingTree: execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }),
+      fixtureOnly: true, fixtureSource: 'frontend/e2e/site-write-outcome.spec.ts + frontend/e2e/mockApi.ts',
+      fixtureSha256: sha256(await readFile(new URL('./site-write-outcome.spec.ts', import.meta.url))),
+      mockApiSha256: sha256(await readFile(new URL('./mockApi.ts', import.meta.url))), iconFixtureSha256: sha256(icon),
+      testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      screenshot: `${name}.png`, screenshotSha256: sha256(await readFile(png)),
+      stateName: 'existing-site icon commit-500; unknown upload; original preview retained',
+      beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfter: [...fixture.requests], axe,
+    }
+    const json = info.outputPath('ui-captures', `${name}-capture-state.json`)
+    await writeFile(json, JSON.stringify(capture, null, 2))
+    await info.attach(name, { path: png, contentType: 'image/png' })
+    await info.attach(`${name}-state`, { path: json, contentType: 'application/json' })
+    // 先保存完整失败证据，再验证几何与未筛选 axe；soft 不会将违规转换成通过。
+    expect.soft(afterCapture).toEqual(beforeCapture)
+    expect.soft(afterAxe).toEqual(beforeCapture)
+    expect.soft(fixture.requests).toEqual(requestsBefore)
+    expect.soft(fixture.writes()).toEqual([{ method: 'POST', path: `${pathFor(existingId)}/icon` }])
+    expect.soft(beforeCapture.document.fonts).toBe('loaded')
+    expect.soft(beforeCapture.document.scrollWidth).toBeLessThanOrEqual(beforeCapture.document.clientWidth + 1)
+    expect.soft(beforeCapture.preview.complete && beforeCapture.preview.naturalWidth === 58 && beforeCapture.preview.naturalHeight === 58).toBe(true)
+    expect.soft(beforeCapture.uploadDisabled).toBe(true)
+    expect.soft(beforeCapture.preview.clips.every((clip) =>
+      beforeCapture.preview.bounds.left >= clip.left - 1 && beforeCapture.preview.bounds.right <= clip.right + 1 &&
+      beforeCapture.preview.bounds.top >= clip.top - 1 && beforeCapture.preview.bounds.bottom <= clip.bottom + 1)).toBe(true)
+    for (const control of [beforeCapture.warning, beforeCapture.preview, beforeCapture.footer, beforeCapture.retry, beforeCapture.close, beforeCapture.dismiss]) {
+      expect.soft(control.visible && control.inViewport, JSON.stringify(control)).toBe(true)
+    }
+    for (const control of [beforeCapture.warning, beforeCapture.footer, beforeCapture.retry, beforeCapture.close]) {
+      expect.soft(control.contained, JSON.stringify(control)).toBe(true)
+    }
+    for (const control of [beforeCapture.retry, beforeCapture.close, beforeCapture.dismiss]) {
+      expect.soft(control.centerHit, JSON.stringify(control)).toBe(true)
+    }
+    expect.soft(beforeCapture.warning.bounds.bottom).toBeLessThanOrEqual(beforeCapture.preview.bounds.top)
+    expect.soft(beforeCapture.preview.bounds.bottom).toBeLessThanOrEqual(beforeCapture.footer.bounds.top)
+    expect.soft(axe.violations, JSON.stringify(axe.violations, null, 2)).toEqual([])
   })
 }

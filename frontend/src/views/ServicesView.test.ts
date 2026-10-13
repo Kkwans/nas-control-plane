@@ -26,6 +26,7 @@ const site = { ...profile, id: 'manual:demo', projectId: 'manual:demo', ports: [
 interface ViewState {
   draft: SiteProfileInput
   pendingIcon: File | null
+  pendingIconPreview: string
   editOpen: boolean
   saving: boolean
   iconBusy: boolean
@@ -490,5 +491,70 @@ describe('现有站点图标上传归属', () => {
     expect(view.unknownIcons.size).toBe(0)
     expect(view.unknownWrite).toBeNull()
     expect(messages.error).not.toHaveBeenCalled()
+  })
+
+  it('上传在途关闭重开同站点仍单飞，迟到未知保留重开草稿', async () => {
+    const pending = deferred<{ siteId: string; iconUrl: string }>()
+    const upload = vi.spyOn(store, 'uploadIcon').mockReturnValueOnce(pending.promise)
+    view.openEditor(site)
+    const operation = view.uploadIcon(event(file()))
+    view.editOpen = false
+    view.openEditor(site)
+    view.draft.description = '重开后的新草稿'
+    expect(view.iconBusy).toBe(true)
+    await view.uploadIcon(event(file()))
+    expect(upload).toHaveBeenCalledTimes(1)
+    pending.reject(new SiteIconUploadError(site.id, 'unknown'))
+    await operation
+    expect(view.iconBusy).toBe(false)
+    expect(view.unknownWrite).toBeInstanceOf(SiteIconUploadError)
+    expect(view.draft.description).toBe('重开后的新草稿')
+    expect(messages.success).not.toHaveBeenCalled()
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-icon')
+  })
+  it('抽屉关闭后到达的未知结果仍被记录，重开恢复保护', async () => {
+    const pending = deferred<{ siteId: string; iconUrl: string }>()
+    vi.spyOn(store, 'uploadIcon').mockReturnValueOnce(pending.promise)
+    view.openEditor(site)
+    const operation = view.uploadIcon(event(file()))
+    view.editOpen = false
+    pending.reject(new SiteIconUploadError(site.id, 'unknown'))
+    await operation
+    expect(view.unknownIcons.has(site.id)).toBe(true)
+    expect(view.unknownWrite).toBeNull()
+    view.openEditor(site)
+    expect(view.unknownWrite).toBeInstanceOf(SiteIconUploadError)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-icon')
+  })
+  it.each(['确认成功', '明确拒绝'] as const)('%s 释放预览对象地址，允许用户再次选择文件', async (outcome) => {
+    const upload = vi.spyOn(store, 'uploadIcon')
+    if (outcome === '确认成功') upload.mockResolvedValue({ siteId: site.id, iconUrl: `/api/v1/sites/${site.id}/icon` })
+    else upload.mockRejectedValue(new SiteIconUploadError(site.id, 'rejected'))
+    view.openEditor(site)
+    await view.uploadIcon(event(file()))
+    expect(view.pendingIcon).toBeNull()
+    expect(view.pendingIconPreview).toBe('')
+    expect(view.iconBusy).toBe(false)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-icon')
+    await view.uploadIcon(event(file()))
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+  })
+  it('卸载释放预览对象地址，迟到未知不能新增记录或消息', async () => {
+    const pending = deferred<{ siteId: string; iconUrl: string }>()
+    vi.spyOn(store, 'uploadIcon').mockReturnValueOnce(pending.promise)
+    view.openEditor(site)
+    const operation = view.uploadIcon(event(file()))
+    app.unmount(); unmounted = true
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-icon')
+    pending.reject(new SiteIconUploadError(site.id, 'unknown'))
+    await operation
+    expect(view.unknownIcons.size).toBe(0)
+    expect(messages.error).not.toHaveBeenCalled()
+    expect(messages.success).not.toHaveBeenCalled()
   })
 })
