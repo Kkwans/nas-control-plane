@@ -55,7 +55,7 @@ function sensorSamples(gap = false): MetricSample[] {
 
 async function startHistory(page: Page, initial: HistoryReply) {
   await page.clock.install({ time: new Date(summary.collectedAt) })
-  await page.clock.setFixedTime(new Date(summary.collectedAt))
+  // 样本时间固定，UI 时钟继续前进；冻结 Date.now 会让 Vue 丢弃标签向选择框冒泡的 click。
   await installMockApi(page, { clock: false, manualRealtime: true })
   let reply = initial
   // 后注册的精确 fixture 覆盖通用 mock；其余 /api/v1/** 也只由 installMockApi 响应。
