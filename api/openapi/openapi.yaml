@@ -2447,7 +2447,9 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 150 } }
       responses:
         '200':
-          description: Normalized and redacted log entries
+          description: >-
+            规范化的日志条目。系统与Agent日志仅对已识别的敏感模式进行脱敏；容器日志不保证脱敏。
+            所有来源仍可能包含敏感信息，导出或分享前应检查内容。
           content:
             application/json:
               schema:

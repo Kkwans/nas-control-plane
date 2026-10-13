@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CirclePause, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
+import { computed, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
+import { CirclePause, Download, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
 import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTooltip } from 'element-plus'
 
 import type { LogEntry } from '@/api/control'
@@ -13,6 +13,9 @@ import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatLocalTimestamp } from '@/lib/datetime'
 import { logTokens } from '@/utils/logTokens'
+import { formatLogExport, LOG_EXPORT_TOO_LARGE } from '@/domain/logExport'
+import { createTextDownloader } from '@/lib/downloadText'
+import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 type LogSource = 'system' | 'agent' | 'container'
 const systemStore = useSystemStore()
@@ -22,6 +25,14 @@ const containerId = ref('')
 const level = ref('all')
 const hours = ref(6)
 const query = ref('')
+const appliedQuery = ref('')
+const appliedFilters = ref('')
+const pageSession = captureSession()
+const exportActive = ref(true)
+const exporting = ref(false)
+const exportFeedback = ref('')
+const exportError = ref('')
+const downloader = createTextDownloader((busy) => { exporting.value = busy })
 const following = ref(false)
 const logSession = useLogQuerySession()
 const { entries, nextCursor, loading, loadingMore, error, lastReceivedAt, followState, loadMore } = logSession
@@ -42,6 +53,41 @@ const pagedEntries = computed(() => {
   const start = (page.value - 1) * pageSize.value
   return sortedEntries.value.slice(start, start + pageSize.value)
 })
+function filterKey() { return JSON.stringify([source.value, containerId.value, level.value, hours.value]) }
+const exportDisabledReason = computed(() => {
+  if (!exportActive.value || pageSession.signal.aborted) return '当前会话已结束，请重新打开日志页面。'
+  if (query.value.trim() !== appliedQuery.value) return '搜索条件尚未应用，请按回车或刷新后导出'
+  if (loading.value || loadingMore.value || filterKey() !== appliedFilters.value) return '正在读取日志，请稍后导出。'
+  if (error.value) return '日志读取失败，请重试成功后导出。'
+  if (!pagedEntries.value.length) return '当前页没有可导出的日志。'
+  return ''
+})
+function canExport() {
+  return !exportDisabledReason.value && exportActive.value && !pageSession.signal.aborted && isCurrentSession(pageSession.generation)
+}
+function exportCurrentPage() {
+  if (exporting.value || !canExport()) return
+  exportFeedback.value = ''
+  exportError.value = ''
+  try {
+    const count = pagedEntries.value.length
+    const initiated = downloader.download(() => formatLogExport({
+      entries: pagedEntries.value, source: source.value, page: page.value, pageSize: pageSize.value,
+      loadedCount: entries.value.length, exportedAt: new Date(),
+    }), canExport)
+    if (initiated) exportFeedback.value = `已发起 ${count} 条日志下载`
+  } catch (caught) {
+    exportError.value = caught instanceof Error && caught.message === LOG_EXPORT_TOO_LARGE
+      ? LOG_EXPORT_TOO_LARGE : '日志下载未能发起，请重试。'
+  }
+}
+function stopExports() {
+  exportActive.value = false
+  downloader.dispose()
+  exportFeedback.value = ''
+  exportError.value = ''
+}
+pageSession.signal.addEventListener('abort', stopExports, { once: true })
 const logHistoryNote = computed(() => {
   if (source.value === 'container') return `Docker 容器日志当前最多读取 200 条；服务端暂未提供历史游标，缩小时间范围可查看指定窗口。`
   if (nextCursor.value) return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，可继续加载更多结果。`
@@ -53,6 +99,10 @@ function syncFollowStream() {
 }
 
 function refreshLogs() {
+  appliedQuery.value = query.value.trim()
+  appliedFilters.value = filterKey()
+  exportFeedback.value = ''
+  exportError.value = ''
   page.value = 1
   selectedEntry.value = null
   void logSession.load({
@@ -69,6 +119,7 @@ watch(loading, (busy) => {
   if (busy && !entries.value.length) skeletonTimer = setTimeout(() => { showSkeleton.value = true }, 180)
 }, { flush: 'sync' })
 watch([source, containerId, level, hours], refreshLogs)
+watch([query, page, pageSize], () => { exportFeedback.value = ''; exportError.value = '' })
 watch(pageSize, () => { page.value = 1 })
 watch(pageCount, (count) => {
   if (page.value > count) page.value = count
@@ -79,9 +130,12 @@ onMounted(() => {
   refreshLogs()
 })
 onBeforeUnmount(() => {
+  stopExports()
+  pageSession.signal.removeEventListener('abort', stopExports)
   logSession.dispose()
   if (skeletonTimer) clearTimeout(skeletonTimer)
 })
+onDeactivated(stopExports)
 
 function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
@@ -146,6 +200,11 @@ function followStateDescription(value: FollowState) {
         <ElInput v-model="query" clearable aria-label="搜索日志消息或服务" placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
         <label class="follow-switch"><component :is="following ? Play : CirclePause" :size="16" /><span>实时跟随</span><ElSwitch v-model="following" /></label>
         <ElButton class="log-refresh-button" :loading="loading" title="刷新当前日志" @click="refreshLogs"><RefreshCw :size="16" />刷新</ElButton>
+        <ElButton class="log-export-button" :disabled="Boolean(exportDisabledReason) || exporting" aria-describedby="log-export-hint log-export-state" @click="exportCurrentPage"><Download :size="16" aria-hidden="true" />导出当前页（{{ pagedEntries.length }} 条）</ElButton>
+      </div>
+      <div class="log-export-notes">
+        <p id="log-export-hint">仅保存点击时当前页已显示的日志，不包含其他页或未加载历史；实时新增记录不会追加到文件。最多 200 条 / 2 MiB。日志可能含敏感信息，分享前请检查。</p>
+        <p id="log-export-state" role="status" aria-live="polite" :class="{ 'log-export-error': exportError }">{{ exportError || exportDisabledReason || exportFeedback || (exporting ? '正在发起下载…' : '') }}</p>
       </div>
     </section>
 
@@ -204,7 +263,7 @@ function followStateDescription(value: FollowState) {
   justify-content: space-between;
   gap: 14px;
   padding: 13px 14px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 .log-filters,
 .log-tools {
@@ -255,7 +314,32 @@ function followStateDescription(value: FollowState) {
   min-width: 0;
   flex: 0 1 auto;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
+.log-export-button {
+  min-height: 44px;
+  height: auto;
+  max-width: 100%;
+  padding-block: 10px;
+  margin-left: 0;
+  flex: 0 0 auto;
+  white-space: normal;
+}
+.log-export-button :deep(span) { white-space: normal; }
+.log-export-button:focus-visible {
+  outline: 2px solid var(--ncp-primary-strong);
+  outline-offset: 3px;
+}
+.log-export-notes {
+  width: 100%;
+  flex: 1 0 100%;
+  color: var(--ncp-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.log-export-notes p { margin: 0; }
+.log-export-notes .log-export-error { color: var(--ncp-danger-strong); }
 .log-tools :deep(.page-size-control) {
   gap: 5px;
   white-space: nowrap;
@@ -653,6 +737,7 @@ function followStateDescription(value: FollowState) {
     width: auto;
     min-width: 0;
   }
+  .log-tools .log-export-button { grid-column: 1 / -1; }
   .log-head {
     grid-template-columns: 155px 68px 150px minmax(280px, 1fr);
   }
