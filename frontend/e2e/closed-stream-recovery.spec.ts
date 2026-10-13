@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { overviewDocker, summary } from './mockApi'
+import { withClockFrames } from '../src/test-support/axeClock'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
 
@@ -189,39 +190,6 @@ function expectSafe(api: Fixture, logout = false) {
   expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual(logout ? ['POST /api/v1/auth/logout'] : [])
 }
 
-// 完整 axe 使用逐帧时钟；仅容忍其已关闭 about:blank 汇总页引发的已知 clock 竞争。
-async function analyze(page: Page) {
-  const context = page.context()
-  const auxiliaryPages = new Set<Page>()
-  let contextClosed = false
-  const onPage = (auxiliary: Page) => auxiliaryPages.add(auxiliary)
-  const onClose = () => { contextClosed = true }
-  const alive = () => !contextClosed && !page.isClosed() && context.browser()?.isConnected() === true
-  context.on('page', onPage); context.on('close', onClose)
-  let finished = false
-  let rejected = false
-  let result!: Awaited<ReturnType<AxeBuilder['analyze']>>
-  let failure: unknown
-  try {
-    const pending = new AxeBuilder({ page }).analyze().then((value) => { result = value; finished = true }, (error: unknown) => { failure = error; rejected = true; finished = true })
-    for (let elapsed = 0; !finished && elapsed < 2000; elapsed += 16) {
-      try { await page.clock.runFor(16) } catch (error) {
-        const summaryClosed = auxiliaryPages.size === 1 && [...auxiliaryPages].every((auxiliary) => auxiliary.url() === 'about:blank' && auxiliary.isClosed())
-        if (!(error instanceof Error) || !/^clock\.runFor: Target page, context or browser has been closed(?:\n|$)/.test(error.message) || !summaryClosed || !alive()) throw error
-        let timeout: ReturnType<typeof setTimeout> | undefined
-        try {
-          await Promise.race([pending, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(error), 1000) })])
-        } finally { clearTimeout(timeout) }
-        if (rejected) throw failure
-        if (!alive()) throw error
-      }
-    }
-    expect(finished, 'axe 未在受控 2 秒时钟内结束').toBe(true)
-    await pending
-    if (rejected) throw failure
-    return result
-  } finally { context.off('page', onPage); context.off('close', onClose) }
-}
 async function capture(page: Page, info: TestInfo, api: Fixture, name: string) {
   await page.evaluate(() => document.fonts.ready)
   await page.mouse.move(0, 0)
@@ -244,7 +212,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, name: string) {
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = info.outputPath('ui-captures', `${stem}.png`)
   await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
-  const axe = await analyze(page)
+  const axe = await withClockFrames(page, () => new AxeBuilder({ page }).analyze())
   const json = info.outputPath('ui-captures', `${stem}-capture-state.json`)
   await writeFile(json, JSON.stringify({
     fixtureOnly: true, sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),

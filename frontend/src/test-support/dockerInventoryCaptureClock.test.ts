@@ -1,7 +1,6 @@
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
-import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { withClockFrames } from './axeClock'
 
 type SummaryPage = { url: () => string; isClosed: () => boolean }
 type FixtureContext = EventEmitter & { browser: () => { isConnected: () => boolean } }
@@ -28,18 +27,6 @@ type FixtureOptions = {
   tick?: (fixture: Fixture) => void | Promise<void>
 }
 
-// 只提取当前 E2E 源文件的纯调度函数，不加载 Playwright 测试入口或启动浏览器。
-// AST 按名称定位，避免维护另一份可能与真正采集逻辑脱节的测试实现。
-const source = readFileSync(new URL('../../e2e/docker-inventory-response.spec.ts', import.meta.url), 'utf8')
-const ast = ts.createSourceFile('docker-inventory-response.spec.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-const helpers = ast.statements.filter((node): node is ts.FunctionDeclaration =>
-  ts.isFunctionDeclaration(node) && node.name?.text === 'withClockFrames')
-if (helpers.length !== 1) throw new Error('必须找到唯一的 withClockFrames 采集函数')
-const compiled = ts.transpileModule(helpers[0]!.getText(ast), {
-  compilerOptions: { target: ts.ScriptTarget.ES2022 },
-}).outputText
-const withClockFrames = new Function('expect', `${compiled}; return withClockFrames;`)(expect) as
-  <T>(page: FixturePage, operation: () => Promise<T>) => Promise<T>
 const closedError = () => new Error('clock.runFor: Target page, context or browser has been closed')
 
 function setup(options: FixtureOptions = {}): Fixture {
@@ -168,8 +155,9 @@ describe('Docker 清单完整 axe 的受控时钟生命周期', () => {
     const failure = closedError()
     const fixture = setup({ tick(current) { current.closeSummary(); throw failure } })
     const pending = expect(withClockFrames(fixture.page, fixture.start)).rejects.toBe(failure)
+    await vi.advanceTimersByTimeAsync(16)
     await vi.advanceTimersByTimeAsync(999)
-    expect(vi.getTimerCount()).toBe(1)
+    expect(vi.getTimerCount()).toBe(2)
     await vi.advanceTimersByTimeAsync(1)
     await pending
     expect(vi.getTimerCount()).toBe(0)
@@ -192,8 +180,12 @@ describe('Docker 清单完整 axe 的受控时钟生命周期', () => {
   })
 
   it('未完成的分析仍受累计 2000 毫秒时钟上限约束', async () => {
+    vi.useFakeTimers()
     const fixture = setup()
-    await expect(withClockFrames(fixture.page, fixture.start)).rejects.toThrow('axe 未在受控 2 秒时钟预算内结束')
+    const pending = expect(withClockFrames(fixture.page, fixture.start)).rejects.toThrow('axe 未在真实 5 秒时限内结束')
+    await vi.advanceTimersByTimeAsync(5000)
+    await pending
+    expect(vi.getTimerCount()).toBe(0)
     expect(fixture.ticks).toHaveLength(125)
     expect(fixture.ticks.reduce((sum, tick) => sum + tick, 0)).toBe(2000)
     fixture.checkCleanup()
