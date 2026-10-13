@@ -90,3 +90,27 @@ GOCACHE=/workspace/scratch/a2c31a226a28/ncp-tools/go-cache \
 ```
 
 这些诊断测试用断言证明当前缺陷和可行精确参数路径，不是已经修复。没有做真实 MySQL/PostgreSQL、NAS 或部署验证。
+
+## M14-B1 实施契约（2026-10-13 10:38 UTC）
+
+第一片限定为显式结果模式、前导普通注释、影响行数可信度及结果收尾，不声称自动理解全部 RETURNING/CTE。auto 保留现有首关键字分类；需要返回写语句结果时用户选择 rows，需要驱动影响行数时选择 exec。分类只读取 SQL 原文；提交驱动不删注释、不改写、不拆分 SQL。
+
+### 兼容与单次执行
+
+- HTTP 省略 resultMode 保留旧 Query RPC。明确提交 auto/rows/exec 使用新增可选 QueryWithOptions RPC；旧 Agent 或旧 provider 返回稳定 result_mode_unsupported，必须在 SQL 执行前发生。
+- 不能在旧 Query RPC 中添加字段后期待旧 Agent 拒绝：其宽松解码会忽略字段并执行。显式模式不支持时不降级重放。
+- 无效模式在连接数据库之前拒绝。结果模式不是 Root SQL 权限白名单，不把 rows 声称为只读。
+- 每个请求只选一个 QueryContext 或 ExecContext 路径。错误、超时、截断和关闭失败后均不自动重试，不保证 SQL 没有生效。
+
+### 结果与界面
+
+- 保留 rowsAffected 现有字段类型，新增 rowsAffectedKnown。驱动不支持、返回负数、跨 JSON 安全整数范围或行集路径无法取得通用计数时，界面显示“影响行数未知”，不显示伪造的零。
+- rows 模式独立展示返回行数和截断；返回 500 行不代表只修改 500 行。显式关闭 Rows 并核查关闭及迭代错误，避免在关闭失败时发成功响应。
+- 工作台确认冻结 SQL 和模式，重复触发不重放；成功后刷新当前表，即便 RETURNING 有列。刷新失败保留 SQL 已成功的结果。路由离开或停止等待不代表远端写入回滚。
+- 结果错误应提示先核对写入状态；删除“其他数据库和表不受影响”之类对任意 Root SQL 不成立的保证。
+
+### 新隔离证据与验收边界
+
+临时 SQLite 诊断确认：501 行 UPDATE RETURNING 会修改全部 501 行而只展示 500 行；INSERT 后接无效语句的批次可在返回错误前持久化 INSERT；当前 SQLite 驱动的双 SELECT 批次展示最后一个结果集。不得从响应截断、失败或驱动行为推导跨数据库的事务/多结果集保证。
+
+验收包括旧客户端/旧 Agent/旧 provider 兼容、零 SQL 调用的模式不支持结果、真实 protobuf 往返、零与未知计数、带注释查询、RETURNING 只执行一次、499/500/501 边界、Rows.Close 错误、取消资源释放及界面快照。全自动 SQL lexer、多结果集、总字节预算与真实 MySQL/PostgreSQL/NAS验证仍在本片之外。
