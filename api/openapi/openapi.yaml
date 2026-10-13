@@ -366,6 +366,11 @@ paths:
     get:
       operationId: listMetricSamples
       summary: Read persisted host metric samples
+      description: >-
+        历史由服务端后台独立采集，无需浏览器保持连接，HTTP 概览和实时流请求不写入历史。
+        每个 UTC 分钟仅保存首个合格且成功持久化的完整样本及其温度子样本，保留 7 天。
+        必需指标源不可用、样本无效或持久化失败可能形成间断，不补零或插值；
+        缺失温度保持为空。实时概览和实时流的共享采集不属于此历史接口的保证。
       tags: [monitoring]
       security: [{RootSession: []}]
       parameters:

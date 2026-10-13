@@ -115,7 +115,6 @@ type ControlStore interface {
 	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)
 	RecordComposeRevision(context.Context, controlstore.ComposeRevision) (controlstore.ComposeRevision, error)
 	ComposeRevisions(context.Context, string, int) ([]controlstore.ComposeRevision, error)
-	RecordMetricSample(context.Context, controlstore.MetricSample) error
 	MetricSamples(context.Context, time.Time) ([]controlstore.MetricSample, error)
 }
 
@@ -394,7 +393,6 @@ func (api *handler) systemSummary(response http.ResponseWriter, request *http.Re
 		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
 		return
 	}
-	api.recordMetricSample(request.Context(), summary)
 	writeJSON(response, http.StatusOK, summary)
 }
 
@@ -482,7 +480,6 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 				snapshot.Errors = append(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE")
 			} else {
 				snapshot.Summary = &summary
-				api.recordMetricSample(request.Context(), summary)
 			}
 		}
 		if scope.docker {
@@ -575,32 +572,6 @@ func (api *handler) collectDockerInventoryContext(ctx context.Context) (docker.I
 	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
 	defer cancel()
 	return api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
-}
-
-func (api *handler) recordMetricSample(ctx context.Context, summary system.Summary) {
-	if api.controlStore == nil {
-		return
-	}
-	metric := summary.MetricSample()
-	temperatures := make([]controlstore.MetricTemperature, 0, len(metric.Temperatures))
-	for _, temperature := range metric.Temperatures {
-		temperatures = append(temperatures, controlstore.MetricTemperature{
-			Name:               temperature.Name,
-			TemperatureCelsius: temperature.TemperatureCelsius,
-		})
-	}
-	_ = api.controlStore.RecordMetricSample(ctx, controlstore.MetricSample{
-		CollectedAt:     metric.CollectedAt,
-		CPUPercent:      metric.CPUPercent,
-		MemoryPercent:   metric.MemoryPercent,
-		Load1:           metric.Load1,
-		DiskPercent:     metric.DiskPercent,
-		NetworkReceive:  metric.NetworkReceive,
-		NetworkTransmit: metric.NetworkTransmit,
-		DiskReadBytes:   metric.DiskReadBytes,
-		DiskWriteBytes:  metric.DiskWriteBytes,
-		Temperatures:    temperatures,
-	})
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {

@@ -22,6 +22,8 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/httpapi"
+	"github.com/Kkwans/nas-control-plane/internal/monitoring"
+	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
 const (
@@ -121,7 +123,7 @@ func agentProbeErrorCode(err error) string {
 	return "NCP_SERVER_AGENT_PROBE_FAILED"
 }
 
-func runHTTPServer(ctx context.Context, args []string) error {
+func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	listenAddress := flags.String("listen", defaultHTTPListenAddress, "HTTP 监听地址")
@@ -190,25 +192,34 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		}
 	}
 
+	collector, err := monitoring.NewCollector(socketSummarySource{socketPath: *agentSocketPath}, controlStore, monitoring.Options{Logger: slog.Default()})
+	if err != nil {
+		return err
+	}
 	jobEngine, err := httpapi.NewJobEngine(controlStore)
 	if err != nil {
 		return err
 	}
-	engineClosed := false
+	ownerContext, cancelOwners := context.WithCancel(ctx)
+	collectorStarted := false
+	var server *http.Server
+	// 所有退出分支共用一次预算；先取消流/RPC，再并行等待 HTTP、Job 和采集器。
 	defer func() {
-		if engineClosed {
-			return
-		}
-		closeContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		cancelOwners()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 		defer cancel()
-		_ = jobEngine.Close(closeContext)
+		if err := shutdownOwners(shutdownContext, server, jobEngine, collector, collectorStarted); err != nil {
+			slog.Error("服务关闭未完成", "code", "SERVER_SHUTDOWN_FAILED")
+			resultErr = errors.Join(resultErr, err)
+		}
 	}()
 
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
+	server = &http.Server{
+		BaseContext: func(net.Listener) context.Context { return ownerContext },
 		Handler: httpapi.NewHandler(httpapi.Config{
 			JobEngine:           jobEngine,
 			AgentSocketPath:     *agentSocketPath,
@@ -223,6 +234,8 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	collectorStarted = true
+	go func() { _ = collector.Run(ownerContext) }()
 	serveErrors := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -236,19 +249,7 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	case err := <-serveErrors:
 		return err
 	case <-ctx.Done():
-		shutdownContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
-		defer cancel()
-		jobEngine.StopAdmission()
-		engineClosed = true
-		httpErr := server.Shutdown(shutdownContext)
-		if httpErr != nil {
-			_ = jobEngine.Close(shutdownContext)
-			return httpErr
-		}
-		if err := jobEngine.Close(shutdownContext); err != nil {
-			return err
-		}
-		return <-serveErrors
+		return nil
 	}
 }
 
@@ -258,4 +259,51 @@ type socketDatabaseConnectionTester struct {
 
 func (tester socketDatabaseConnectionTester) TestConnection(ctx context.Context, connection ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
 	return agentsocket.TestDatabaseConnection(ctx, tester.socketPath, connection)
+}
+
+// socketSummarySource 保持宿主机能力只由 Agent RPC 提供。
+type socketSummarySource struct{ socketPath string }
+
+func (s socketSummarySource) CollectSystemSummary(ctx context.Context) (system.Summary, error) {
+	return agentsocket.CollectSystemSummary(ctx, s.socketPath)
+}
+
+type shutdownJobOwner interface {
+	StopAdmission()
+	Close(context.Context) error
+}
+type shutdownCollector interface{ Done() <-chan struct{} }
+
+func shutdownOwners(ctx context.Context, server *http.Server, jobs shutdownJobOwner, collector shutdownCollector, started bool) error {
+	jobs.StopAdmission()
+	results := make(chan error, 3)
+	go func() { results <- jobs.Close(ctx) }()
+	go func() {
+		if server == nil {
+			results <- nil
+			return
+		}
+		err := server.Shutdown(ctx)
+		if err != nil {
+			_ = server.Close()
+		}
+		results <- err
+	}()
+	go func() {
+		if !started {
+			results <- nil
+			return
+		}
+		select {
+		case <-collector.Done():
+			results <- nil
+		case <-ctx.Done():
+			results <- ctx.Err()
+		}
+	}()
+	var result error
+	for i := 0; i < 3; i++ {
+		result = errors.Join(result, <-results)
+	}
+	return result
 }
