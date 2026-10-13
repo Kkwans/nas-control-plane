@@ -6,7 +6,7 @@ import TaskCenterDrawer from './TaskCenterDrawer.vue'
 import { invalidateSession } from '@/session/sessionLifecycle'
 const mock = vi.hoisted(() => ({ state: {} as Record<string, unknown>, finishClose: () => {} }))
 vi.mock('@/composables/useTaskCenter', () => ({ useTaskCenter: () => mock.state }))
-vi.mock('element-plus', () => ({ ElDrawer: { props: ['modelValue'], emits: ['closed'], setup: (props: { modelValue: boolean }, { slots, emit }: { slots: Record<string, (arg?: unknown) => VNodeChild>; emit: (event: string) => void }) => { mock.finishClose = () => emit('closed'); return () => h('section', { role: 'dialog', 'aria-label': '最近任务', 'data-open': String(props.modelValue) }, [slots.header?.({ titleId: 'task-title' }), slots.default?.()]) } } }))
+vi.mock('element-plus', () => ({ ElDrawer: { props: ['modelValue', 'withHeader', 'title'], emits: ['closed'], setup: (props: { modelValue: boolean; withHeader: boolean; title: string }, { slots, emit }: { slots: Record<string, (arg?: unknown) => VNodeChild>; emit: (event: string) => void }) => { mock.finishClose = () => emit('closed'); return () => h('section', { role: 'dialog', 'aria-label': props.title, 'data-with-header': String(props.withHeader), 'data-open': String(props.modelValue) }, [slots.header?.({ titleId: 'task-title' }), slots.default?.()]) } } }))
 let app: App | undefined
 let host: HTMLDivElement
 const refresh = vi.fn(), requestCancel = vi.fn()
@@ -20,6 +20,15 @@ function set(key: string, value: unknown) { (mock.state[key] as Ref<unknown>).va
 function button(text: string) { return [...host.querySelectorAll('button')].find(item => item.textContent?.includes(text))! }
 afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
+  it('自定义 div 标题不创建重复 banner，dialog 仍关联可见标题', async () => {
+    await mount(); const dialog = host.querySelector('[role="dialog"]')!
+    expect(dialog.getAttribute('data-with-header')).toBe('false'); expect(host.querySelector('header')).toBeNull()
+    const title = host.querySelector('h2')!; expect(title.textContent).toBe('最近任务'); expect(dialog.getAttribute('aria-labelledby')).toBe(title.id)
+  })
+  it('筛选器名称由独立标签提供，不混入选项文本', async () => {
+    await mount(); const controls = [...host.querySelectorAll('input, select')]
+    expect(controls.map(control => document.getElementById(control.getAttribute('aria-labelledby')!)?.textContent)).toEqual(['搜索已加载记录', '任务类型', '任务状态'])
+  })
   it('最近列表范围明确，完成与产物未知分别呈现', async () => {
     await mount(); expect(host.textContent).toContain('可能不包含更早历史'); expect(host.textContent).toContain('关闭面板不会停止任务')
     expect(host.textContent).toContain('当前列表 1 条'); expect(host.textContent).toContain('已完成')
@@ -34,8 +43,13 @@ describe('TaskCenterDrawer', () => {
   })
   it('取消能力判定与正在提交状态可感知', async () => {
     const active = job({ status: 'running', cancellable: true }); await mount([active]); button('查看详情').click(); await nextTick()
-    button('请求取消').click(); expect(requestCancel).toHaveBeenCalledWith(active)
+    button('请求取消').focus(); button('请求取消').click(); expect(requestCancel).toHaveBeenCalledWith(active)
+    expect(document.activeElement).toBe(button('收起详情'))
     set('cancellingIds', new Set(['job-1'])); await nextTick(); expect(button('正在提交').disabled).toBe(true)
+  })
+  it('刷新移除当前取消行时把焦点交还稳定的关闭按钮', async () => {
+    await mount([job({ status: 'running', cancellable: true })]); button('查看详情').click(); await nextTick(); button('请求取消').focus()
+    set('jobs', []); await nextTick(); expect(document.activeElement).toBe(host.querySelector('[aria-label="关闭最近任务"]'))
   })
   it('首次加载、失败、空集合与全无效记录明确区分', async () => {
     await mount([], { loading: ref(true), hasLoaded: ref(false) }); expect(host.textContent).toContain('正在读取最近任务')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { ChevronDown, ListChecks, RefreshCw, X } from '@lucide/vue'
 import { ElDrawer } from 'element-plus'
 import ResourcePagination from '@/components/ResourcePagination.vue'
@@ -12,6 +12,7 @@ import type { JobSnapshot } from '@/api/system'
 
 const emit = defineEmits<{ close: [] }>()
 const open = ref(true)
+const titleId = useId()
 const closeButton = ref<HTMLButtonElement | null>(null)
 const expanded = ref(new Set<string>())
 const {
@@ -39,6 +40,21 @@ async function focusClose() {
   await nextTick()
   closeButton.value?.focus({ preventScroll: true })
 }
+function focusRowDetails(target: Element | null) {
+  target?.closest('article')?.querySelector<HTMLButtonElement>('.task-detail-toggle')?.focus({ preventScroll: true })
+}
+function cancelTask(job: JobSnapshot, event: MouseEvent) {
+  // 命令会立即禁用按钮；先保留同一行的有效焦点，避免浏览器把 Tab 起点退回 body。
+  focusRowDetails(event.currentTarget as Element)
+  void requestCancel(job)
+}
+watch([jobs, stale, cancellingIds], () => {
+  const active = document.activeElement
+  if (!(active instanceof HTMLButtonElement) || !active.matches('.task-cancel')) return
+  const job = jobs.value.find(item => item.id === active.dataset.jobId)
+  if (!job) closeButton.value?.focus({ preventScroll: true })
+  else if (!canCancel(job) || cancellingIds.value.has(job.id)) focusRowDetails(active)
+})
 function progress(job: JobSnapshot) {
   // 只有服务端提供明确的 0–100 数值时显示；Compose 的占位 0 不代表可测量进度。
   return job.type === 'docker-image-pull' && Number.isFinite(job.progress) && job.progress >= 0 && job.progress <= 100
@@ -47,15 +63,13 @@ function progress(job: JobSnapshot) {
 </script>
 
 <template>
-  <ElDrawer :model-value="open" title="最近任务" size="min(760px, 100%)" append-to-body :show-close="false" class="task-center-drawer"
+  <ElDrawer :model-value="open" title="最近任务" size="min(760px, 100%)" append-to-body :show-close="false" :with-header="false" :aria-labelledby="titleId" class="task-center-drawer"
     @update:model-value="!$event && close()" @close="close" @closed="emit('close')" @open-auto-focus="focusClose">
-    <template #header="{ titleId }">
-      <div class="task-heading">
+    <div class="task-heading">
         <span class="task-heading__icon"><ListChecks :size="22" aria-hidden="true" /></span>
         <div><h2 :id="titleId">最近任务</h2><p>跨页面查看任务进展与结果</p></div>
         <button ref="closeButton" class="task-icon-button" type="button" aria-label="关闭最近任务" @click="close"><X :size="20" aria-hidden="true" /></button>
-      </div>
-    </template>
+    </div>
     <div class="task-center">
       <div class="task-toolbar">
         <p class="task-scope">显示控制面当前可提供的最近记录，可能不包含更早历史。关闭面板不会停止任务。</p>
@@ -64,9 +78,9 @@ function progress(job: JobSnapshot) {
           <button class="task-button" type="button" :disabled="loading || refreshing" @click="refresh"><RefreshCw :size="16" :class="{ spin: loading || refreshing }" aria-hidden="true" />刷新任务</button>
         </div>
         <div class="task-filters">
-          <label class="task-search">搜索已加载记录<input v-model="query" type="search" placeholder="对象、ID 或消息" /></label>
-          <label>任务类型<select v-model="typeFilter"><option v-for="option in typeOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
-          <label>任务状态<select v-model="statusFilter"><option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+          <label class="task-search"><span :id="`${titleId}-search`">搜索已加载记录</span><input :aria-labelledby="`${titleId}-search`" v-model="query" type="search" placeholder="对象、ID 或消息" /></label>
+          <label><span :id="`${titleId}-type`">任务类型</span><select :aria-labelledby="`${titleId}-type`" v-model="typeFilter"><option v-for="option in typeOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
+          <label><span :id="`${titleId}-status`">任务状态</span><select :aria-labelledby="`${titleId}-status`" v-model="statusFilter"><option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
         </div>
         <div class="task-feedback" role="status" aria-live="polite" aria-atomic="true">
           <span v-if="refreshing">正在刷新，保留上次记录…</span>
@@ -95,25 +109,24 @@ function progress(job: JobSnapshot) {
             <div v-if="expanded.has(job.id)" class="task-details">
               <dl><div><dt>完整 ID</dt><dd class="task-mono">{{ job.id }}</dd></div><div><dt>对象</dt><dd>{{ job.reference || '未提供' }}</dd></div><div><dt>任务类型</dt><dd>{{ job.type }}</dd></div><div><dt>创建时间</dt><dd>{{ formatLocalTimestamp(job.createdAt) }}</dd></div><div><dt>完成时间</dt><dd>{{ job.completedAt ? formatLocalTimestamp(job.completedAt) : '尚无确认时间' }}</dd></div><div v-if="job.type === 'docker-image-pull'"><dt>镜像当前状态</dt><dd>{{ jobArtifactLabel(job) }}</dd></div><div><dt>消息</dt><dd>{{ job.message || '无' }}</dd></div><div v-if="job.error"><dt>错误</dt><dd>{{ job.error }}</dd></div><div v-if="job.errorCode"><dt>错误代码</dt><dd class="task-mono">{{ job.errorCode }}</dd></div></dl>
               <p v-if="job.type === 'compose-deploy'" class="task-description">部署任务完成仅表示命令已完成，请另行核验配置与实际运行状态。</p>
-              <button v-if="job.type === 'docker-image-pull' && job.cancellable === true" class="task-button task-cancel" type="button" :disabled="!canCancel(job) || cancellingIds.has(job.id)" @click="requestCancel(job)">{{ cancellingIds.has(job.id) ? '正在提交' : '请求取消' }}</button>
+              <button v-if="job.type === 'docker-image-pull' && job.cancellable === true" class="task-button task-cancel" :data-job-id="job.id" type="button" :disabled="!canCancel(job) || cancellingIds.has(job.id)" @click="cancelTask(job, $event)">{{ cancellingIds.has(job.id) ? '正在提交' : '请求取消' }}</button>
               <p v-else class="task-description">此任务不支持取消</p>
               <p v-if="cancelErrors[job.id]" class="task-cancel-error" role="alert">{{ cancelErrors[job.id]!.reference }}：{{ cancelErrors[job.id]!.message }}（{{ cancelErrors[job.id]!.code }}）</p>
             </div>
           </article>
         </div>
       </div>
-      <footer v-if="filteredJobs.length" class="task-pagination"><span>匹配 {{ filteredJobs.length }} 条 · 每页 20 条</span><ResourcePagination v-model:page="page" :page-count="pageCount" /></footer>
+      <div v-if="filteredJobs.length" class="task-pagination"><span>匹配 {{ filteredJobs.length }} 条 · 每页 20 条</span><ResourcePagination v-model:page="page" :page-count="pageCount" /></div>
     </div>
   </ElDrawer>
 </template>
 
 <style scoped>
-.task-center-drawer :deep(.el-drawer__header){margin:0;padding:18px 20px;border-bottom:1px solid var(--ncp-line)}
-.task-center-drawer :deep(.el-drawer__body){display:flex;min-height:0;padding:0;overflow:hidden}
-.task-heading{display:flex;width:100%;min-width:0;align-items:center;gap:12px}.task-heading__icon{display:grid;flex:0 0 44px;height:44px;place-items:center;border-radius:var(--ncp-radius-md);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.task-heading>div{min-width:0;flex:1}.task-heading h2{margin:0;color:var(--ncp-text);font-size:1.1rem}.task-heading p{margin:4px 0 0;color:var(--ncp-text-subtle);font-size:.78rem}.task-icon-button{display:grid;min-width:44px;min-height:44px;place-items:center;border-radius:var(--ncp-radius-control);background:var(--ncp-surface-quiet);color:var(--ncp-text-muted)}
-.task-center{display:flex;min-width:0;min-height:0;width:100%;flex-direction:column;color:var(--ncp-text)}.task-toolbar{flex-shrink:0;padding:16px 20px 12px;border-bottom:1px solid var(--ncp-line);background:var(--ncp-surface)}.task-scope{margin:0 0 14px;color:var(--ncp-text-subtle);font-size:.78rem;line-height:1.6}.task-refresh-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}.task-observation{display:grid;gap:4px}.task-observation strong{font-size:.87rem}.task-observation span,.task-snapshot{font-size:.75rem;color:var(--ncp-text-subtle)}.task-button{display:inline-flex;min-width:44px;min-height:44px;align-items:center;justify-content:center;gap:7px;padding:8px 12px;border:1px solid var(--ncp-line);border-radius:var(--ncp-radius-control);background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.8rem;font-weight:650}.task-button:disabled{opacity:.55;cursor:not-allowed}.task-button:hover:not(:disabled),.task-icon-button:hover,.task-detail-toggle:hover{background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}
+.task-center-drawer :deep(.el-drawer__body){display:flex;flex-direction:column;min-height:0;padding:0;overflow:hidden}
+.task-heading{display:flex;width:100%;min-width:0;flex-shrink:0;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--ncp-line)}.task-heading__icon{display:grid;flex:0 0 44px;height:44px;place-items:center;border-radius:var(--ncp-radius-md);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.task-heading>div{min-width:0;flex:1}.task-heading h2{margin:0;color:var(--ncp-text);font-size:1.1rem}.task-heading p{margin:4px 0 0;color:var(--ncp-text-subtle);font-size:.78rem}.task-icon-button{display:grid;min-width:44px;min-height:44px;place-items:center;border-radius:var(--ncp-radius-control);background:var(--ncp-surface-quiet);color:var(--ncp-text-muted)}
+.task-center{display:flex;min-width:0;min-height:0;width:100%;flex:1;flex-direction:column;color:var(--ncp-text)}.task-toolbar{flex-shrink:0;padding:16px 20px 12px;border-bottom:1px solid var(--ncp-line);background:var(--ncp-surface)}.task-scope{margin:0 0 14px;color:var(--ncp-text-subtle);font-size:.78rem;line-height:1.6}.task-refresh-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}.task-observation{display:grid;gap:4px}.task-observation strong{font-size:.87rem}.task-observation span,.task-snapshot{font-size:.75rem;color:var(--ncp-text-subtle)}.task-button{display:inline-flex;min-width:44px;min-height:44px;align-items:center;justify-content:center;gap:7px;padding:8px 12px;border:1px solid var(--ncp-line);border-radius:var(--ncp-radius-control);background:var(--ncp-surface);color:var(--ncp-text-muted);font:inherit;font-size:.8rem;font-weight:650}.task-button:disabled{opacity:.55;cursor:not-allowed}.task-button:hover:not(:disabled),.task-icon-button:hover,.task-detail-toggle:hover{background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}
 .task-filters{display:grid;grid-template-columns:minmax(0,1.5fr) repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.task-filters label{display:grid;min-width:0;gap:6px;font-size:.75rem;color:var(--ncp-text-muted)}.task-filters input,.task-filters select{width:100%;min-width:0;min-height:44px;padding:8px 10px;border:1px solid var(--ncp-control-border);border-radius:var(--ncp-radius-control);background:var(--ncp-control-surface);color:var(--ncp-text);font:inherit;font-size:.8rem}.task-feedback{display:grid;gap:4px;margin-top:12px;font-size:.75rem;line-height:1.5}.task-warning{color:var(--ncp-warning-strong)}.task-invalid{margin:8px 0 0;font-size:.78rem}.task-list-region{overflow:auto;overscroll-behavior:contain;min-height:0;flex:1;padding:16px 20px;background:var(--ncp-surface-quiet)}.task-list{display:grid;gap:10px}.task-row{min-width:0;padding:14px 16px;border:1px solid var(--ncp-line);border-radius:var(--ncp-radius-md);background:var(--ncp-surface)}.task-row__top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}.task-type{font-size:.75rem;color:var(--ncp-text-subtle);overflow-wrap:anywhere}.task-state{padding:4px 9px;border-radius:var(--ncp-radius-pill);background:var(--ncp-neutral-soft);color:var(--ncp-neutral-strong);font-size:.75rem;font-weight:700}.task-state--running{background:var(--ncp-info-soft);color:var(--ncp-info-strong)}.task-state--completed{background:var(--ncp-success-soft);color:var(--ncp-success-strong)}.task-state--failed{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.task-state--persisting,.task-state--cancelling,.task-state--interrupted{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.task-row h3{margin:10px 0 8px;overflow-wrap:anywhere;font-size:.9rem;font-weight:700;line-height:1.5}.task-description{margin:8px 0;color:var(--ncp-text-subtle);font-size:.78rem;line-height:1.6}.task-progress-row{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:.75rem;color:var(--ncp-text-muted);font-variant-numeric:tabular-nums}.task-progress-row progress{width:100%;height:6px;accent-color:var(--ncp-primary);border:0;border-radius:var(--ncp-radius-pill);overflow:hidden}.task-progress-row progress::-webkit-progress-bar{background:var(--ncp-surface-sunken)}.task-progress-row progress::-webkit-progress-value{background:var(--ncp-primary)}.task-row__footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px}.task-row time{font-size:.75rem;font-variant-numeric:tabular-nums;color:var(--ncp-text-subtle)}.task-detail-toggle{display:flex;min-height:44px;align-items:center;gap:5px;padding:6px 8px;border-radius:var(--ncp-radius-sm);background:transparent;color:var(--ncp-primary-strong);font-size:.78rem}.task-detail-toggle svg{transition:transform var(--ncp-duration-fast)}.task-detail-toggle .expanded{transform:rotate(180deg)}.task-details{padding-top:12px;border-top:1px solid var(--ncp-line-subtle)}.task-details dl{display:grid;gap:10px;margin:0}.task-details dl>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px;font-size:.78rem;line-height:1.6}.task-details dt{color:var(--ncp-text-subtle)}.task-details dd{min-width:0;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.task-mono{font-family:var(--ncp-font-mono)}.task-cancel{margin-top:12px}.task-cancel-error{margin:10px 0 0;color:var(--ncp-danger-strong);font-size:.78rem;overflow-wrap:anywhere;white-space:pre-wrap}.task-pagination{display:flex;flex-shrink:0;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:12px 20px;border-top:1px solid var(--ncp-line);font-size:.75rem;color:var(--ncp-text-subtle);font-variant-numeric:tabular-nums}.task-empty-filter{display:grid;justify-items:center;gap:12px}.task-empty-filter>.resource-state{width:100%}.task-list-region :deep(.resource-state button){min-height:44px}.task-center-drawer button:focus-visible,.task-center-drawer input:focus-visible,.task-center-drawer select:focus-visible{outline:2px solid var(--ncp-primary);outline-offset:2px}.spin{animation:task-spin 1s linear infinite}@keyframes task-spin{to{transform:rotate(360deg)}}
 @media(max-width:560px){.task-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.task-search{grid-column:1/-1}.task-toolbar,.task-list-region{padding:12px 14px}.task-row{padding:12px}.task-details dl>div{grid-template-columns:1fr;gap:2px}.task-pagination{padding:10px 14px}}
-@media(max-height:640px){.task-center{overflow:auto}.task-toolbar{flex-shrink:1}.task-list-region{overflow:visible;flex:none}.task-pagination{flex-shrink:0}}
+@media(max-height:640px){.task-heading{position:sticky;top:0;z-index:2;background:var(--ncp-surface)}.task-center-drawer :deep(.el-drawer__body){display:block;overflow:auto;overscroll-behavior:contain}.task-center{display:block;overflow:visible}.task-list-region{overflow:visible}.task-pagination{flex-shrink:0}}
 @media(prefers-reduced-motion:reduce){.spin{animation:none}.task-detail-toggle svg{transition:none}.task-center-drawer{transition:none}}
 </style>

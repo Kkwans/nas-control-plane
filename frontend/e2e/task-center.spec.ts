@@ -189,9 +189,18 @@ test('可见时低频读取，隐藏及关闭停止轮询且不创建逐任务 S
   await page.getByRole('button', { name: '任务', exact: true }).click()
   await expect(rowOf(page, 'media-stack')).toBeVisible()
   await expect(dialogOf(page).getByRole('button', { name: '刷新任务', exact: true })).toBeEnabled()
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()))
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
+  // 与 app.spec 相同，暂停在未来而非跨进程传回时已过去的 Date.now()。
+  // 暂停后手动校准，让成功读取和下一轮计时共享确定的时间原点。
+  const refresh = dialogOf(page).getByRole('button', { name: '刷新任务', exact: true })
+  const beforeCalibration = state.listRequests
+  await refresh.click()
+  await expect.poll(() => state.listRequests).toBe(beforeCalibration + 1)
+  await expect(refresh).toBeEnabled()
   const opened = state.listRequests
-  await page.clock.runFor(15_100)
+  await page.clock.runFor(14_900)
+  expect(state.listRequests).toBe(opened)
+  await page.clock.runFor(200)
   await expect.poll(() => state.listRequests).toBe(opened + 1)
   await expect(dialogOf(page).getByRole('button', { name: '刷新任务', exact: true })).toBeEnabled()
   // 确定性模拟 visibilitychange，不冒充操作系统后台标签验收。
@@ -215,7 +224,7 @@ test('可见时低频读取，隐藏及关闭停止轮询且不创建逐任务 S
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-center-drawer')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '任务', exact: true })).toBeFocused()
-  await page.clock.pauseAt(await page.evaluate(() => Date.now()))
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
   const closed = state.listRequests
   await page.clock.runFor(60_100)
   expect(state.listRequests).toBe(closed)
@@ -263,6 +272,16 @@ async function expectTextWraps(locator: Locator) {
 
 async function capture(page: Page, info: TestInfo, name: string, topbarBeforeOpen: unknown, fixtureSource = 'frontend/e2e/task-center.spec.ts:mixedJobs + frontend/e2e/mockApi.ts') {
   if (process.env.NCP_CAPTURE_UI !== '1') return
+  const drawer = page.locator('.task-center-drawer')
+  if (await drawer.count()) {
+    // screenshot(animations: disabled) 会完成过渡；元数据必须先等待同一真实打开位置。
+    await expect.poll(async () => drawer.evaluate(async (element) => {
+      const before = element.getBoundingClientRect()
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      const after = element.getBoundingClientRect()
+      return Math.max(Math.abs(after.right - innerWidth), Math.abs(after.x - before.x), Math.abs(after.y - before.y))
+    })).toBeLessThanOrEqual(.1)
+  }
   const state = await page.evaluate(() => {
     const bounds = (element: Element | null) => element ? element.getBoundingClientRect().toJSON() : null
     const dialog = document.querySelector('.task-center-drawer')
@@ -273,6 +292,10 @@ async function capture(page: Page, info: TestInfo, name: string, topbarBeforeOpe
       main: { bounds: bounds(document.querySelector('#app-main')), scrollWidth: document.querySelector('#app-main')?.scrollWidth, clientWidth: document.querySelector('#app-main')?.clientWidth },
       dialog: { bounds: bounds(dialog), scrollWidth: dialog?.scrollWidth, clientWidth: dialog?.clientWidth },
       imageDownloads: { bounds: bounds(document.querySelector('.download-workspace')), rows: [...document.querySelectorAll('.download-row')].map((row) => row.textContent) },
+      scrollRegions: [...document.querySelectorAll('.task-center-drawer .el-drawer__body, .task-center, .task-list-region')].map((element) => ({
+        className: element.className, scrollTop: element.scrollTop, scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight, bounds: bounds(element),
+      })),
       controls: [...(dialog?.querySelectorAll('button, input, select') ?? [])].map((element) => ({
         tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent,
         bounds: bounds(element), disabled: element.hasAttribute('disabled'),
@@ -287,7 +310,7 @@ async function capture(page: Page, info: TestInfo, name: string, topbarBeforeOpe
     fixtureSource,
     fixtureOnly: true, topbarBeforeOpen, ...state,
   }, null, 2))
-  await page.screenshot({ path: info.outputPath('ui-captures', `${name}.png`), fullPage: true, animations: 'disabled' })
+  await page.screenshot({ path: info.outputPath('ui-captures', `${name}.png`), fullPage: false, animations: 'disabled' })
   await info.attach(`${name}-capture-state`, { path: statePath, contentType: 'application/json' })
 }
 
@@ -326,7 +349,16 @@ for (const width of [390, 768, 1280, 1440]) {
       await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-list`, topbarBeforeOpen)
       await dialog.getByLabel('搜索已加载记录', { exact: true }).fill('中文媒体归档项目')
       const row = rowOf(page, longReference)
-      await row.getByRole('button', { name: '查看详情', exact: true }).click()
+      const details = row.getByRole('button', { name: '查看详情', exact: true })
+      await details.scrollIntoViewIfNeeded()
+      await expect(details).toBeInViewport({ ratio: 1 })
+      expect(await details.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+        return Boolean(hit && element.contains(hit))
+      })).toBe(true)
+      if (width === 390) await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-scrolled-list`, topbarBeforeOpen)
+      await details.click()
       // 全局 reduced-motion 契约用 .01ms!important 保留动画结束事件。
       const motionDurations = await row.locator('.task-detail-toggle svg').evaluate((element) =>
         getComputedStyle(element).transitionDuration.split(',').map((value) => {
