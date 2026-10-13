@@ -200,18 +200,53 @@ async function settle(page: Page) {
 }
 
 async function withClockFrames<T>(page: Page, operation: () => Promise<T>): Promise<T> {
+  const context = page.context()
+  const auxiliaryPages = new Set<Page>()
+  let contextClosed = false
+  const onPage = (auxiliary: Page) => auxiliaryPages.add(auxiliary)
+  const onContextClose = () => { contextClosed = true }
+  const originalPageIsAlive = () => !contextClosed && !page.isClosed() && context.browser()?.isConnected() === true
+  context.on('page', onPage)
+  context.on('close', onContextClose)
   let finished = false
   let rejected = false
   let result!: T
   let failure: unknown
-  const pending = operation().then((value) => { result = value; finished = true }, (error: unknown) => { failure = error; rejected = true; finished = true })
-  // axe 的异步规则包含零延时回调。逐帧驱动暂停时钟，不恢复真实时间，也不跳过规则。
-  // 显式的 2 秒预算远小于 15 秒新鲜度阈值；超出预算失败，绝不重置资源或放宽断言。
-  for (let elapsed = 0; !finished && elapsed < 2000; elapsed += 16) await page.clock.runFor(16)
-  expect(finished, 'axe 未在受控 2 秒时钟预算内结束').toBe(true)
-  await pending
-  if (rejected) throw failure
-  return result
+  try {
+    const pending = operation().then((value) => { result = value; finished = true }, (error: unknown) => { failure = error; rejected = true; finished = true })
+    // axe 的异步规则包含零延时回调。逐帧驱动暂停时钟，不恢复真实时间，也不跳过规则。
+    // 累计 2 秒预算远小于 15 秒新鲜度阈值；失败的 tick 不重试，避免重复推进时间。
+    for (let elapsed = 0; !finished && elapsed < 2000; elapsed += 16) {
+      try {
+        await page.clock.runFor(16)
+      } catch (error) {
+        // 完整 axe 会在同一 context 新建 about:blank 汇总页，finishRun 后立即关闭。
+        // runFor 向所有页面注册 init script，可能正好碰到该汇总页关闭；不能把
+        // 主页面/context 关闭、其他时钟异常或 axe 自身失败当作这类生命周期竞争。
+        const closedSummaryPage = auxiliaryPages.size === 1 && [...auxiliaryPages].every((auxiliary) =>
+          auxiliary.url() === 'about:blank' && auxiliary.isClosed())
+        if (!(error instanceof Error) || !/^clock\.runFor: Target page, context or browser has been closed(?:\n|$)/.test(error.message) ||
+          !closedSummaryPage || !originalPageIsAlive()) throw error
+        // 汇总页关闭后只等待 analyze 的 Node 侧收尾，不再驱动/重试页面时钟。
+        // 真实 1 秒上限防止将卡死分析拖到整个测试的 60 秒超时。
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([pending, new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(error), 1000)
+          })])
+        } finally { clearTimeout(timeout) }
+        if (rejected) throw failure
+        if (!originalPageIsAlive()) throw error
+      }
+    }
+    expect(finished, 'axe 未在受控 2 秒时钟预算内结束').toBe(true)
+    await pending
+    if (rejected) throw failure
+    return result
+  } finally {
+    context.off('page', onPage)
+    context.off('close', onContextClose)
+  }
 }
 
 // 仅读取 Pinia 投影供证据核对，不调用 store 方法、不改写页面状态。
