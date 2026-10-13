@@ -100,7 +100,18 @@ jobs:
       - name: Install Chromium
         run: corepack pnpm exec playwright install --with-deps chromium
       - name: Mock E2E and screenshot regression
+        env:
+          NCP_CAPTURE_UI: '1'
         run: corepack pnpm exec playwright test
+      - name: Upload fixture UI screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}
+          # 仅上传明确的 fixture PNG，不包含 trace、认证状态或其他测试输出。
+          path: frontend/test-results/**/ui-captures/*.png
+          if-no-files-found: warn
+          retention-days: 14
 
   compose:
     name: Compose config
