@@ -3266,12 +3266,13 @@ components:
         network: { $ref: '#/components/schemas/SystemNetworkDetails' }
         storage: { $ref: '#/components/schemas/SystemStorageDetails' }
         proxy: { $ref: '#/components/schemas/SystemProxyDetails' }
-        tailscale: { $ref: '#/components/schemas/TailscaleCapability' }
-        dns: { $ref: '#/components/schemas/DNSCapability' }
+        tailscale: { $ref: '#/components/schemas/SystemDetailsTailscaleCapability' }
+        dns: { $ref: '#/components/schemas/SystemDetailsDNSCapability' }
         publicEgress: { $ref: '#/components/schemas/PublicEgressCapability' }
         control: { $ref: '#/components/schemas/SystemControlDetails' }
     SystemDeviceDetails:
       type: object
+      required: [hostname, model, operatingSystem, kernelVersion, architecture, uptimeSeconds, processCount, cgroupVersion]
       properties:
         hostname: { type: string }
         model: { type: string }
@@ -3283,9 +3284,11 @@ components:
         cgroupVersion: { type: string }
     SystemHardwareDetails:
       type: object
+      required: [cpu, memory, sensors]
       properties:
         cpu:
           type: object
+          required: [model, physicalCores, logicalCores, frequencyMHz, temperatureCelsius]
           properties:
             model: { type: string }
             physicalCores: { type: integer, minimum: 0 }
@@ -3294,6 +3297,7 @@ components:
             temperatureCelsius: { type: number }
         memory:
           type: object
+          required: [totalBytes, availableBytes]
           properties:
             totalBytes: { type: integer, minimum: 0 }
             availableBytes: { type: integer, minimum: 0 }
@@ -3301,16 +3305,19 @@ components:
           type: array
           items:
             type: object
+            required: [name, temperatureCelsius]
             properties:
               name: { type: string }
               temperatureCelsius: { type: number }
     SystemNetworkDetails:
       type: object
+      required: [interfaces, gateway, routes, dnsServers, listeningPorts]
       properties:
         interfaces:
           type: array
           items:
             type: object
+            required: [name, hardwareAddress, mtu, state, lowerUp, lowerUpKnown, speedMbps, duplex, addresses]
             properties:
               name: { type: string }
               hardwareAddress: { type: string }
@@ -3318,12 +3325,13 @@ components:
               state: { type: string }
               lowerUp: { type: boolean }
               lowerUpKnown: { type: boolean }
-              speedMbps: { type: integer, minimum: 0 }
+              speedMbps: { type: integer, minimum: -1 }
               duplex: { type: string }
               addresses:
-                type: array
+                type: [array, 'null']
                 items:
                   type: object
+                  required: [address, prefixLength, family]
                   properties:
                     address: { type: string }
                     prefixLength: { type: integer, minimum: 0 }
@@ -3333,6 +3341,7 @@ components:
           type: array
           items:
             type: object
+            required: [destination, gateway, interface, metric]
             properties:
               destination: { type: string }
               gateway: { type: string }
@@ -3343,6 +3352,7 @@ components:
           type: array
           items:
             type: object
+            required: [protocol, address, port, pid]
             properties:
               protocol: { type: string }
               address: { type: string }
@@ -3355,16 +3365,18 @@ components:
               containerName: { type: string }
               service: { type: string }
               detectionSource: { type: string }
-              detectionSources: { type: array, items: { type: string } }
+              detectionSources: { type: [array, 'null'], items: { type: string } }
               detectionStatus: { type: string }
               detectionErrorCode: { type: string }
     SystemStorageDetails:
       type: object
+      required: [mounts, disks, raid]
       properties:
         mounts:
           type: array
           items:
             type: object
+            required: [path, device, filesystem, totalBytes, usedBytes, availableBytes, usedPercent]
             properties:
               path: { type: string }
               device: { type: string }
@@ -3377,13 +3389,14 @@ components:
           type: array
           items:
             type: object
+            required: [name, model, sizeBytes, rotational, kind, role, transport, description, health, temperatureCelsius]
             properties:
               name: { type: string }
               model: { type: string }
               sizeBytes: { type: integer, minimum: 0 }
               rotational: { type: boolean }
-              kind: { type: string, enum: [physical, emmc, emmc-boot, compressed-memory, virtual] }
-              role: { type: string, enum: [data, system, boot, swap, virtual] }
+              kind: { type: string, enum: ['', physical, emmc, emmc-boot, compressed-memory, virtual] }
+              role: { type: string, enum: ['', data, system, boot, swap, virtual] }
               transport: { type: string }
               description: { type: string }
               health: { type: string }
@@ -3392,31 +3405,35 @@ components:
           type: array
           items:
             type: object
+            required: [name, level, state, devices]
             properties:
               name: { type: string }
               level: { type: string }
               state: { type: string }
-              devices: { type: array, items: { type: string } }
+              devices: { type: [array, 'null'], items: { type: string } }
     SystemProxyDetails:
       type: object
+      required: [mihomo, system, associations]
       properties:
         mihomo:
           type: object
+          required: [detected, state, detail]
           properties:
             detected: { type: boolean }
             state: { type: string }
             detail: { type: string }
             controllerEndpoint: { type: string }
             authRequired: { type: boolean }
-            operations: { type: array, items: { type: string } }
-        mihomoCapability: { $ref: '#/components/schemas/MihomoCapability' }
+            operations: { type: [array, 'null'], items: { type: string } }
+        mihomoCapability: { $ref: '#/components/schemas/SystemDetailsMihomoCapability' }
         system:
           type: array
-          items: { $ref: '#/components/schemas/ProxyEvidence' }
+          items: { $ref: '#/components/schemas/SystemDetailsProxyEvidence' }
         associations:
           type: array
           items:
             type: object
+            required: [subject, kind, method, evidence, endpoint, detail]
             properties:
               subject: { type: string }
               kind: { type: string }
@@ -3434,11 +3451,13 @@ components:
         detail: { type: string }
     SystemControlDetails:
       type: object
+      required: [nodes]
       properties:
         nodes:
           type: array
           items:
             type: object
+            required: [id, name, detail, status, version, lastSeen]
             properties:
               id: { type: string }
               name: { type: string }
@@ -3446,6 +3465,221 @@ components:
               status: { type: string }
               version: { type: string }
               lastSeen: { type: string, format: date-time }
+    SystemDetailsTailscaleCapability:
+      type: object
+      required:
+      - detected
+      - state
+      - backendState
+      - version
+      - interface
+      - overlayIps
+      - online
+      - linkState
+      - heartbeatState
+      - reachable
+      - evidence
+      - warnings
+      properties:
+        detected:
+          type: boolean
+        state:
+          type: string
+        backendState:
+          type: string
+        version:
+          type: string
+        interface:
+          type: string
+        overlayIps:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        online:
+          type: boolean
+        linkState:
+          type: string
+        heartbeatState:
+          type: string
+        reachable:
+          type: boolean
+        evidence:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/CapabilityEvidence'
+        warnings:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/SystemDetailsProbeWarning'
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsMihomoCapability:
+      type: object
+      required:
+      - detected
+      - state
+      - processName
+      - executable
+      - version
+      - controller
+      - evidence
+      - warnings
+      properties:
+        detected:
+          type: boolean
+        state:
+          type: string
+        processName:
+          type: string
+        executable:
+          type: string
+        version:
+          type: string
+        controller:
+          $ref: '#/components/schemas/SystemDetailsMihomoControllerCapability'
+        evidence:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/CapabilityEvidence'
+        warnings:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/SystemDetailsProbeWarning'
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsMihomoControllerCapability:
+      type: object
+      required:
+      - detected
+      - endpoint
+      - reachable
+      - authRequired
+      - tokenConfigured
+      - operations
+      - detectionSource
+      properties:
+        detected:
+          type: boolean
+        endpoint:
+          type: string
+          description: 已脱敏的控制器地址
+        reachable:
+          type: boolean
+        authRequired:
+          type: boolean
+        tokenConfigured:
+          type: boolean
+        operations:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        detectionSource:
+          type: string
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsDNSCapability:
+      type: object
+      required:
+      - backend
+      - detected
+      - state
+      - readOnly
+      - canRead
+      - canPreview
+      - canConfirm
+      - canRollback
+      - nameservers
+      - detectionSource
+      - errorCode
+      properties:
+        backend:
+          type: string
+          enum:
+          - ''
+          - systemd-resolved
+          - networkmanager
+          - static-resolv-conf
+          - ugos-network-service
+          - unknown
+        detected:
+          type: boolean
+        state:
+          type: string
+        readOnly:
+          type: boolean
+        canRead:
+          type: boolean
+        canPreview:
+          type: boolean
+        canConfirm:
+          type: boolean
+        canRollback:
+          type: boolean
+        nameservers:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        configuredNameservers:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: DNS servers managed by the detected writable backend; may differ from effective resolvers.
+        detectionSource:
+          type: string
+        errorCode:
+          type: string
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsProxyEvidence:
+      type: object
+      properties:
+        source:
+          type: string
+        method:
+          type: string
+          enum:
+          - ''
+          - http
+          - socks
+          - tun
+          - transparent
+          - unknown
+        evidence:
+          type: string
+          enum:
+          - ''
+          - confirmed
+          - inferred
+          - unknown
+        address:
+          type: string
+        detail:
+          type: string
+      required:
+      - source
+      - method
+      - evidence
+      - address
+      - detail
+      description: 系统详情中的完整代理证据。
+    SystemDetailsProbeWarning:
+      type: object
+      required: [code, source]
+      properties:
+        code: { type: string }
+        source: { type: string }
     DockerInventory:
       type: object
       required: [collectedAt, engine, containers, projects]

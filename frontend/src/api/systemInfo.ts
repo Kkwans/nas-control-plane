@@ -1,3 +1,4 @@
+import { parseSystemDetailsResponse } from './systemDetailsResponse'
 import {
   isApiErrorResponse,
   jsonRequest,
@@ -67,7 +68,8 @@ export async function requestSystemSummary(fetcher: typeof fetch = fetch, signal
 }
 
 export async function requestSystemDetails(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<SystemDetails> {
-  return requestJson('/api/v1/system/details', signal ? { signal } : {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+  const payload = await requestJson('/api/v1/system/details', signal ? { signal } : {}, isRecord, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+  return parseSystemDetailsResponse(payload)
 }
 
 export async function requestDNSCapability(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DNSCapability> {
@@ -377,37 +379,6 @@ function isSystemSummary(value: unknown): value is SystemSummary {
     Array.isArray(value.storage) &&
     Array.isArray(value.network) &&
     Array.isArray(value.warnings)
-  )
-}
-
-function isSystemDetails(value: unknown): value is SystemDetails {
-  if (
-    !isRecord(value) ||
-    typeof value.collectedAt !== 'string' ||
-    !Array.isArray(value.warnings) ||
-    !isRecord(value.device) ||
-    !isRecord(value.hardware) ||
-    !isRecord(value.network) ||
-    !isRecord(value.storage) ||
-    !isRecord(value.proxy) ||
-    !isRecord(value.control)
-  ) return false
-
-  return (
-    isRecord(value.hardware.cpu) &&
-    isRecord(value.hardware.memory) &&
-    Array.isArray(value.hardware.sensors) &&
-    Array.isArray(value.network.interfaces) &&
-    Array.isArray(value.network.routes) &&
-    Array.isArray(value.network.dnsServers) &&
-    Array.isArray(value.network.listeningPorts) &&
-    Array.isArray(value.storage.mounts) &&
-    Array.isArray(value.storage.disks) &&
-    Array.isArray(value.storage.raid) &&
-    isRecord(value.proxy.mihomo) &&
-    Array.isArray(value.proxy.system) &&
-    Array.isArray(value.proxy.associations) &&
-    Array.isArray(value.control.nodes)
   )
 }
 
