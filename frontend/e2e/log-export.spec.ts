@@ -416,7 +416,7 @@ test('实时新记录在下载交接后到达，不改变已冻结文件或重�
     await route.fulfill({ headers: { 'content-type': 'text/event-stream' }, body: '' }).catch(() => { /* 页面关闭会取消流。 */ })
   })
   await openLogs(page)
-  await page.locator('.follow-switch').getByRole('switch').click()
+  await page.locator('.follow-switch .el-switch').click()
   try {
     await expect.poll(() => streamRequested).toBe(true)
     await expect.poll(() => page.evaluate(() => (window as unknown as ProbeWindow).logStreams.length)).toBe(1)
@@ -507,11 +507,28 @@ for (const width of [390, 768, 1280, 1440]) {
     await mockLogs(page, [entry(1)])
     await openLogs(page)
     await expect(exportButton(page)).toBeEnabled()
+    const layout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      mainWidth: document.querySelector('#app-main')?.scrollWidth ?? 0,
+      viewportWidth: window.innerWidth,
+    }))
+    expect(layout.bodyWidth, '日志导出工具栏不能导致页面横向溢出').toBeLessThanOrEqual(layout.viewportWidth)
+    expect(layout.mainWidth, '日志导出工具栏不能导致主区域横向溢出').toBeLessThanOrEqual(layout.viewportWidth)
     await captureExport(page, testInfo, `${width}px-100pct`)
     await page.evaluate(() => {
       const root = document.documentElement
       root.style.setProperty('font-size', `${parseFloat(getComputedStyle(root).fontSize) * 2}px`, 'important')
     })
+    const enlargedLayout = await page.evaluate(() => ({
+      bodyWidth: document.body.scrollWidth,
+      mainWidth: document.querySelector('#app-main')?.scrollWidth ?? 0,
+      viewportWidth: window.innerWidth,
+    }))
+    expect(enlargedLayout.bodyWidth, '200% 字体日志页不能横向溢出').toBeLessThanOrEqual(enlargedLayout.viewportWidth)
+    expect(enlargedLayout.mainWidth, '200% 字体日志主区域不能横向溢出').toBeLessThanOrEqual(enlargedLayout.viewportWidth)
+    const pageSizeLabel = page.locator('.page-size-control .el-select__placeholder')
+    await expect(pageSizeLabel).toHaveText('5 条')
+    expect(await pageSizeLabel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1), '放大根字体后每页数量不能省略').toBe(true)
     const button = exportButton(page)
     await button.scrollIntoViewIfNeeded()
     await expect(button).toBeVisible()

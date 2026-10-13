@@ -345,8 +345,8 @@ function followStateDescription(value: FollowState) {
   white-space: nowrap;
 }
 .log-tools :deep(.page-size-control .ncp-select) {
-  width: 78px;
-  min-width: 78px;
+  width: max(78px, calc(2.6rem + 42px));
+  min-width: max(78px, calc(2.6rem + 42px));
 }
 .log-tools :deep(.el-input) {
   width: clamp(150px, 15vw, 220px);
@@ -708,7 +708,12 @@ function followStateDescription(value: FollowState) {
   .log-toolbar {
     align-items: stretch;
     flex-direction: column;
+    flex-wrap: nowrap;
     gap: 12px;
+  }
+  .log-export-notes {
+    flex: 0 0 auto;
+    min-width: 0;
   }
   .log-filters {
     display: grid;
@@ -738,6 +743,8 @@ function followStateDescription(value: FollowState) {
     min-width: 0;
   }
   .log-tools .log-export-button { grid-column: 1 / -1; }
+  .log-tools .follow-switch,
+  .log-tools :deep(.page-size-control) { flex-wrap: wrap; }
   .log-head {
     grid-template-columns: 155px 68px 150px minmax(280px, 1fr);
   }
