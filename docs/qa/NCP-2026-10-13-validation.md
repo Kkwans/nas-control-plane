@@ -237,3 +237,16 @@
 - 独立审查发现自然Wait后立即abort会丢失尾部输出，已改为排空立即可读内容，在EOF/EAGAIN结束；自然退出后的输入拒绝不破坏尾部。父取消watcher保留到排空/关闭，覆盖未开始Read时迟到取消；deadline与receipt同时就绪时再次核对凭据。
 - 独立纯fake `TestHostCleanup|TestHostRawTransport` race十轮通过；实现方生命周期race十轮及Agent分类测试通过，全包仅编译检查、Darwin/amd64 Agent包交叉编译通过。无本地真实PTY、Shell或子进程用例执行。
 - 新增隔离CI用例验证O_NONBLOCK、真实PTY读取消/写背压和零/非零/信号终止直属child回收，尚待完整CI。启动前locale/能力探测、Manager.Open持锁和容器attach握手不在本片范围；保持既有readiness流程，不额外添加无截止的等待。
+
+## 13:44 UTC 主机 PTY 隔离 CI 闭环
+
+- 96070cd00476e26bbd9ac8b69f236033b67f7e7e 已推送并核对远端；[CI 38406804798](https://github.com/Kkwans/nas-control-plane/actions/runs/38406804798)的Go、前端及Compose均通过，发布任务跳过。
+- 隔离Linux完整go test执行terminal包3.165s成功，包含保留的交互PTY及新增O_NONBLOCK、空读取消、写背压和直属child零/非零/信号回收测试；本地未执行这些真实内核/子进程用例。此证据不等于NAS实机验证或任意进程树清理保证。
+- H2开启预留与短锁发布正在实现，独立审查同步进行；不因等待CI停止后续授权开发。
+
+## 13:48 UTC 开启预留与并发发布
+
+- H2四个代码/测试文件冻结：Manager.Open的Start/Metadata/拒绝后Close移出全局锁，opening/live/closing原子计费；晚到取消不发布，Close返回前不释放资源名额。默认上限及协议不变。
+- Agent初始失败也记录安全清理分类，不泄露未发布ID、底层错误或用户输入。独立审查补上裸主错误与带码Close错误组合的分类回归，次级取消/目标错误不再改变原Internal映射。
+- 实现方组合纯fake选择器race二十轮、独立审查同一选择器race五轮通过；覆盖TestTerminalStartReservation、既有TestManager、关闭预留与启动中取消回归。根Go构建、冻结hash和diff检查通过。完整CI待验收。
+- 无本地PTY/子进程/监听器或NAS操作；不合作的Start/Metadata仍占预留，单次启动期限、SDK握手与任意第三方实现panic不由该片保证。

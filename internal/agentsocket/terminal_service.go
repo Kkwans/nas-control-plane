@@ -49,24 +49,16 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	defer cancel()
 	opened, err := s.manager.Open(sessionContext, terminal.StartRequest{Target: start.Target, ContainerID: start.ContainerID, Rows: start.Rows, Cols: start.Cols})
 	if err != nil {
+		if terminalStartCleanupFailed(err) {
+			s.logCleanupFailure(err, start.Target, "start", "")
+		}
 		return terminalManagerError(err)
 	}
 	// 显式关闭与错误收尾共享结果；日志不包含底层错误或终端内容。
 	cleanup := sync.OnceValue(func() error {
 		err := s.manager.Close(opened.ID)
 		if err != nil && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
-			classification := "TERMINAL_CLOSE_FAILED"
-			if errors.Is(err, terminal.ErrContainerExitUnconfirmed) {
-				classification = "TERMINAL_CONTAINER_EXIT_UNCONFIRMED"
-			} else if errors.Is(err, terminal.ErrHostExitUnconfirmed) {
-				classification = "TERMINAL_HOST_EXIT_UNCONFIRMED"
-			}
-			logger := s.logger
-			if logger == nil {
-				logger = slog.Default()
-			}
-			localCleanupUnconfirmed := errors.Is(err, terminal.ErrContainerCleanupUnconfirmed) || errors.Is(err, terminal.ErrHostCleanupUnconfirmed)
-			logger.Warn("terminal cleanup incomplete", "code", classification, "session_id", opened.ID, "target", opened.Target, "local_cleanup_unconfirmed", localCleanupUnconfirmed)
+			s.logCleanupFailure(err, opened.Target, "", opened.ID)
 		}
 		return err
 	})
@@ -161,6 +153,43 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 			}
 		}
 	}
+}
+
+// 开启失败可能没有已发布会话；仅凭清理证据告警，不记录底层错误或请求内容。
+func terminalStartCleanupFailed(err error) bool {
+	return errors.Is(err, terminal.ErrSessionCleanupFailed) ||
+		errors.Is(err, terminal.ErrContainerExitUnconfirmed) ||
+		errors.Is(err, terminal.ErrHostExitUnconfirmed) ||
+		errors.Is(err, terminal.ErrContainerCleanupUnconfirmed) ||
+		errors.Is(err, terminal.ErrHostCleanupUnconfirmed)
+}
+
+func (s *terminalPOCService) logCleanupFailure(err error, target terminal.Target, phase, sessionID string) {
+	classification := "TERMINAL_CLOSE_FAILED"
+	if errors.Is(err, terminal.ErrContainerExitUnconfirmed) {
+		classification = "TERMINAL_CONTAINER_EXIT_UNCONFIRMED"
+	} else if errors.Is(err, terminal.ErrHostExitUnconfirmed) {
+		classification = "TERMINAL_HOST_EXIT_UNCONFIRMED"
+	}
+	// target 来自请求时也必须限制为已知枚举，不能将原始用户输入写入日志。
+	safeTarget := "unknown"
+	if target == terminal.TargetHost || target == terminal.TargetContainer {
+		safeTarget = string(target)
+	}
+	attributes := []any{"code", classification}
+	if sessionID != "" {
+		attributes = append(attributes, "session_id", sessionID)
+	}
+	attributes = append(attributes, "target", safeTarget, "local_cleanup_unconfirmed",
+		errors.Is(err, terminal.ErrContainerCleanupUnconfirmed) || errors.Is(err, terminal.ErrHostCleanupUnconfirmed))
+	if phase != "" {
+		attributes = append(attributes, "phase", phase)
+	}
+	logger := s.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("terminal cleanup incomplete", attributes...)
 }
 
 func (s *terminalPOCService) copyTerminalOutput(ctx context.Context, stream AgentTerminalPOCService_OpenServer, sessionID string, done chan<- error) {

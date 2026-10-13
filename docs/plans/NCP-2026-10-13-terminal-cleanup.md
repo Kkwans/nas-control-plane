@@ -41,7 +41,7 @@
 
 ## M08-H1：主机 PTY 的可取消 I/O 与直属进程回收
 
-基线：208bc58262445180cbea87ea2ae91b2b70e08575。状态：实现及独立审查完成，本地纯 fake 竞态与跨平台编译通过；真实 PTY 用例尚待隔离 Linux CI，不宣称 NAS 实机验收。
+基线：208bc58262445180cbea87ea2ae91b2b70e08575。状态：96070cd已推送且完整CI通过；纯fake竞态、跨平台编译及隔离Linux真实PTY/直属child用例通过，不宣称NAS实机验收。
 
 ### 已确认问题与范围
 
@@ -65,3 +65,25 @@
 - 两秒预算约束应用层等待，依赖正常 Linux 非阻塞 syscall/ioctl 返回；不宣称可抢占任意内核 D-state、驱动卡死或精确墙钟硬截止。
 - nil Close 仅证明所拥有资源与直接 child 的回收结果，不代表所有后代已消失或 Root 命令副作用撤销。
 - Manager.Open 全局锁、PTY 创建之前的 locale/能力探测、容器 attach 之前的握手仍是独立缺口；NAS 实机未验证。
+
+## M08-H2：开启预留与短锁发布
+
+基线：96070cd00476e26bbd9ac8b69f236033b67f7e7e。状态：代码与独立审查完成，纯fake竞态回归通过，完整CI待验收。
+
+### 问题与设计
+
+Manager.Open原先在全局锁内调用Starter.Start及Metadata。一个慢启动会阻塞已有会话的查询/输入/关闭，甚至使达到上限的新请求不能及时拒绝。
+
+- 短锁内保留opening名额，配额始终计入opening + live + closing，保留默认上限1及全部配置。
+- 同步调用Start及Metadata，但移出全局锁；不增加超时后遗弃的启动goroutine，不以context取消作为已释放资源的证据。
+- 发布时短锁复核取消并原子将opening转为live；取消或错误但返回了session时，原子转为closing，在锁外Close，结束后才释放名额。
+- 非nil session与错误同时返回也须有唯一清理者。保留主错误码及errors.Is清理因果；Agent初始Open失败出口安全记录未确认清理，不让取消映射nil吞掉诊断。
+- 成功发布是归属转移点；紧随发布发生的取消由既有session/Agent清理路径处理，不重复关闭。
+
+### 验收与保留范围
+
+使用纯fake/barrier证明慢Start/Metadata不挡其他manager操作、容量无间隙、晚到成功只关闭一次、错误出口名额恢复、并发唯一ID、发布前后取消以及安全日志。真实Starter在配置容量大于1时须支持并发并返回独立session；不使用原有非并发安全fake重复同一对象。
+
+不新增不存在的CloseAll或每用户配额，不修改host/container传输、协议或依赖。卡住的Starter仍占其名额，H2不保证单次Open总时长有界；locale、PTY创建和SDK attach握手保留为独立问题。
+
+H2审查补充：裸主错误与带码的清理错误组合时，显式固定原主错误码（含空码），防止次级取消/目标错误改变原RPC失败分类，同时保留errors.Is因果。生产starter的每次会话资源独立；Moby首协商失败后重试存在静态观察到的潜在内部version并发边界，尚未动态复现，不将此片描述为SDK所有路径并发保证，默认容量1保持不变。

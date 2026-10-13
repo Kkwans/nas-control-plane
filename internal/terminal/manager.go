@@ -61,11 +61,12 @@ type SessionCapabilities struct {
 	ANSIColors     bool `json:"ansiColors"`
 }
 
+// SessionMetadataProvider 的 Metadata 在发布前调用，不持有 Manager 锁。
 type SessionMetadataProvider interface {
 	Metadata() SessionMetadata
 }
 
-// Session 表示已创建的受控终端会话。
+// Session 表示已创建的受控终端会话；实现须允许 Read、Write、Resize 与 Close 并发。
 type Session interface {
 	Read(context.Context, []byte) (int, error)
 	Write([]byte) (int, error)
@@ -73,9 +74,14 @@ type Session interface {
 	Close() error
 }
 
+// Starter 须支持并发 Start，且每次返回独立的 Session。
+// 非 nil Session（即使同时返回错误）的所有权交给 Manager；nil 时的部分资源由 Starter 回收。
 type Starter interface {
 	Start(context.Context, StartRequest) (Session, error)
 }
+
+// ErrSessionCleanupFailed 表示未发布会话的 Close 失败，不改变主错误码。
+var ErrSessionCleanupFailed = errors.New("terminal session cleanup failed")
 
 type Manager struct {
 	mu           sync.Mutex
@@ -84,6 +90,7 @@ type Manager struct {
 	maxSessions  int
 	nextID       uint64
 	sessions     map[string]Session
+	openingCount int
 	closingCount int
 }
 
@@ -108,8 +115,12 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.sessions)+m.closingCount >= m.maxSessions {
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return SessionInfo{}, coded("TERMINAL_SESSION_CANCELED", err)
+	}
+	if m.openingCount+len(m.sessions)+m.closingCount >= m.maxSessions {
+		m.mu.Unlock()
 		return SessionInfo{}, coded("TERMINAL_SESSION_LIMIT_REACHED", errors.New("terminal session limit reached"))
 	}
 
@@ -118,19 +129,24 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 		starter = m.container
 	}
 	if starter == nil {
+		m.mu.Unlock()
 		return SessionInfo{}, coded("TERMINAL_TARGET_UNAVAILABLE", errors.New("terminal target is unavailable"))
 	}
+	// 预留名额持续到 Start/Metadata 返回及发布或清理完成；取消不能提前释放。
+	m.openingCount++
+	m.mu.Unlock()
 	session, err := starter.Start(ctx, request)
 	if err != nil {
-		return SessionInfo{}, err
+		return SessionInfo{}, m.rejectOpening(session, err)
 	}
 	if session == nil {
-		return SessionInfo{}, coded("TERMINAL_SESSION_START_FAILED", errors.New("terminal starter returned nil session"))
+		return SessionInfo{}, m.rejectOpening(nil, coded("TERMINAL_SESSION_START_FAILED", errors.New("terminal starter returned nil session")))
+	}
+	if err := ctx.Err(); err != nil {
+		return SessionInfo{}, m.rejectOpening(session, coded("TERMINAL_SESSION_CANCELED", err))
 	}
 
-	m.nextID++
 	info := SessionInfo{
-		ID:           fmt.Sprintf("term-p0-%d", m.nextID),
 		Target:       request.Target,
 		Shell:        "shell",
 		Enhancement:  "native",
@@ -152,8 +168,43 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 			info.Capabilities = sessionCapabilitiesFor(info.Shell, info.Enhancement)
 		}
 	}
+	m.mu.Lock()
+	// 取消检查与发布共享线性化边界；检查之后的取消由已发布会话的调用方收尾。
+	if err := ctx.Err(); err != nil {
+		m.openingCount--
+		m.closingCount++
+		m.mu.Unlock()
+		return SessionInfo{}, m.closeRejectedOpening(session, coded("TERMINAL_SESSION_CANCELED", err))
+	}
+	m.openingCount--
+	m.nextID++
+	info.ID = fmt.Sprintf("term-p0-%d", m.nextID)
 	m.sessions[info.ID] = session
+	m.mu.Unlock()
 	return info, nil
+}
+
+// rejectOpening 原子转换资源责任，不能在 opening 与 closing 之间留下配额空窗。
+func (m *Manager) rejectOpening(session Session, primary error) error {
+	m.mu.Lock()
+	m.openingCount--
+	if session != nil {
+		m.closingCount++
+	}
+	m.mu.Unlock()
+	if session == nil {
+		return primary
+	}
+	return m.closeRejectedOpening(session, primary)
+}
+
+func (m *Manager) closeRejectedOpening(session Session, primary error) error {
+	defer func() { m.mu.Lock(); m.closingCount--; m.mu.Unlock() }()
+	if err := session.Close(); err != nil {
+		// 外层固定主错误码（包括空码），避免次级 Close 错误改变 RPC 映射。
+		return coded(ErrorCode(primary), errors.Join(primary, ErrSessionCleanupFailed, err))
+	}
+	return primary
 }
 
 func (m *Manager) Read(ctx context.Context, sessionID string, output []byte) (int, error) {
