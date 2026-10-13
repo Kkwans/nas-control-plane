@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CirclePause, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
 import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTooltip } from 'element-plus'
 
-import { followLogs, requestLogs, type LogEntry } from '@/api/control'
+import type { LogEntry } from '@/api/control'
+import { useLogQuerySession, type FollowState } from '@/composables/useLogQuerySession'
+import { logEntryKey } from '@/domain/logEntries'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import ResourceState from '@/components/ResourceState.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -11,10 +13,8 @@ import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatLocalTimestamp } from '@/lib/datetime'
 import { logTokens } from '@/utils/logTokens'
-import { isAbortError } from '@/session/sessionLifecycle'
 
 type LogSource = 'system' | 'agent' | 'container'
-type FollowState = 'paused' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
 const systemStore = useSystemStore()
 const { pageSize } = useListPreference('logs.events')
 const source = ref<LogSource>('system')
@@ -23,23 +23,12 @@ const level = ref('all')
 const hours = ref(6)
 const query = ref('')
 const following = ref(false)
-const followState = ref<FollowState>('paused')
-const lastReceivedAt = ref<string | null>(null)
-const loading = ref(false)
-const error = ref('')
-const entries = ref<LogEntry[]>([])
-const nextCursor = ref('')
+const logSession = useLogQuerySession()
+const { entries, nextCursor, loading, loadingMore, error, lastReceivedAt, followState, loadMore } = logSession
 const selectedEntry = ref<LogEntry | null>(null)
 const page = ref(1)
 const showSkeleton = ref(false)
-const loadingMore = ref(false)
-const pendingQueryKey = ref('')
-const loadedQueryKey = ref('')
-let logSource: EventSource | null = null
-let loadController: AbortController | null = null
 let skeletonTimer: ReturnType<typeof setTimeout> | null = null
-let loadSequence = 0
-let followSequence = 0
 
 const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
@@ -59,125 +48,27 @@ const logHistoryNote = computed(() => {
   return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，当前筛选范围已没有更多结果。`
 })
 
-async function load(silent = false) {
-  const requestSequence = ++loadSequence
-  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
-  loadController?.abort()
-  if (source.value === 'container' && !containerId.value) {
-    entries.value = []
-    nextCursor.value = ''
-    loading.value = false
-    showSkeleton.value = false
-    pendingQueryKey.value = queryKey
-    loadedQueryKey.value = queryKey
-    return
-  }
-  pendingQueryKey.value = queryKey
-  if (loadedQueryKey.value !== queryKey) {
-    entries.value = []
-    nextCursor.value = ''
-    page.value = 1
-  }
-  if (!silent) {
-    loading.value = true
-    if (!entries.value.length) {
-      if (skeletonTimer) clearTimeout(skeletonTimer)
-      skeletonTimer = setTimeout(() => { showSkeleton.value = true }, 180)
-    }
-  }
-  error.value = ''
-  loadController = new AbortController()
-  try {
-    const result = await requestLogs({
-      source: source.value, containerId: containerId.value, level: level.value,
-      query: query.value, hours: hours.value, limit: 200,
-    }, loadController.signal)
-    if (requestSequence !== loadSequence) return
-    entries.value = result.entries
-    nextCursor.value = result.nextCursor
-    lastReceivedAt.value = result.collectedAt
-    page.value = 1
-    loadedQueryKey.value = queryKey
-  } catch (caught) {
-    if (isAbortError(caught)) return
-    if (requestSequence !== loadSequence) return
-    error.value = '日志读取失败，请确认目标服务正在运行。'
-  } finally {
-    if (requestSequence === loadSequence) {
-      if (skeletonTimer) clearTimeout(skeletonTimer)
-      skeletonTimer = null
-      showSkeleton.value = false
-      loading.value = false
-    }
-  }
-}
-
-async function loadMore() {
-  const cursor = nextCursor.value
-  if (!cursor || loading.value || loadingMore.value) return
-  const requestSequence = ++loadSequence
-  loadController?.abort()
-  loadingMore.value = true
-  error.value = ''
-  loadController = new AbortController()
-  try {
-    const result = await requestLogs({
-      source: source.value, containerId: containerId.value, level: level.value,
-      query: query.value, hours: hours.value, limit: 200, cursor,
-    }, loadController.signal)
-    if (requestSequence !== loadSequence) return
-    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
-    for (const entry of result.entries) merged.set(entry.id, entry)
-    entries.value = [...merged.values()]
-    nextCursor.value = result.nextCursor
-  } catch (caught) {
-    if (isAbortError(caught)) return
-    if (requestSequence !== loadSequence) return
-    error.value = '更多日志读取失败，请重试。'
-  } finally {
-    if (requestSequence === loadSequence) loadingMore.value = false
-  }
-}
-
 function syncFollowStream() {
-  const sequence = ++followSequence
-  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
-  logSource?.close()
-  logSource = null
-  if (!following.value || (source.value === 'container' && !containerId.value)) {
-    followState.value = 'paused'
-    return
-  }
-  followState.value = 'connecting'
-  error.value = ''
-  logSource = followLogs({
-    source: source.value, containerId: containerId.value, level: level.value,
-    query: query.value, hours: hours.value, limit: pageSize.value,
-  }, systemStore.refreshIntervalSeconds, (result) => {
-    if (sequence !== followSequence || queryKey !== `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`) return
-    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
-    for (const entry of result.entries) merged.set(entry.id, entry)
-    entries.value = [...merged.values()].sort((left, right) => new Date(right.timestamp).valueOf() - new Date(left.timestamp).valueOf()).slice(0, 500)
-    followState.value = 'connected'
-    lastReceivedAt.value = result.collectedAt
-    error.value = ''
-  }, (state = 'reconnecting') => {
-    followState.value = state
-    error.value = state === 'failed'
-      ? '实时日志连接失败，请暂停后重新开启。'
-      : '实时日志正在重新连接，期间不会丢失已加载的历史记录。'
-  })
+  logSession.syncFollow(following.value, systemStore.refreshIntervalSeconds, pageSize.value)
 }
 
 function refreshLogs() {
-  void load()
-  if (following.value) syncFollowStream()
+  page.value = 1
+  selectedEntry.value = null
+  void logSession.load({
+    source: source.value, containerId: containerId.value, level: level.value,
+    query: query.value, hours: hours.value, limit: 200,
+  })
+  syncFollowStream()
 }
 
-watch([source, containerId, level, hours], () => {
-  void load()
-  if (following.value) syncFollowStream()
-})
+watch(loading, (busy) => {
+  if (skeletonTimer) clearTimeout(skeletonTimer)
+  skeletonTimer = null
+  showSkeleton.value = false
+  if (busy && !entries.value.length) skeletonTimer = setTimeout(() => { showSkeleton.value = true }, 180)
+}, { flush: 'sync' })
+watch([source, containerId, level, hours], refreshLogs)
 watch(pageSize, () => { page.value = 1 })
 watch(pageCount, (count) => {
   if (page.value > count) page.value = count
@@ -185,12 +76,10 @@ watch(pageCount, (count) => {
 watch(following, syncFollowStream)
 onMounted(() => {
   void systemStore.refresh({ inventory: true })
-  void load()
+  refreshLogs()
 })
 onBeforeUnmount(() => {
-  followSequence += 1
-  loadController?.abort()
-  logSource?.close()
+  logSession.dispose()
   if (skeletonTimer) clearTimeout(skeletonTimer)
 })
 
@@ -273,7 +162,7 @@ function followStateDescription(value: FollowState) {
       <template v-if="showSkeleton && !entries.length">
         <div v-for="row in 12" :key="row" class="log-row log-row--skeleton"><i v-for="cell in 4" :key="cell" class="ncp-skeleton"></i></div>
       </template>
-      <div v-for="entry in pagedEntries" v-else :key="entry.id" class="log-row">
+      <div v-for="entry in pagedEntries" v-else :key="logEntryKey(entry)" class="log-row">
         <time>{{ formatLocalTimestamp(entry.timestamp) }}</time>
         <span :class="['level-badge', `level-badge--${entry.level}`]">{{ levelLabel(entry.level) }}</span>
         <div class="log-message" :title="entry.message"><small>{{ entryContext(entry) }}</small><span class="log-message__text"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></span></div>

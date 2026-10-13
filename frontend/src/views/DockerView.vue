@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
@@ -31,6 +31,7 @@ import {
 import { projectStateTone as projectStateToneBase } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
 import { useSitesStore } from '@/stores/sites'
+import { createScopedReadRequest } from '@/domain/scopedReadRequest'
 import { presentDockerPorts } from '@/domain/dockerPorts'
 
 type StateFilter = 'all' | DockerProject['state']
@@ -54,6 +55,7 @@ const projectDeletePending = ref<string | null>(null)
 const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
 const projectContainerActionErrors = ref<Record<string, string>>({})
 const actionError = ref<string | null>(null)
+const detailRequest = createScopedReadRequest()
 const logOpen = ref(false)
 const logLoading = ref(false)
 const logContainerName = ref('')
@@ -351,6 +353,8 @@ function performSelectedProjectAction(action: ContainerAction) {
   if (selectedProject.value) void performProjectAction(selectedProject.value, action)
 }
 async function openContainerDetails(container: { id: string; name: string }) {
+  const request = detailRequest.begin()
+  const fetchDetails: typeof fetch = (input, init) => fetch(input, { ...init, signal: request.signal })
   logOpen.value = true
   logLoading.value = true
   logContainerName.value = container.name
@@ -358,15 +362,28 @@ async function openContainerDetails(container: { id: string; name: string }) {
   containerDetails.value = null
   containerDrawerError.value = ''
   const [detailsResult, logsResult] = await Promise.allSettled([
-    requestContainerDetails(container.id),
-    requestContainerLogs(container.id, 200),
+    requestContainerDetails(container.id, fetchDetails),
+    requestContainerLogs(container.id, 200, fetchDetails),
   ])
+  request.finish()
+  if (!request.isCurrent() || !logOpen.value) return
   if (detailsResult.status === 'fulfilled') containerDetails.value = detailsResult.value
   else containerDrawerError.value = errorMessage(detailsResult.reason, '容器详情读取失败。')
   if (logsResult.status === 'fulfilled') logs.value = logsResult.value
   else containerDrawerError.value = [containerDrawerError.value, errorMessage(logsResult.reason, '容器日志读取失败。')].filter(Boolean).join(' ')
   logLoading.value = false
 }
+
+watch(logOpen, (open) => {
+  if (!open) {
+    detailRequest.invalidate()
+    logLoading.value = false
+    logs.value = null
+    containerDetails.value = null
+    containerDrawerError.value = ''
+  }
+}, { flush: 'sync' })
+onBeforeUnmount(() => detailRequest.invalidate())
 
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
