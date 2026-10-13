@@ -1,11 +1,10 @@
 import { computed, onScopeDispose, ref } from 'vue'
+import { createPreferencesState } from './preferences'
 import { defineStore } from 'pinia'
 
 import {
   requestListPreference,
-  requestPreferences,
   updateListPreference,
-  updatePreferences,
   type ListPreference,
   type UserPreferences,
 } from '@/api/control'
@@ -95,7 +94,15 @@ export const useSystemStore = defineStore('system', () => {
   const resourceHistory = ref<ResourceSample[]>([])
   const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
   const realtimeScopes = ref<RealtimeScope[]>([])
-  const preferences = ref<UserPreferences>({ ...DEFAULT_USER_PREFERENCES, navigationOrder: [...DEFAULT_USER_PREFERENCES.navigationOrder] })
+  const preferenceState = createPreferencesState(DEFAULT_USER_PREFERENCES, applyExperiencePreferences, (saved) => {
+    const intervalChanged = saved.refreshIntervalSeconds !== refreshIntervalSeconds.value
+    refreshIntervalSeconds.value = saved.refreshIntervalSeconds
+    if (eventSource && intervalChanged) {
+      const scopes = [...realtimeScopes.value]
+      stopRealtime()
+      startRealtime(scopes)
+    }
+  })
   const listPreferences = ref<Record<string, ListPreference>>({})
   const listPreferenceRequests = new Map<string, Promise<ListPreference>>()
 
@@ -157,35 +164,6 @@ export const useSystemStore = defineStore('system', () => {
     return result
   }
 
-  async function loadPreferences() {
-    const session = captureSession()
-    const loaded = await requestPreferences(session.signal)
-    if (!isCurrentSession(session.generation)) return
-    preferences.value = loaded
-    refreshIntervalSeconds.value = loaded.refreshIntervalSeconds
-    applyExperiencePreferences(loaded)
-  }
-
-  async function setRefreshInterval(seconds: number) {
-    await setPreferences({ ...preferences.value, refreshIntervalSeconds: seconds })
-  }
-
-  async function setPreferences(input: UserPreferences) {
-    const session = captureSession()
-    const saved = await updatePreferences(input, session.signal)
-    if (!isCurrentSession(session.generation)) return saved
-    const intervalChanged = saved.refreshIntervalSeconds !== refreshIntervalSeconds.value
-    preferences.value = saved
-    refreshIntervalSeconds.value = saved.refreshIntervalSeconds
-    applyExperiencePreferences(saved)
-    if (eventSource && intervalChanged) {
-      const scopes = [...realtimeScopes.value]
-      stopRealtime()
-      startRealtime(scopes)
-    }
-    return saved
-  }
-
   function listPreference(listKey: string): ListPreference {
     return listPreferences.value[listKey] ?? {
       listKey,
@@ -224,10 +202,6 @@ export const useSystemStore = defineStore('system', () => {
     if (!isCurrentSession(session.generation)) return saved
     listPreferences.value = { ...listPreferences.value, [listKey]: saved }
     return saved
-  }
-
-  function previewPreferences(input: UserPreferences) {
-    applyExperiencePreferences(input)
   }
 
   function refreshResource(resource: RefreshResource, force: boolean) {
@@ -449,10 +423,9 @@ export const useSystemStore = defineStore('system', () => {
     pendingRefreshes.clear()
     refreshErrors.clear()
     listPreferenceRequests.clear()
-    preferences.value = { ...DEFAULT_USER_PREFERENCES, navigationOrder: [...DEFAULT_USER_PREFERENCES.navigationOrder] }
+    preferenceState.reset()
     refreshIntervalSeconds.value = DEFAULT_REFRESH_INTERVAL_SECONDS
     listPreferences.value = {}
-    applyExperiencePreferences(preferences.value)
   }
 
   function appendResourceSample(nextSummary: SystemSummary) {
@@ -481,7 +454,7 @@ export const useSystemStore = defineStore('system', () => {
     previousNetwork = networkAvailable ? { timestamp, receiveBytes, transmitBytes } : null
   }
 
-  onScopeDispose(stopRealtime)
+  onScopeDispose(() => { stopRealtime(); preferenceState.dispose() })
 
   return {
     connectionState,
@@ -499,19 +472,15 @@ export const useSystemStore = defineStore('system', () => {
     resourceHistory,
     refreshIntervalSeconds,
     realtimeScopes,
-    preferences,
+    ...preferenceState,
     listPreferences,
     deviceName,
     lastUpdated,
     refresh,
     refreshStrict,
-    loadPreferences,
-    setRefreshInterval,
-    setPreferences,
     listPreference,
     ensureListPreference,
     setListPreference,
-    previewPreferences,
     startRealtime,
     stopRealtime,
     clear,
