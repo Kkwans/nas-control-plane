@@ -162,6 +162,7 @@ func (api *handler) databaseDelete(response http.ResponseWriter, request *http.R
 
 func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *http.Request, destination any) bool {
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxDatabaseBodySize))
+	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")

@@ -1,6 +1,7 @@
 package agentsocket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -101,8 +102,21 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
 	values := make(map[string]any)
-	if err := json.Unmarshal(encoded, &values); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&values); err != nil {
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
+	}
+	// Struct 的数值会转换为 float64；数据库字段按原始数字文本传输，避免主键和小数被舍入。
+	// 仅转换行数据，保留 limit、offset 等协议字段的数值类型。
+	for _, field := range []string{"values", "keys"} {
+		if row, ok := values[field].(map[string]any); ok {
+			for name, value := range row {
+				if number, ok := value.(json.Number); ok {
+					row[name] = number.String()
+				}
+			}
+		}
 	}
 	payload, err := structpb.NewStruct(values)
 	if err != nil {

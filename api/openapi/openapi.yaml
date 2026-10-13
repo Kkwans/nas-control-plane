@@ -2412,14 +2412,20 @@ components:
           properties:
             schema: { type: string }
             table: { type: string, minLength: 1 }
-            values: { type: object, additionalProperties: {} }
+            values:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseUpdateRequest:
       allOf:
         - $ref: '#/components/schemas/DatabaseInsertRequest'
         - type: object
           required: [keys]
           properties:
-            keys: { type: object, additionalProperties: {} }
+            keys:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseDeleteRequest:
       allOf:
         - $ref: '#/components/schemas/DatabaseConnection'
@@ -2428,7 +2434,10 @@ components:
           properties:
             schema: { type: string }
             table: { type: string, minLength: 1 }
-            keys: { type: object, additionalProperties: {} }
+            keys:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseMutationResult:
       type: object
       required: [rowsAffected]
