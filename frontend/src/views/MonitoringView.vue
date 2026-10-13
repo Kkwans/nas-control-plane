@@ -8,6 +8,7 @@ import DateTimeRangeControl from '@/components/DateTimeRangeControl.vue'
 import MonitoringSensorSelect from '@/components/MonitoringSensorSelect.vue'
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
 import ResourceState from '@/components/ResourceState.vue'
+import ResourceAlertsPanel from '@/components/ResourceAlertsPanel.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
@@ -191,7 +192,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page workspace-page">
-    <WorkspaceHeader title="系统监控" description="服务端每分钟记录首个有效样本；此处仅展示已保存的历史，点击刷新读取最新记录" :icon="Gauge" :stats="stats">
+    <WorkspaceHeader title="系统监控" description="当前资源提示独立评估；历史图表每分钟记录首个有效样本，时间范围仅作用于历史" :icon="Gauge" :stats="stats">
       <template #filters>
         <div class="monitor-range-filter" role="group" aria-label="快速时间范围">
           <CompactSegmentedFilter :model-value="typeof appliedRange === 'string' ? appliedRange : ''" :options="quickRanges" accessible-label="快速时间范围" @update:model-value="selectQuickRange($event as TimeRange)" />
@@ -208,6 +209,8 @@ onBeforeUnmount(() => {
         />
       </template>
     </WorkspaceHeader>
+
+    <ResourceAlertsPanel />
 
     <p v-if="rangeError" class="monitor-error" role="alert">{{ rangeError }}</p>
     <p v-if="status === 'success'" class="monitor-history-note">已读取范围：{{ loadedRangeLabel }}。折线空白表示缺少可用样本；网络和磁盘为相邻分钟样本间的平均速率。</p>

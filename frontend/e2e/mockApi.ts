@@ -500,6 +500,15 @@ export async function installMockApi(page: Page, options: { clock?: boolean; man
     if (path === '/api/v1/system/details') return json(route, systemDetails)
     if (path === '/api/v1/system/dns/capability') return json(route, systemDetails.dns)
     if (path === '/api/v1/proxy/mihomo/inspect') return json(route, mihomoInspection)
+    if (path === '/api/v1/monitoring/alerts') {
+      // 默认关闭；启用与故障语义由 resource-alerts.spec.ts 的独立内存 fixture 覆盖。
+      const alertRule = (kind: 'cpu' | 'memory') => ({
+        id: `host.${kind}.high`, severity: 'warning', triggerPercent: 90, recoveryPercent: kind === 'cpu' ? 80 : 85,
+        triggerSeconds: 120, recoverySeconds: 60, condition: 'normal', availability: 'unknown', reasonCode: 'MONITORING_ALERTS_NO_SAMPLE',
+        sampleAt: null, receivedAt: null, value: null, pendingSince: null, firingSince: null, recoveringSince: null, lastRecoveredAt: null,
+      })
+      return json(route, { enabled: false, observedAt: collectedAt, startedAt: collectedAt, rules: { cpu: alertRule('cpu'), memory: alertRule('memory') } })
+    }
     if (path === '/api/v1/monitoring/samples') return json(route, [])
     if (path === '/api/v1/logs') return json(route, { collectedAt, entries: [], nextCursor: '' })
     if (path === '/api/v1/users') return json(route, [])

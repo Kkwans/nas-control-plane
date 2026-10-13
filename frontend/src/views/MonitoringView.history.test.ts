@@ -8,6 +8,7 @@ import MonitoringView from './MonitoringView.vue'
 
 const mocks = vi.hoisted(() => ({ requestMetricSamples: vi.fn(), date: undefined as ((event: 'update:from' | 'update:to' | 'now' | 'clear' | 'apply', value?: unknown) => void) | undefined, sensor: undefined as ((value: string[]) => void) | undefined }))
 vi.mock('@/api/control', async (original) => ({ ...await original<object>(), requestMetricSamples: mocks.requestMetricSamples }))
+vi.mock('@/components/ResourceAlertsPanel.vue', () => ({ default: { template: '<div data-alerts-panel />' } }))
 vi.mock('@/components/RealtimeTrendChart.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return { default: defineComponent({ props: { timestamps: Array, series: Array, history: Boolean, emptyMessage: String }, setup: (props) => () => h('div', { 'data-chart': JSON.stringify(props) }, props.emptyMessage) }) }

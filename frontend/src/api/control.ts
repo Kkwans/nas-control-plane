@@ -1,3 +1,4 @@
+import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
 import { SiteWriteUnknownError } from './siteWriteOutcome'
 import { NcpApiError } from '@/api/system'
@@ -283,6 +284,10 @@ export function saveComposeDraft(
 
 export function requestComposeRevisions(projectId: string): Promise<ComposeRevision[]> {
   return request(`/api/v1/docker/compose/revisions?${new URLSearchParams({ projectId })}`)
+}
+
+export function requestResourceAlerts(signal?: AbortSignal): Promise<ResourceAlerts> {
+  return request('/api/v1/monitoring/alerts', signal ? { signal } : {}, parseResourceAlerts)
 }
 
 export function requestMetricSamples(
