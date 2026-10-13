@@ -488,7 +488,7 @@ async function executeSubmit() {
     submitting.value = null
   }
 }
-// 共享清单接口未逐行验证；此处只接收展示所需字段，不保留原始响应或附加配置。
+// 即使共享清单已验证，此处仍仅保留五个展示字段，避免未知尝试额外持有配置。
 function projectVerificationInventory(value: unknown): { containers: VerificationContainer[] } {
   const invalid = () => new Error('容器列表格式无效')
   if (!value || typeof value !== 'object' || !('containers' in value) || !Array.isArray(value.containers)) throw invalid()

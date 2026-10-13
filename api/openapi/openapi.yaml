@@ -3767,6 +3767,7 @@ components:
     DockerInventory:
       type: object
       required: [collectedAt, engine, containers, projects]
+      description: 浏览器逐项校验完整清单；必需字段缺失或元素无效时拒绝整个 Docker 清单。集合显式为 null 时按各字段说明归一化为空数组。
       properties:
         collectedAt:
           type: string
@@ -3774,11 +3775,13 @@ components:
         engine:
           $ref: '#/components/schemas/DockerEngineInfo'
         containers:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/InventoryContainer'
         projects:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/DockerProject'
     DockerResources:
@@ -4279,6 +4282,7 @@ components:
           items: { type: string }
     DockerEngineInfo:
       type: object
+      required: [serverVersion, operatingSystem, architecture, containers, containersRunning, containersStopped, images]
       properties:
         serverVersion: { type: string }
         operatingSystem: { type: string }
@@ -4289,6 +4293,8 @@ components:
         images: { type: integer, minimum: 0 }
     InventoryContainer:
       type: object
+      required: [id, name, image, state, status, createdAt, ports, projectId, projectName, serviceName]
+      description: 非时间字符串可为空，容器状态保留未知字符串，时间允许 Go 零值；startedAt、finishedAt、exitCode、restartCount、health 为兼容旧响应的可选补充字段。浏览器只校验时间字段的字符串类型，采集时间的新鲜度由状态层判断。
       properties:
         id: { type: string }
         name: { type: string }
@@ -4304,7 +4310,8 @@ components:
         restartCount: { type: integer, minimum: 0 }
         health: { type: string, enum: [none, starting, healthy, unhealthy] }
         ports:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/PortMapping'
         projectId: { type: string }
@@ -4312,13 +4319,15 @@ components:
         serviceName: { type: string }
     PortMapping:
       type: object
+      required: [hostIp, privatePort, publicPort, protocol]
       properties:
         hostIp: { type: string }
-        privatePort: { type: integer, minimum: 0 }
-        publicPort: { type: integer, minimum: 0 }
+        privatePort: { type: integer, minimum: 0, maximum: 65535 }
+        publicPort: { type: integer, minimum: 0, maximum: 65535 }
         protocol: { type: string }
     DockerProject:
       type: object
+      required: [id, name, kind, state, workingDirectory, configFiles, containerCount, runningCount]
       properties:
         id: { type: string }
         name: { type: string }
@@ -4330,7 +4339,8 @@ components:
           enum: [running, stopped, degraded]
         workingDirectory: { type: string }
         configFiles:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items: { type: string }
         containerCount: { type: integer, minimum: 0 }
         runningCount: { type: integer, minimum: 0 }

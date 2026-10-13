@@ -88,6 +88,9 @@ export const useSystemStore = defineStore('system', () => {
   const capabilities = ref<SystemCapabilities | null>(null)
   const summary = ref<SystemSummary | null>(null)
   const inventory = ref<DockerInventory | null>(null)
+  const inventoryRefreshing = ref(false)
+  const inventoryErrorCode = ref<string | null>(null)
+  const inventoryStale = ref(false)
   const errorCode = ref<string | null>(null)
   const errorCodes = ref<string[]>([])
   const isRefreshing = ref(false)
@@ -275,6 +278,10 @@ export const useSystemStore = defineStore('system', () => {
 
   function updateRefreshState() {
     isRefreshing.value = pendingRefreshes.size > 0
+    // Docker 首次读取与恢复只依据自身资源，不能被其他页面留下的能力数据掩盖。
+    inventoryRefreshing.value = pendingRefreshes.has('inventory')
+    inventoryErrorCode.value = refreshErrors.get('inventory') ?? realtimeErrors.get('inventory') ?? null
+    inventoryStale.value = Boolean(inventory.value) && !isFresh('inventory')
     summaryStale.value = Boolean(summary.value) && !isFresh('summary')
     const expected: RefreshResource[] = realtimeScopes.value.length
       ? realtimeScopes.value.map((scope) => scope === 'docker' ? 'inventory' : scope)
@@ -314,20 +321,18 @@ export const useSystemStore = defineStore('system', () => {
     const normalized = [...new Set(scopes)].sort()
     const unchanged = normalized.length === realtimeScopes.value.length &&
       normalized.every((scope, index) => scope === realtimeScopes.value[index])
-    if (unchanged && eventSource) {
+    if (unchanged && (eventSource || (!normalized.length && freshnessTimer !== null))) {
       updateRefreshState()
       return
     }
     stopRealtime()
     realtimeScopes.value = normalized
-    if (!normalized.length) {
-      updateRefreshState()
-      return
-    }
     const session = captureSession()
-    const streamSequence = ++realtimeSequence
-    realtimeState.value = 'connecting'
+    // 无推送作用域的页面也需要让已读取快照自然过期；此时仅运行本地时钟，不轮询或订阅。
+    realtimeState.value = normalized.length ? 'connecting' : 'offline'
     startFreshnessTimer(session)
+    if (!normalized.length) return
+    const streamSequence = ++realtimeSequence
     eventSource = subscribeSystemEvents(normalized, refreshIntervalSeconds.value, {
       open: () => {
         if (isCurrentSession(session.generation) && realtimeSequence === streamSequence) realtimeState.value = 'streaming'
@@ -406,6 +411,9 @@ export const useSystemStore = defineStore('system', () => {
     capabilities.value = null
     summary.value = null
     inventory.value = null
+    inventoryRefreshing.value = false
+    inventoryErrorCode.value = null
+    inventoryStale.value = false
     errorCode.value = null
     errorCodes.value = []
     realtimeErrorCode.value = null
@@ -465,6 +473,9 @@ export const useSystemStore = defineStore('system', () => {
     capabilities,
     summary,
     inventory,
+    inventoryRefreshing,
+    inventoryErrorCode,
+    inventoryStale,
     services,
     errorCode,
     errorCodes,

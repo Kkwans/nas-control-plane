@@ -534,7 +534,7 @@ describe('共享快照新鲜度与会话生命周期', () => {
     expect(store.summaryStale).toBe(true)
   })
 
-  it('停止、切换空作用域、会话失效和销毁均回收时钟，旧流回调失效', () => {
+  it('空作用域保留本地时钟，停止、会话失效和销毁均回收时钟，旧流回调失效', () => {
     const store = useSystemStore()
     store.startRealtime(['summary'])
     const old = stream()
@@ -544,6 +544,8 @@ describe('共享快照新鲜度与会话生命周期', () => {
     old.snapshot(snapshot())
     expect(store.summary).toBeNull()
     store.startRealtime([])
+    expect(vi.getTimerCount()).toBe(1)
+    store.stopRealtime()
     expect(vi.getTimerCount()).toBe(0)
     store.startRealtime(['summary'])
     invalidateSession()

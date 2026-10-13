@@ -82,8 +82,8 @@ const pagedProjects = computed(() => {
   return projects.value.slice(start, start + projectPageSize.value)
 })
 const inventory = computed(() => systemStore.inventory)
-const inventoryLoading = computed(() => !inventory.value && systemStore.connectionState !== 'unavailable')
-const inventoryUnavailable = computed(() => !inventory.value && systemStore.connectionState === 'unavailable')
+const inventoryLoading = computed(() => !inventory.value && (systemStore.inventoryRefreshing || !systemStore.inventoryErrorCode))
+const inventoryUnavailable = computed(() => !inventory.value && !systemStore.inventoryRefreshing && Boolean(systemStore.inventoryErrorCode))
 const effectiveActionPending = computed(() => {
   if (actionPending.value) return actionPending.value
   if (projectActionPending.value) return `project:${projectActionPending.value.projectId}:${projectActionPending.value.action}`
@@ -100,7 +100,7 @@ const detailOpen = computed({
   },
 })
 const stats = computed<WorkspaceStat[]>(() => [
-  { label: '全部项目', value: allProjects.value.length },
+  { label: '全部项目', value: inventory.value ? allProjects.value.length : '—' },
   { label: '运行容器', value: inventory.value?.engine.containersRunning ?? '—', tone: 'success' },
   { label: '停止容器', value: inventory.value?.engine.containersStopped ?? '—', tone: 'warning' },
   { label: '本地镜像', value: inventory.value?.engine.images ?? '—' },
@@ -414,6 +414,14 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
     </div>
 
+    <section v-if="inventory && (systemStore.inventoryErrorCode || systemStore.inventoryStale)" class="inventory-recovery panel" role="status">
+      <div>
+        <strong>{{ systemStore.inventoryErrorCode ? 'Docker 状态更新失败，显示上次数据' : 'Docker 状态尚未更新，显示上次数据' }}</strong>
+        <span>上次更新：{{ inventory.collectedAt }}{{ systemStore.inventoryErrorCode ? `（${systemStore.inventoryErrorCode}）` : '' }}。项目和容器状态可能已变化。</span>
+      </div>
+      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="systemStore.refresh({ inventory: true })">重新加载</ActionButton>
+    </section>
+
     <section v-if="inventoryLoading" class="resource-state panel" aria-live="polite" aria-busy="true">
       <LoaderCircle class="spin" :size="22" />
       <strong>正在读取 Docker 状态</strong>
@@ -422,8 +430,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 
     <section v-else-if="inventoryUnavailable" class="resource-state resource-state--error panel" role="alert">
       <strong>Docker 状态读取失败</strong>
-      <span>无法读取项目和容器列表{{ systemStore.errorCode ? `（${systemStore.errorCode}）` : '' }}。</span>
-      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" @click="systemStore.refresh({ inventory: true })">重新加载</ActionButton>
+      <span>无法读取项目和容器列表{{ systemStore.inventoryErrorCode ? `（${systemStore.inventoryErrorCode}）` : '' }}。</span>
+      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="systemStore.refresh({ inventory: true })">重新加载</ActionButton>
     </section>
 
     <template v-else-if="activeView === 'images'">
@@ -572,6 +580,10 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .resource-state span { font-size: .75rem; }
 .resource-state--error { border-color: var(--ncp-danger-border); color: var(--ncp-danger-strong); }
 .resource-state--error strong { color: var(--ncp-danger-strong); }
+.inventory-recovery { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-color: var(--ncp-warning-border); background: var(--ncp-warning-soft); }
+.inventory-recovery>div { display: grid; flex: 1 1 240px; min-width: 0; gap: 4px; }
+.inventory-recovery strong { color: var(--ncp-text); font-size: .85rem; }
+.inventory-recovery span { color: var(--ncp-text-muted); font-size: .78rem; overflow-wrap: anywhere; }
 .docker-table { overflow: hidden; border-color:rgba(203,214,228,.9); }
 .docker-table__head, .project-row { display: grid; grid-template-columns: minmax(0,1.3fr) 108px 74px minmax(80px,180px) minmax(0,1fr) 188px; align-items: center; gap: 12px; }
 .docker-table__head { min-height: 46px; padding: 0 18px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; }

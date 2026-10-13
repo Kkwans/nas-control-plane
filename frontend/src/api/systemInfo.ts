@@ -1,4 +1,5 @@
 import { parseSystemDetailsResponse } from './systemDetailsResponse'
+import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
   isApiErrorResponse,
   jsonRequest,
@@ -9,7 +10,6 @@ import {
 import type {
   CapabilityEvidence,
   DNSCapability,
-  DockerInventory,
   MihomoCapability,
   MihomoInspection,
   PublicEgressCapability,
@@ -177,8 +177,18 @@ export function subscribeSystemEvents(
   source.addEventListener('snapshot', (event) => {
     try {
       const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
-      if (!isRealtimeSnapshot(payload)) throw new Error('实时快照格式无效')
-      handlers.snapshot(payload)
+      if (!isRealtimeSnapshotEnvelope(payload)) throw new Error('实时快照格式无效')
+      const { docker, ...envelope } = payload
+      const snapshot: RealtimeSnapshot = envelope
+      if ('docker' in payload) {
+        try {
+          snapshot.docker = parseDockerInventoryResponse(docker)
+        } catch {
+          // Docker 坏切片只影响该模块，保留同帧摘要并等待下一帧恢复。
+          snapshot.errors = [...(snapshot.errors ?? []), DOCKER_INVENTORY_RESPONSE_INVALID]
+        }
+      }
+      handlers.snapshot(snapshot)
     } catch {
       handlers.error()
       source.close()
@@ -382,16 +392,11 @@ function isSystemSummary(value: unknown): value is SystemSummary {
   )
 }
 
-function isDockerInventory(value: unknown): value is DockerInventory {
-  return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
-}
-
-function isRealtimeSnapshot(value: unknown): value is RealtimeSnapshot {
+function isRealtimeSnapshotEnvelope(value: unknown): value is Omit<RealtimeSnapshot, 'docker'> & { docker?: unknown } {
   return (
     isRecord(value) &&
     typeof value.collectedAt === 'string' &&
     (value.summary === undefined || isSystemSummary(value.summary)) &&
-    (value.docker === undefined || isDockerInventory(value.docker)) &&
     (value.errors === undefined || (Array.isArray(value.errors) && value.errors.every((item) => typeof item === 'string')))
   )
 }

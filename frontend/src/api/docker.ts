@@ -1,4 +1,5 @@
 import { captureSession } from '@/session/sessionLifecycle'
+import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
   NcpApiError,
   isApiErrorResponse,
@@ -272,7 +273,8 @@ export async function requestDockerHubTags(
 }
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerInventory> {
-  return requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
+  const payload = await requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isRecord, fetcher, DOCKER_INVENTORY_RESPONSE_INVALID)
+  return parseDockerInventoryResponse(payload)
 }
 
 export async function requestDockerResources(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerResources> {
@@ -667,10 +669,6 @@ function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResu
         typeof service.running === 'boolean',
     )
   )
-}
-
-function isDockerInventory(value: unknown): value is DockerInventory {
-  return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
 }
 
 function isDockerResources(value: unknown): value is DockerResources {
