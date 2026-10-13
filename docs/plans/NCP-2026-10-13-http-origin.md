@@ -66,3 +66,17 @@ MIME切片本身不修复原LimitReader隐藏尾部的问题；该缺口已由�
 读取包装每轮检查context和有限连续空读，完整读取及解码返回成功前再次检查取消；不创建后台goroutine包装任意阻塞Reader，不更改HTTP timeout。原HTTP body仍由server关闭，可选inspect前缀与Close链保留，探测时取消不执行Agent请求。内存分配随上限有界但可能因ReadAll容量增长超过payload长度，不能宣称整个进程内存不超过1MiB。
 
 验收须覆盖三类容量和分块大小、limit-1/limit/limit+1、隐藏尾部、畸形超大体、bytes+EOF/bytes+读取错误、空读与取消、伪造/未知长度、inspect探测计入同一总预算、35路由无业务副作用、11无body/multipart不受影响，以及旧LimitReader负对照。413通过既有错误结构传递并同步OpenAPI，不自动重试或清除会话。真实网络慢请求与NAS仍不在本片验收范围。
+
+
+## M17：初始化部分成功后的认证恢复
+
+2026-10-13复核：唯一生产入口先成功打开auth再构造handler，失败即退出。Auth:nil的旁路属于既有测试/嵌入兼容，未发现生产数据库故障自动降级为匿名Root的路径。本片不改变该构造器契约，不新增免认证开关。
+
+明确缺口：bootstrap可先提交首个账号，再因后续Login失败返回503且不写cookie。旧前端仍停在setup，重复提交会遇到409。最小修复仅在结果不确定/已初始化错误后只读查询auth/status一次，按权威结果进入登录、setup或暂不可用；不自动重放bootstrap/Login，也不把initialized当authenticated。
+
+- 复用operation序列与signal，旧调和不能覆盖较新login/logout/refresh，finally只能释放本次操作。
+- 模式变化或结果不确定时清除所属提交的密码/确认字段；保留用户名，不保存或重发密码，不清除新操作的输入。
+- 仅权威authenticated且user有效时可发出成功事件；初始化完成但未登录明确提示“控制台已初始化，请登录”，不声称本次创建一定成功。
+- status失败进入可只读重查的不可用态，明确400/403等校验错误不自动重放。
+- 同步OpenAPI中已有bootstrap/login/logout503，保留既有错误码；fake/recorder验证bootstrap成功但Login失败时503、无cookie、status已初始化、受保护业务仍401。
+- 前端验证状态竞争/密码清理/真实emit，后端只用recorder/fake，不创建真实账号或连接NAS。源码与独立审查完成；46项聚焦前端与696项完整单元通过，lint/typecheck/生产构建及包预算通过，OpenAPI全套和精确HTTP race通过；发布后的隔离浏览器验证另行闭环。

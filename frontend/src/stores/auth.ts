@@ -11,6 +11,8 @@ import {
 } from '@/api/system'
 import { isAbortError } from '@/session/sessionLifecycle'
 
+export type AuthenticationResult = 'authenticated' | 'reconciled' | 'superseded'
+
 export type AuthenticationState = 'checking' | 'setup' | 'anonymous' | 'authenticated' | 'unavailable'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -19,18 +21,18 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<RootUser | null>(null)
   const errorCode = ref<string | null>(null)
   const errorMessage = ref<string | null>(null)
-  let operationSequence = 0
+  const operationSequence = ref(0)
   let operationController: AbortController | null = null
 
   function beginOperation() {
     operationController?.abort()
     const controller = new AbortController()
     operationController = controller
-    return { sequence: ++operationSequence, signal: controller.signal }
+    return { sequence: ++operationSequence.value, signal: controller.signal }
   }
 
   function isCurrent(sequence: number) {
-    return sequence === operationSequence
+    return sequence === operationSequence.value
   }
 
   function finishOperation(sequence: number) {
@@ -66,31 +68,64 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function bootstrap(credentials: { username: string; password: string }) {
+  async function bootstrap(credentials: { username: string; password: string }): Promise<AuthenticationResult> {
     const operation = beginOperation()
     try {
       const session = await bootstrapRoot(credentials, fetch, operation.signal)
-      if (!isCurrent(operation.sequence)) return
+      if (!isCurrent(operation.sequence)) return 'superseded'
       initialized.value = true
       user.value = session.user
       state.value = 'authenticated'
       errorCode.value = null
       errorMessage.value = null
+      return 'authenticated'
+    } catch (error) {
+      if (!isCurrent(operation.sequence) || isAbortError(error)) return 'superseded'
+      if (!shouldReconcileBootstrap(error)) throw error
+      // 创建账号与创建会话并非原子操作；只读复核，绝不重放凭据。
+      try {
+        const status = await requestAuthStatus(fetch, operation.signal)
+        if (!isCurrent(operation.sequence)) return 'superseded'
+        initialized.value = status.initialized
+        user.value = status.authenticated ? status.user ?? null : null
+        state.value = status.authenticated && status.user ? 'authenticated' : status.initialized ? 'anonymous' : 'setup'
+        errorCode.value = state.value === 'authenticated' ? null : 'BOOTSTRAP_RECONCILED'
+        errorMessage.value = state.value === 'authenticated' ? null : status.initialized
+          ? '控制台已初始化，请登录。'
+          : '已确认控制台尚未初始化，请检查后重新提交。'
+        return state.value === 'authenticated' ? 'authenticated' : 'reconciled'
+      } catch (statusError) {
+        if (!isCurrent(operation.sequence) || isAbortError(statusError)) return 'superseded'
+        setUnavailable(statusError)
+        errorCode.value = 'BOOTSTRAP_STATUS_UNCONFIRMED'
+        errorMessage.value = '初始化结果尚未确认，请重新检查。'
+        return 'reconciled'
+      }
     } finally {
       finishOperation(operation.sequence)
     }
   }
 
-  async function login(credentials: { username: string; password: string }) {
+  function shouldReconcileBootstrap(error: unknown) {
+    return !(error instanceof NcpApiError) || [
+      'AUTH_UNAVAILABLE', 'AUTH_ALREADY_INITIALIZED', 'AUTH_SESSION_RESPONSE_INVALID', 'API_REQUEST_FAILED',
+    ].includes(error.code)
+  }
+
+  async function login(credentials: { username: string; password: string }): Promise<AuthenticationResult> {
     const operation = beginOperation()
     try {
       const session = await loginRoot(credentials, fetch, operation.signal)
-      if (!isCurrent(operation.sequence)) return
+      if (!isCurrent(operation.sequence)) return 'superseded'
       initialized.value = true
       user.value = session.user
       state.value = 'authenticated'
       errorCode.value = null
       errorMessage.value = null
+      return 'authenticated'
+    } catch (error) {
+      if (!isCurrent(operation.sequence) || isAbortError(error)) return 'superseded'
+      throw error
     } finally {
       finishOperation(operation.sequence)
     }
@@ -137,6 +172,7 @@ export const useAuthStore = defineStore('auth', () => {
     errorCode,
     errorMessage,
     isAuthenticated,
+    operationRevision: computed(() => operationSequence.value),
     refresh,
     bootstrap,
     login,

@@ -92,6 +92,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）。账号可能已经创建，但会话未建立且不设置 Cookie；客户端应先只读查询 /api/v1/auth/status 确认初始化与认证状态，不得自动重放 bootstrap 或 login。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/auth/login:
     post:
       operationId: loginRootAccount
@@ -132,6 +138,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）；未建立新会话，不设置 Cookie。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/auth/logout:
     post:
       operationId: logoutRootAccount
@@ -142,6 +154,12 @@ paths:
           $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: Session cleared
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）；会话撤销未获确认，不清除 Cookie，客户端不得当作已退出。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/users:
     get:
       operationId: listUsers
