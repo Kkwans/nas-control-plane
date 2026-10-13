@@ -105,13 +105,16 @@ func (recorder *responseRecorder) Unwrap() http.ResponseWriter {
 	return recorder.ResponseWriter
 }
 
-func (recorder *responseRecorder) Flush() {
+// FlushError 保留底层写入错误，供 ResponseController 终止失败的流。
+func (recorder *responseRecorder) FlushError() error {
 	if !recorder.wroteHeader {
 		recorder.WriteHeader(http.StatusOK)
 	}
-	if flusher, ok := recorder.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	return http.NewResponseController(recorder.ResponseWriter).Flush()
+}
+
+func (recorder *responseRecorder) Flush() {
+	_ = recorder.FlushError()
 }
 
 func (recorder *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {

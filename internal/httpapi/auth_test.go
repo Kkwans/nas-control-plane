@@ -76,7 +76,9 @@ func TestInvalidCookieStillRequiresAuthentication(t *testing.T) {
 func TestRootBootstrapLoginSessionProtectsControlPlaneAPIs(t *testing.T) {
 	authService := openTestAuthService(t)
 	agent := &fakeAgentClient{summary: system.Summary{CollectedAt: time.Now().UTC(), Host: system.HostSnapshot{Hostname: "DH4300-PLUS"}}}
-	handler := NewHandler(Config{Auth: authService, Agent: agent, RequestID: func() string { return "req-auth" }})
+	provider := metricsProvider(agent.summary.CollectedAt)
+	provider.state.Summary = &agent.summary
+	handler := NewHandler(Config{Auth: authService, Agent: agent, SummarySnapshots: provider, RequestID: func() string { return "req-auth" }})
 
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/system/summary", nil))

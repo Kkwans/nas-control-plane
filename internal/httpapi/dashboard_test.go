@@ -12,19 +12,21 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
-func TestSystemSummaryUsesRootAgentData(t *testing.T) {
-	collectedAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+func TestSystemSummaryUsesSharedRootAgentSnapshot(t *testing.T) {
+	collectedAt := time.Now().UTC()
 	agent := &fakeAgentClient{summary: system.Summary{
 		CollectedAt: collectedAt,
 		Host:        system.HostSnapshot{Hostname: "DH4300-PLUS"},
 		CPU:         system.CPUStats{UsagePercent: 12.5},
 	}}
-	handler := NewHandler(Config{Agent: agent, AgentTimeout: time.Second, RequestID: func() string { return "req-summary" }})
+	provider := metricsProvider(collectedAt)
+	provider.state.Summary = &agent.summary
+	handler := NewHandler(Config{Agent: agent, SummarySnapshots: provider, AgentTimeout: time.Second, RequestID: func() string { return "req-summary" }})
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/summary", nil))
 
-	if response.Code != http.StatusOK || !agent.deadlineObserved {
+	if response.Code != http.StatusOK || agent.deadlineObserved {
 		t.Fatalf("status = %d, deadlineObserved = %t", response.Code, agent.deadlineObserved)
 	}
 	var body system.Summary

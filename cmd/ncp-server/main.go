@@ -225,6 +225,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 			AgentSocketPath:     *agentSocketPath,
 			Auth:                authService,
 			ControlStore:        controlStore,
+			SummarySnapshots:    collector,
 			DatabaseConnections: databaseConnections,
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,

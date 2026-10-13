@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
@@ -131,6 +130,7 @@ type Config struct {
 	AgentTimeout        time.Duration
 	Auth                Authenticator
 	ControlStore        ControlStore
+	SummarySnapshots    SummarySnapshots
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
 	Terminal            TerminalClient
@@ -180,6 +180,10 @@ type handler struct {
 	agentTimeout        time.Duration
 	auth                Authenticator
 	controlStore        ControlStore
+	summarySnapshots    SummarySnapshots
+	realtimeSubscribers atomic.Int32
+	now                 func() time.Time
+	newRealtimeTicker   func(time.Duration) realtimeTicker
 	sessionCookieSecure bool
 	siteAssetsDirectory string
 	siteIconClient      siteIconHTTPClient
@@ -242,6 +246,7 @@ func NewHandler(config Config) http.Handler {
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
 		controlStore:        config.ControlStore,
+		summarySnapshots:    config.SummarySnapshots,
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
 		terminal:            config.Terminal,
@@ -388,9 +393,9 @@ func (api *handler) agentStatus(response http.ResponseWriter, request *http.Requ
 }
 
 func (api *handler) systemSummary(response http.ResponseWriter, request *http.Request) {
-	summary, err := api.collectSystemSummary(request.Context())
-	if err != nil {
-		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
+	summary, _ := api.latestSystemSummary(api.currentTime())
+	if summary == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，采集尚未就绪、失败或数据已过期。")
 		return
 	}
 	writeJSON(response, http.StatusOK, summary)
@@ -453,109 +458,6 @@ func (api *handler) monitoringSamples(response http.ResponseWriter, request *htt
 		return
 	}
 	writeJSON(response, http.StatusOK, samples)
-}
-
-func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
-	flusher, ok := response.(http.Flusher)
-	if !ok {
-		api.writeError(response, request, http.StatusInternalServerError, "REALTIME_STREAM_UNSUPPORTED", "当前服务不支持实时数据流。")
-		return
-	}
-
-	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	response.Header().Set("Cache-Control", "no-cache, no-transform")
-	response.Header().Set("Connection", "keep-alive")
-	response.Header().Set("X-Accel-Buffering", "no")
-	response.WriteHeader(http.StatusOK)
-	interval := realtimeInterval(request)
-	scope := realtimeScope(request)
-	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
-	flusher.Flush()
-
-	sendSnapshot := func() bool {
-		snapshot := RealtimeSnapshot{CollectedAt: time.Now().UTC()}
-		if scope.summary {
-			summary, err := api.collectSystemSummary(request.Context())
-			if err != nil {
-				snapshot.Errors = append(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE")
-			} else {
-				snapshot.Summary = &summary
-			}
-		}
-		if scope.docker {
-			inventory, err := api.collectDockerInventoryContext(request.Context())
-			if err != nil {
-				snapshot.Errors = append(snapshot.Errors, "DOCKER_INVENTORY_UNAVAILABLE")
-			} else {
-				snapshot.Docker = &inventory
-			}
-		}
-		payload, err := json.Marshal(snapshot)
-		if err != nil {
-			return false
-		}
-		_, err = fmt.Fprintf(response, "event: snapshot\ndata: %s\n\n", payload)
-		if err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
-	}
-
-	if !sendSnapshot() {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-request.Context().Done():
-			return
-		case <-ticker.C:
-			if !sendSnapshot() {
-				return
-			}
-		}
-	}
-}
-
-type realtimeStreamScope struct {
-	summary bool
-	docker  bool
-}
-
-func realtimeScope(request *http.Request) realtimeStreamScope {
-	scope := realtimeStreamScope{}
-	for _, name := range request.URL.Query()["scope"] {
-		switch name {
-		case "summary":
-			scope.summary = true
-		case "docker":
-			scope.docker = true
-		}
-	}
-	if !scope.summary && !scope.docker {
-		scope.summary = true
-	}
-	return scope
-}
-
-func realtimeInterval(request *http.Request) time.Duration {
-	raw := request.URL.Query().Get("interval")
-	if raw == "" {
-		return defaultRealtimeInterval
-	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds < controlstore.MinRefreshIntervalSeconds || seconds > controlstore.MaxRefreshIntervalSeconds {
-		return defaultRealtimeInterval
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func (api *handler) collectSystemSummary(ctx context.Context) (system.Summary, error) {
-	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
-	defer cancel()
-	return api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
 }
 
 func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, error) {

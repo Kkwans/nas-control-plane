@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
-	"github.com/Kkwans/nas-control-plane/internal/system"
 )
 
 type metricsWriteSpy struct {
@@ -27,6 +26,8 @@ type metricsCancelRecorder struct {
 	cancel context.CancelFunc
 }
 
+func (r metricsCancelRecorder) SetWriteDeadline(time.Time) error { return nil }
+
 func (r metricsCancelRecorder) Flush() {
 	r.ResponseRecorder.Flush()
 	if strings.Contains(r.Body.String(), "event: snapshot") {
@@ -35,7 +36,8 @@ func (r metricsCancelRecorder) Flush() {
 }
 func TestMetricsRequestsNeverWriteHistory(t *testing.T) {
 	store := &metricsWriteSpy{}
-	api := &handler{agent: &fakeAgentClient{summary: system.Summary{CollectedAt: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)}}, agentTimeout: time.Second, controlStore: store}
+	agent := &metricsAgentSpy{}
+	api := &handler{agent: agent, summarySnapshots: metricsProvider(time.Now()), agentTimeout: time.Second, controlStore: store}
 	for i := 0; i < 100; i++ {
 		response := httptest.NewRecorder()
 		api.systemSummary(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/summary", nil))
@@ -51,6 +53,9 @@ func TestMetricsRequestsNeverWriteHistory(t *testing.T) {
 		if !strings.Contains(response.Body.String(), "event: snapshot") {
 			t.Fatal("missing snapshot")
 		}
+	}
+	if agent.summaryCalls.Load() != 0 {
+		t.Fatal("HTTP requested summary RPC")
 	}
 	if store.writes != 0 {
 		t.Fatalf("HTTP wrote %d history samples", store.writes)

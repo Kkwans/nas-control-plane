@@ -750,18 +750,22 @@ paths:
   /api/v1/system/summary:
     get:
       operationId: getSystemSummary
-      summary: Get a live NAS host summary
+      summary: 读取共享的 NAS 主机实时快照
+      description: >-
+        只读服务后台 Collector 的最新快照，不触发 Agent RPC 或历史写入。
+        保留原始 collectedAt 与 warnings；有效快照中的源 warnings 不会使整个响应变成 503，
+        客户端须将受影响源显示为不可用。历史候选或写入失败不影响有效实时快照。
       tags: [system]
       security: [{RootSession: []}]
       responses:
         '200':
-          description: Live host metrics collected by Root Agent
+          description: 后台 Root Agent 快照；接收年龄与 collectedAt 年龄均不超过 15 秒，数据未来偏差最多 5 秒
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemSummary'
         '503':
-          description: Root Agent or a required metric source is unavailable
+          description: SYSTEM_SUMMARY_UNAVAILABLE；冷启动、未配置或已停止的 Collector、最新源错误、无效时间或接收/数据年龄超过 15 秒
           content:
             application/json:
               schema:
@@ -1002,22 +1006,55 @@ paths:
         - name: interval
           in: query
           required: false
-          description: Snapshot interval in seconds
+          description: 读取缓存并发送 snapshot 的秒数，不控制主机采集；缺省或非法值回退 5 秒，同一 collectedAt 可以重复发送
           schema:
             type: integer
             minimum: 2
             maximum: 300
             default: 5
+        - name: scope
+          in: query
+          required: false
+          style: form
+          explode: true
+          description: 可重复指定 summary 和 docker；未提供或全部不识别时回退 summary。docker-only 不读取主机快照，也不携带主机历史错误
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [summary, docker]
       summary: 订阅控制台实时刷新事件
+      description: >-
+        保留 retry 行和 snapshot 事件，事件 data 为 RealtimeSnapshot JSON；新连接立即发送当前状态。
+        summary 只读共享缓存，不触发主机 RPC 或历史写入；Docker 暂仍按每连接发送调用有超时的 Agent RPC，
+        mixed scope 可能等待其最多约 5 秒，并在 Docker 完成后检查 summary 新鲜度。
+        外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
+        每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；Docker RPC 或正在写入可延迟该节拍。
+        每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或主机快照 provider 停止会关闭相应流。
+        不保证每个采样均送达，无重放；客户端必须按内层时间去重并独立判断 15 秒新鲜度。
+        每个服务 Handler 的全部 scope 共享最多 64 条连接，不宣称共享编码或整个服务的硬内存上限。
       tags: [system]
       security: [{RootSession: []}]
       responses:
         '200':
-          description: 每 5 秒发送一次 snapshot 事件
+          description: 按 interval 发送最新 snapshot，默认 5 秒；源不可用时省略 summary，warnings 与历史错误分别保留
           content:
             text/event-stream:
               schema:
                 type: string
+                description: SSE data 使用 components/schemas/RealtimeSnapshot 定义的 JSON
+        '503':
+          description: REALTIME_SUBSCRIBER_LIMIT；认证通过后、提交流响应前拒绝超过 64 的新连接
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: REALTIME_STREAM_UNSUPPORTED；响应 writer 不支持有界实时流
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Root 会话无效
           content:
@@ -2678,6 +2715,35 @@ components:
         transport:
           type: string
           examples: [unix]
+    RealtimeSnapshot:
+      type: object
+      required: [collectedAt]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+          description: 本次事件发送时间，不可用于为内层资源保鲜
+        summary:
+          $ref: '#/components/schemas/SystemSummary'
+        docker:
+          $ref: '#/components/schemas/DockerInventory'
+        errors:
+          type: array
+          description: >-
+            各资源独立状态，客户端须检查全部错误。SYSTEM_SUMMARY_UNAVAILABLE 表示没有当前可用主机快照；
+            MONITORING_WRITE_FAILED 表示历史写入失败，MONITORING_SAMPLE_INCOMPLETE 表示核心源 warning 导致历史候选不完整，
+            MONITORING_SAMPLE_INVALID 表示历史值无效，MONITORING_SAMPLE_LIMIT_EXCEEDED 表示历史候选超限。
+            四种历史错误均不等同于 Agent 不可用，也不取消有效 summary。
+            源 warnings 保留在 summary.warnings 中；Docker 错误独立为 DOCKER_INVENTORY_UNAVAILABLE。
+          items:
+            type: string
+            enum:
+              - SYSTEM_SUMMARY_UNAVAILABLE
+              - DOCKER_INVENTORY_UNAVAILABLE
+              - MONITORING_WRITE_FAILED
+              - MONITORING_SAMPLE_INCOMPLETE
+              - MONITORING_SAMPLE_INVALID
+              - MONITORING_SAMPLE_LIMIT_EXCEEDED
     SystemSummary:
       type: object
       required: [collectedAt, host, cpu, memory, storage, network, warnings]
