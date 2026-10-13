@@ -1,12 +1,12 @@
 # M08-C1 容器终端的有界中断与关闭
 
-日期：2026-10-13。基线：7dc9d2159b098ebf0197207d4d643b31a13d48ac。状态：代码与独立隔离审查完成；分支完整CI待验收。
+日期：2026-10-13。基线：7dc9d2159b098ebf0197207d4d643b31a13d48ac。状态：容器片6cb1688已推送并通过完整CI；主机H1追加片见文末，独立记录验证状态。
 
 ## 目标与范围
 
 活动流撤销已经到达Server与Agent流；本片继续解决已取得Docker exec attachment之后，容器输入、调整尺寸和关闭同步阻塞的问题。保留Root终端能力、Shell选择、Session与RPC对外契约。
 
-不包含ExecAttach返回前的SDK握手、Manager.Start全局持锁重构、宿主机PTY与任意子孙进程终止。不得为了结束一个终端而停止整个容器、杀PID 1、遍历杀进程，或限制Root用户的既有管理能力。
+不包含ExecAttach返回前的SDK握手、Manager.Open全局持锁重构、宿主机PTY与任意子孙进程终止。不得为了结束一个终端而停止整个容器、杀PID 1、遍历杀进程，或限制Root用户的既有管理能力。
 
 ## 已确认问题
 
@@ -37,4 +37,31 @@
 
 ## 保留缺口
 
-本片不承诺总开启时间有界，不修复ExecAttach前同步握手及Manager.Start持锁，不承诺宿主机PTY的非阻塞状态、直接child的等待或所有后代回收。容器shell可忽略控制字节或留下脱离任务，后续须先定义所有权和观测策略。两秒关闭加100ms最后通知还存在调度开销，不宣称RPC精确在2.000秒内结束。
+本片不承诺总开启时间有界，不修复ExecAttach前同步握手及Manager.Open持锁，不承诺宿主机PTY的非阻塞状态、直接child的等待或所有后代回收。容器shell可忽略控制字节或留下脱离任务，后续须先定义所有权和观测策略。两秒关闭加100ms最后通知还存在调度开销，不宣称RPC精确在2.000秒内结束。
+
+## M08-H1：主机 PTY 的可取消 I/O 与直属进程回收
+
+基线：208bc58262445180cbea87ea2ae91b2b70e08575。状态：实现及独立审查完成，本地纯 fake 竞态与跨平台编译通过；真实 PTY 用例尚待隔离 Linux CI，不宣称 NAS 实机验收。
+
+### 已确认问题与范围
+
+已有 Resize 经 pty.Setsize 调用 File.Fd，可能把 master 切回阻塞模式；File.Read/Write 也可能在 Go poller 内等待，外层 EAGAIN 检查不足以保证取消。旧 Close 不等待有效 Wait 结果，重复调用还可能丢失首次错误。
+
+本片只处理已成功启动的主机 PTY、启动成功后的失败出口、直属 child 的唯一回收责任。保留 Root、Shell/rc/环境、增强能力、初始窗口大小与 RPC 契约。不终止任意后代、进程组或其他终端，不调整系统权限。
+
+### 实现契约
+
+1. master 通过 SyscallConn.Control 设置非阻塞；Read/Write 的 RawConn 回调只做一次系统调用并返回 true，让应用层控制 EAGAIN/EINTR 等待。Resize 通过受保护 fd 执行 TIOCSWINSZ，禁止运行路径再调用 File.Fd 或 pty.Setsize。
+2. 读操作与写入/调整尺寸分别使用可取消 gate。写入两秒总预算覆盖排队、部分写入与重试，只推进已写后缀，不重放输入。Resize 的排队同样有预算。
+3. 父取消、显式关闭拒绝新输入并中断本地等待；自然退出须保留可立即读取的尾部输出，直到 EOF/EAGAIN，不等待仍持有 slave 的后代。
+4. 每个直接 child 只有一个 Cmd.Wait owner。非零退出和信号终止的有效 ProcessState 也属于已回收，不能只以 WaitErr==nil 判定。
+5. Close 从入口共享两秒清理预算，保存唯一结果；区分本地 I/O/关闭未确认与直属进程退出未确认。迟到 Wait 继续由原 owner 接收，不把既已返回的超时改成成功。
+6. 已取得 PTY 后的初始化失败和取消走同一清理路径；Agent 日志只记录安全的分类标志，不记录终端输入或底层敏感错误文本。
+
+### 验收与真实边界
+
+- 本地只执行纯 fake/barrier 的生命周期、取消、并发 Close、部分写入、预算和错误分类测试及 race；真实 PTY/直属进程用例仅在既有隔离 Linux CI 执行。
+- 内核用例检查 Resize 前后 O_NONBLOCK、空读取消、写背压、直属 child 的零/非零/信号退出回收；保留既有交互 PTY 回归。
+- 两秒预算约束应用层等待，依赖正常 Linux 非阻塞 syscall/ioctl 返回；不宣称可抢占任意内核 D-state、驱动卡死或精确墙钟硬截止。
+- nil Close 仅证明所拥有资源与直接 child 的回收结果，不代表所有后代已消失或 Root 命令副作用撤销。
+- Manager.Open 全局锁、PTY 创建之前的 locale/能力探测、容器 attach 之前的握手仍是独立缺口；NAS 实机未验证。

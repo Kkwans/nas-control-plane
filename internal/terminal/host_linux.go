@@ -4,14 +4,10 @@ package terminal
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -97,6 +93,19 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 		}
 		return nil, coded("TERMINAL_HOST_START_FAILED", err)
 	}
+	transport := newHostPTYTransport(terminalFile)
+	session := newHostSession(ctx, transport, command.Process.Kill, func() hostWaitResult {
+		return waitHostCommand(command)
+	})
+	if err := session.initialize(transport.Init); err != nil {
+		if readyReader != nil {
+			_ = readyReader.Close()
+		}
+		if readyWriter != nil {
+			_ = readyWriter.Close()
+		}
+		return nil, coded("TERMINAL_HOST_START_FAILED", err)
+	}
 	if readyWriter != nil {
 		_ = readyWriter.Close()
 	}
@@ -118,25 +127,8 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 	if metadata.Shell == "bash" {
 		applyHostBashCapabilities(&metadata, capabilityProbe)
 	}
-	if err := ctx.Err(); err != nil {
-		_ = terminalFile.Close()
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return nil, coded("TERMINAL_SESSION_CANCELED", err)
-	}
-	if err := syscall.SetNonblock(int(terminalFile.Fd()), true); err != nil {
-		_ = terminalFile.Close()
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return nil, coded("TERMINAL_HOST_START_FAILED", err)
-	}
-
-	session := &hostSession{file: terminalFile, command: command, exited: make(chan struct{}), metadata: metadata}
-	go func() {
-		_ = command.Wait()
-		close(session.exited)
-	}()
-	return session, nil
+	session.metadata = metadata
+	return session.started()
 }
 
 func hostEnhancement(rcFile, bleFile string) string {
@@ -234,62 +226,4 @@ func waitForTerminalReady(reader *os.File, contexts ...context.Context) (bool, s
 		_ = reader.Close()
 		return false, shellCapabilityProbe{Err: context.DeadlineExceeded}
 	}
-}
-
-type hostSession struct {
-	file     *os.File
-	command  *exec.Cmd
-	exited   chan struct{}
-	close    sync.Once
-	metadata SessionMetadata
-}
-
-func (s *hostSession) Metadata() SessionMetadata {
-	metadata := s.metadata
-	if metadata.Shell == "" {
-		metadata.Shell = filepath.Base(s.command.Path)
-	}
-	return metadata
-}
-
-func (s *hostSession) Read(ctx context.Context, output []byte) (int, error) {
-	for {
-		read, err := s.file.Read(output)
-		if read > 0 || err == nil {
-			return read, err
-		}
-		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
-			return 0, err
-		}
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-s.exited:
-			return 0, os.ErrClosed
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-}
-
-func (s *hostSession) Write(input []byte) (int, error) {
-	return s.file.Write(input)
-}
-
-func (s *hostSession) Resize(rows, cols uint16) error {
-	return pty.Setsize(s.file, &pty.Winsize{Rows: rows, Cols: cols})
-}
-
-func (s *hostSession) Close() error {
-	var closeErr error
-	s.close.Do(func() {
-		if s.command.Process != nil {
-			if err := s.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				closeErr = err
-			}
-		}
-		if err := s.file.Close(); err != nil && !errors.Is(err, os.ErrClosed) && closeErr == nil {
-			closeErr = err
-		}
-	})
-	return closeErr
 }

@@ -58,12 +58,15 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 			classification := "TERMINAL_CLOSE_FAILED"
 			if errors.Is(err, terminal.ErrContainerExitUnconfirmed) {
 				classification = "TERMINAL_CONTAINER_EXIT_UNCONFIRMED"
+			} else if errors.Is(err, terminal.ErrHostExitUnconfirmed) {
+				classification = "TERMINAL_HOST_EXIT_UNCONFIRMED"
 			}
 			logger := s.logger
 			if logger == nil {
 				logger = slog.Default()
 			}
-			logger.Warn("terminal cleanup incomplete", "code", classification, "session_id", opened.ID, "target", opened.Target, "local_cleanup_unconfirmed", errors.Is(err, terminal.ErrContainerCleanupUnconfirmed))
+			localCleanupUnconfirmed := errors.Is(err, terminal.ErrContainerCleanupUnconfirmed) || errors.Is(err, terminal.ErrHostCleanupUnconfirmed)
+			logger.Warn("terminal cleanup incomplete", "code", classification, "session_id", opened.ID, "target", opened.Target, "local_cleanup_unconfirmed", localCleanupUnconfirmed)
 		}
 		return err
 	})

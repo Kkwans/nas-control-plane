@@ -225,3 +225,15 @@
 - M10-C九个文件冻结且独立审查无发现：四decoder先读取完整有界body，再严格解码；保持8KiB/16KiB/1MiB容量，完整空白与尾部计入，35路由超限统一413，保留原400/415及认证来源优先级和数字精度。
 - 新增测试覆盖读取边界/分块、读取错误、取消/空读、35路由无副作用、inspect前缀与Close及保护顺序。旧四decoder的overlay负对照产生432项预期失败，证明隐藏尾部等缺陷可被捕捉。冻结后race通过20.041s，安全HTTP回归2.095s、go build ./...、OpenAPI、87项前端契约测试与vue-tsc、diff检查通过。完整CI待验收。
 - 不启动本地网络服务、不无限drain、不修改HTTP timeout；取消依赖底层Reader配合。限额是payload完整字节预算，不是进程总内存硬上限。无NAS、真实Docker或生产操作。
+
+## 13:36 UTC 完整请求体限额 CI 闭环
+
+- 208bc58262445180cbea87ea2ae91b2b70e08575 已推送并核对远端；[CI 38405801295](https://github.com/Kkwans/nas-control-plane/actions/runs/38405801295)完整通过：556项前端单元、157项Chromium，Go检查与Compose均成功，发布任务跳过。
+- 主机PTY H1正独立审查：已发现并修正初版在直属child自然退出后立即关闭master导致尾部输出丢失的问题；尾部排空与迟到父取消的并发回归仍在补充。不把未冻结工作树或未执行的真实PTY用例计为已验收。
+
+## 13:38 UTC 主机 PTY 取消与回收
+
+- H1改用一次非阻塞RawConn系统调用与可取消gate；Resize不再通过File.Fd恢复阻塞。Write部分成功不重放，共享预算；Close保存首次结果并分别报告本地清理/直属child回收未确认。
+- 独立审查发现自然Wait后立即abort会丢失尾部输出，已改为排空立即可读内容，在EOF/EAGAIN结束；自然退出后的输入拒绝不破坏尾部。父取消watcher保留到排空/关闭，覆盖未开始Read时迟到取消；deadline与receipt同时就绪时再次核对凭据。
+- 独立纯fake `TestHostCleanup|TestHostRawTransport` race十轮通过；实现方生命周期race十轮及Agent分类测试通过，全包仅编译检查、Darwin/amd64 Agent包交叉编译通过。无本地真实PTY、Shell或子进程用例执行。
+- 新增隔离CI用例验证O_NONBLOCK、真实PTY读取消/写背压和零/非零/信号终止直属child回收，尚待完整CI。启动前locale/能力探测、Manager.Open持锁和容器attach握手不在本片范围；保持既有readiness流程，不额外添加无截止的等待。
