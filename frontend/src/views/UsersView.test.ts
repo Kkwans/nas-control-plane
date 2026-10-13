@@ -4,6 +4,7 @@ import { createApp, defineComponent, h, nextTick, type App } from 'vue'
 import type { ManagedUser, PasswordPolicy } from '@/api/control'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import UsersView from './UsersView.vue'
+import { UserWriteOutcomeUnknownError } from '@/api/userWriteOutcome'
 
 const api = vi.hoisted(() => ({ requestUsers: vi.fn(), requestPasswordPolicy: vi.fn(), updatePasswordPolicy: vi.fn(), createUser: vi.fn(), updateUserPassword: vi.fn(), updateUserStatus: vi.fn(), deleteUser: vi.fn() }))
 const messages = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }))
@@ -32,6 +33,7 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 type State = {
+  unknownWrites: { action: string; target: string | number; username: string }[]; createUnknown: boolean; passwordUnknown: boolean;
   users: ManagedUser[]; usersLoading: boolean; usersError: string; policyLoading: boolean; policyError: string;
   policyDraft: PasswordPolicy | null; confirmedPolicy: PasswordPolicy | null; policyDirty: boolean; policySaving: boolean; policyReady: boolean;
   createOpen: boolean; passwordOpen: boolean; dangerOpen: boolean; createBusy: boolean; passwordBusy: boolean; dangerBusy: boolean;
@@ -365,5 +367,146 @@ describe('UsersView 写入弹窗与目标归属', () => {
     if (outcome === 'success') write.resolve(); else write.reject(new Error('fixture'))
     await pending; expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0)
     expect(api.requestUsers).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('UsersView 账号写入结果未知', () => {
+  const password = { currentPassword: 'fixture-current-only', newPassword: 'fixture-password-only', confirmation: 'fixture-password-only' }
+  const second = { ...user, id: 3, username: 'fixture-second' }
+
+  it.each([' ', '\u0085', '\u2003'])('创建未知清除提交密码，关闭重开和只读列表不能解锁，同名 %j 空白也不能重放，其他用户名可用', async (space) => {
+    api.createUser.mockRejectedValueOnce(new UserWriteOutcomeUnknownError('create')).mockResolvedValue(second)
+    mount(); await flush(); state.createOpen = true
+    state.createForm = { username: `${space}${user.username}${space}`, password: password.newPassword }
+    await state.submitCreate(); await flush()
+    expect(state.createForm.password).toBe(''); expect(state.createBusy).toBe(false)
+    expect(state.unknownWrites).toEqual([{ action: 'create', target: user.username, username: user.username }])
+    expect(button('创建账号').disabled).toBe(true)
+    state.createOpen = false; state.createOpen = true
+    state.createForm = { username: user.username, password: password.newPassword }
+    await state.loadUsers(); await state.submitCreate(); await flush()
+    expect(api.createUser).toHaveBeenCalledTimes(1); expect(state.createUnknown).toBe(true)
+    expect(host.textContent).toContain('不能证明此前请求成功'); expect(messages.success).not.toHaveBeenCalled()
+    state.createForm = { username: second.username, password: password.newPassword }
+    await state.submitCreate(); expect(api.createUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('创建未知键与 SQLite NOCASE 一致，ASCII 大小写不能绕过，非 ASCII 不误合并', async () => {
+    api.createUser.mockRejectedValue(new UserWriteOutcomeUnknownError('create'))
+    mount(); await flush(); state.createOpen = true
+    state.createForm = { username: 'Fixture-Ä', password: password.newPassword }; await state.submitCreate()
+    state.createForm = { username: '\u0085FIXTURE-Ä\u0085', password: password.newPassword }; await state.submitCreate()
+    expect(api.createUser).toHaveBeenCalledTimes(1); expect(state.createUnknown).toBe(true)
+    expect(state.unknownWrites).toEqual([{ action: 'create', target: 'fixture-Ä', username: 'Fixture-Ä' }])
+    state.createForm = { username: 'fixture-ä', password: password.newPassword }; await state.submitCreate()
+    expect(api.createUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('旧创建弹窗迟到未知仍在页面可见，不清后来不同用户名的密码草稿', async () => {
+    const write = deferred<ManagedUser>(); api.createUser.mockReturnValue(write.promise)
+    mount(); await flush(); state.createOpen = true
+    state.createForm = { username: user.username, password: password.newPassword }
+    const pending = state.submitCreate(); state.createOpen = false; state.createOpen = true
+    state.createForm = { username: second.username, password: 'fixture-later-secret' }
+    write.reject(new UserWriteOutcomeUnknownError('create')); await pending; await flush()
+    expect(host.textContent).toContain(`${user.username}：创建账号结果未确认`)
+    expect(state.createForm).toEqual({ username: second.username, password: 'fixture-later-secret' })
+    expect(state.createUnknown).toBe(false); expect(messages.error).not.toHaveBeenCalled()
+    expect(JSON.stringify(state.unknownWrites)).not.toContain('secret')
+  })
+
+  it.each([1, 2])('账号 %s 改密未知不成功/重载，清密码；旧列表失效且只读核对不能确认密码', async (id) => {
+    vi.useFakeTimers(); const stale = deferred<ManagedUser[]>()
+    api.requestUsers.mockReturnValueOnce(stale.promise); api.updateUserPassword.mockRejectedValue(new UserWriteOutcomeUnknownError('password'))
+    mount(); await flush(); state.openPassword({ ...user, id }); state.passwordForm = { ...password }
+    await state.submitPassword(); await flush()
+    expect(Object.values(state.passwordForm)).toEqual(['', '', '']); expect(state.passwordBusy).toBe(false)
+    expect(button('保存新密码').disabled).toBe(true)
+    expect((api.requestUsers.mock.calls[0]![0] as AbortSignal).aborted).toBe(true)
+    expect(api.requestUsers).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0)
+    stale.resolve([{ ...user, username: 'stale' }]); await flush(); expect(state.users).toEqual([])
+    state.passwordOpen = false; state.openPassword({ ...user, id }); state.passwordForm = { ...password }
+    await state.loadUsers(); await state.submitPassword()
+    expect(api.updateUserPassword).toHaveBeenCalledTimes(1); expect(state.passwordUnknown).toBe(true)
+    expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled()
+  })
+
+  it('改密 A 迟到未知不影响 B 草稿/在途锁，A 的其他操作仍能提交', async () => {
+    const first = deferred<void>(); const next = deferred<void>()
+    api.updateUserPassword.mockReturnValueOnce(first.promise).mockReturnValueOnce(next.promise)
+    api.updateUserStatus.mockResolvedValue({ ...user, disabled: true })
+    mount(); await flush(); state.openPassword(user); state.passwordForm = { ...password }
+    const pending = state.submitPassword(); state.passwordOpen = false; state.openPassword(second); state.passwordForm = { ...password }
+    state.passwordForm = { currentPassword: '', newPassword: 'fixture-second-password', confirmation: 'fixture-second-password' }
+    const secondDraft = { ...state.passwordForm }
+    const secondPending = state.submitPassword()
+    first.reject(new UserWriteOutcomeUnknownError('password')); await pending; await flush()
+    expect(host.textContent).toContain(`${user.username}：修改密码结果未确认`)
+    expect(state.passwordForm).toEqual(secondDraft); expect(state.passwordBusy).toBe(true); expect(state.passwordUnknown).toBe(false)
+    state.requestStatusChange(user); await state.confirmDanger(); expect(api.updateUserStatus).toHaveBeenCalledTimes(1)
+    next.resolve(); await secondPending
+  })
+
+  it.each(['status', 'delete'] as const)('%s 未知即使弹窗关闭仍显示；使旧 GET 失效，后续 GET 不清保护且其他账号可操作', async (action) => {
+    const write = deferred<ManagedUser | void>(); const stale = deferred<ManagedUser[]>()
+    const writeApi = action === 'status' ? api.updateUserStatus : api.deleteUser
+    writeApi.mockReturnValueOnce(write.promise)
+    api.requestUsers.mockReturnValueOnce(stale.promise)
+    mount(); await flush(); state.users = [user, second]
+    const open = action === 'status' ? state.requestStatusChange : state.requestDelete
+    open(user); const pending = state.confirmDanger(); state.dangerOpen = false
+    write.reject(new UserWriteOutcomeUnknownError(action)); await pending; await flush()
+    expect(host.textContent).toContain('账号操作结果未确认')
+    expect((api.requestUsers.mock.calls[0]![0] as AbortSignal).aborted).toBe(true)
+    stale.resolve([]); await flush(); expect(state.users).toEqual([user, second])
+    await state.loadUsers(); open(user); state.dangerOpen = true; await state.confirmDanger()
+    expect(writeApi).toHaveBeenCalledTimes(1)
+    writeApi.mockResolvedValue(action === 'status' ? { ...second, disabled: true } : undefined)
+    open(second); await state.confirmDanger(); expect(writeApi).toHaveBeenCalledTimes(2)
+    expect(state.unknownWrites).toHaveLength(1)
+  })
+
+  it('未知禁用后只读列表观察到已禁用，反向启用仍不能绕过同目标状态保护', async () => {
+    api.updateUserStatus.mockRejectedValue(new UserWriteOutcomeUnknownError('status'))
+    mount(); await flush(); state.requestStatusChange(user); await state.confirmDanger()
+    api.requestUsers.mockResolvedValue([{ ...user, disabled: true }]); await state.loadUsers()
+    expect(state.users[0]!.disabled).toBe(true)
+    state.requestStatusChange(state.users[0]!); state.dangerOpen = true; await state.confirmDanger()
+    expect(api.updateUserStatus).toHaveBeenCalledTimes(1)
+    expect(api.updateUserStatus).toHaveBeenCalledWith(user.id, true)
+    expect(state.unknownWrites).toEqual([{ action: 'status', target: user.id, username: user.username }])
+    expect(messages.success).not.toHaveBeenCalled()
+  })
+
+  it('危险操作旧弹窗未知到达时，关闭同目标重开弹窗，不留下看似可提交的确认按钮', async () => {
+    const write = deferred<ManagedUser>(); api.updateUserStatus.mockReturnValue(write.promise)
+    mount(); await flush(); state.requestStatusChange(user); const pending = state.confirmDanger()
+    state.dangerOpen = false; state.requestStatusChange(user)
+    write.reject(new UserWriteOutcomeUnknownError('status')); await pending; await flush()
+    expect(state.dangerOpen).toBe(false); expect(host.querySelector('[data-danger]')).toBeNull()
+    state.requestStatusChange(user); await state.confirmDanger()
+    expect(state.dangerOpen).toBe(false); expect(api.updateUserStatus).toHaveBeenCalledTimes(1)
+    state.requestDelete(user); await flush(); expect(host.querySelector('[data-danger]')).not.toBeNull()
+  })
+
+  it('会话失效清除已有未知记录及敏感输入，不把保护带到下一会话', async () => {
+    api.createUser.mockRejectedValue(new UserWriteOutcomeUnknownError('create'))
+    mount(); await flush(); state.createOpen = true
+    state.createForm = { username: user.username, password: password.newPassword }; await state.submitCreate()
+    expect(state.unknownWrites).toHaveLength(1)
+    beginSession(); await flush()
+    expect(state.unknownWrites).toEqual([]); expect(state.createForm.password).toBe('')
+    expect(host.textContent).not.toContain('账号操作结果未确认')
+  })
+
+  it.each(['unmount', 'session'] as const)('%s 清除未知记录，迟到未知不恢复旧页面状态', async (cleanup) => {
+    const write = deferred<void>(); api.updateUserPassword.mockReturnValue(write.promise)
+    mount(); await flush(); state.openPassword(user); state.passwordForm = { ...password }
+    const pending = state.submitPassword()
+    if (cleanup === 'unmount') { app!.unmount(); app = undefined } else invalidateSession()
+    write.reject(new UserWriteOutcomeUnknownError('password')); await pending
+    expect(state.unknownWrites).toEqual([]); expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled()
+    expect(state.passwordForm.newPassword).toBe('')
   })
 })

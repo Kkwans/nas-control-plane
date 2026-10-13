@@ -1,9 +1,10 @@
 import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
 import { SiteWriteUnknownError } from './siteWriteOutcome'
+import { requestUserWrite } from './userWriteOutcome'
 import { NcpApiError } from '@/api/system'
 import { parseIgnoredSitesResponse, parseSiteListResponse, parseSiteProfileResponse } from './siteResponse'
-import { parsePasswordPolicyResponse, parseUserListResponse } from './userResponse'
+import { normalizeManagedUsername, parseManagedUserResponse, parsePasswordPolicyResponse, parseUserListResponse } from './userResponse'
 
 export interface UserPreferences {
   refreshIntervalSeconds: number
@@ -329,28 +330,38 @@ export function updatePasswordPolicy(input: PasswordPolicy): Promise<PasswordPol
 }
 
 export function createUser(input: { username: string; password: string }): Promise<ManagedUser> {
-  return request('/api/v1/users', { method: 'POST', body: JSON.stringify(input) })
+  const username = normalizeManagedUsername(input.username)
+  const body = JSON.stringify(input)
+  return requestUserWrite('/api/v1/users', { method: 'POST', body }, 'create', 201, (value) => {
+    const user = parseManagedUserResponse(value)
+    if (!username || user.username !== username || user.disabled) throw new Error('invalid user result')
+    return user
+  })
 }
 
 export function updateUserStatus(userId: number, disabled: boolean): Promise<ManagedUser> {
-  return request(`/api/v1/users/${userId}/status`, { method: 'PUT', body: JSON.stringify({ disabled }) })
+  return requestUserWrite(`/api/v1/users/${userId}/status`, { method: 'PUT', body: JSON.stringify({ disabled }) }, 'status', 200, (value) => {
+    const user = parseManagedUserResponse(value)
+    if (user.id !== userId || user.disabled !== disabled) throw new Error('invalid user result')
+    return user
+  })
 }
 
 export function updateUserPassword(
   userId: number,
   input: { currentPassword?: string; newPassword: string },
 ): Promise<void> {
-  return request(`/api/v1/users/${userId}/password`, {
+  return requestUserWrite(`/api/v1/users/${userId}/password`, {
     method: 'PUT',
     body: JSON.stringify({
       currentPassword: input.currentPassword || '',
       newPassword: input.newPassword,
     }),
-  })
+  }, 'password', 204, () => undefined)
 }
 
 export function deleteUser(userId: number): Promise<void> {
-  return request(`/api/v1/users/${userId}`, { method: 'DELETE' })
+  return requestUserWrite(`/api/v1/users/${userId}`, { method: 'DELETE' }, 'delete', 204, () => undefined)
 }
 
 export function followLogs(

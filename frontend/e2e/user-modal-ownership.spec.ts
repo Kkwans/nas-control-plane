@@ -41,22 +41,22 @@ async function fixture(page: Page) {
     const held = gates.splice(index, 1)[0]!
     held.received.resolve()
     await held.release.promise
-    if (held.status !== 200) return route.fulfill({ status: held.status, json: { code: 'FIXTURE_FAILURE', message: 'fixture stale write failure' } })
+    if (held.status >= 400) return route.fulfill({ status: held.status, json: { code: 'FIXTURE_FAILURE', message: 'fixture stale write failure' } })
     if (method === 'POST' && path === usersPath) {
       users = [...users, created]
-      return route.fulfill({ json: created })
+      return route.fulfill({ status: held.status, json: created })
     }
     if (method === 'PUT' && path.endsWith('/status')) {
       const id = Number(path.split('/')[4])
       users = users.map((user) => user.id === id ? { ...user, disabled: true } : user)
-      return route.fulfill({ json: users.find((user) => user.id === id) })
+      return route.fulfill({ status: held.status, json: users.find((user) => user.id === id) })
     }
     if (method === 'DELETE') users = users.filter((user) => user.id !== Number(path.split('/')[4]))
-    return route.fulfill({ status: 204 })
+    return held.status === 204 ? route.fulfill({ status: 204 }) : route.fulfill({ status: held.status, json: {} })
   })
   return {
     writes,
-    hold(path: string, method: string, status = 200) {
+    hold(path: string, method: string, status = method === 'POST' ? 201 : path.endsWith('/status') ? 200 : 204) {
       const held = { path, method, status, received: deferred(), release: deferred() }
       gates.push(held)
       return held
@@ -64,7 +64,7 @@ async function fixture(page: Page) {
     async release(held: (typeof gates)[number]) {
       const response = page.waitForResponse((value) => new URL(value.url()).pathname === held.path && value.request().method() === held.method)
       // 改密成功处理函数必定发起只读对账；先注册观察，避免错过快速的 204 回调。
-      const reconciled = held.status === 200 && held.path.endsWith('/password')
+      const reconciled = held.status === 204 && held.path.endsWith('/password')
         ? page.waitForRequest((request) => new URL(request.url()).pathname === usersPath && request.method() === 'GET')
         : undefined
       held.release.resolve()
@@ -111,7 +111,7 @@ for (const mode of ['close', 'cancel', 'escape'] as const) {
   test(`创建挂起后 ${mode} 清空敏感草稿；重开单飞且迟到结果不关闭新弹窗`, async ({ page }) => {
     const api = await fixture(page)
     await ready(page)
-    const held = api.hold(usersPath, 'POST', mode === 'cancel' ? 503 : 200)
+    const held = api.hold(usersPath, 'POST', mode === 'cancel' ? 503 : 201)
     await createButton(page).click()
     await dialog(page).getByPlaceholder('例如 operator').fill(created.username)
     await fillPassword(page, secretA)
@@ -132,13 +132,14 @@ for (const mode of ['close', 'cancel', 'escape'] as const) {
     await expect(dialog(page).locator('input[type="password"]')).toHaveValue(secretB)
     await expect(page.locator('.el-message')).toHaveCount(0)
     expect(api.writes).toEqual([{ method: 'POST', path: usersPath, body: { username: created.username, password: secretA } }])
-    // 遮罩下的目录仍应消费原创建的已确认结果；失败不凭用户名猜测创建归属。
+    // 遮罩下的目录仍应消费已确认结果；503 为未知，不凭用户名猜测归属。
+    if (mode === 'cancel') await expect(page.locator('.user-write-warning')).toContainText(created.username)
     await expect(row(page, created.username)).toHaveCount(mode === 'cancel' ? 0 : 1)
     await close(page, 'cancel')
   })
 }
 
-for (const status of [200, 503]) {
+for (const status of [204, 503]) {
   test(`改密 A 挂起后重开 A/B，${status} 迟到结果不清 B 且保留策略草稿`, async ({ page }) => {
     const api = await fixture(page)
     await ready(page)
@@ -215,5 +216,68 @@ for (const status of [200, 503]) {
     await expect(row(page, userA.username).locator('.account-status')).toHaveText(status === 200 ? '已禁用' : '可用')
     await expect(row(page, userB.username).locator('.account-status')).toHaveText('可用')
     expect(api.writes).toEqual([{ method: 'PUT', path: `${usersPath}/${userA.id}/status`, body: { disabled: true } }])
+  })
+}
+
+// 错误成功状态也可能已提交；只读看见账号不确认原创建归属或解除重放保护。
+test('创建返回 200 后保持未知；只读刷新与重开不解除同名保护', async ({ page }) => {
+  const api = await fixture(page)
+  await ready(page)
+  const held = api.hold(usersPath, 'POST', 200)
+  await createButton(page).click()
+  await dialog(page).getByPlaceholder('例如 operator').fill(created.username)
+  await fillPassword(page, secretA)
+  await createSubmit(page).click()
+  await held.received.promise
+  await api.release(held)
+  await expect(createSubmit(page)).toBeDisabled()
+  await blankSecrets(dialog(page))
+  await expect(page.locator('.el-message')).toHaveCount(0)
+  await close(page, 'cancel')
+  const warning = page.locator('.user-write-warning')
+  await expect(warning).toContainText(created.username)
+  const read = page.waitForResponse((response) => new URL(response.url()).pathname === usersPath && response.request().method() === 'GET')
+  await warning.getByRole('button', { name: '只读刷新账号列表' }).click()
+  await read
+  await expect(row(page, created.username)).toBeVisible()
+  await expect(warning).toBeVisible()
+  await createButton(page).click()
+  await blankSecrets(dialog(page))
+  // NEL 是 Go TrimSpace 空白；JS trim 不处理，必须使用服务器一致的目标键。
+  await dialog(page).getByPlaceholder('例如 operator').fill(`\u0085${created.username}\u0085`)
+  await fillPassword(page, secretB)
+  await expect(createSubmit(page)).toBeDisabled()
+  await createSubmit(page).dispatchEvent('click')
+  expect(api.writes).toHaveLength(1)
+  await dialog(page).getByPlaceholder('例如 operator').fill('fixture-unrelated-new')
+  await expect(createSubmit(page)).toBeEnabled()
+})
+
+for (const status of [200, 503]) {
+  test(`改密返回 ${status} 后清空密码且同账号不重放；其他账号仍可操作`, async ({ page }) => {
+    const api = await fixture(page)
+    await ready(page)
+    const held = api.hold(`${usersPath}/${userA.id}/password`, 'PUT', status)
+    await openPassword(page, userA.username)
+    await fillPassword(page, secretA)
+    await passwordSubmit(page).click()
+    await held.received.promise
+    await api.release(held)
+    await expect(passwordSubmit(page)).toBeDisabled()
+    await blankSecrets(dialog(page))
+    await expect(page.locator('.el-message')).toHaveCount(0)
+    await close(page, 'close')
+    await expect(page.locator('.user-write-warning')).toContainText(userA.username)
+    await openPassword(page, userA.username)
+    await blankSecrets(dialog(page))
+    await fillPassword(page, secretB)
+    await expect(passwordSubmit(page)).toBeDisabled()
+    await passwordSubmit(page).dispatchEvent('click')
+    expect(api.writes).toHaveLength(1)
+    await close(page, 'cancel')
+    await openPassword(page, userB.username)
+    await expect(passwordSubmit(page)).toBeEnabled()
+    await blankSecrets(dialog(page))
+    expect(api.writes).toHaveLength(1)
   })
 }

@@ -7,6 +7,7 @@ import * as database from './database'
 import * as docker from './docker'
 import * as system from './systemInfo'
 import { NcpApiError } from './systemTransport'
+import { UserWriteOutcomeUnknownError } from './userWriteOutcome'
 
 const credentials = { username: 'fixture', password: 'fixture-only' }
 const project = { id: 'fixture', name: 'fixture', kind: 'compose' as const, workingDirectory: '/fixture', configFiles: ['/fixture/compose.yaml'] }
@@ -83,6 +84,24 @@ const noBodyRequests: RequestCase[] = [
   { family: 'database', path: '/databases/discovery', method: 'GET', run: () => database.discoverDatabases() },
 ]
 
+// 仅三个有 JSON body 的账号写入采用敏感响应净化；密码规则和其他 API 保持原合同。
+function isSanitizedAccountJSONRequest(family: RequestCase['family'], method: RequestCase['method'], path: string) {
+  return family === 'control' && (
+    method === 'POST' && path === '/users' ||
+    method === 'PUT' && /^\/users\/[1-9]\d*\/(status|password)$/.test(path)
+  )
+}
+
+function expectJSONRejection(error: unknown, expected: typeof mediaError, family: RequestCase['family'], method: RequestCase['method'], path: string) {
+  expect(error).toBeInstanceOf(NcpApiError)
+  if (isSanitizedAccountJSONRequest(family, method, path)) {
+    expect(error).not.toBeInstanceOf(UserWriteOutcomeUnknownError)
+    expect(error).toMatchObject({ code: expected.code, message: expected.message, requestId: undefined })
+  } else {
+    expect(error).toMatchObject(expected)
+  }
+}
+
 function rejectWithJSONError(status = 415, error = mediaError) {
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(error), {
     status,
@@ -95,7 +114,7 @@ function rejectWithJSONError(status = 415, error = mediaError) {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('JSON 请求 MIME 与大小错误契约', () => {
-  it.each(jsonRequests)('$family $method $path 发送 JSON，并保留 415，不重试或跳转登录', async ({ run, path, method }) => {
+  it.each(jsonRequests)('$family $method $path 发送 JSON，并保留 415，不重试或跳转登录', async ({ run, path, method, family }) => {
     const fetcher = rejectWithJSONError()
     const session = beginSession()
     const location = { href: 'http://fixture.test/current', assign: vi.fn(), replace: vi.fn() }
@@ -103,8 +122,7 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
     vi.stubGlobal('window', { location })
 
     const error = await run().catch((caught: unknown) => caught)
-    expect(error).toBeInstanceOf(NcpApiError)
-    expect(error).toMatchObject(mediaError)
+    expectJSONRejection(error, mediaError, family, method, path)
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]!
     expect(url).toBe(`/api/v1${path}`)
@@ -122,7 +140,7 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
     expect(location.replace).not.toHaveBeenCalled()
   })
 
-  it.each(jsonRequests)('$family $method $path 保留完整请求体 413，不重试或跳转登录', async ({ run }) => {
+  it.each(jsonRequests)('$family $method $path 保留完整请求体 413，不重试或跳转登录', async ({ run, path, method, family }) => {
     const bodyError = {
       code: 'HTTP_REQUEST_BODY_TOO_LARGE',
       message: '请求体超过大小限制。',
@@ -135,8 +153,7 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
     vi.stubGlobal('window', { location })
 
     const error = await run().catch((caught: unknown) => caught)
-    expect(error).toBeInstanceOf(NcpApiError)
-    expect(error).toMatchObject(bodyError)
+    expectJSONRejection(error, bodyError, family, method, path)
     expect(fetcher).toHaveBeenCalledTimes(1)
     expect(captureSession()).toEqual(session)
     expect(session.signal.aborted).toBe(false)
@@ -146,9 +163,16 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
     expect(location.replace).not.toHaveBeenCalled()
   })
 
-  it.each(noBodyRequests)('$family $method $path 无 body 时不添加 Content-Type', async ({ run, path, method }) => {
+  it.each(noBodyRequests)('$family $method $path 无 body 时不添加 Content-Type', async ({ run, path, method, family }) => {
     const fetcher = rejectWithJSONError()
-    await expect(run()).rejects.toMatchObject(mediaError)
+    const error = await run().catch((caught: unknown) => caught)
+    if (family === 'control' && method === 'DELETE' && /^\/users\/[1-9]\d*$/.test(path)) {
+      // 服务端 DELETE 账号不经过 JSON MIME 检查；意外 415 不能作为已证明未执行。
+      expect(error).toBeInstanceOf(UserWriteOutcomeUnknownError)
+      expect(error).toMatchObject({ code: 'USER_WRITE_OUTCOME_UNKNOWN', operation: 'delete', requestId: undefined })
+    } else {
+      expect(error).toMatchObject(mediaError)
+    }
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]!
     expect(url).toBe(`/api/v1${path}`)

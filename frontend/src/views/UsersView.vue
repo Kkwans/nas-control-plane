@@ -19,7 +19,8 @@ import ResourceState from '@/components/ResourceState.vue'
 import ConfirmDangerDialog from '@/components/ConfirmDangerDialog.vue'
 import { createRequestSequenceGate } from '@/domain/requestSequence'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
-import { parsePasswordPolicyResponse } from '@/api/userResponse'
+import { managedUsernameKey, normalizeManagedUsername, parsePasswordPolicyResponse } from '@/api/userResponse'
+import { UserWriteOutcomeUnknownError } from '@/api/userWriteOutcome'
 import { useAuthStore } from '@/stores/auth'
 
 const authStore = useAuthStore()
@@ -36,6 +37,19 @@ const createGeneration = ref(0)
 const passwordGeneration = ref(0)
 const dangerGeneration = ref(0)
 const pendingUsers = ref(new Set<number>())
+// 只保存当前页面/会话内的操作与目标，不保留请求体或密码。
+type UnknownUserWrite = { action: 'create' | 'password' | 'status' | 'delete'; target: string | number; username: string }
+const unknownWrites = ref<UnknownUserWrite[]>([])
+function isUnknown(action: UnknownUserWrite['action'], target: string | number) {
+  return unknownWrites.value.some((item) => item.action === action && item.target === target)
+}
+function markUnknown(action: UnknownUserWrite['action'], target: string | number, username: string) {
+  invalidateUsersRead()
+  if (!isUnknown(action, target)) unknownWrites.value.push({ action, target, username })
+}
+function unknownActionLabel(action: UnknownUserWrite['action']) {
+  return { create: '创建账号', password: '修改密码', status: '更新状态', delete: '删除账号' }[action]
+}
 const selectedUser = ref<ManagedUser | null>(null)
 const createForm = ref({ username: '', password: '' })
 const passwordForm = ref({ currentPassword: '', newPassword: '', confirmation: '' })
@@ -49,6 +63,10 @@ const dangerOpen = ref(false)
 const dangerUser = ref<ManagedUser | null>(null)
 const dangerAction = ref<'status' | 'delete'>('status')
 
+const createUnknown = computed(() => isUnknown('create', managedUsernameKey(createForm.value.username)))
+const passwordUnknown = computed(() => !!selectedUser.value && isUnknown('password', selectedUser.value.id))
+const dangerUnknown = computed(() => !!dangerUser.value && isUnknown(dangerAction.value, dangerUser.value.id))
+watch(dangerUnknown, (unknown) => { if (unknown) dangerOpen.value = false }, { flush: 'sync' })
 const createBusy = computed(() => createPending.value)
 const passwordBusy = computed(() => !!selectedUser.value && pendingUsers.value.has(selectedUser.value.id))
 const dangerBusy = computed(() => !!dangerUser.value && pendingUsers.value.has(dangerUser.value.id))
@@ -153,7 +171,7 @@ async function savePasswordPolicy() {
   }
 }
 
-// 已确认的写入使更早的目录读取失效；仅重读，不重放写请求。
+// 已确认或结果未知的写入都使更早的目录读取失效；GET 不能证明此前写入的结果。
 function invalidateUsersRead() {
   usersGate.invalidate()
   usersController?.abort()
@@ -177,6 +195,7 @@ function dispose() {
   policySaving.value = false
   createPending.value = false
   pendingUsers.value.clear()
+  unknownWrites.value = []
   users.value = []
   confirmedPolicy.value = null
   policyDraft.value = null
@@ -200,9 +219,9 @@ function passwordRuleText() {
 }
 
 async function submitCreate() {
-  if (!ownsPage() || !createOpen.value || !passwordSubmitReady.value || !confirmedPolicy.value || createPending.value) return
+  if (!ownsPage() || !createOpen.value || !passwordSubmitReady.value || !confirmedPolicy.value || createPending.value || createUnknown.value) return
   const payload = { ...createForm.value }
-  if (!payload.username.trim() || payload.password.length < confirmedPolicy.value.minLength) {
+  if (!normalizeManagedUsername(payload.username) || payload.password.length < confirmedPolicy.value.minLength) {
     ElMessage.warning(`请输入用户名，密码需${passwordRuleText()}。`)
     return
   }
@@ -219,7 +238,11 @@ async function submitCreate() {
       ElMessage.success('账号已创建。')
     }
   } catch (reason) {
-    if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : '账号创建失败。')
+    if (!ownsPage()) return
+    if (reason instanceof UserWriteOutcomeUnknownError) {
+      markUnknown('create', managedUsernameKey(payload.username), normalizeManagedUsername(payload.username))
+      if (ownsDialog()) createForm.value.password = ''
+    } else if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : '账号创建失败。')
   } finally {
     if (ownsPage()) createPending.value = false
   }
@@ -234,12 +257,13 @@ function openPassword(user: ManagedUser) {
 
 async function submitPassword() {
   const targetId = selectedUser.value?.id
-  if (!ownsPage() || !passwordOpen.value || !passwordSubmitReady.value || !confirmedPolicy.value || targetId === undefined || pendingUsers.value.has(targetId)) return
+  if (!ownsPage() || !passwordOpen.value || !passwordSubmitReady.value || !confirmedPolicy.value || targetId === undefined || pendingUsers.value.has(targetId) || isUnknown('password', targetId)) return
   const draft = { ...passwordForm.value }
   if (draft.newPassword.length < confirmedPolicy.value.minLength || draft.newPassword !== draft.confirmation) {
     ElMessage.warning(`新密码需${passwordRuleText()}，且两次输入必须一致。`)
     return
   }
+  const targetUsername = selectedUser.value!.username
   const actorId = currentUserId.value
   const isCurrent = targetId === actorId
   const payload = { currentPassword: isCurrent ? draft.currentPassword : '', newPassword: draft.newPassword }
@@ -265,13 +289,18 @@ async function submitPassword() {
       if (observed) ElMessage.success('密码已重置，该账号的现有会话已撤销。')
     }
   } catch (reason) {
-    if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : '密码修改失败。')
+    if (!ownsPage()) return
+    if (reason instanceof UserWriteOutcomeUnknownError) {
+      markUnknown('password', targetId, targetUsername)
+      if (ownsDialog()) passwordForm.value = { currentPassword: '', newPassword: '', confirmation: '' }
+    } else if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : '密码修改失败。')
   } finally {
     if (ownsPage()) pendingUsers.value.delete(targetId)
   }
 }
 
 function requestStatusChange(user: ManagedUser) {
+  if (!ownsPage() || isUnknown('status', user.id)) return
   dangerGeneration.value += 1
   dangerUser.value = { ...user }
   dangerAction.value = 'status'
@@ -279,6 +308,7 @@ function requestStatusChange(user: ManagedUser) {
 }
 
 function requestDelete(user: ManagedUser) {
+  if (!ownsPage() || isUnknown('delete', user.id)) return
   dangerGeneration.value += 1
   dangerUser.value = { ...user }
   dangerAction.value = 'delete'
@@ -289,6 +319,7 @@ async function confirmDanger() {
   const user = dangerUser.value ? { ...dangerUser.value } : null
   if (!ownsPage() || !dangerOpen.value || !user || pendingUsers.value.has(user.id)) return
   const action = dangerAction.value
+  if (isUnknown(action, user.id)) return
   const disabled = !user.disabled
   const generation = dangerGeneration.value
   const ownsDialog = () => ownsPage() && dangerOpen.value && generation === dangerGeneration.value
@@ -309,7 +340,12 @@ async function confirmDanger() {
       ElMessage.success(action === 'delete' ? '账号已删除。' : `账号已${disabled ? '禁用' : '启用'}。`)
     }
   } catch (reason) {
-    if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : action === 'status' ? '账号状态更新失败。' : '删除失败。')
+    if (!ownsPage()) return
+    if (reason instanceof UserWriteOutcomeUnknownError) {
+      markUnknown(action, user.id, user.username)
+      // 未知不是持续请求；关闭原确认弹窗，在页面提供可持续看见的警告。
+      if (ownsDialog()) dangerOpen.value = false
+    } else if (ownsDialog()) ElMessage.error(reason instanceof Error ? reason.message : action === 'status' ? '账号状态更新失败。' : '删除失败。')
   } finally {
     if (ownsPage()) pendingUsers.value.delete(user.id)
   }
@@ -326,6 +362,14 @@ onMounted(() => { void loadUsers(); void loadPasswordPolicy() })
 <template>
   <div class="page workspace-page users-page">
     <WorkspaceHeader title="用户管理" description="管理可登录 NCP 的等权 Root 账号与会话安全" :icon="UserRound" :stats="stats" />
+
+    <section v-if="unknownWrites.length" class="user-write-warning panel" role="alert">
+      <h2>账号操作结果未确认</h2>
+      <p>请求可能已经生效。当前页面已阻止对同一目标重复执行该操作；关闭弹窗不会解除保护。</p>
+      <ul><li v-for="item in unknownWrites" :key="`${item.action}:${item.target}`">{{ item.username }}：{{ unknownActionLabel(item.action) }}结果未确认。</li></ul>
+      <p>只读刷新仅显示当前账号列表，不能证明此前请求成功，也不能确认密码或解除重复提交保护。请勿通过重新提交或重新打开页面尝试恢复。</p>
+      <ElButton :loading="usersLoading" :disabled="usersLoading" @click="loadUsers">只读刷新账号列表</ElButton>
+    </section>
 
     <section class="password-policy panel">
       <header>
@@ -377,13 +421,13 @@ onMounted(() => { void loadUsers(); void loadPasswordPolicy() })
             <dd class="user-date__value"><time>{{ formatTime(user.createdAt) }}</time></dd>
           </dl>
           <div class="user-actions">
-            <ElButton :icon="KeyRound" :disabled="!passwordSubmitReady" plain @click="openPassword(user)">{{ user.id === currentUserId ? '修改密码' : '重置密码' }}</ElButton>
+            <ElButton :icon="KeyRound" :disabled="!passwordSubmitReady || pendingUsers.has(user.id) || isUnknown('password', user.id)" plain @click="openPassword(user)">{{ user.id === currentUserId ? '修改密码' : '重置密码' }}</ElButton>
             <ElDropdown v-if="user.id !== currentUserId" trigger="click">
               <ElButton :icon="MoreHorizontal" circle aria-label="更多账号操作" />
               <template #dropdown>
                 <ElDropdownMenu>
-                  <ElDropdownItem @click="requestStatusChange(user)">{{ user.disabled ? '启用账号' : '禁用账号' }}</ElDropdownItem>
-                  <ElDropdownItem divided class="danger-action" @click="requestDelete(user)">删除账号</ElDropdownItem>
+                  <ElDropdownItem :disabled="pendingUsers.has(user.id) || isUnknown('status', user.id)" @click="requestStatusChange(user)">{{ user.disabled ? '启用账号' : '禁用账号' }}</ElDropdownItem>
+                  <ElDropdownItem :disabled="pendingUsers.has(user.id) || isUnknown('delete', user.id)" divided class="danger-action" @click="requestDelete(user)">删除账号</ElDropdownItem>
                 </ElDropdownMenu>
               </template>
             </ElDropdown>
@@ -394,24 +438,27 @@ onMounted(() => { void loadUsers(); void loadPasswordPolicy() })
 
     <ElDialog v-model="createOpen" title="新增 Root 账号" width="440px" destroy-on-close>
       <div class="dialog-form">
+        <p v-if="createUnknown" class="dialog-note" role="alert">此用户名的创建结果未确认，不能重复创建。只读列表不能确认此前请求的结果。</p>
         <label><span>用户名</span><ElInput v-model="createForm.username" maxlength="64" autocomplete="username" placeholder="例如 operator" /></label>
         <label><span>初始密码</span><ElInput v-model="createForm.password" type="password" show-password autocomplete="new-password" :placeholder="passwordRuleText()" /></label>
       </div>
-      <template #footer><ElButton @click="createOpen = false">取消</ElButton><ElButton type="primary" :loading="createBusy" :disabled="!passwordSubmitReady || createBusy" @click="submitCreate">创建账号</ElButton></template>
+      <template #footer><ElButton @click="createOpen = false">取消</ElButton><ElButton type="primary" :loading="createBusy" :disabled="!passwordSubmitReady || createBusy || createUnknown" @click="submitCreate">创建账号</ElButton></template>
     </ElDialog>
 
     <ElDialog v-model="passwordOpen" :title="selectedUser?.id === currentUserId ? '修改自己的密码' : `重置 ${selectedUser?.username} 的密码`" width="440px" destroy-on-close>
       <div class="dialog-form">
+        <p v-if="passwordUnknown" class="dialog-note" role="alert">此账号的密码修改结果未确认，不能重复提交。账号列表无法核实密码，请勿尝试自动验证或再次重置。</p>
         <label v-if="selectedUser?.id === currentUserId"><span>当前密码</span><ElInput v-model="passwordForm.currentPassword" type="password" show-password autocomplete="current-password" /></label>
         <label><span>新密码</span><ElInput v-model="passwordForm.newPassword" type="password" show-password autocomplete="new-password" :placeholder="passwordRuleText()" /></label>
         <label><span>确认新密码</span><ElInput v-model="passwordForm.confirmation" type="password" show-password autocomplete="new-password" /></label>
         <p class="dialog-note">保存后，该账号的全部登录会话将立即失效。</p>
       </div>
-      <template #footer><ElButton @click="passwordOpen = false">取消</ElButton><ElButton type="primary" :loading="passwordBusy" :disabled="!passwordSubmitReady || passwordBusy" @click="submitPassword">保存新密码</ElButton></template>
+      <template #footer><ElButton @click="passwordOpen = false">取消</ElButton><ElButton type="primary" :loading="passwordBusy" :disabled="!passwordSubmitReady || passwordBusy || passwordUnknown" @click="submitPassword">保存新密码</ElButton></template>
     </ElDialog>
 
     <ConfirmDangerDialog
       :key="dangerGeneration"
+      v-if="!dangerUnknown"
       v-model="dangerOpen"
       :title="dangerAction === 'delete' ? '删除账号' : `${dangerUser?.disabled ? '启用' : '禁用'}账号`"
       :description="dangerAction === 'delete' ? `账号“${dangerUser?.username}”的全部会话会失效，删除后账号本身无法恢复。` : `确认${dangerUser?.disabled ? '启用' : '禁用'}账号“${dangerUser?.username}”？`"
@@ -427,6 +474,7 @@ onMounted(() => { void loadUsers(); void loadPasswordPolicy() })
 </template>
 
 <style scoped>
+.user-write-warning{padding:16px 20px;border-color:var(--ncp-warning-border);background:var(--ncp-warning-soft);overflow-wrap:anywhere}.user-write-warning h2{margin:0;font-size:1rem}.user-write-warning p,.user-write-warning li{font-size:.84rem;line-height:1.6}
 /* 页头完整展示说明与摘要；覆盖仅限本页，不改变共享页头。 */
 .users-page :deep(.workspace-header__copy h1),
 .users-page :deep(.workspace-header__copy p),

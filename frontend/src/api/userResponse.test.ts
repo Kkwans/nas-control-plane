@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsePasswordPolicyResponse, parseUserListResponse } from './userResponse'
+import { managedUsernameKey, normalizeManagedUsername, parsePasswordPolicyResponse, parseUserListResponse } from './userResponse'
 
 const user = {
   id: 1, username: 'fixture-root', role: 'root', disabled: false,
@@ -80,5 +80,22 @@ describe('密码规则读取契约', () => {
     const value = Object.freeze({ ...policy, minLength, future: { revision: 2 } })
     expect(parsePasswordPolicyResponse(value)).toEqual(value)
     expect(parsePasswordPolicyResponse(value)).not.toBe(value)
+  })
+})
+
+describe('账号名归一化与 Go 一致', () => {
+  it('去掉 NEL Unicode 空白，保留 BOM 并保留大小写', () => {
+    expect(normalizeManagedUsername('\u0085 Root\u0085')).toBe('Root')
+    expect(normalizeManagedUsername('\uFEFFRoot\uFEFF')).toBe('\uFEFFRoot\uFEFF')
+  })
+})
+
+describe('账号创建未知锁的 SQLite NOCASE 身份', () => {
+  it('仅折叠 ASCII，保留非 ASCII 区分并复用 Go 空白规则', () => {
+    expect(managedUsernameKey('\u0085 Root\u0085')).toBe('root')
+    expect(managedUsernameKey('ÄBC')).toBe('Äbc')
+    expect(managedUsernameKey('äBC')).toBe('äbc')
+    expect(managedUsernameKey('İI')).toBe('İi')
+    expect(managedUsernameKey('\uFEFFRoot')).toBe('\uFEFFroot')
   })
 })

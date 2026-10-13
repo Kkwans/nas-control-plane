@@ -39,7 +39,7 @@ function timestamp(value: unknown): string {
   return result
 }
 
-function user(value: unknown): ManagedUser {
+export function parseManagedUserResponse(value: unknown): ManagedUser {
   const item = record(value)
   if (item.role !== 'root') invalid()
   const result: ManagedUser = {
@@ -58,7 +58,7 @@ function user(value: unknown): ManagedUser {
 
 export function parseUserListResponse(value: unknown): ManagedUser[] {
   if (!Array.isArray(value)) invalid()
-  return value.map(user)
+  return value.map(parseManagedUserResponse)
 }
 
 // 仅接入读取响应；写入结果未知的恢复语义由独立切片处理。
@@ -72,4 +72,14 @@ export function parsePasswordPolicyResponse(value: unknown): PasswordPolicy {
     requireDigit: boolean(item.requireDigit),
     requireSpecial: boolean(item.requireSpecial),
   }
+}
+
+// 与 Go strings.TrimSpace 相同；JS trim 对 NEL/BOM 的处理不同。
+export function normalizeManagedUsername(value: string): string {
+  return value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '')
+}
+
+// SQLite COLLATE NOCASE 只折叠 ASCII 字母，不使用 Unicode/区域大小写转换。
+export function managedUsernameKey(value: string): string {
+  return normalizeManagedUsername(value).replace(/[A-Z]/g, (character) => character.toLowerCase())
 }
