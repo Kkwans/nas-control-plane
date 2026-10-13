@@ -41,7 +41,7 @@ const {
   invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage,
   downloadStatusOptions, activePullCount, filteredDownloadJobs, downloadPageCount,
   pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
-  confirmDeleteJob, isLiveJob, canCancelJob, canDeleteJob, canRetryJob, downloadState, downloadStateLabel, effectiveTotal,
+  confirmDeleteJob, isLiveJob, canCancelJob, canDeleteJob, canRetryJob, downloadState, downloadStateLabel, downloadArtifactLabel, effectiveTotal,
 } = downloads
 const imageModeTabs = computed<SectionTab[]>(() => [
   { value: 'local', label: '本地镜像', icon: HardDrive, count: images.value.length },
@@ -179,7 +179,7 @@ onMounted(() => {
       </header>
       <div class="download-head"><span>镜像</span><span>状态</span><span>进度</span><span>速度</span><span>更新时间</span><span>操作</span></div>
       <article v-for="job in pagedDownloadJobs" :key="job.id" class="download-row">
-        <div><strong>{{ job.reference }}</strong><small>{{ job.message }}</small></div>
+        <div><strong>{{ job.reference }}</strong><small>{{ job.message }}</small><small v-if="job.status === 'completed'">{{ downloadArtifactLabel(job) }}</small></div>
         <span :class="['job-state', `job-state--${downloadState(job)}`]">{{ downloadStateLabel(job) }}</span>
         <div class="job-progress"><span><i :style="{ width: `${job.progress}%` }"></i></span><small>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
         <span>{{ job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>

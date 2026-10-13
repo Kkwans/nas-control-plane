@@ -101,12 +101,17 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     if (isLiveJob(job) && job.cancellationStatus === 'requested') return 'cancelling'
     if (job.cancellationStatus === 'unknown' || job.status === 'interrupted') return 'interrupted'
     if (job.artifactState === 'deleted') return 'deleted'
-    if (job.status === 'completed' && job.artifactState !== 'present' && !localImageForJob(job)) return 'deleted'
     return job.status
   }
   function downloadStateLabel(job: JobSnapshot) {
     const state = downloadState(job)
     return state === 'persisting' ? '结果保存中' : state === 'cancelling' ? '取消中' : state === 'queued' ? '排队中' : state === 'running' ? '下载中' : state === 'completed' ? '已完成' : state === 'deleted' ? '已删除' : state === 'cancelled' ? '已停止' : state === 'interrupted' ? '结果未确认' : '失败'
+  }
+  function downloadArtifactLabel(job: JobSnapshot) {
+    if (job.artifactState === 'deleted') return '镜像已删除'
+    // 本地清单未加载、刷新失败或缺少匹配，都不能证明镜像已删除。
+    if (job.artifactState === 'present' || localImageForJob(job)) return '镜像存在'
+    return '镜像未核实'
   }
   function effectiveTotal(job: JobSnapshot) {
     return job.totalBytes || localImageForJob(job)?.sizeBytes || 0
@@ -252,6 +257,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     canRetryJob,
     downloadState,
     downloadStateLabel,
+    downloadArtifactLabel,
     effectiveTotal,
     dateLabel,
   }

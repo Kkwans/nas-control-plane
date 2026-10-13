@@ -119,7 +119,7 @@ WaitDelay约束管道收尾，不保证StartProcess/Process.Wait内核异常可�
 
 ## M08-C2：容器能力探测完整性与有界捕获
 
-基线：cadd8b8192bb57951b7c009f26bda8c02d53b7da。状态：三文件实现与独立审查完成，30项纯fake测试、race、全包编译/vet/构建通过，完整CI待验收。
+基线：cadd8b8192bb57951b7c009f26bda8c02d53b7da。状态：三文件实现与独立审查完成，30项纯fake测试、race、全包编译/vet/构建通过，e1230e7完整CI通过。
 
 - 保留 Root、固定两秒 context、非 TTY 及现有 Shell 顺序/参数/环境。只处理预探测，不改变交互终端。
 - 捕获的原始 Docker 多路帧限制 32KiB，额外一字节辨别超限与精确上限后的 EOF；读取错误、取消或不完整输出全部失败关闭。

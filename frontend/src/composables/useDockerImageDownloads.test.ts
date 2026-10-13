@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, ref } from 'vue'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
-import type { JobSnapshot } from '@/api/system'
+import type { DockerImageSummary, JobSnapshot } from '@/api/system'
 import { useDockerImageDownloads } from './useDockerImageDownloads'
 
 const api = vi.hoisted(() => ({ cancel: vi.fn(), remove: vi.fn(), retry: vi.fn(), list: vi.fn(), subscribe: vi.fn(), confirm: vi.fn(), success: vi.fn(), info: vi.fn(), error: vi.fn() }))
@@ -11,9 +11,9 @@ vi.mock('element-plus', () => ({ ElMessage: { success: api.success, info: api.in
 vi.mock('@/composables/useListPreference', () => ({ useListPreference: () => ({ pageSize: ref(10) }) }))
 const apps: ReturnType<typeof createApp>[] = []
 const job = (fields: Partial<JobSnapshot> = {}): JobSnapshot => ({ id: 'job-1', type: 'docker-image-pull', status: 'running', artifactState: 'unknown', message: '下载中', progress: 50, createdAt: '', updatedAt: '', downloadedBytes: 50, totalBytes: 100, speedBytes: 10, layers: {}, ...fields })
-function setup() {
+function setup(images = ref<DockerImageSummary[]>([])) {
   let state!: ReturnType<typeof useDockerImageDownloads>
-  const app = createApp({ setup() { state = useDockerImageDownloads(ref([])); return () => null } })
+  const app = createApp({ setup() { state = useDockerImageDownloads(images); return () => null } })
   apps.push(app)
   app.mount(document.createElement('div'))
   return state
@@ -79,6 +79,49 @@ describe('下载生命周期呈现', () => {
     await state.retryDownload(job({ status: 'interrupted', cancellationStatus: 'unknown' }))
     expect(api.confirm).toHaveBeenCalledOnce()
     expect(api.retry).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('下载结果与本地镜像核实', () => {
+  const image: DockerImageSummary = { id: 'sha256:local', repoTags: ['docker.io/library/alpine:latest'], repoDigests: [], sizeBytes: 1024, createdAt: '', containers: 0 }
+
+  it('已完成但缺少本地镜像清单时不推断镜像已删除', () => {
+    const state = setup()
+    const completed = job({ status: 'completed', reference: 'library/alpine:latest' })
+    state.upsertDownloadJob(completed)
+    expect(state.downloadState(completed)).toBe('completed')
+    expect(state.downloadStateLabel(completed)).toBe('已完成')
+    expect(state.downloadArtifactLabel(completed)).toBe('镜像未核实')
+    state.downloadStatus.value = 'deleted'
+    expect(state.filteredDownloadJobs.value).toEqual([])
+    state.downloadStatus.value = 'completed'
+    expect(state.filteredDownloadJobs.value).toEqual([completed])
+    expect(state.canDeleteJob(completed)).toBe(true)
+  })
+
+  it('明确存在或本地匹配是正向证据，未匹配仍为未核实', () => {
+    const images = ref<DockerImageSummary[]>([])
+    const state = setup(images)
+    const completed = job({ status: 'completed', reference: 'library/alpine:latest' })
+    expect(state.downloadArtifactLabel({ ...completed, artifactState: 'present' })).toBe('镜像存在')
+    images.value = [image]
+    expect(state.downloadArtifactLabel(completed)).toBe('镜像存在')
+    expect(state.downloadArtifactLabel({ ...completed, reference: 'library/other:latest' })).toBe('镜像未核实')
+    images.value = []
+    expect(state.downloadArtifactLabel(completed)).toBe('镜像未核实')
+    expect(state.downloadState(completed)).toBe('completed')
+  })
+
+  it('明确删除继续显示删除，且不覆盖取消、保存或结果未知语义', () => {
+    const state = setup(ref([image]))
+    const deleted = job({ status: 'completed', artifactState: 'deleted', reference: 'library/alpine:latest' })
+    expect(state.downloadState(deleted)).toBe('deleted')
+    expect(state.downloadArtifactLabel(deleted)).toBe('镜像已删除')
+    expect(state.downloadState({ ...deleted, persistenceStatus: 'pending' })).toBe('persisting')
+    expect(state.downloadState({ ...deleted, status: 'running', cancellationStatus: 'requested' })).toBe('cancelling')
+    expect(state.downloadState({ ...deleted, cancellationStatus: 'unknown' })).toBe('interrupted')
+    expect(state.downloadState({ ...deleted, status: 'interrupted' })).toBe('interrupted')
   })
 })
 
