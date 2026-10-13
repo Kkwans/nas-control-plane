@@ -11,6 +11,8 @@ type SavedCallbacks = {
 type SocketProbe = {
   url: string
   readyState: number
+  bufferedAmount: number
+  onmessage: SavedCallbacks['message']
   closeCalls: number
   sent: Array<{ kind: 'control' | 'input'; text: string }>
   saved: SavedCallbacks
@@ -24,14 +26,26 @@ type FixtureWindow = Window & { terminalSockets: SocketProbe[] }
 const toolbar = (page: Page) => page.locator('.terminal-toolbar')
 const connectionStatus = (page: Page) => page.locator('.terminal-frame > header [role="status"]')
 const connectButton = (page: Page) => toolbar(page).getByRole('button', { name: '连接终端', exact: true })
+const isCursorResponse = (text: string) => text.startsWith('\u001b') && /^\[\d+;\d+R$/.test(text.slice(1))
+const unexpectedApiRequests = new WeakMap<Page, string[]>()
+
+test.afterEach(async ({ page }) => {
+  expect(unexpectedApiRequests.get(page) ?? [], '终端 fixture 不应请求未模拟的 API').toEqual([])
+})
 
 async function installTerminalFixture(page: Page) {
   // 所有 HTTP/SSE 都由共享 fixture 接管；WebSocket 完全替换，不调用原生构造器。
   // 这是浏览器交互回归，不是 NAS / Agent / PTY 验收。
   await installMockApi(page, { clock: false, manualRealtime: true })
+  const unexpected: string[] = []
+  unexpectedApiRequests.set(page, unexpected)
   await page.route('**/api/**', (route) => {
-    if (route.request().method() !== 'GET') return route.fulfill({ status: 503, json: { code: 'FIXTURE_WRITE_BLOCKED' } })
-    return route.fallback()
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    // 仅 v1 GET 交给已安装的共享 mock；其未知 v1 路径也由 mock 响应，不访问网络。
+    if (request.method() === 'GET' && path.startsWith('/api/v1/')) return route.fallback()
+    unexpected.push(`${request.method()} ${path}`)
+    return route.fulfill({ status: 503, json: { code: 'FIXTURE_UNEXPECTED_API_BLOCKED' } })
   })
   await page.routeWebSocket('**/*', (socket) => {
     // 防御性拦截：即使 fixture 意外被替换，也绝不连接真实服务端。
@@ -47,6 +61,7 @@ async function installTerminalFixture(page: Page) {
       static readonly CLOSED = 3
       readyState = FakeSocket.CONNECTING
       binaryType = 'blob'
+      // 测试显式设置传输积压快照；send 仅记录帧，不模拟网络排空或自动累加。
       bufferedAmount = 0
       closeCalls = 0
       sent: SocketProbe['sent'] = []
@@ -131,7 +146,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { path, contentType: 'image/png' })
 }
 
-async function checkClosingLayout(page: Page, info: TestInfo, width: number) {
+async function checkClosingLayout(page: Page, info: TestInfo, width: number, state = 'closing', noticeText = '不能保证远端任务已结束') {
   await page.setViewportSize({ width, height: 1000 })
   await page.evaluate(() => document.fonts.ready)
   const geometry = await toolbar(page).evaluate((element) => {
@@ -173,13 +188,13 @@ async function checkClosingLayout(page: Page, info: TestInfo, width: number) {
   })
   const accessibility = await new AxeBuilder({ page }).include('.terminal-toolbar').analyze()
   // 先持久化像素、行盒和无障碍证据，再断言；失败也能直接审阅截断原因。
-  const name = `fixture-terminal-closing-${width}`
+  const name = `fixture-terminal-${state}-${width}`
   await capture(page, info, name)
   const path = info.outputPath('ui-captures', `${name}-capture-state.json`)
   await writeFile(path, JSON.stringify({ geometry, accessibility }, null, 2))
   await info.attach(`${name}-geometry-axe`, { path, contentType: 'application/json' })
   expect(accessibility.violations).toEqual([])
-  expect(geometry.notice.text).toContain('不能保证远端任务已结束')
+  expect(geometry.notice.text).toContain(noticeText)
   expect(geometry.notice.whiteSpace).toBe('normal')
   expect(geometry.notice.textOverflow).not.toBe('ellipsis')
   expect(geometry.notice.overflowX).toBe('visible')
@@ -356,4 +371,144 @@ test('退出会话在服务端响应前立即清理本地终端和待确认粘�
     expect(await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.closeCalls)).toBe(1)
     expect(realSockets).toEqual([])
   } finally { release() }
+})
+
+
+// 不替换 xterm.write 或完成回调；这些场景没有先发送用户键盘输入，因而不会触发 xterm 同步快路。
+// 在此前提下，同一 JS task 交付的帧会先排队，真实异步 parser 尚不能释放预算。
+async function outputBurst(page: Page, sizes: number[], queryCursor = false) {
+  return page.evaluate(({ sizes, queryCursor }) => {
+    const socket = (window as unknown as FixtureWindow).terminalSockets.at(-1)!
+    const observations: Array<{ bytes: number; closeCalls: number }> = []
+    for (const [index, size] of sizes.entries()) {
+      // 每帧独占精确长度 ArrayBuffer，不使用更大的 backing buffer 或字符串代替二进制。
+      const frame = new Uint8Array(size)
+      if (queryCursor && index === sizes.length - 1) frame.set([27, 91, 54, 110], size - 4)
+      socket.onmessage?.(new MessageEvent('message', { data: frame.buffer }))
+      observations.push({ bytes: frame.byteLength, closeCalls: socket.closeCalls })
+    }
+    return observations
+  }, { sizes, queryCursor })
+}
+
+for (const width of [390, 1440]) {
+  test(`终端预算 ${width}px：单帧超过 16 KiB 后显示完整过载说明并等待关闭事件`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height: 1000 })
+    const realSockets = await installTerminalFixture(page)
+    await beginAttempt(page)
+    await startAttempt(page)
+    await paste(page, 'pending fixture\nnever sent')
+    await expect(page.getByRole('dialog', { name: '确认多行粘贴' })).toBeVisible()
+    expect(await outputBurst(page, [16 * 1024 + 1])).toEqual([{ bytes: 16 * 1024 + 1, closeCalls: 1 }])
+    await expect(connectionStatus(page)).toHaveText('关闭中')
+    await expect(page.locator('.xterm')).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: '确认多行粘贴' })).toHaveCount(0)
+    await expect(connectButton(page)).toHaveCount(0)
+    await expect(toolbar(page).getByRole('button', { name: /Docker 容器/ })).toBeDisabled()
+    await checkClosingLayout(page, info, width, 'output-overflow', '终端输出处理过载')
+    await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.lateEvents(false))
+    await expect(connectionStatus(page)).toHaveText('关闭中')
+    expect(await inputFrames(page)).toEqual([])
+    await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.finishClose())
+    await expect(connectionStatus(page)).toHaveText('连接失败')
+    await expect(connectButton(page)).toBeEnabled()
+    await expect(toolbar(page).getByRole('status')).toContainText('后续输出未保留')
+    expect(realSockets).toEqual([])
+  })
+}
+
+test('终端预算：同 task 精确 256 KiB 待处理输出允许，再多一字节关闭且不自动重连', async ({ page }) => {
+  const realSockets = await installTerminalFixture(page)
+  await beginAttempt(page)
+  await startAttempt(page)
+  const frames = await outputBurst(page, [...Array<number>(16).fill(16 * 1024), 1])
+  expect(frames.slice(0, 16).every(frame => frame.closeCalls === 0)).toBe(true)
+  expect(frames[16]).toEqual({ bytes: 1, closeCalls: 1 })
+  await expect(connectionStatus(page)).toHaveText('关闭中')
+  await expect(toolbar(page).getByRole('status')).toContainText('终端输出处理过载')
+  await expect(connectButton(page)).toHaveCount(0)
+  await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.finishClose())
+  await expect(connectButton(page)).toBeEnabled()
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets.length)).toBe(1)
+  expect(realSockets).toEqual([])
+})
+
+test('终端预算：真实 xterm 完成解析后释放输出预算，下一批仍可达到上限', async ({ page }) => {
+  const realSockets = await installTerminalFixture(page)
+  await beginAttempt(page)
+  await startAttempt(page)
+  for (let batch = 1; batch <= 2; batch++) {
+    const frames = await outputBurst(page, Array<number>(16).fill(16 * 1024), true)
+    expect(frames.every(frame => frame.closeCalls === 0)).toBe(true)
+    // 最后一帧的 DSR 经真实 parser 产生应答；poll 返回后的下一 task 才发送新批次。
+    await expect.poll(async () => (await inputFrames(page)).filter(isCursorResponse).length).toBe(batch)
+    await expect(connectionStatus(page)).toHaveText('已连接')
+  }
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.closeCalls)).toBe(0)
+  expect(realSockets).toEqual([])
+})
+
+test('终端预算：超限 UTF-8 粘贴不发送、不保留确认框，缩短后原连接可继续输入', async ({ page }) => {
+  const realSockets = await installTerminalFixture(page)
+  await beginAttempt(page)
+  await startAttempt(page)
+  await paste(page, 'old pending\nfixture')
+  await expect(page.getByRole('dialog', { name: '确认多行粘贴' })).toBeVisible()
+  // 字符数小于 32 KiB，UTF-8 加 bracketed-paste 包装后超过字节上限。
+  await paste(page, '界'.repeat(11_000))
+  await expect(toolbar(page).getByRole('status')).toContainText('终端输入超过 32 KiB，未发送')
+  await expect(page.getByRole('dialog', { name: '确认多行粘贴' })).toHaveCount(0)
+  await expect(connectionStatus(page)).toHaveText('已连接')
+  expect(await inputFrames(page)).toEqual([])
+  // 包装共 12 字节：精确 32 KiB 允许，多一字节拒绝。
+  await paste(page, 'a'.repeat(32 * 1024 - 12 + 1))
+  expect(await inputFrames(page)).toEqual([])
+  await paste(page, 'a'.repeat(32 * 1024 - 12))
+  expect((await inputFrames(page)).map(text => new TextEncoder().encode(text).byteLength)).toEqual([32 * 1024])
+  await paste(page, 'recovered fixture')
+  expect((await inputFrames(page)).at(-1)).toBe('\u001b[200~recovered fixture\u001b[201~')
+  expect(realSockets).toEqual([])
+})
+
+test('终端预算：发送积压含本次输入，超过 64 KiB 时不发送且关闭一次', async ({ page }) => {
+  const realSockets = await installTerminalFixture(page)
+  await beginAttempt(page)
+  await startAttempt(page)
+  // 单字符 bracketed paste 为 13 字节，先验证等于上限允许。
+  await page.evaluate(() => { (window as unknown as FixtureWindow).terminalSockets[0]!.bufferedAmount = 64 * 1024 - 13 })
+  await paste(page, 'x')
+  expect(await inputFrames(page)).toEqual(['\u001b[200~x\u001b[201~'])
+  await page.evaluate(() => { (window as unknown as FixtureWindow).terminalSockets[0]!.bufferedAmount = 64 * 1024 - 12 })
+  await paste(page, 'y')
+  await expect(connectionStatus(page)).toHaveText('关闭中')
+  await expect(toolbar(page).getByRole('status')).toContainText('终端发送积压')
+  await expect(toolbar(page).getByRole('status')).toContainText('已发送的输入无法撤回')
+  expect(await inputFrames(page)).toEqual(['\u001b[200~x\u001b[201~'])
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.closeCalls)).toBe(1)
+  await expect(connectButton(page)).toHaveCount(0)
+  expect(realSockets).toEqual([])
+})
+
+test('终端预算：退役 owner 的已排队输出与旧 socket 回调不消耗新 owner 预算', async ({ page }) => {
+  const realSockets = await installTerminalFixture(page)
+  await beginAttempt(page)
+  await startAttempt(page)
+  // 在同一 task 填满旧 owner 后立即 pagehide，确保旧 parser 尚未运行。
+  await page.evaluate(() => {
+    const socket = (window as unknown as FixtureWindow).terminalSockets[0]!
+    for (let frame = 0; frame < 16; frame++) socket.onmessage?.(new MessageEvent('message', { data: new ArrayBuffer(16 * 1024) }))
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    socket.finishClose()
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+  })
+  await beginAttempt(page, 2)
+  await startAttempt(page)
+  await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.lateEvents())
+  const frames = await outputBurst(page, Array<number>(16).fill(16 * 1024), true)
+  expect(frames.every(frame => frame.closeCalls === 0)).toBe(true)
+  await expect.poll(async () => (await inputFrames(page, 1)).some(isCursorResponse)).toBe(true)
+  await expect(connectionStatus(page)).toHaveText('已连接')
+  expect(await inputFrames(page, 0)).toEqual([])
+  expect(await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[1]!.closeCalls)).toBe(0)
+  expect(realSockets).toEqual([])
 })

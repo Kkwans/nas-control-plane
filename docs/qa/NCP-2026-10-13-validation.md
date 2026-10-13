@@ -502,3 +502,10 @@ fe92e45 的 [CI 38435982303](https://github.com/Kkwans/nas-control-plane/actions
 - Serve在任何listener和live provider初始化前验证配置；纯解析测试保留旧旗标行为，真实组查询仍在启动前执行。
 - 四份独立fake host/container Session验证输出、输入、resize、唯一Close、退役ID、第五会话拒绝以及opening/live/closing混合计数。独立复核race五次及主任务race三次、扩大既有fake回归通过；主任务Agent/Server编译和三包vet通过。新CI仍待验。
 - 仅源码与纯fake测试，不证明真实四路终端、进程/内存硬上限、全部后代退出或多标签可用；没有启动真实终端、Docker或NAS。
+
+## 终端 B 输入输出预算
+
+- 每attempt256KiB待xterm回调二进制字节、16KiB单输出帧；32KiB UTF-8输入完整准入，64KiB投影发送积压预算。预留回调幂等且关闭后失效，超长输入不拆分、不重放；过载按当前owner清理。
+- 保留多行粘贴确认，计入归一化和bracketed包装；单字节投影超限、回调同步/重复/乱序/退役后、write异常与零长输出均有纯fake回归。close控制仍尽力发送，不宣称总内存或所有网络缓存硬上限。
+- 主任务67文件1198单元、全量lint、Vue类型与生产构建540KiB预算通过；独立源码审查无阻断。原六项浏览器用例保留，新增七项预算用例，静态检查与13项发现通过；实际CI和截图待验。
+- 没有连接真实终端、Docker或NAS，不代表多标签或部署完成。

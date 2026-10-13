@@ -25,6 +25,7 @@ import {
   type TerminalCapabilities,
   type TerminalCapabilityState,
 } from '@/domain/terminal'
+import { boundedUtf8Bytes, createTerminalOutputBudget, TERMINAL_INPUT_BYTES, TERMINAL_SOCKET_BUFFER_BYTES } from '@/domain/terminalBudget'
 import { getTerminalTheme } from '@/domain/terminalTheme'
 import { useReducedMotion } from '@/composables/useReducedMotion'
 import { useSystemStore } from '@/stores/system'
@@ -65,6 +66,7 @@ type Attempt = {
   active: boolean
   ready: boolean
   cleaned: boolean
+  outputBudget: ReturnType<typeof createTerminalOutputBudget>
   socket: WebSocket | null
   terminal: Terminal | null
   fit: FitAddon | null
@@ -168,6 +170,7 @@ function clearSessionDetails() {
 function cleanup(owner: Attempt) {
   if (owner.cleaned) return
   owner.cleaned = true
+  owner.outputBudget.dispose()
   // 仅保留 close 回调以核实本地关闭；不让退役 socket 持有输出对象。
   if (owner.socket) { owner.socket.onmessage = null; owner.socket.onerror = null }
   owner.containerId = ''
@@ -229,7 +232,7 @@ async function connect() {
     generation: ++attemptGeneration, session: captureSession(), target: target.value, containerId: containerId.value,
     title: target.value === 'host' ? 'root@DH4300Plus' : containers.value.find(item => item.id === containerId.value)?.name || 'container',
     active: true, ready: false, cleaned: false, socket: null, terminal: null, fit: null,
-    timers: {}, releases: [], outcome: 'closed',
+    timers: {}, releases: [], outcome: 'closed', outputBudget: createTerminalOutputBudget(),
   }
   current = owner
   terminalTitle.value = owner.title
@@ -279,7 +282,16 @@ async function connect() {
       if (!owns(owner, socket)) return
       try {
         if (typeof event.data !== 'string') {
-          if (owner.ready) terminal.write(new Uint8Array(event.data as ArrayBuffer))
+          if (!owner.ready) return
+          if (!(event.data instanceof ArrayBuffer)) throw new Error('invalid terminal binary frame')
+          if (!event.data.byteLength) return
+          const consumed = owner.outputBudget.reserve(event.data.byteLength)
+          if (!consumed) {
+            retire(owner, '终端输出处理过载，正在关闭本地连接，后续输出未保留。', 'error')
+            return
+          }
+          try { terminal.write(new Uint8Array(event.data), consumed) }
+          catch (error) { consumed(); throw error }
           return
         }
         const control = JSON.parse(event.data) as { type?: string; shell?: string; enhancement?: string; reason?: string; code?: string; capabilities?: unknown }
@@ -313,7 +325,9 @@ async function connect() {
     owner.releases.push(() => input.dispose())
     const dimensions = terminal.onResize(({ rows, cols }) => {
       if (!ready(owner) || capabilities.value?.resize === false) return
-      try { socket.send(JSON.stringify({ type: 'resize', rows, cols })) }
+      const payload = JSON.stringify({ type: 'resize', rows, cols })
+      if (!checkSocketBudget(owner, payload.length)) return
+      try { socket.send(payload) }
       catch { retire(owner, '终端窗口调整发送失败，正在关闭本地连接。', 'error') }
     })
     owner.releases.push(() => dimensions.dispose())
@@ -338,8 +352,16 @@ function handlePaste(owner: Attempt, event: ClipboardEvent) {
   event.preventDefault()
   event.stopImmediatePropagation()
   if (!ready(owner)) { statusMessage.value = '终端尚未就绪，未写入剪贴板内容。'; return }
+  // CRLF 归一化最多将字符数减半；先限制原文，再检查包含 bracketed-paste 包装的实际载荷。
+  const safe = supportsSafeMultilinePaste(capabilities.value)
+  if (text.length > TERMINAL_INPUT_BYTES * 2 ||
+    boundedUtf8Bytes(createTerminalPastePayload(text, safe), TERMINAL_INPUT_BYTES) > TERMINAL_INPUT_BYTES) {
+    pendingPaste.value = null
+    statusMessage.value = '终端输入超过 32 KiB，未发送；请缩短内容后重试。'
+    return
+  }
   if (isMultilineTerminalPaste(text)) {
-    const paste = { owner, text, lineCount: normalizeTerminalPaste(text).split('\n').length, safe: supportsSafeMultilinePaste(capabilities.value) }
+    const paste = { owner, text, lineCount: normalizeTerminalPaste(text).split('\n').length, safe }
     pendingPaste.value = paste
     statusMessage.value = pendingPasteDescription.value
     void nextTick(() => { if (ready(owner) && pendingPaste.value === paste) safely(() => pasteConfirmRef.value?.focus()) })
@@ -367,10 +389,22 @@ function cancelPaste() {
 }
 function sendTerminalInput(owner: Attempt, data: string | Uint8Array): boolean {
   if (!ready(owner)) return false
+  const bytes = typeof data === 'string' ? boundedUtf8Bytes(data, TERMINAL_INPUT_BYTES) : data.byteLength
+  if (!bytes) return false
+  if (bytes > TERMINAL_INPUT_BYTES) {
+    statusMessage.value = '终端输入超过 32 KiB，未发送；请缩短内容后重试。'
+    return false
+  }
+  if (!checkSocketBudget(owner, bytes)) return false
   const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-  if (!payload.byteLength) return false
   try { owner.socket!.send(payload); return true }
   catch { retire(owner, '终端输入发送失败，正在关闭本地连接。', 'error'); return false }
+}
+function checkSocketBudget(owner: Attempt, bytes: number): boolean {
+  if (!ready(owner)) return false
+  if (owner.socket!.bufferedAmount + bytes <= TERMINAL_SOCKET_BUFFER_BYTES) return true
+  retire(owner, '终端发送积压，当前输入或窗口调整未发送，正在关闭本地连接；已发送的输入无法撤回。', 'error')
+  return false
 }
 function describeTerminalCapabilityState(state: TerminalCapabilityState): string {
   return state === 'supported' ? '支持' : state === 'unsupported' ? '不支持' : '未报告'

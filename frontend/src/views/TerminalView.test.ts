@@ -4,6 +4,7 @@ import { createApp, h, nextTick, type App } from 'vue'
 import { mockReducedMotion } from '@/test/reducedMotion'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import TerminalView from './TerminalView.vue'
+import { TERMINAL_INPUT_BYTES, TERMINAL_OUTPUT_FRAME_BYTES, TERMINAL_SOCKET_BUFFER_BYTES } from '@/domain/terminalBudget'
 
 const mocks = vi.hoisted(() => ({ terminals: [] as FakeTerminal[], fits: [] as { fit: ReturnType<typeof vi.fn> }[], fail: '' }))
 type FakeTerminal = {
@@ -15,6 +16,7 @@ type FakeTerminal = {
   inputDispose: ReturnType<typeof vi.fn>
   resizeDispose: ReturnType<typeof vi.fn>
   write: ReturnType<typeof vi.fn>
+  consumed: (() => void)[]
   focus: ReturnType<typeof vi.fn>
   clear: ReturnType<typeof vi.fn>
 }
@@ -35,7 +37,11 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   dispose = vi.fn(() => { if (mocks.fail === 'dispose') throw Error('fake dispose') })
   inputDispose = vi.fn(() => { if (mocks.fail === 'inputDispose') throw Error('fake input dispose') })
   resizeDispose = vi.fn()
-  write = vi.fn(() => { if (mocks.fail === 'write') throw Error('fake write') })
+  consumed: (() => void)[] = []
+  write = vi.fn((_data: Uint8Array, callback?: () => void) => {
+    if (callback) this.consumed.push(callback)
+    if (mocks.fail === 'write') throw Error('fake write')
+  })
   clear = vi.fn()
   focus = vi.fn()
   constructor(options: FakeTerminal['options']) {
@@ -54,6 +60,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 class FakeSocket {
   static OPEN = 1
   readyState = 0
+  bufferedAmount = 0
   binaryType = ''
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null
   onerror: (() => void) | null = null
@@ -365,5 +372,144 @@ describe('R7 取消操作与原粘贴键盘语义', () => {
     expect(sockets[0]!.send).not.toHaveBeenCalled()
     mocks.terminals[0]!.key(new KeyboardEvent('keydown', { key: 'q', ctrlKey: true }))
     expect(sockets[0]!.send).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('R8 单 owner 输出与输入预算', () => {
+  it('延迟消费的 256 KiB 精确边界接纳，超一字节终止并保持 closing', async () => {
+    mount(); await connect(); sockets[0]!.started(); await flush()
+    const socket = sockets[0]!
+    const message = socket.onmessage!
+    const terminal = mocks.terminals[0]!
+    for (let index = 0; index < 16; index++) message({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    expect(terminal.write).toHaveBeenCalledTimes(16)
+    expect(socket.close).not.toHaveBeenCalled()
+    paste(); await flush()
+    message({ data: new ArrayBuffer(1) })
+    terminal.data('ignored'); terminal.resize({ rows: 30, cols: 90 })
+    message({ data: new ArrayBuffer(1) })
+    await flush()
+    expect(terminal.write).toHaveBeenCalledTimes(16)
+    expect(terminal.dispose).toHaveBeenCalledTimes(1)
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'close' }))
+    expect(host.querySelector('.paste-confirmation')).toBeNull()
+    expect(button('关闭中').disabled).toBe(true)
+    expect(host.textContent).toContain('输出处理过载')
+    await actions().connect()
+    expect(sockets).toHaveLength(1)
+  })
+  it('消费回调允许后续完整帧，重复与乱序回调不能额外扩大预算', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    const socket = sockets[0]!
+    const terminal = mocks.terminals[0]!
+    for (let index = 0; index < 16; index++) socket.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    terminal.consumed[8]!(); terminal.consumed[8]!(); terminal.consumed[1]!()
+    socket.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    socket.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    expect(socket.close).not.toHaveBeenCalled()
+    socket.onmessage!({ data: new ArrayBuffer(1) })
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    expect(terminal.write).toHaveBeenCalledTimes(18)
+  })
+  it.each(['overflow', 'write'])('%s 关闭后的回调不改变替换 owner 的预算', async failure => {
+    mount(); await connect(); sockets[0]!.started()
+    const old = sockets[0]!
+    if (failure === 'write') mocks.fail = 'write'
+    old.onmessage!({ data: new ArrayBuffer(1) })
+    const consumed = mocks.terminals[0]!.consumed[0]!
+    if (failure === 'overflow') old.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES + 1) })
+    old.closed(); mocks.fail = ''; await flush(); await connect(); sockets[1]!.started()
+    const next = sockets[1]!
+    for (let index = 0; index < 16; index++) next.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    consumed(); consumed()
+    expect(next.close).not.toHaveBeenCalled()
+    next.onmessage!({ data: new ArrayBuffer(1) })
+    expect(next.close).toHaveBeenCalledTimes(1)
+    expect(mocks.terminals[1]!.write).toHaveBeenCalledTimes(16)
+  })
+  it('16 KiB + 1 异常帧未交给 xterm，零长度帧不消耗预算', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    sockets[0]!.onmessage!({ data: new ArrayBuffer(0) })
+    sockets[0]!.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES + 1) })
+    expect(mocks.terminals[0]!.write).not.toHaveBeenCalled()
+    expect(sockets[0]!.close).toHaveBeenCalledTimes(1)
+  })
+  it('同步 write 回调同样释放预算，不触发伪超限', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    mocks.terminals[0]!.write.mockImplementation((_data: Uint8Array, callback: () => void) => callback())
+    for (let index = 0; index < 32; index++) sockets[0]!.onmessage!({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    expect(mocks.terminals[0]!.write).toHaveBeenCalledTimes(32)
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
+  })
+  it('32 KiB UTF-8 输入边界，超限不截断、不发送、不重放', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    const terminal = mocks.terminals[0]!
+    const socket = sockets[0]!
+    terminal.data('😀'.repeat(TERMINAL_INPUT_BYTES / 4))
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(new TextEncoder().encode('😀'.repeat(TERMINAL_INPUT_BYTES / 4)))
+    socket.send.mockClear()
+    terminal.data('😀'.repeat(TERMINAL_INPUT_BYTES / 4) + 'x')
+    await flush()
+    expect(socket.send).not.toHaveBeenCalled()
+    expect(socket.close).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('超过 32 KiB，未发送')
+    vi.advanceTimersByTime(1000)
+    expect(socket.send).not.toHaveBeenCalled()
+    terminal.data('x')
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(new TextEncoder().encode('x'))
+  })
+  it('粘贴按归一化及括号包装后的字节限制，过大原文不保留确认', async () => {
+    mount(); await connect(); sockets[0]!.started(); await flush()
+    paste('a'.repeat(TERMINAL_INPUT_BYTES - 12))
+    expect(sockets[0]!.send).toHaveBeenCalledTimes(1)
+    sockets[0]!.send.mockClear()
+    paste('a'.repeat(TERMINAL_INPUT_BYTES - 11))
+    paste('a\n' + 'b'.repeat(TERMINAL_INPUT_BYTES))
+    await flush()
+    expect(sockets[0]!.send).not.toHaveBeenCalled()
+    expect(host.querySelector('.paste-confirmation')).toBeNull()
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
+    paste('\r\n'.repeat(TERMINAL_INPUT_BYTES - 12)); await flush()
+    expect(host.querySelector('.paste-confirmation')).not.toBeNull()
+    button('粘贴到终端').click()
+    expect(sockets[0]!.send).toHaveBeenCalledTimes(1)
+  })
+  it.each(['input', 'resize', 'paste'])('64 KiB 发送积压拒绝 %s，不重放且回收当前 owner', async source => {
+    mount(); await connect(); sockets[0]!.started(); await flush()
+    const socket = sockets[0]!
+    socket.bufferedAmount = TERMINAL_SOCKET_BUFFER_BYTES
+    if (source === 'input') mocks.terminals[0]!.data('x')
+    else if (source === 'resize') mocks.terminals[0]!.resize({ rows: 30, cols: 90 })
+    else { paste(); await flush(); button('粘贴到终端').click() }
+    await flush()
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'close' }))
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    expect(host.textContent).toContain('已发送的输入无法撤回')
+    socket.bufferedAmount = 0
+    vi.advanceTimersByTime(10000)
+    expect(socket.send).toHaveBeenCalledTimes(1)
+  })
+  it('现有积压低于 64 KiB，但加入完整载荷超一字节时整笔拒绝', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    const socket = sockets[0]!
+    socket.bufferedAmount = TERMINAL_SOCKET_BUFFER_BYTES - TERMINAL_INPUT_BYTES + 1
+    expect(socket.bufferedAmount).toBeLessThan(TERMINAL_SOCKET_BUFFER_BYTES)
+    mocks.terminals[0]!.data('a'.repeat(TERMINAL_INPUT_BYTES))
+    expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'close' }))
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    socket.bufferedAmount = 0
+    vi.advanceTimersByTime(10000)
+    expect(socket.send).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(host.textContent).toContain('当前输入或窗口调整未发送')
+  })
+  it('bufferedAmount 加当前载荷精确 64 KiB 可以发送', async () => {
+    mount(); await connect(); sockets[0]!.started()
+    sockets[0]!.bufferedAmount = TERMINAL_SOCKET_BUFFER_BYTES - TERMINAL_INPUT_BYTES
+    mocks.terminals[0]!.data('a'.repeat(TERMINAL_INPUT_BYTES))
+    expect(sockets[0]!.send).toHaveBeenCalledTimes(1)
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
   })
 })

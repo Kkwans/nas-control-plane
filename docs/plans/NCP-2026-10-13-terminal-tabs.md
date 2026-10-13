@@ -165,3 +165,13 @@ P 片完成标准：上述源码缺陷与 mock 回归闭环、前端类型检查
 - 混合容量 4 以 barrier 控制 Start、Metadata、Close，覆盖 1 opening + 2 live + 1 closing 与 2 live + 2 closing；晚到成功取消、Metadata 取消、Session+error、成功发布后取消、Close error、重复关闭、替补 ID 不复用与兄弟会话持续可用。沿用 Manager 的锁外清理、主错误码、唯一 Close owner 和 Close 返回后释放容量，不更改进程退出保证。
 - 使用 `source ../ncp-tools/env.sh`（Go 1.26.4）、`GOPROXY=off`，运行 `go test -race ./cmd/ncp-agent ./internal/agentsocket ./internal/terminal -run '^(TestTerminal(Capacity|ProductionCapacity|StartReservation|CleanupManager)|TestManager|TestRunAgentServer|TestWriteBuildVersion)' -count=1 -timeout=60s`，三包均通过；`git diff --check` 通过。筛选仅覆盖已审查的纯 fake/配置测试，未运行包内真实 PTY、helper、进程或网络测试。未启动真实 listener/WebSocket/终端命令，未连接 Docker/NAS。
 - 本轮只完成容量接线与逻辑隔离，不表示真实四路终端、Root 命令资源隔离、全部后代退出或前端多标签已验收。没有修改部署设置或当前运行环境，后续部署仍按当次授权办理。
+
+## B 片：单连接输入输出预算
+
+已实现并完成独立源码复核，浏览器回归与CI仍待验。每个attempt最多256KiB待xterm write回调确认的二进制字节，单帧最大16KiB；回调只能释放自身预留一次，关闭后失效，异常同步写入也归还预留。零长输出不进入write队列。
+
+当前HTTP浏览器协议为二进制输出与JSON控制，16KiB来自Agent输出分块；RPC内部base64不属于浏览器线协议。UTF-8输入最多32KiB，与Server和Manager现有上限一致；普通输入/resize发送后的projected bufferedAmount最多64KiB。超长输入整笔拒绝并提示；粘贴先计入CRLF归一化及bracketed包装，再决定是否保留多行确认。
+
+输出过载或发送积压只退役当前owner并走已有closing清理，不截断ANSI，不拆分或重放输入；迟到回调不影响新连接。close控制帧仍按P片尽力发送，因此64KiB是普通发送准入策略，并非浏览器全部网络缓存硬限；256KiB也不代表xterm/浏览器总内存。
+
+主任务完整67文件1198项单元、全量lint、Vue类型、生产构建与540KiB预算通过；独立58项聚焦测试（含原终端domain）通过，补充单字节投影超限后聚焦59项通过。保留原六项浏览器用例并新增七项预算交互，严格静态检查及13项发现通过；真实Chromium+mock与390/1440溢出截图仍待CI。本片不增加标签页，不修改后端默认容量、协议、生产参数或权限，未执行真实终端命令。
