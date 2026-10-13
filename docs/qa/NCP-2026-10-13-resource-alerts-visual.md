@@ -75,3 +75,9 @@
 两份原始 axe 的 `violations` 均为空，仍保留 `incomplete`：`aria-prohibited-attr` 指向带 aria-label 但没有有效 role 的顶部位置 div；`aria-valid-attr-value` 无法确认折叠日期选择器的 aria-controls 目标；`color-contrast` 对渐变背景等无法自动确定。未将这些待人工检查项删除或称为通过。该对状态 JSON 未携带截图 SHA256 字段，因此只声称官方同名图与状态的对应关系，不声称像 M29 工件一样有内嵌图片摘要绑定。
 
 结论仅覆盖该精确提交的日期帮助开态像素、语义及通过的键盘/混合交互 fixture，不是整页或全部无障碍合规声明。本轮仅查看 GitHub CI 工件，没有启动本地浏览器、监听端口、Docker 或真实 NAS，也没有部署验证。
+
+## 顶部刷新帮助制品保留修正（22:25 UTC）
+
+86c49e4 的 CI38475317287 通过1708单元及359浏览器，六项失败均为已知账号禁用入口旧fixture；新增三项刷新帮助测试全部通过。但原fixture只有testInfo.attach，官方分片器未保留其PNG/axe，因此不能声称真实像素已复核。已将四个打开帮助的PNG和配对capture-state JSON直接写入ui-captures，保留源码/PNG摘要、完整axe、焦点/ARIA/真实页头归属与截图前后状态及请求。字体就绪后采样，要求截图和axe不改变帮助状态。
+
+此fixture修正经独立审查；严格E2E类型、lint、三项发现与精确基线462480d上的1777项单元、Vue类型检查通过。实际新版制品仍待CI下载和逐图查看。

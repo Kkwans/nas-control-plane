@@ -1,3 +1,6 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { installMockApi, summary } from './mockApi'
@@ -5,7 +8,16 @@ import { waitForPageReady } from './pageReadiness'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
 
+const evidence = new WeakMap<Page, { requests: Array<{ method: string; path: string }>; pageErrors: string[] }>()
+
 async function openPage(page: Page) {
+  const events = { requests: [] as Array<{ method: string; path: string }>, pageErrors: [] as string[] }
+  evidence.set(page, events)
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/')) events.requests.push({ method: request.method(), path: url.pathname + url.search })
+  })
+  page.on('pageerror', (error) => events.pageErrors.push(error.message))
   await installMockApi(page, { clock: false })
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(page.getByRole('heading', { name: '系统总览', exact: true })).toBeVisible()
@@ -34,15 +46,65 @@ async function openHelp(page: Page, button: Locator) {
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height)
   return help
 }
+async function helpState(page: Page) {
+  return page.evaluate(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="立即刷新数据"]')!
+    const id = button.getAttribute('aria-describedby')
+    const help = id ? document.getElementById(id) : null
+    const header = button.closest('header.topbar')
+    const active = document.activeElement
+    const geometry = (element: HTMLElement | null) => element ? {
+      bounds: element.getBoundingClientRect().toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+      display: getComputedStyle(element).display, visibility: getComputedStyle(element).visibility,
+    } : null
+    return {
+      viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY },
+      focus: { tag: active?.tagName, id: active?.id, label: active?.getAttribute('aria-label'), buttonFocused: active === button },
+      button: { describedBy: id, disabled: button.disabled, hovered: button.matches(':hover'), geometry: geometry(button) },
+      help: help ? {
+        id: help.id, text: help.textContent, role: help.getAttribute('role'), ariaHidden: help.getAttribute('aria-hidden'),
+        hovered: help.matches(':hover'), geometry: geometry(help), parentTag: help.parentElement?.tagName,
+        parentClass: help.parentElement?.className, directHeaderChild: help.parentElement === header,
+      } : null,
+      landmark: { headerCount: document.querySelectorAll('header.topbar').length, headerContainsButton: header?.contains(button), headerContainsHelp: help ? header?.contains(help) : false, mainCount: document.querySelectorAll('main').length },
+    }
+  })
+}
 async function auditOpenHelp(page: Page, testInfo: TestInfo, label: string) {
+  // screenshot 会等待字体；采样前同样等待，避免把字体落地误判成提示状态漂移。
+  await page.evaluate(() => document.fonts.ready.then(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))))
   const button = page.getByRole('button', { name: '立即刷新数据', exact: true })
   await openHelp(page, button)
-  await testInfo.attach(`${label}.png`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
-  const result = await new AxeBuilder({ page }).analyze()
+  const events = evidence.get(page)!
+  const beforeCapture = await helpState(page)
+  const requestsBefore = [...events.requests]
+  // CI 官方证据收集器只保留此目录中的 PNG 和配对 capture-state JSON。
+  await mkdir(testInfo.outputPath('ui-captures'), { recursive: true })
+  const png = testInfo.outputPath('ui-captures', `${label}.png`)
+  await page.screenshot({ path: png, fullPage: true })
+  const afterScreenshot = await helpState(page)
+  const axe = await new AxeBuilder({ page }).analyze()
+  const afterAxe = await helpState(page)
+  const json = testInfo.outputPath('ui-captures', `${label}-capture-state.json`)
+  await writeFile(json, JSON.stringify({
+    fixtureOnly: true, sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+    fixtureSource: 'frontend/e2e/refresh-help.spec.ts + frontend/e2e/mockApi.ts',
+    fixtureSha256: createHash('sha256').update(await readFile(new URL('./refresh-help.spec.ts', import.meta.url))).digest('hex'),
+    mockApiSha256: createHash('sha256').update(await readFile(new URL('./mockApi.ts', import.meta.url))).digest('hex'),
+    testTitle: testInfo.title, project: testInfo.project.name, retry: testInfo.retry, url: page.url(),
+    screenshot: `${label}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'),
+    beforeCapture, afterScreenshot, afterAxe, requestsBefore, requestsAfter: [...events.requests], pageErrors: [...events.pageErrors],
+    axe,
+  }, null, 2))
+  await testInfo.attach(label, { path: png, contentType: 'image/png' })
+  await testInfo.attach(`${label}-state`, { path: json, contentType: 'application/json' })
   await openHelp(page, button)
-  await testInfo.attach(`${label}-axe.json`, { body: JSON.stringify(result.violations, null, 2), contentType: 'application/json' })
+  expect(afterScreenshot).toEqual(beforeCapture)
+  expect(afterAxe).toEqual(beforeCapture)
+  expect(events.requests).toEqual(requestsBefore)
+  expect(events.pageErrors).toEqual([])
   // 全页真实扫描；region 同样阻断，不能因通常属于 moderate 而放过。
-  const violations = result.violations.filter((item) => item.id === 'region' || item.impact === 'serious' || item.impact === 'critical')
+  const violations = axe.violations.filter((item) => item.id === 'region' || item.impact === 'serious' || item.impact === 'critical')
   expect(violations, JSON.stringify(violations, null, 2)).toEqual([])
 }
 
