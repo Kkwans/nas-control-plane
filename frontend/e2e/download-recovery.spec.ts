@@ -108,10 +108,10 @@ async function expectInterrupted(page: Page) {
 async function capture(page: Page, info: TestInfo, name: string, state: Awaited<ReturnType<typeof fixture>>) {
   // 全量 axe 结果和截图描述同一状态；不得过滤 contrast/ARIA 等规则。
   const axe = await new AxeBuilder({ page }).analyze()
-  const directory = info.outputPath('ui-captures', name)
+  const directory = info.outputPath('ui-captures')
   if (process.env.NCP_CAPTURE_UI === '1') {
     await mkdir(directory, { recursive: true })
-    await page.screenshot({ path: `${directory}/screenshot.png`, fullPage: false, animations: 'disabled' })
+    await page.screenshot({ path: `${directory}/${name}.png`, fullPage: false, animations: 'disabled' })
   }
   // PNG 完成后读取状态；手动 Job 流在截图与状态记录期间不会自己推进。
   const browserState = await page.evaluate(() => {
@@ -140,10 +140,10 @@ async function capture(page: Page, info: TestInfo, name: string, state: Awaited<
       fixtureOnly: true, fixtureSource: 'frontend/e2e/download-recovery.spec.ts + frontend/e2e/mockApi.ts',
       state: name, reads: state.reads, mutations: state.mutations, blocked: state.blocked,
       streams: await streams(page), ...browserState }
-    await writeFile(`${directory}/end-capture-state.json`, JSON.stringify(metadata, null, 2))
-    await writeFile(`${directory}/full-axe-capture-state.json`, JSON.stringify(axe, null, 2))
-    await info.attach(`${name}-state`, { path: `${directory}/end-capture-state.json`, contentType: 'application/json' })
-    await info.attach(`${name}-screenshot`, { path: `${directory}/screenshot.png`, contentType: 'image/png' })
+    await writeFile(`${directory}/${name}-capture-state.json`, JSON.stringify(metadata, null, 2))
+    await writeFile(`${directory}/${name}-axe-capture-state.json`, JSON.stringify(axe, null, 2))
+    await info.attach(`${name}-state`, { path: `${directory}/${name}-capture-state.json`, contentType: 'application/json' })
+    await info.attach(`${name}-screenshot`, { path: `${directory}/${name}.png`, contentType: 'image/png' })
   }
   expect(axe.violations).toEqual([])
 }
