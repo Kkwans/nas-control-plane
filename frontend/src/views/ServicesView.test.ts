@@ -24,6 +24,7 @@ const profile: SiteProfileInput = { name: 'Demo', description: '', iconUrl: '', 
 const site = { ...profile, id: 'manual:demo', projectId: 'manual:demo', ports: [8080], state: 'running', source: 'manual' } as Site
 interface ViewState {
   draft: SiteProfileInput
+  pendingIcon: File | null
   editOpen: boolean
   saving: boolean
   syncPending: boolean
@@ -67,7 +68,7 @@ beforeEach(async () => {
   view = (app._instance as unknown as { setupState: ViewState }).setupState as unknown as ViewState
   await settle()
 })
-afterEach(() => { if (!unmounted) app.unmount(); host.remove(); vi.restoreAllMocks() })
+afterEach(() => { if (!unmounted) app.unmount(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('站点部分成功反馈', () => {
   it('创建后同步失败保留草稿和创建 ID，重试只读；后续保存更新既有站点', async () => {
@@ -306,6 +307,54 @@ describe('站点写入未知结果的只读核对', () => {
     expect(save).toHaveBeenCalledTimes(2)
     expect(messages.error).not.toHaveBeenCalled()
     await nextTick()
-    expect(host.textContent).toContain('收藏保存请求返回成功状态')
+    expect(host.textContent).toContain('收藏保存请求可能已经执行')
+  })
+})
+
+
+describe('站点真实传输未知结果', () => {
+  it.each(['disconnect', 'abort', 'gateway'] as const)('提交后 %s 保留未知创建，重复保存和图标选择不重放', async (failure) => {
+    const actual = await vi.importActual<typeof import('@/api/control')>('@/api/control')
+    const api = await import('@/api/control')
+    vi.mocked(api.createSite).mockImplementationOnce(actual.createSite)
+    const committed: string[] = []
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => {
+      committed.push(`manual:${committed.length + 1}`)
+      if (failure === 'disconnect') throw new TypeError('connection lost after commit')
+      if (failure === 'abort') throw new DOMException('aborted after commit', 'AbortError')
+      return new Response('Bad Gateway', { status: 502 })
+    })
+    vi.stubGlobal('fetch', fetch)
+    view.openCreator(); view.draft = { ...profile }
+    view.pendingIcon = new File(['icon'], 'icon.png', { type: 'image/png' })
+    await nextTick(); await view.saveSite(); await view.saveSite()
+    await view.uploadIcon({ target: { files: [view.pendingIcon] } } as unknown as Event)
+    await view.recheckUnknownWrite(); await view.saveSite()
+    expect(committed).toEqual(['manual:1'])
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(view.unknownWrite).toMatchObject({ operation: 'create', code: 'SITE_WRITE_UNKNOWN' })
+    expect(view.savedSiteId).toBeNull()
+    expect(view.pendingIcon).not.toBeNull()
+    expect(api.uploadSiteIcon).not.toHaveBeenCalled()
+    expect(api.deleteSite).not.toHaveBeenCalled()
+    expect(messages.error).not.toHaveBeenCalled()
+    expect(messages.success).not.toHaveBeenCalled()
+  })
+
+  it.each(['editor', 'favorite'] as const)('真实 PUT 断线暂停 %s 重提并保留目标', async (mode) => {
+    const actual = await vi.importActual<typeof import('@/api/control')>('@/api/control')
+    const api = await import('@/api/control')
+    vi.mocked(api.updateSite).mockImplementationOnce(actual.updateSite)
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError('connection lost after commit'))
+    vi.stubGlobal('fetch', fetch)
+    if (mode === 'editor') {
+      view.openEditor(site); await nextTick(); await view.saveSite(); await view.saveSite()
+      expect(view.savedSiteId).toBe(site.id)
+      expect(view.unknownWrite).toMatchObject({ operation: 'update', siteId: site.id })
+    } else { await view.toggleFavorite(site); await view.toggleFavorite(site) }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith(`/api/v1/sites/${encodeURIComponent(site.id)}`, expect.objectContaining({ method: 'PUT', redirect: 'error' }))
+    expect(messages.error).not.toHaveBeenCalled()
+    expect(messages.success).not.toHaveBeenCalled()
   })
 })

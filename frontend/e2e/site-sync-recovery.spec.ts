@@ -32,7 +32,7 @@ async function installSiteFixture(page: Page) {
     const path = new URL(request.url()).pathname
     if (request.method() !== 'GET') {
       writes.push({ method: request.method(), path, body: request.postDataJSON() as Record<string, unknown> })
-      await route.fulfill({ json: { ...request.postDataJSON(), projectId: path === '/api/v1/sites' ? createdId : decodeURIComponent(path.split('/').at(-1)!) } })
+      await route.fulfill({ status: request.method() === 'POST' ? 201 : 200, json: { ...request.postDataJSON(), projectId: path === '/api/v1/sites' ? createdId : decodeURIComponent(path.split('/').at(-1)!) } })
       return
     }
     reads.push(path)

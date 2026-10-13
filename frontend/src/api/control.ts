@@ -1,6 +1,6 @@
 import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
-import { SiteWriteUnknownError } from './siteWriteOutcome'
+import { requestSiteProfileWrite } from './siteWriteOutcome'
 import { requestUserWrite } from './userWriteOutcome'
 import { NcpApiError } from '@/api/system'
 import { parseIgnoredSitesResponse, parseSiteListResponse, parseSiteProfileResponse } from './siteResponse'
@@ -209,24 +209,19 @@ export function updateSite(
   input: SiteProfileInput,
   signal?: AbortSignal,
 ): Promise<SiteProfileInput & { projectId: string }> {
-  return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, {
+  return requestSiteProfileWrite(`/api/v1/sites/${encodeURIComponent(siteId)}`, {
     method: 'PUT',
     body: JSON.stringify(input),
     ...(signal ? { signal } : {}),
-  }, (value) => {
-    try { return parseSiteProfileResponse(value, { operation: 'update', siteId }) }
-    catch { throw new SiteWriteUnknownError('update', siteId) }
-  })
+  }, 'update', (value) => parseSiteProfileResponse(value, { operation: 'update', siteId }), siteId)
 }
 
 export function createSite(
   input: SiteProfileInput,
   signal?: AbortSignal,
 ): Promise<SiteProfileInput & { projectId: string }> {
-  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input), ...(signal ? { signal } : {}) }, (value) => {
-    try { return parseSiteProfileResponse(value, { operation: 'create' }) }
-    catch { throw new SiteWriteUnknownError('create') }
-  })
+  return requestSiteProfileWrite('/api/v1/sites', { method: 'POST', body: JSON.stringify(input), ...(signal ? { signal } : {}) },
+    'create', (value) => parseSiteProfileResponse(value, { operation: 'create' }))
 }
 
 export function deleteSite(siteId: string, signal?: AbortSignal): Promise<void> {

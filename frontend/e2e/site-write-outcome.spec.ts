@@ -189,7 +189,7 @@ for (const width of [390, 1440]) {
     await openCreator(page)
     await editor(page).getByLabel('简介', { exact: true }).fill('提交的草稿')
     await create(page).click()
-    await expect(warning(page)).toContainText('创建请求返回成功状态，但响应无效，创建结果未确认。')
+    await expect(warning(page)).toContainText('创建请求可能已经执行，创建结果未确认。')
     await expectHeldEditor(page, '提交的草稿')
     await warningEvidence(page, info)
     await editor(page).getByLabel('简介', { exact: true }).fill('未知期间继续编辑')
@@ -224,7 +224,7 @@ test('更新 200 返回错误 ID：保留请求期间的编辑，核对存在仍
   await held.received.promise
   await editor(page).getByLabel('简介', { exact: true }).fill('请求期间的新草稿')
   held.release.resolve()
-  await expect(warning(page)).toContainText('保存请求返回成功状态，但响应无效，保存结果未确认。')
+  await expect(warning(page)).toContainText('保存请求可能已经执行，保存结果未确认。')
   await expect(warning(page)).toContainText(`记录 ID：${existingId}`)
   await expectHeldEditor(page, '请求期间的新草稿')
   const before = fixture.requests.length

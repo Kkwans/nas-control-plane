@@ -161,11 +161,11 @@ describe('站点写入响应未知结果', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/v1/sites/${encodeURIComponent(id)}`)
   })
 
-  it('合法 POST 返回手工 ID，HTTP 失败保留原始错误码', async () => {
+  it('合法 POST 返回手工 ID，已证明的解码拒绝保留错误码', async () => {
     const { createSite } = await import('./control')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ...input, projectId: 'manual:demo', source: 'manual' }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'INPUT_INVALID', message: 'invalid' }), { status: 400 })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'CONTROL_INPUT_INVALID', message: 'invalid', requestId: 'fixture' }), { status: 400 })))
     await expect(createSite(input)).resolves.toMatchObject({ projectId: 'manual:demo' })
-    await expect(createSite(input)).rejects.toMatchObject({ code: 'INPUT_INVALID' })
+    await expect(createSite(input)).rejects.toMatchObject({ code: 'CONTROL_INPUT_INVALID' })
   })
 })

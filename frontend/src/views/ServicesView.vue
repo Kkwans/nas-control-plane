@@ -492,7 +492,7 @@ function sitesForCategory(category: string) {
     </div>
 
     <div v-if="unknownFavorites.size" class="site-error" role="status">
-      <span>部分收藏保存请求返回成功状态，但响应无效，结果未确认。本页已暂停这些站点的重复收藏提交，请只读核对目录。</span>
+      <span>部分收藏保存请求可能已经执行，结果未确认。本页已暂停这些站点的重复收藏提交，请只读核对目录。</span>
       <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
     </div>
 
