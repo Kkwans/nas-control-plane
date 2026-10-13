@@ -28,3 +28,9 @@
 ## 边界
 
 全部DNS预览、确认、回滚及读取均由内存fixture接管，IP为文档测试地址；未更改真实DNS、NAS网络、代理或宿主服务。实际网络设置/回滚不是本轮验收范围；合成点击仅检查禁用入口防重，不代表用户可绕过disabled。语义修复后仍需准确提交的完整CI和工件复核。
+
+## 重复地标修复（等待替换CI）
+
+新增局部 SectionDialog：Vue Teleport 把原生无名称 section 放在 body 内，Element Plus Dialog 留在该 section 内，不再二次传送。原生分区将其 header/footer 限定为弹窗内容；未修改依赖、未追加全局DOM补丁、未覆写 dialog 角色、未排除 axe 规则。只在 DNS 编辑器使用。
+
+五项真实 Element Plus jsdom 回归验证命名、标题、v-model/事件/作用域插槽透传、关闭/重开、pending Escape、固定传送目的地及卸载清理；独立审查无阻断问题。主线程完整64文件1115项单元、全量lint、Vue类型检查、生产构建及540KiB预算通过。真实Chromium中的地标、焦点和新读取状态布局仍待本次CI，不以静态检查替代。

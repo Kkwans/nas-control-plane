@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElButton, ElDialog, ElInput } from 'element-plus'
+import { ElButton, ElInput } from 'element-plus'
 import {
   Activity,
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
 import ActionButton from '@/components/ActionButton.vue'
+import SectionDialog from '@/components/SectionDialog.vue'
 import InfrastructureOverviewPanel from '@/components/InfrastructureOverviewPanel.vue'
 import InfrastructureDnsPanel from '@/components/InfrastructureDnsPanel.vue'
 import InfrastructureListenersPanel from '@/components/InfrastructureListenersPanel.vue'
@@ -617,12 +618,11 @@ onBeforeUnmount(dispose)
       />
     </template>
 
-    <ElDialog
+    <SectionDialog
       v-model="dnsDialogOpen"
       class="dns-editor-dialog"
       title="编辑 DNS 服务器"
       width="min(580px, calc(100vw - 28px))"
-      append-to-body
       destroy-on-close
       :close-on-click-modal="!dnsPending"
       :close-on-press-escape="!dnsPending"
@@ -653,7 +653,7 @@ onBeforeUnmount(dispose)
           <ActionButton v-else variant="primary" :disabled="!canConfirmDNS" :loading="dnsPending" @click="confirmDNS">确认应用</ActionButton>
         </div>
       </template>
-    </ElDialog>
+    </SectionDialog>
   </div>
 </template>
 

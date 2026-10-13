@@ -283,7 +283,7 @@ describe('系统详情与辅助 DNS 读取隔离', () => {
     read.reject(new Error('DNS offline')); await flush()
     expect(state.details).toEqual(details); expect(state.errorMessage).toBe(''); expect(state.dnsCapabilityError).toBe('DNS offline')
     expect(host.querySelector('[data-testid="dns-read-status"]')?.textContent).toContain('重试 DNS 能力')
-    expect(host.querySelector('[data-testid="dns-dialog-read-status"]')?.textContent).toContain('重试 DNS 能力')
+    expect(document.querySelector('[data-testid="dns-dialog-read-status"]')?.textContent).toContain('重试 DNS 能力')
   })
 
   it.each([false, true])('详情失败、DNS 成功独立保留（已有快照 %s）', async (existing) => {
