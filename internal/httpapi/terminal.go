@@ -62,7 +62,10 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		_ = connection.Close(websocket.StatusInternalError, "终端验证通道不可用")
 		return
 	}
-	defer stream.Close()
+	defer func() {
+		cancel()
+		_ = stream.Close()
+	}()
 
 	if err := stream.Send(terminal.Message{
 		Type:        terminal.MessageStart,
@@ -97,11 +100,21 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		return
 	}
 
+	// 输出协程只报告一次结果；容量 1 保证接收端退出后仍可完成发送。
 	outputDone := make(chan error, 1)
 	go proxyTerminalOutput(sessionContext, connection, stream, outputDone)
 
 	input := make(chan terminalInput, 1)
-	go readTerminalInput(sessionContext, connection, input)
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		readTerminalInput(sessionContext, connection, input)
+	}()
+	defer func() {
+		cancel()
+		_ = connection.CloseNow()
+		<-inputDone
+	}()
 
 	for {
 		select {
@@ -170,44 +183,64 @@ type terminalInput struct {
 	err            error
 }
 
-func readTerminalInput(ctx context.Context, connection *websocket.Conn, destination chan<- terminalInput) {
+type terminalInputReader interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+}
+
+func sendTerminalInput(ctx context.Context, destination chan<- terminalInput, input terminalInput) bool {
+	select {
+	case destination <- input:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func readTerminalInput(ctx context.Context, connection terminalInputReader, destination chan<- terminalInput) {
 	defer close(destination)
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		messageType, data, err := connection.Read(ctx)
 		if err != nil {
-			destination <- terminalInput{err: err}
+			sendTerminalInput(ctx, destination, terminalInput{err: err})
 			return
 		}
 		switch messageType {
 		case websocket.MessageBinary:
 			if len(data) == 0 || len(data) > maxWebSocketInput {
-				destination <- terminalInput{err: errors.New("terminal input size is invalid")}
+				sendTerminalInput(ctx, destination, terminalInput{err: errors.New("terminal input size is invalid")})
 				return
 			}
-			destination <- terminalInput{message: terminal.Message{Type: terminal.MessageInput, Data: data}}
+			if !sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageInput, Data: data}}) {
+				return
+			}
 		case websocket.MessageText:
 			control, err := decodeTerminalControl(data)
 			if err != nil {
-				destination <- terminalInput{err: err}
+				sendTerminalInput(ctx, destination, terminalInput{err: err})
 				return
 			}
 			switch control.Type {
 			case "resize":
 				rows, cols, err := terminalDimensions(control.Rows, control.Cols)
 				if err != nil {
-					destination <- terminalInput{err: err}
+					sendTerminalInput(ctx, destination, terminalInput{err: err})
 					return
 				}
-				destination <- terminalInput{message: terminal.Message{Type: terminal.MessageResize, Rows: rows, Cols: cols}}
+				if !sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageResize, Rows: rows, Cols: cols}}) {
+					return
+				}
 			case "close":
-				destination <- terminalInput{message: terminal.Message{Type: terminal.MessageClose}, closeRequested: true}
+				sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageClose}, closeRequested: true})
 				return
 			default:
-				destination <- terminalInput{err: errors.New("terminal control type is invalid")}
+				sendTerminalInput(ctx, destination, terminalInput{err: errors.New("terminal control type is invalid")})
 				return
 			}
 		default:
-			destination <- terminalInput{err: errors.New("websocket message type is invalid")}
+			sendTerminalInput(ctx, destination, terminalInput{err: errors.New("websocket message type is invalid")})
 			return
 		}
 	}

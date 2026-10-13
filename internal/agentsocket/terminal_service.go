@@ -33,11 +33,16 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if err != nil || start.Type != terminal.MessageStart {
 		return grpcstatus.Error(codes.InvalidArgument, "TERMINAL_START_INVALID")
 	}
-	opened, err := s.manager.Open(stream.Context(), terminal.StartRequest{Target: start.Target, ContainerID: start.ContainerID, Rows: start.Rows, Cols: start.Cols})
+	sessionContext, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+	opened, err := s.manager.Open(sessionContext, terminal.StartRequest{Target: start.Target, ContainerID: start.ContainerID, Rows: start.Rows, Cols: start.Cols})
 	if err != nil {
 		return terminalManagerError(err)
 	}
-	defer func() { _ = s.manager.Close(opened.ID) }()
+	defer func() {
+		cancel()
+		_ = s.manager.Close(opened.ID)
+	}()
 
 	started, err := terminalMessageToStruct(terminal.Message{
 		Type:         terminal.MessageStarted,
@@ -56,19 +61,23 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 		return terminalStreamSendError(err)
 	}
 
+	// 输出协程只报告一次结果；容量 1 保证接收端退出后仍可完成发送。
 	outputDone := make(chan error, 1)
-	go s.copyTerminalOutput(stream.Context(), stream, opened.ID, outputDone)
+	go s.copyTerminalOutput(sessionContext, stream, opened.ID, outputDone)
 
 	incoming := make(chan terminalReceiveResult, 1)
-	go receiveTerminalMessages(stream, incoming)
+	go receiveTerminalMessages(sessionContext, stream, incoming)
 
 	for {
 		select {
-		case <-stream.Context().Done():
+		case <-sessionContext.Done():
 			return nil
 		case outputError := <-outputDone:
 			return outputError
-		case received := <-incoming:
+		case received, ok := <-incoming:
+			if !ok {
+				return nil
+			}
 			if received.err != nil {
 				return terminalStreamReceiveError(received.err)
 			}
@@ -89,7 +98,12 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 				if err := s.manager.Close(opened.ID); err != nil && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
 					return terminalManagerError(err)
 				}
-				return <-outputDone
+				select {
+				case err := <-outputDone:
+					return err
+				case <-sessionContext.Done():
+					return nil
+				}
 			default:
 				return grpcstatus.Error(codes.InvalidArgument, "TERMINAL_MESSAGE_INVALID")
 			}
@@ -138,10 +152,19 @@ type terminalReceiveResult struct {
 	err     error
 }
 
-func receiveTerminalMessages(stream AgentTerminalPOCService_OpenServer, destination chan<- terminalReceiveResult) {
+func receiveTerminalMessages(ctx context.Context, stream AgentTerminalPOCService_OpenServer, destination chan<- terminalReceiveResult) {
+	// Recv 的阻塞由 RPC 返回后的传输层取消解除，不能在 Open 返回前等待它结束。
+	defer close(destination)
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		message, err := stream.Recv()
-		destination <- terminalReceiveResult{message: message, err: err}
+		select {
+		case destination <- terminalReceiveResult{message: message, err: err}:
+		case <-ctx.Done():
+			return
+		}
 		if err != nil {
 			return
 		}
