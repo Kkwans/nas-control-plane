@@ -75,7 +75,7 @@ describe('站点部分成功反馈', () => {
     expect(view.draft).toEqual(profile)
     expect(view.savedSiteId).toBe(site.id)
     expect(view.syncPending).toBe(true)
-    expect(messages.warning).toHaveBeenCalled()
+    expect(messages.warning).not.toHaveBeenCalled()
     expect(messages.error).not.toHaveBeenCalled()
     expect(messages.success).not.toHaveBeenCalled()
     await view.saveSite()

@@ -73,58 +73,79 @@ async function openCreator(page: Page) {
   await editor(page).getByPlaceholder('例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成').fill('https://fixture.invalid/app')
 }
 
-async function expectReadable(locator: Locator) {
-  await locator.scrollIntoViewIfNeeded()
-  await expect(locator).toBeVisible()
-  expect(await locator.evaluate((element) => {
+async function controlGeometry(locator: Locator) {
+  return locator.evaluate((element) => {
     const range = document.createRange()
     range.selectNodeContents(element)
-    const clips = [element.getBoundingClientRect()]
+    const bounds = element.getBoundingClientRect()
+    const clips = [bounds]
     for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
       const style = getComputedStyle(ancestor)
       if (/(hidden|clip|auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) clips.push(ancestor.getBoundingClientRect())
     }
-    return element.scrollWidth <= element.clientWidth + 1 && [...range.getClientRects()]
-      .filter((line) => line.width && line.height)
-      .every((line) => clips.every((clip) => line.left >= clip.left - 1 && line.right <= clip.right + 1 && line.top >= clip.top - 1 && line.bottom <= clip.bottom + 1))
-  })).toBe(true)
+    const lines = [...range.getClientRects()].filter((line) => line.width && line.height)
+    const center = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+    const hit = document.elementFromPoint(center.x, center.y)
+    const style = getComputedStyle(element)
+    return {
+      text: element.textContent, accessibleLabel: element.getAttribute('aria-label'),
+      bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()), clips: clips.map((clip) => clip.toJSON()),
+      scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+      visible: bounds.width > 0 && bounds.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+      inViewport: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight,
+      center, centerHit: hit === element || (hit !== null && element.contains(hit)),
+      hitElement: hit ? { tag: hit.tagName, className: hit.getAttribute('class'), text: hit.textContent } : null,
+      contained: lines.length > 0 && element.scrollWidth <= element.clientWidth + 1 && lines.every((line) => clips.every((clip) =>
+        line.left >= clip.left - 1 && line.right <= clip.right + 1 && line.top >= clip.top - 1 && line.bottom <= clip.bottom + 1)),
+    }
+  })
 }
 
 async function warningEvidence(page: Page, info: TestInfo) {
   await page.evaluate(() => document.fonts.ready)
   const base = await page.locator('html').evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
+  const observations = []
   for (const scale of [1, 2]) {
     await page.evaluate((size) => document.documentElement.style.setProperty('font-size', `${size}px`, 'important'), base * scale)
-    await expect(page.locator('html')).toHaveCSS('font-size', `${base * scale}px`)
     await warning(page).scrollIntoViewIfNeeded()
     await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    // 真实关闭按钮由 Element Plus Drawer 提供；不移动焦点、隐藏提示或裁掉遮挡物。
+    const close = editor(page).locator('button.el-drawer__close-btn')
+    const state = {
+      viewport: page.viewportSize(),
+      rootFontSize: await page.locator('html').evaluate((element) => getComputedStyle(element).fontSize),
+      warning: await controlGeometry(warning(page)),
+      retry: await controlGeometry(retry(page)),
+      close: await controlGeometry(close),
+    }
     if (process.env.NCP_CAPTURE_UI === '1') {
       const name = `site-sync-warning-${page.viewportSize()!.width}-${scale * 100}`
       const path = info.outputPath('ui-captures', `${name}.png`)
-      const state = await warning(page).evaluate((element) => {
-        const range = document.createRange()
-        range.selectNodeContents(element)
-        return {
-          viewport: { width: innerWidth, height: innerHeight },
-          rootFontSize: getComputedStyle(document.documentElement).fontSize,
-          text: element.textContent, bounds: element.getBoundingClientRect().toJSON(),
-          lines: [...range.getClientRects()].map((line) => line.toJSON()),
-          scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
-        }
-      })
       await mkdir(info.outputPath('ui-captures'), { recursive: true })
       await writeFile(info.outputPath('ui-captures', `${name}-capture-state.json`), JSON.stringify({
         sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
         fixtureOnly: true, fixtureSource: 'frontend/e2e/site-sync-recovery.spec.ts + frontend/e2e/mockApi.ts', ...state,
       }, null, 2))
-      await editor(page).screenshot({ path, animations: 'disabled' })
+      await page.screenshot({ path, fullPage: false, animations: 'disabled' })
       await info.attach(`site-sync-warning-${scale * 100}`, { path, contentType: 'image/png' })
     }
-    await expectReadable(warning(page))
-    await expectReadable(retry(page))
-    // 仅审计新增恢复说明与操作；不把既有表单的无关问题混入此契约。
+    // 仅审计新增恢复说明与操作；保留 WCAG 正文对比度规则，不降低阈值。
     const results = await new AxeBuilder({ page }).include('.site-editor [role="status"]').include('.site-editor .el-drawer__footer').analyze()
     const blocking = results.violations.filter((item) => item.impact === 'serious' || item.impact === 'critical')
+    observations.push({ scale, state, blocking })
+  }
+  // 先完成两种字号的实际像素与几何采集，100% 的失败也不会吞掉 200% 证据。
+  for (const { scale, state, blocking } of observations) {
+    expect(state.rootFontSize).toBe(`${base * scale}px`)
+    for (const control of [state.warning, state.retry]) {
+      expect(control.visible, JSON.stringify(control)).toBe(true)
+      expect(control.contained, JSON.stringify(control)).toBe(true)
+    }
+    for (const control of [state.close, state.retry]) {
+      expect(control.visible, JSON.stringify(control)).toBe(true)
+      expect(control.inViewport, JSON.stringify(control)).toBe(true)
+      expect(control.centerHit, JSON.stringify(control)).toBe(true)
+    }
     expect(blocking, JSON.stringify(blocking, null, 2)).toEqual([])
   }
   await page.evaluate((size) => document.documentElement.style.setProperty('font-size', `${size}px`, 'important'), base)

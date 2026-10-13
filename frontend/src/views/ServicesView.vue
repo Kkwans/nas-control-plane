@@ -300,7 +300,7 @@ async function saveSite() {
       savedSiteId.value = error.siteId ?? siteId
       syncPending.value = true
       if (pendingIcon.value === icon) resetPendingIcon()
-      ElMessage.warning('站点资料已保存，但列表尚未同步。请重新同步，无需重复提交。')
+      // 抽屉内持久状态已播报，避免重复 toast 遮住移动端标题和关闭入口。
     } else ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
   } finally {
     if (current()) saving.value = false
@@ -609,7 +609,7 @@ function sitesForCategory(category: string) {
       </ElForm>
       <template #footer>
         <ElButton @click="editOpen = false">取消</ElButton>
-        <ElButton v-if="syncPending" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
+        <ElButton v-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
         <ElButton v-else type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
     </ElDrawer>
@@ -617,6 +617,18 @@ function sitesForCategory(category: string) {
 </template>
 
 <style scoped>
+.editor-sync-action.el-button--primary {
+  --el-button-text-color: var(--ncp-on-primary);
+  --el-button-bg-color: var(--ncp-primary-strong);
+  --el-button-border-color: var(--ncp-primary-strong);
+  --el-button-hover-text-color: var(--ncp-on-primary);
+  --el-button-hover-bg-color: var(--ncp-primary-strong);
+  --el-button-hover-border-color: var(--ncp-primary-strong);
+  --el-button-active-text-color: var(--ncp-on-primary);
+  --el-button-active-bg-color: var(--ncp-primary-strong);
+  --el-button-active-border-color: var(--ncp-primary-strong);
+}
+
 .editor-sync-notice { display: flex; align-items: flex-start; gap: var(--ncp-space-2); margin: 0 0 var(--ncp-space-4); padding: var(--ncp-space-3); border: 1px solid var(--ncp-line); border-radius: var(--ncp-radius-control); background: var(--ncp-warning-soft); color: var(--ncp-warning-strong); font-size: .82rem; line-height: 1.6; overflow-wrap: anywhere; }
 .editor-sync-notice svg { flex: 0 0 auto; margin-top: 3px; }
 .required-group-label::before{margin-right:4px;color:var(--el-color-danger);content:'*'}.required-group-label small{margin-left:5px;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:500}

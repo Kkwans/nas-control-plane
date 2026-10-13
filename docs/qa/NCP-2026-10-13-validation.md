@@ -424,3 +424,8 @@ d146b11的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/r
 - OpenAPI将POST/PUT/ignored返回资料与输入分开，声明projectId和实际metadata；单测序列化真实Go SiteProfile验证schema，没有运行endpoint或数据库。
 - 生产POST/PUT校验接线明确未启用，防止未知写结果被现有UI误当可重复提交的普通失败；新增回归固定这一分阶段边界。
 - 独立76项API聚焦及OpenAPI全套通过，完整59文件789项单元、lint/typecheck/生产构建与预算通过。隔离浏览器回归待CI；未知写入与图标补偿并未因此解决。
+
+
+## 16:23 UTC 站点恢复提示对比度修正
+
+3eecaa7首次实际CI为720项单元通过、209项浏览器通过/2失败；两项新建恢复场景的重试按钮白字浅蓝底仅2.5:1，未达4.5:1。实际两张100%PNG还发现重复toast覆盖标题，200%及两个场景后续分支因前置失败未执行。改用专属深品牌蓝交互样式，并保留内联说明、去掉重复toast；扩大视口/关闭目标证据，不跳过原axe门槛。替换CI与新像素待验，原失败见[报告](NCP-2026-10-13-site-sync-visual.md)。
