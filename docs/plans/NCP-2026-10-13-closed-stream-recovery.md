@@ -38,3 +38,13 @@
 所有流、请求、时钟与 DOM 交互均为内存 fake/jsdom；没有启动真实浏览器或端口监听，没有 PTY、Docker、NAS、提交、推送或部署操作。视觉与线上运行验收未执行。
 
 主任务发布前以 73e1064 为基线、仅叠加本模块五文件的精确快照验证：85 文件 / 1624 项单元、全量 lint、类型检查、生产构建与包预算全部通过。此处不含并行日期提示框改动。
+
+## 浏览器 fixture 补充（待 CI 运行）
+
+2026-10-13 21:42 UTC，在 704b879 上补齐 `frontend/e2e/closed-stream-recovery.spec.ts`，共 8 项。独立 EventSource fixture 区分 OPEN、原生 CONNECTING、原生 CLOSED 与三种坏帧终止；关闭后普通帧不再投递，迟到回调显式注入。通过实际顶部按钮和导航/退出控件覆盖请求挂起期间终止、连续点击、只替换一个源、GET/open/重复帧不清错、新鲜 SSE 恢复，以及路由/会话清理。路由切换允许同会话 GET 完成更新缓存，但不得重启旧订阅；退出后的 GET 不得恢复已清空状态。等待 store 完成响应处理后再核对清理结果，避免把 route.fulfill 当作应用已处理。
+
+所有 API 均在内存响应，外部来源、未列入清单的请求和 WebSocket 均拒绝；唯一允许的写请求为模拟退出。390/1440 两种宽度预备输出断流与恢复 PNG、完整 axe、控件几何、前后 store/源/请求/时钟状态和源码摘要。axe 仅推进最多 2 秒受控时钟；仅放行已关闭 about:blank 汇总页且主页面/上下文仍存活的特定 clock 错误，其他错误继续失败。
+
+验证：在 frontend 目录执行 standalone `tsc --noEmit --strict --noUncheckedIndexedAccess --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler --types node e2e/closed-stream-recovery.spec.ts`、该文件 ESLint（零 warning）、Playwright `--list`（8 项）及 `git diff --check` 均通过。本轮没有运行浏览器、监听器、PTY、NAS 或本地服务；上述截图、axe 与 E2E 通过状态仍须 CI 生成和核验，不能将静态发现等同运行验收。
+
+主任务精确快照（704b879 加本片浏览器与 QA 文档）通过 86 文件 / 1654 项单元、全量 lint、Vue 类型检查与八项浏览器发现；独立严格 E2E 类型检查通过。实际浏览器运行仍待提交后 CI。
