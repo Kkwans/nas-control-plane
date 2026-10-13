@@ -4,6 +4,7 @@ import { createApp, h } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 
 import DateTimeRangeControl from './DateTimeRangeControl.vue'
+import source from './DateTimeRangeControl.vue?raw'
 
 describe('DateTimeRangeControl', () => {
   it('renders one compact range picker and keeps apply disabled until the range is complete', () => {
@@ -32,4 +33,31 @@ describe('DateTimeRangeControl', () => {
 
     app.unmount()
   })
+  it('allows intrinsic-width actions to wrap rather than clipping enlarged labels', () => {
+    const actions = source.match(/\.date-time-range__actions > \.action-button \{([^}]+)\}/)?.[1]
+    expect(actions).toContain('min-width: max-content')
+    expect(actions).toContain('height: auto')
+    const mobile = source.split('@media (max-width: 760px)')[1]!.split('@media')[0]!
+    expect(mobile).toMatch(/\.date-time-range__actions \{[^}]*flex-wrap: wrap/)
+    expect(mobile).toMatch(/\.date-time-range__actions > \.action-button \{[^}]*flex: 1 0 auto/)
+    expect(mobile).not.toContain('min-width: 0')
+  })
+
+  it.each([false, true])('preserves clear/apply events and loading protection (loading=%s)', (loading) => {
+    const host = document.createElement('div')
+    const onNow = vi.fn(), onClear = vi.fn(), onApply = vi.fn()
+    const app = createApp({ render: () => h(DateTimeRangeControl, {
+      from: new Date('2026-10-13T00:00:00Z'), to: new Date('2026-10-13T01:00:00Z'),
+      loading, onNow, onClear, onApply,
+    }) })
+    app.mount(host)
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.date-time-range__actions button')]
+    expect(buttons).toHaveLength(3)
+    expect(buttons.every((button) => button.disabled === loading)).toBe(true)
+    for (const button of buttons) button.click()
+    for (const handler of [onNow, onClear, onApply]) expect(handler).toHaveBeenCalledTimes(loading ? 0 : 1)
+    expect(host.querySelector('.date-time-range')?.getAttribute('aria-busy')).toBe(String(loading))
+    app.unmount()
+  })
+
 })

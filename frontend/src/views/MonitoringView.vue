@@ -192,7 +192,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page workspace-page">
-    <WorkspaceHeader title="系统监控" description="当前资源提示独立评估；历史图表每分钟记录首个有效样本，时间范围仅作用于历史" :icon="Gauge" :stats="stats">
+    <WorkspaceHeader class="monitor-header" title="系统监控" description="当前资源提示独立评估；历史图表每分钟记录首个有效样本，时间范围仅作用于历史" :icon="Gauge" :stats="stats">
       <template #filters>
         <div class="monitor-range-filter" role="group" aria-label="快速时间范围">
           <CompactSegmentedFilter :model-value="typeof appliedRange === 'string' ? appliedRange : ''" :options="quickRanges" accessible-label="快速时间范围" @update:model-value="selectQuickRange($event as TimeRange)" />
@@ -268,6 +268,23 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 监控说明区分当前提示与历史范围，放大文字时也必须完整可读。 */
+.monitor-header :deep(.workspace-header__copy p) {
+  display: block;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: unset;
+}
+.monitor-header :deep(.workspace-stat dt),
+.monitor-header :deep(.workspace-stat dd) {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.monitor-header :deep(.workspace-toolbar) { flex-wrap: wrap; }
+.monitor-header :deep(.workspace-tools) { flex: 1 1 36rem; }
+.monitor-range-filter :deep(.compact-filter) { flex-wrap: wrap; overflow: visible; }
 .monitor-range-filter { display:flex; min-width:0; align-items:center; }
 .monitor-range-filter :deep(.el-segmented) { max-width:100%; }
 .monitor-error { margin-bottom:14px; padding:12px 14px; border:1px solid color-mix(in srgb, var(--ncp-danger) 20%, transparent); border-radius:10px; background:var(--ncp-danger-soft); color:var(--ncp-danger-strong); font-size:.86rem; }

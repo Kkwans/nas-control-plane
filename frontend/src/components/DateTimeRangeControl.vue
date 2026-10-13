@@ -61,6 +61,7 @@ const rangeValue = computed<[Date, Date] | null>({
 .date-time-range {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--ncp-space-2);
 }
@@ -129,7 +130,14 @@ const rangeValue = computed<[Date, Date] | null>({
 }
 
 .date-time-range__actions > .action-button {
-  min-width: 72px;
+  min-width: max-content;
+  height: auto;
+  min-height: 40px;
+  padding-block: .35em;
+}
+
+.date-time-range__actions :deep(.action-button__label) {
+  line-height: 1.3;
 }
 
 @media (max-width: 1260px) {
@@ -155,14 +163,12 @@ const rangeValue = computed<[Date, Date] | null>({
   }
 
   .date-time-range__actions {
-    display: grid;
     width: 100%;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    flex-wrap: wrap;
   }
 
   .date-time-range__actions > .action-button {
-    width: 100%;
-    min-width: 0;
+    flex: 1 0 auto;
   }
 }
 

@@ -97,11 +97,43 @@ async function fullAxe(page: Page) {
   expect(await semanticState(page), 'axe 期间规则、读数、原因、恢复时间或错误状态不得变化').toEqual(before)
   return result
 }
+async function historyControlGeometry(page: Page) {
+  await expect(page.locator('.monitor-header .date-time-range')).toHaveAttribute('aria-busy', 'false')
+  await page.evaluate(() => document.fonts.ready)
+  return page.locator('.monitor-header').evaluate((header) => ({
+    fields: [...header.querySelectorAll('.workspace-header__copy p, .workspace-stat dt, .workspace-stat dd, .compact-filter button, .date-time-range__actions .action-button__label')].map((field) => {
+      const range = document.createRange()
+      range.selectNodeContents(field)
+      const bounds = field.getBoundingClientRect()
+      const clips = [header.getBoundingClientRect()]
+      for (let ancestor: Element | null = field; ancestor && ancestor !== header; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        if (/(hidden|clip|auto|scroll)/.test(`${style.overflowX} ${style.overflowY}`)) clips.push(ancestor.getBoundingClientRect())
+      }
+      const lines = [...range.getClientRects()].filter((rect) => rect.width && rect.height)
+      return {
+        text: field.textContent, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
+        scrollWidth: field.scrollWidth, clientWidth: field.clientWidth,
+        contained: lines.length > 0 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && clips.every((clip) =>
+          line.left >= clip.left - 1 && line.right <= clip.right + 1 && line.top >= clip.top - 1 && line.bottom <= clip.bottom + 1)),
+      }
+    }),
+    actionBounds: [...header.querySelectorAll('.date-time-range__actions button')].map((button) => button.getBoundingClientRect().toJSON()),
+  }))
+}
+function expectReadableHistoryControls(geometry: Awaited<ReturnType<typeof historyControlGeometry>>) {
+  expect(geometry.fields).toHaveLength(14)
+  for (const field of geometry.fields) {
+    expect(field.contained, `${field.text}: ${JSON.stringify(field)}`).toBe(true)
+    expect(field.scrollWidth, field.text ?? '').toBeLessThanOrEqual(field.clientWidth + 1)
+  }
+}
 async function evidence(page: Page, info: TestInfo, state: string) {
   await page.evaluate(() => document.fonts.ready)
   // 先运行 axe，再冻结并采集同一实际 UI 的像素与状态。
   const axe = await fullAxe(page)
   const captureState = await semanticState(page)
+  const historyControls = await historyControlGeometry(page)
   const checks = await panel(page).evaluate((element) => {
     const bounds = element.getBoundingClientRect()
     return {
@@ -120,7 +152,7 @@ async function evidence(page: Page, info: TestInfo, state: string) {
     const jsonPath = info.outputPath('ui-captures', `${name}-capture-state.json`)
     await writeFile(jsonPath, JSON.stringify({
       sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-      fixtureOnly: true, fixtureSource: 'frontend/e2e/resource-alerts.spec.ts + frontend/e2e/mockApi.ts', state, semanticState: captureState, ...checks,
+      fixtureOnly: true, fixtureSource: 'frontend/e2e/resource-alerts.spec.ts + frontend/e2e/mockApi.ts', state, semanticState: captureState, historyControls, ...checks,
       axe: { violations: axe.violations, incomplete: axe.incomplete, passes: axe.passes.map(({ id }) => id) },
     }, null, 2))
     await page.screenshot({ path, fullPage: true, animations: 'disabled' })
@@ -128,6 +160,7 @@ async function evidence(page: Page, info: TestInfo, state: string) {
     await info.attach(`${name}-capture-state`, { path: jsonPath, contentType: 'application/json' })
   }
   expect(await semanticState(page), 'PNG 与 capture-state 必须记录同一规则状态').toEqual(captureState)
+  expectReadableHistoryControls(historyControls)
   expect(checks.documentOverflow).toBe(false)
   expect(checks.panel.left).toBeGreaterThanOrEqual(0)
   expect(checks.panel.right).toBeLessThanOrEqual(checks.viewport.width)
@@ -191,6 +224,18 @@ test('触发、恢复观察、unknown 与 stale 保留未确认事件，合法�
   expect(api.writes).toEqual([])
 })
 
+test('1440px 默认字号的历史操作保持紧凑且文字完整', async ({ page }) => {
+  const api = await fixture(page)
+  await open(page)
+  const geometry = await historyControlGeometry(page)
+  expectReadableHistoryControls(geometry)
+  const [first, ...rest] = geometry.actionBounds
+  expect(first).toBeDefined()
+  for (const button of rest) expect(Math.abs(button.top - first!.top)).toBeLessThanOrEqual(1)
+  expect(geometry.actionBounds.every((button) => button.height <= 44)).toBe(true)
+  expect(api.writes).toEqual([])
+})
+
 for (const width of [320, 390, 768, 1440]) {
   test(`${width}px 中断事件长原因码在 200% 根字号不溢出`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 1000 })
@@ -203,6 +248,7 @@ for (const width of [320, 390, 768, 1440]) {
     // 390/1440 保留代表截图，其余尺寸执行同样布局和完整 axe 检查。
     if (width === 390 || width === 1440) await evidence(page, info, 'retained-event-200-percent')
     else {
+      expectReadableHistoryControls(await historyControlGeometry(page))
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
       const axe = await fullAxe(page)
       expect(axe.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([])
