@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { installMockApi } from './mockApi'
@@ -130,6 +131,94 @@ async function capture(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { path, contentType: 'image/png' })
 }
 
+async function checkClosingLayout(page: Page, info: TestInfo, width: number) {
+  await page.setViewportSize({ width, height: 1000 })
+  await page.evaluate(() => document.fonts.ready)
+  const geometry = await toolbar(page).evaluate((element) => {
+    const rect = (node: Element) => {
+      const { x, y, width, height, right, bottom } = node.getBoundingClientRect()
+      return { x, y, width, height, right, bottom }
+    }
+    const measureText = (node: Element) => {
+      const range = document.createRange()
+      range.selectNodeContents(node)
+      return Array.from(range.getClientRects(), ({ x, y, width, height, right, bottom }) => ({ x, y, width, height, right, bottom }))
+    }
+    const notice = element.querySelector<HTMLElement>('.terminal-live-status')!
+    const style = getComputedStyle(notice)
+    return {
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+      toolbar: rect(element),
+      children: Array.from(element.children, rect),
+      notice: {
+        text: notice.textContent,
+        rect: rect(notice),
+        lines: measureText(notice),
+        whiteSpace: style.whiteSpace,
+        textOverflow: style.textOverflow,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        clientWidth: notice.clientWidth,
+        scrollWidth: notice.scrollWidth,
+        clientHeight: notice.clientHeight,
+        scrollHeight: notice.scrollHeight,
+      },
+      targets: Array.from(element.querySelectorAll('.target-tabs button'), (button) => ({
+        rect: rect(button),
+        labels: Array.from(button.querySelectorAll('strong, small'), (label) => ({ text: label.textContent, lines: measureText(label) })),
+      })),
+      actions: Array.from(element.querySelectorAll('.terminal-toolbar-actions button'), rect),
+    }
+  })
+  const accessibility = await new AxeBuilder({ page }).include('.terminal-toolbar').analyze()
+  // 先持久化像素、行盒和无障碍证据，再断言；失败也能直接审阅截断原因。
+  const name = `fixture-terminal-closing-${width}`
+  await capture(page, info, name)
+  const path = info.outputPath('ui-captures', `${name}.json`)
+  await writeFile(path, JSON.stringify({ geometry, accessibility }, null, 2))
+  await info.attach(`${name}-geometry-axe`, { path, contentType: 'application/json' })
+  expect(accessibility.violations).toEqual([])
+  expect(geometry.notice.text).toContain('不能保证远端任务已结束')
+  expect(geometry.notice.whiteSpace).toBe('normal')
+  expect(geometry.notice.textOverflow).not.toBe('ellipsis')
+  expect(geometry.notice.overflowX).toBe('visible')
+  expect(geometry.notice.overflowY).toBe('visible')
+  expect(geometry.notice.scrollWidth).toBeLessThanOrEqual(geometry.notice.clientWidth + 1)
+  expect(geometry.notice.scrollHeight).toBeLessThanOrEqual(geometry.notice.clientHeight + 1)
+  expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth)
+  type Rect = typeof geometry.toolbar
+  const inside = (inner: Rect, outer: Rect) => {
+    expect(inner.width).toBeGreaterThan(0)
+    expect(inner.height).toBeGreaterThan(0)
+    expect(inner.x).toBeGreaterThanOrEqual(outer.x - 1)
+    expect(inner.y).toBeGreaterThanOrEqual(outer.y - 1)
+    expect(inner.right).toBeLessThanOrEqual(outer.right + 1)
+    expect(inner.bottom).toBeLessThanOrEqual(outer.bottom + 1)
+  }
+  expect(geometry.notice.lines.length).toBeGreaterThan(0)
+  for (const line of geometry.notice.lines) inside(line, geometry.notice.rect)
+  for (const child of geometry.children) inside(child, geometry.toolbar)
+  for (const [index, child] of geometry.children.entries()) {
+    for (const other of geometry.children.slice(index + 1)) {
+      const overlapWidth = Math.min(child.right, other.right) - Math.max(child.x, other.x)
+      const overlapHeight = Math.min(child.bottom, other.bottom) - Math.max(child.y, other.y)
+      expect(overlapWidth > 1 && overlapHeight > 1, '工具栏控件与完整状态说明不得重叠').toBe(false)
+    }
+  }
+  for (const target of geometry.targets) {
+    inside(target.rect, geometry.toolbar)
+    for (const label of target.labels) {
+      expect(label.lines, `${label.text} 应保持单行`).toHaveLength(1)
+      inside(label.lines[0]!, target.rect)
+    }
+  }
+  for (const action of geometry.actions) inside(action, geometry.toolbar)
+  expect(geometry.toolbar.x).toBeGreaterThanOrEqual(0)
+  expect(geometry.toolbar.right).toBeLessThanOrEqual(width)
+  expect(geometry.toolbar.bottom).toBeLessThanOrEqual(1000)
+}
+
 for (const width of [390, 1440]) {
   test(`内存终端 fixture ${width}px：可键盘取消连接，关闭事件前锁定目标和重连`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 1000 })
@@ -157,7 +246,8 @@ for (const width of [390, 1440]) {
     await expect(containerSelect).toBeDisabled()
     await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.lateEvents(false))
     await expect(connectionStatus(page)).toHaveText('关闭中')
-    await capture(page, info, `fixture-terminal-closing-${width}`)
+    await checkClosingLayout(page, info, width)
+    if (width === 390) await checkClosingLayout(page, info, 320)
     await page.evaluate(() => (window as unknown as FixtureWindow).terminalSockets[0]!.finishClose())
     await expect(connectButton(page)).toBeEnabled()
     await expect(containerSelect).toBeEnabled()
