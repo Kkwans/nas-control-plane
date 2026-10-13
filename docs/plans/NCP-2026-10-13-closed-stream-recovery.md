@@ -48,3 +48,11 @@
 验证：在 frontend 目录执行 standalone `tsc --noEmit --strict --noUncheckedIndexedAccess --skipLibCheck --target ES2022 --module ESNext --moduleResolution Bundler --types node e2e/closed-stream-recovery.spec.ts`、该文件 ESLint（零 warning）、Playwright `--list`（8 项）及 `git diff --check` 均通过。本轮没有运行浏览器、监听器、PTY、NAS 或本地服务；上述截图、axe 与 E2E 通过状态仍须 CI 生成和核验，不能将静态发现等同运行验收。
 
 主任务精确快照（704b879 加本片浏览器与 QA 文档）通过 86 文件 / 1654 项单元、全量 lint、Vue 类型检查与八项浏览器发现；独立严格 E2E 类型检查通过。实际浏览器运行仍待提交后 CI。
+
+### 首轮 CI 修正与独立可访问性待办
+
+实际 CI `38472748082`（a9c754）新增 8 项中 5 通过、3 失败：390/1440 两项已完成断流和恢复截图，但完整 axe 均报告 `region`（moderate），节点分别为 `#el-popper-container-672` / `#el-popper-container-4740`；退出项使用了不存在的“登录”按钮名，实际 LoginView 标题为“进入 NAS Control Plane”、按钮为“进入控制台”。本轮仅修正测试：退出后确认真实标题/控件；截图前将指针移开，再推进受控时钟直至 popper 完成正常离场。原先仅推进 34 ms，短于 Element Plus 默认 200 ms hideAfter，可能将短暂提示层冻结在截图与 axe 扫描之间。没有删除/隐藏 DOM、修改产品或排除 axe 规则，扫描后仍确认未重新出现 popper。
+
+body 下可见提示层触发的 `region` 仍是独立、未关闭的可访问性发现。本片只验证指针移开后的稳定流状态，不声称覆盖或修复 hover 状态。日志只给出容器节点，未含提示文字；具体内容需结合该次 artifact 进一步核验。修正后 standalone 严格 TS、文件 ESLint、8 项发现及 diff check 通过；浏览器结果必须由后续实际 CI 确认。
+
+捕获修正的独立精确快照（9f7acee 加两文件）通过 86 文件 / 1655 项单元、全量 lint 和 Vue 类型检查；八项 E2E 严格类型/发现通过。实际运行待后续 CI。

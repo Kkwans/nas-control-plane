@@ -225,6 +225,12 @@ async function analyze(page: Page) {
 async function capture(page: Page, info: TestInfo, api: Fixture, name: string) {
   await page.evaluate(() => document.fonts.ready)
   await page.mouse.move(0, 0)
+  // 默认 hover 提示需要 200 ms hideAfter 加离场动画；不能在冻结的中间态截图/跑 axe。
+  // 通过正常离开触发器关闭，不删除 DOM、不隐藏内容，也不排除任何 axe 规则。
+  await expect.poll(async () => {
+    await page.clock.runFor(50)
+    return page.locator('.el-popper:visible').count()
+  }, { message: '等待 hover 提示完成正常离场', intervals: [50] }).toBe(0)
   await settle(page)
   const store = await state(page)
   const sourcesBefore = await sources(page)
@@ -254,6 +260,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, name: string) {
   }, null, 2))
   await info.attach(stem, { path: png, contentType: 'image/png' })
   await info.attach(`${stem}-state`, { path: json, contentType: 'application/json' })
+  await expect(page.locator('.el-popper:visible')).toHaveCount(0)
   expect.soft(await state(page)).toEqual(store)
   expect.soft(await sources(page)).toEqual(sourcesBefore)
   expect.soft(api.requests).toEqual(requests)
@@ -400,7 +407,8 @@ for (const boundary of ['route', 'logout'] as const) {
         await expect(page.getByRole('heading', { name: '站点管理', exact: true })).toBeVisible()
       } else {
         await page.getByRole('button', { name: '退出登录', exact: true }).click()
-        await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
+        await expect(page.getByRole('heading', { name: '进入 NAS Control Plane', exact: true })).toBeVisible()
+        await expect(page.getByRole('button', { name: '进入控制台', exact: true })).toBeVisible()
       }
       expect((await sources(page)).every((source) => source.readyState === 2)).toBe(true)
     } finally { held.release.resolve() }
