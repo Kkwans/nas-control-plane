@@ -277,3 +277,10 @@
 - CI helper覆盖成功/失败/超限/父取消及管道未关闭；继承管道模拟由两个测试直属child持有真实exec stdout-copy管道，各自唯一Wait owner和有界失败清理，不能据此宣称生产回收任意后代。取消测试记录Wait后的context错误，防止把探测deadline误作显式父取消通过。
 - WaitDelay不抢占Process.Wait或PATH/启动中的内核等待，H2预留不会因未知owner提前释放；Bash能力CombinedOutput仍为独立缺口。
 - 日志窄屏修复37354be已推送并核对远端，[替换CI 38411236238](https://github.com/Kkwans/nas-control-plane/actions/runs/38411236238)进行中，未将初次失败改写为通过。
+
+## 14:20 UTC 日志视觉闭环与实时测试修正
+
+- 37354be替换CI为172通过/1失败；实际8张PNG确认390/768恢复视口宽度，导出说明完整回到按钮下方，四宽度200%根字号“5 条”不再省略。原始失败及新制品hash分别保留在[视觉复核](NCP-2026-10-13-log-export-visual.md)，不是浏览器真实zoom验收。
+- 剩余失败的精确原因：共享installMockApi将EventSource替换为不发HTTP的内存事件源，测试等待HTTP路由永远不会发生。单文件修正改为页面初始化后观察当前事件源，检查实际开关aria状态、URL参数及单实例，再保留真实Blob下载字节、点击后实时条目显示、文件快照不变和流未重启断言；不将模拟SSE描述为真实网络传输。
+- 610项单元、lint、类型、独立fixture类型与源码审查通过，替换浏览器CI仍待执行。
+- H3 41689c0的[CI 38411607938](https://github.com/Kkwans/nas-control-plane/actions/runs/38411607938)Go/Compose通过，terminal包4.118s包含实际locale helper回归；完整CI因同一日志fixture失败而未通过（172通过/1失败），不是locale失败。

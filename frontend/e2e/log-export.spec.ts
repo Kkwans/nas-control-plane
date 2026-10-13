@@ -80,7 +80,6 @@ async function installExportFixture(page: Page, pageSize = 5) {
     const originalCreate = URL.createObjectURL.bind(URL)
     const originalRevoke = URL.revokeObjectURL.bind(URL)
     const originalClick = HTMLAnchorElement.prototype.click
-    const OriginalEventSource = window.EventSource
     URL.createObjectURL = (object) => {
       const url = originalCreate(object)
       if (object instanceof Blob) host.logDownloadProbe.created.push({ url, type: object.type, size: object.size })
@@ -95,12 +94,6 @@ async function installExportFixture(page: Page, pageSize = 5) {
       host.logDownloadProbe.clicks += 1
       originalClick.call(this)
       host.logDownloadProbe.afterAnchorClick?.()
-    }
-    window.EventSource = class extends OriginalEventSource {
-      constructor(url: string | URL, options?: EventSourceInit) {
-        super(url, options)
-        if (String(url).includes('/api/v1/logs/events')) host.logStreams.push(this)
-      }
     }
   })
 }
@@ -408,37 +401,46 @@ test('键盘 Enter 和 Space 可下载，同一调用栈的重复点击只交接
 test('实时新记录在下载交接后到达，不改变已冻结文件或重启跟随', async ({ page }) => {
   await installExportFixture(page)
   await mockLogs(page, [entry(1)])
-  const streamHeld = barrier()
-  let streamRequested = false
-  await page.route('**/api/v1/logs/events?**', async (route) => {
-    streamRequested = true
-    await streamHeld.promise
-    await route.fulfill({ headers: { 'content-type': 'text/event-stream' }, body: '' }).catch(() => { /* 页面关闭会取消流。 */ })
-  })
   await openLogs(page)
-  await page.locator('.follow-switch .el-switch').click()
-  try {
-    await expect.poll(() => streamRequested).toBe(true)
-    await expect.poll(() => page.evaluate(() => (window as unknown as ProbeWindow).logStreams.length)).toBe(1)
-    await page.evaluate((snapshot) => {
-      const host = window as unknown as ProbeWindow
-      host.logStreams[0]!.dispatchEvent(new MessageEvent('logs', { data: JSON.stringify(snapshot) }))
-      host.logDownloadProbe.afterAnchorClick = () => {
-        host.logDownloadProbe.afterAnchorClick = undefined
-        host.logStreams[0]!.dispatchEvent(new MessageEvent('logs', { data: JSON.stringify({
-          ...snapshot,
-          entries: [{ ...snapshot.entries[0], id: 'live-new', timestamp: '2026-10-13T00:01:00Z', message: '点击后的实时新记录' }],
-        }) }))
+  // installMockApi 的 EventSource 是内存事件源，不发出 HTTP；页面初始化后再观察它，避免多个 init script 的顺序依赖。
+  await page.evaluate(() => {
+    const host = window as unknown as ProbeWindow
+    const FixtureEventSource = window.EventSource
+    window.EventSource = class extends FixtureEventSource {
+      constructor(url: string | URL, options?: EventSourceInit) {
+        super(url, options)
+        if (new URL(String(url), location.href).pathname === '/api/v1/logs/events') host.logStreams.push(this)
       }
-    }, { collectedAt, entries: [entry(1)], nextCursor: '' })
-    await expect(page.getByRole('status', { name: '实时日志已连接', exact: true })).toBeVisible()
-    const result = await exportCurrentPage(page)
-    expect(result.metadata).toMatchObject({ entryCount: 1, loadedCount: 1 })
-    expect(result.rows).toEqual([whitelist(entry(1))])
-    await expect(page.getByText('点击后的实时新记录', { exact: true })).toBeVisible()
-    expect(await page.evaluate(() => (window as unknown as ProbeWindow).logStreams.length)).toBe(1)
-    await expect(page.getByRole('status', { name: '实时日志已连接', exact: true })).toBeVisible()
-  } finally { streamHeld.release() }
+    }
+  })
+  const follow = page.locator('.follow-switch').getByRole('switch')
+  await expect(follow).toHaveAttribute('aria-checked', 'false')
+  await page.locator('.follow-switch .el-switch').click()
+  await expect(follow).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => page.evaluate(() => (window as unknown as ProbeWindow).logStreams.length)).toBe(1)
+  const streamUrl = await page.evaluate(() => (window as unknown as ProbeWindow).logStreams[0]!.url)
+  const parameters = new URL(streamUrl, 'http://fixture.local').searchParams
+  expect(Object.fromEntries(parameters)).toMatchObject({ source: 'system', level: 'all', query: '', hours: '6', limit: '5' })
+  await page.evaluate((snapshot) => {
+    const host = window as unknown as ProbeWindow
+    host.logStreams[0]!.dispatchEvent(new MessageEvent('logs', { data: JSON.stringify(snapshot) }))
+    host.logDownloadProbe.afterAnchorClick = () => {
+      host.logDownloadProbe.afterAnchorClick = undefined
+      host.logStreams[0]!.dispatchEvent(new MessageEvent('logs', { data: JSON.stringify({
+        ...snapshot,
+        entries: [{ ...snapshot.entries[0], id: 'live-new', timestamp: '2026-10-13T00:01:00Z', message: '点击后的实时新记录' }],
+      }) }))
+    }
+  }, { collectedAt, entries: [entry(1)], nextCursor: '' })
+  await expect(page.getByRole('status', { name: '实时日志已连接', exact: true })).toBeVisible()
+  const result = await exportCurrentPage(page)
+  expect(result.metadata).toMatchObject({ entryCount: 1, loadedCount: 1 })
+  expect(result.rows).toEqual([whitelist(entry(1))])
+  await expect(page.getByText('点击后的实时新记录', { exact: true })).toBeVisible()
+  await expect(follow).toHaveAttribute('aria-checked', 'true')
+  expect(await page.evaluate(() => (window as unknown as ProbeWindow).logStreams.length)).toBe(1)
+  expect(await page.evaluate(() => (window as unknown as ProbeWindow).logStreams[0]!.readyState === EventSource.CLOSED)).toBe(false)
+  await expect(page.getByRole('status', { name: '实时日志已连接', exact: true })).toBeVisible()
 })
 
 test('离开页面后旧按钮和迟到读取不能下载，前进后退只使用当前页面数据', async ({ page }) => {

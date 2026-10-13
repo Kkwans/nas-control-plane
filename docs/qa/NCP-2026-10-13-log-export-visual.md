@@ -51,3 +51,43 @@ log-export.spec.ts:174 的 captureExport 仅在 NCP_CAPTURE_UI=1 时 fullPage + 
 所有新截图使用 mockApi、固定 collectedAt=2026-10-13T00:00:00.000Z、pageSize=5、单条 fixture.service 系统日志。不是 NAS 实机、真实 journald、真实权限/会话或用户浏览器端下载环境。未启动本地浏览器、监听服务、PTY；未连接 NAS；未修改源码、CI 或重试任务。
 
 修复优先级：先处理窄屏 flex-column 与 flex-wrap/100% flex-basis 组合，随后用新制品验证提示回到工具栏下方且全页宽度正常；修正 SSE 测试命中可见开关外壳；若需要真正覆盖200%浏览器缩放，应另加真实缩放/重排验证并补焦点状态图。
+
+
+# M15-A 窄屏修复视觉复核（37354be）
+
+## 结果
+
+导出提示横向逃逸与200%根字号每页数量省略已在新制品实际像素中关闭；本提交 CI 仍有一项 SSE 测试失败，不能称完整验收通过。ff92b16 原失败报告与制品保持不变。
+
+## 精确来源
+
+- SHA：37354bed26cd94650f7788070eb18b1079e6eae5。
+- Run：https://github.com/Kkwans/nas-control-plane/actions/runs/38411236238。
+- 前端 job：115343804947。
+- Artifact：https://github.com/Kkwans/nas-control-plane/actions/runs/38411236238/artifacts/11823225927。
+- ZIP size：16,231,987 bytes；SHA-256 ca701c2cf18fd7cc3353656b943bf7d7c58667a26ecd4b912a9ebcb1390b244b，与 GitHub metadata 匹配。
+- 198 entries：无重复、不安全路径、符号链接；全部 CRC 通过；解压总规模检查通过。
+
+## 实际像素复核
+
+view_image 已检查8张 export 原始PNG，宽度分别390/768/1280/1440，每个都有100%和200%根字号。
+
+- 390：100%=390×1274，200%=390×1586；原717px宽度已恢复到390。提示从右侧逃逸列回到按钮下方、工具栏内。完整显示当前页/未加载历史/实时新增不追加/200条与2MiB上限/敏感信息分享前检查。200%内容自然换行，没有重叠或右缘裁切。
+- 768：100%=768×1177，200%=768×1327；原1451px宽度已恢复到768。提示在按钮下方跨工具栏一整行，200%换成多行，未溢出。
+- 1280：100%=1280×1049，200%=1280×1136；导出按钮、提示及其他控件布局保持完整。200%工具区合理分成两行。
+- 1440：100%=1440×1052，200%=1440×1139；没有新增重叠/裁切。
+- 四个200%截图均清楚显示“5 条”，没有原先“5…”省略。390px的“每页”标签在选择框上方，实时跟随开关也换行到其标签下方，二者保留独立边界，没有互相压盖。
+- export按钮仍为现有次要操作样式，图标和完整条数标签可读。提示为灰蓝辅助文本，无肉眼可见的新对比问题。
+- 其他原先200%现象仍存在：部分标题、品牌、时间戳省略，桌面/平板分页按钮文字纵向换行；本次并未将它们宣告为新修复范围。
+
+## 自动化辅助证据与剩余失败
+
+Go、Compose、前端lint/format/typecheck/unit/artifact regression/production build成功。E2E 172 passed / 1 failed。
+
+四宽度导出控件测试通过；新断言同时检查100%和200% body/main scrollWidth <= viewportWidth，并检查每页数量的完整文本及scrollWidth <= clientWidth+1。因此像素结果与几何断言一致。导出键盘焦点、Enter下载、aria-live反馈与scoped axe serious/critical过滤也通过。
+
+唯一失败：log-export.spec.ts:421，实时新记录在下载交接后到达、不改变已冻结文件或重启跟随。可见.el-switch点击已经完成，但streamRequested在5秒内保持false，expect.poll期望true失败。它比原来隐藏input点击超时前进了一步，但仍未进入核心下载冻结断言，不能声称该场景通过。
+
+## 边界
+
+200%仍只是documentElement font-size翻倍，并非浏览器200%zoom；固定px控件字体并未同步翻倍。截图发生在导出按钮focus之前，无导出focus-visible像素；键盘焦点仅有自动化证据。全为固定mock单条系统日志，不等于NAS实机数据、真实SSE传输或实际部署验证。未修改代码、CI、NAS、源文件，也未运行本地浏览器/监听器/PTY；后续新提交与CI由主任务管理。
