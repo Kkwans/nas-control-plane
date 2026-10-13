@@ -101,3 +101,17 @@ H2审查补充：裸主错误与带码的清理错误组合时，显式固定原
 - 本地仅fake预算/取消/容量/解析/race与编译；实际helper进程退出、取消、超限和继承管道行为交由既有隔离Linux CI，fixture须显式拥有并清理其资源，不在用户NAS运行。
 
 Bash能力探测虽有750ms context，但CombinedOutput与继承管道仍需另片处理；H3完成不能被描述为整个HostStarter.Start全程有界。
+
+## M08-H4：主机 Bash 能力探测有界捕获
+
+基线：41689c0bdafe634af96d6b2a7e44db635f934f92。状态：三文件实现与独立审查完成，精确fake/race及全包编译/vet/构建通过；实际helper行为待隔离CI。
+
+主机预探测原CombinedOutput没有内存限额，750ms context也未限制退出后继承管道等待；原实现先解析再设置Err，会从失败或不完整输出继续报告支持readline/paste。
+
+- 保留原Shell/rc参数、脚本、/root工作目录及固定环境，仍使用750ms context；同步Run新增100ms WaitDelay。
+- stdout与stderr直接赋同一可比较指针的32KiB固定writer，遵循Go对同一writer的串行调用契约，保留合并语义和统一容量，不改为分别无界缓冲。
+- 仅Run成功、context有效、没有overflow时调用既有parser；任一失败时三个能力标志全部false，以errors.Join保留运行/取消/超限原因而不含捕获内容。成功的已有能力映射保持不变。
+- 不改共享parser或容器路径。容器LimitReader的截断歧义、非零退出后部分成功以及SDK attach握手是独立缺口，不宣称H4覆盖它们。
+- 本地仅明确前缀的fake/config/parser/race及编译；实际双流flood、退出/取消和fd1/fd2管道遗留由隔离CI的显式直属child fixture验证。保持每个child唯一Wait owner，不杀进程组或遗弃超时goroutine。
+
+WaitDelay约束管道收尾，不保证StartProcess/Process.Wait内核异常可抢占或850ms硬截止；主机ready握手及实际PTY启动仍保留自身边界。

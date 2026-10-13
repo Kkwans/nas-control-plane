@@ -284,3 +284,16 @@
 - 剩余失败的精确原因：共享installMockApi将EventSource替换为不发HTTP的内存事件源，测试等待HTTP路由永远不会发生。单文件修正改为页面初始化后观察当前事件源，检查实际开关aria状态、URL参数及单实例，再保留真实Blob下载字节、点击后实时条目显示、文件快照不变和流未重启断言；不将模拟SSE描述为真实网络传输。
 - 610项单元、lint、类型、独立fixture类型与源码审查通过，替换浏览器CI仍待执行。
 - H3 41689c0的[CI 38411607938](https://github.com/Kkwans/nas-control-plane/actions/runs/38411607938)Go/Compose通过，terminal包4.118s包含实际locale helper回归；完整CI因同一日志fixture失败而未通过（172通过/1失败），不是locale失败。
+
+## 14:26 UTC Bash 能力探测资源边界
+
+- H4三文件冻结并独立审查：保留Root、原参数/rc/脚本/环境，共享同一可比较writer对stdout+stderr合计最多32KiB；原750ms context新增100ms WaitDelay，同步Run保留唯一Wait责任。
+- 仅完整成功且context有效、未超限时解析；任一失败三个能力布尔值全部false，errors.Join保留运行/取消/超限原因，不记录捕获内容。共享parser、容器路径和ready-FD未改。
+- 精确16项fake/config/parser/主机及容器metadata选择器0.790s、race1.801s通过；独立最终race1.802s，全包仅编译、vet、本机构建和冻结hash/diff通过。实际helper仅编译，fd1/fd2继承管道、双流输出与取消行为待隔离CI。
+- 容器探测的截断、非零部分成功、状态确认与非TTY多路帧解析仍需单独设计；H4不宣称覆盖所有探测生产者，也不承诺硬墙钟或任意后代回收。
+- b5c4844已推送，最终日志fixture复验[CI 38412715113](https://github.com/Kkwans/nas-control-plane/actions/runs/38412715113)进行中，真实下载与模拟SSE的覆盖边界保持明确。
+
+## 14:27 UTC 日志导出与locale完整CI闭环
+
+- [b5c4844 CI 38412715113](https://github.com/Kkwans/nas-control-plane/actions/runs/38412715113)整体成功，51文件610项单元、173/173项Chromium，Go/Compose通过，发布跳过。
+- 最后一项实时快照场景通过：模拟日志事件到达后页面更新，但真实下载文件仍是点击前快照且事件源未重启。37354be八图视觉闭环适用于未变化的前端产品代码；不将模拟事件源描述为真实网络SSE。后代完整CI同时覆盖H3实际locale helper。
