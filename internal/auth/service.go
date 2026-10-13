@@ -17,8 +17,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Kkwans/nas-control-plane/internal/sqliteconn"
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -94,7 +94,7 @@ func Open(databasePath string, options Options) (*Service, error) {
 		}
 	}
 
-	database, err := sql.Open("sqlite", databasePath)
+	database, err := sqliteconn.Open(databasePath, "PRAGMA foreign_keys = ON")
 	if err != nil {
 		return nil, coded("AUTH_DATABASE_OPEN_FAILED", err)
 	}

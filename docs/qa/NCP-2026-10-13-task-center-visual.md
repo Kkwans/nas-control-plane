@@ -57,3 +57,58 @@
 - fixture-task-center-768-font-200-list.png: 3f620f9fdc00d44790e31b4d1864fecad5874509e2129113c78eb54325282464 (205121 bytes)
 - fixture-task-center-768-font-200-topbar.png: 23302ea6cdd310c9f8f344996bcf71dd6f32a568719d4dd304c0d21877a55911 (236015 bytes)
 - fixture-legacy-image-unknown-artifact.png: 56d984625f11366443df88694223188264dc8cc7802196f1d44e8e8b23f1fd5f (125158 bytes)
+
+
+# 复验：8b90897e（2026-10-13 15:23 UTC）
+
+结论：仍未通过，失败由11项减少至3项；像素复验还发现通过用例中的同类关闭入口回归。保留以上首次失败记录，不视为最终关闭。
+
+## 证据与结果
+- SHA：8b90897e8626d76ec4738a555d3156222f22aa89，tree 9897ce09990f65a7600c85a524c11b855f27d5f5。
+- [CI run 38420147521](https://github.com/Kkwans/nas-control-plane/actions/runs/38420147521)，attempt1；前端job115375012933。
+- [Artifact11826517395](https://github.com/Kkwans/nas-control-plane/actions/runs/38420147521/artifacts/11826517395)：ncp-fixture-ui-8b90897e8626d76ec4738a555d3156222f22aa89-1。
+- ZIP19,772,316bytes；SHA256 5a018f315c31645d5f8ff34f2ac0318de78a6977faa281fed0a94215c501441c，与GitHub一致。已下载并校验制品，246文件、21,367,320解压bytes；与首次相同的路径/符号链接/加密/大小/压缩比/CRC检查全部通过。
+- 655单元及前端其他构建检查通过，Go/Compose成功；浏览器189通过、3失败（3.4分钟）；新增task-center16/19通过，原173项通过。
+- 原先焦点、筛选标签、时钟用例通过。全部100%及390/200%通过包括axe；其余3组在axe之前失败，不能称其axe已完成。
+
+## 剩余阻断
+1. 768/1280/1440 ×200%根字号，在task-center.spec.ts:384关闭按钮toBeInViewport失败，ratio0；长详情展开后标题/关闭入口滚出可视区。
+2. 实际像素发现768/1280/1440 ×100%详情截图也没有标题/关闭按钮。测试在最终scrollIntoView之前检查关闭按钮，因此仍通过。1440/100详情JSON：body.scrollTop319，关闭按钮top=-279.859、bottom=-235.859。必须在最后滚动后再次断言关闭按钮完整可见和中心命中；本项是实际产品问题，不能仅放宽断言。
+3. 移动短屏sticky标题保留关闭入口，但顶部有20px滚动内容残留条，说明默认drawer body padding仍作用。390/200%初始body宽390，task-center x20宽350；是样式容器没有达到预期的佐证，非DOM scope属性直接证据。
+
+## 逐张像素复验
+实际查看24张相关PNG：8顶栏、8初始列表、5详情（四组100%+390/200%）、2张390滚动列表、1旧镜像截图。三个桌面200%详情PNG因失败未生成。
+- 所有PNG尺寸现在等于viewport，避免首次fullPage伪边界；所有对应任务中心JSON的SHA/fixtureOnly/抽屉左右范围验证一致，首次7/8进场坐标不一致已消失。
+- 顶栏所有宽度/字号仍可用，无任务按钮挤压刷新/状态区。
+- 390滚动列表实际露出查看详情按钮，200%首屏任务在下方但可滚动访问；新增中心命中断言通过。长reference、中文错误、纯文本script字符串、错误代码折行可读。固定标题盖住上方已滚走的部分内容属于滚动裁切，顶部20px残留条仍待修正。
+- 桌面100%详情完整字段和错误内容在卡内折行，关闭入口丢失为主要阻断。
+- 旧镜像仍为已完成+镜像未核实。
+- 390/200%背景概览时间右侧裁切仍可见，属于原背景页面字号压力问题，不作为任务中心关闭回归的替代结论。
+
+下一次验收需要所有宽度固定标题/正确body样式，所有滚动后关闭按钮可见/命中，完整8张详情PNG。无真实NAS验证、无部署、无仓库改动。
+
+## 本次已查看PNG摘要
+- fixture-task-center-1280-font-100-details.png: dbdfa21c0ee26f14a8b0676a0cd5325ae7ce09e16f3d4293cfde85de33ee9892 (257928 bytes)
+- fixture-task-center-1280-font-100-list.png: e241e2db9503da03ecf5676bb00cd1c9d6bfc86b815f9a9411c8e52d0459f7ff (158931 bytes)
+- fixture-task-center-1280-font-100-topbar.png: d625908604467b0ee94c5240fd2428146865f8efe7f17c8723f8d735f19ff88f (172970 bytes)
+- fixture-task-center-1280-font-200-list.png: d973c87434796ed94f5de8ef15f87cc272c43ef31f500488957c91101ab34d4d (223437 bytes)
+- fixture-task-center-1280-font-200-topbar.png: c05e9b977bcbcf2fea42495182fd9753cd909d766f665eb6234e8b55823140da (233841 bytes)
+- fixture-task-center-1440-font-100-details.png: e4322f077b918d0df7b1c18ae3181ca51c94630e7eaa148e5c061adb0f114eff (272895 bytes)
+- fixture-task-center-1440-font-100-list.png: 9ee599c059611a8587c323c085fffa246008147e746c5fa371ec21281aedff1f (171644 bytes)
+- fixture-task-center-1440-font-100-topbar.png: 8b12f8bb18f05461d55f75c86ce8e38e091b0f3caa3850317659460dcfd99069 (184766 bytes)
+- fixture-task-center-1440-font-200-list.png: b2db1c3d02736e9319ee6bf03a4df553cfa2674e1134cc92fcbe247b6b25bc1c (242602 bytes)
+- fixture-task-center-1440-font-200-topbar.png: 3495243410f394c8e4df085a5b9302e019edc23f7d64f65329e2596f4dabcb04 (263435 bytes)
+- fixture-task-center-390-font-100-details.png: 49919875ec7f3a06ed3ee7ff86d358f4650a88e31704115cb164cb9b10c12365 (75521 bytes)
+- fixture-task-center-390-font-100-list.png: f334084df4bc9830b4d8b0d891b931e4c7eeb41debdfce7b10ac4bffd0fb2a2c (49932 bytes)
+- fixture-task-center-390-font-100-scrolled-list.png: 5f96cd2d2b76d20346901f678e5c5803f96784966680b13b3499f66bd3d1a286 (39983 bytes)
+- fixture-task-center-390-font-100-topbar.png: 3510680120c01fb1c1c33e4788afdcbf3918baa84b6ad421dee877218096d915 (55536 bytes)
+- fixture-task-center-390-font-200-details.png: 3e16bb41058fa7a65e57599c1dcbff39ad7fc8c50a272c719d442ad80e2e790d (51908 bytes)
+- fixture-task-center-390-font-200-list.png: e98aea639aa172066943f3b20043ada9f9a4b1b649591e4fadd8206863e2668a (56068 bytes)
+- fixture-task-center-390-font-200-scrolled-list.png: baefcbcef7587f70e13f5b900a56a94e80e917760e906532ad2115ff11986061 (58849 bytes)
+- fixture-task-center-390-font-200-topbar.png: 577874f43e50e1e1c0c8f4120ba7131f3a291e8aeaeed4e3314f1e60e9024ce0 (80439 bytes)
+- fixture-task-center-768-font-100-details.png: 078e1f5fc7e77dc80988df281d94dc18747fdbdf04cbeda1995e0c717d21571f (180551 bytes)
+- fixture-task-center-768-font-100-list.png: 7639e9860b3c3e36d3945b952693942fcbbe4176916c83dfaffc8b266d6feb71 (86659 bytes)
+- fixture-task-center-768-font-100-topbar.png: fbb33c24276ca4e0381b912f1523bb5fca56c3622e5ea33dbe383174b4bc04fa (111788 bytes)
+- fixture-task-center-768-font-200-list.png: aac570a3d581be4ed050dc7f8e980d1e82ef687f0b5aa853ba1b5df80f443aaa (116190 bytes)
+- fixture-task-center-768-font-200-topbar.png: 22b5a23e557f2e86a1d0b39187cd32af61577058618122bbd2d86d6b0c13c530 (145621 bytes)
+- fixture-legacy-image-unknown-artifact.png: 56d984625f11366443df88694223188264dc8cc7802196f1d44e8e8b23f1fd5f (125158 bytes)

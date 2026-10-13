@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/Kkwans/nas-control-plane/internal/sqliteconn"
 )
 
 const (
@@ -222,7 +222,7 @@ func Open(databasePath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o750); err != nil {
 		return nil, err
 	}
-	database, err := sql.Open("sqlite", databasePath)
+	database, err := sqliteconn.Open(databasePath, "PRAGMA busy_timeout = 5000")
 	if err != nil {
 		return nil, err
 	}

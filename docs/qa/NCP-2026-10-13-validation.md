@@ -341,3 +341,9 @@
 - 实际像素进一步发现桌面100%在最后滚动后也会移走标题，旧断言执行得过早。原选择器依赖第三方Teleport根节点继承scope，实际body仍保留默认20px间距并滚动整段。
 - 改用ElDrawer公开body-class接口与专属直接子级选择器，不改其他抽屉；所有视口标题sticky。补充计算样式、零padding/滚动容器和最后滚动后的关闭按钮完整可见及命中断言，19项浏览器测试不变。
 - 655项单元、lint、类型/构建及包预算通过；精确3文件diff复核，实际替换CI与像素仍待验收。
+
+## 15:26 UTC SQLite连接设置恢复
+
+- 修复auth/controlstore/自有credential池连接替换后丢失原有PRAGMA：每次连接建立恢复原设置，不改DSN、全局driver、池配置、迁移或外部DB所有权。
+- 真实临时SQLite复现与修复覆盖外键/级联、原busy值、回收与中断、memory路径、共享文件、重复迁移和非目标池隔离。初始10ms测试在race下不可靠，改为SQL内部执行标记触发取消，保留真实物理连接变化断言。
+- 独立四包精确race×20、完整auth/controlstore、vet及build通过，实施者有限credential回归通过；未操作真实用户数据库。auth不新增超时；现有busy等待可能超出context等边界保持明确，未声称本片解决锁竞争。

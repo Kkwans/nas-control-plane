@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Kkwans/nas-control-plane/internal/sqliteconn"
 )
 
 var errCredentialNotFound = errors.New("credential record not found")
@@ -79,7 +81,7 @@ func OpenSQLiteCredentialStore(path string) (*SQLiteCredentialStore, error) {
 	if err := os.MkdirAll(filepath.Dir(filepath.Clean(path)), 0o750); err != nil {
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_store_open", Cause: err}
 	}
-	database, err := sql.Open("sqlite", path)
+	database, err := sqliteconn.Open(path, "PRAGMA busy_timeout = 5000")
 	if err != nil {
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_store_open", Cause: err}
 	}
