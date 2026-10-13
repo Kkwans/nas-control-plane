@@ -91,7 +91,12 @@ async function select(page: Page, label: string, option: string) {
   await expect(control).toBeVisible()
   await control.click()
   await expect(row(page, label).getByRole('combobox')).toHaveAttribute('aria-expanded', 'true')
-  await page.getByRole('option', { name: option, exact: true }).click()
+  // ElSelect 使用 el-zoom-in-top：Vue nextFrame 的两次 rAF 才移除 scaleY(0)。
+  // 仅推进两个 16 ms 帧及边界余量；此时尚未选择新值，不能推进整个 400 ms 保存窗口。
+  await page.clock.runFor(34)
+  const choice = page.getByRole('option', { name: option, exact: true })
+  await expect(choice).toBeVisible()
+  await choice.click()
 }
 async function font(page: Page, size: number) {
   await expect(row(page, '基础字号')).toContainText(`${size} px`)
