@@ -22,7 +22,7 @@ type FakeTerminal = {
 }
 vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ inventory: { containers: [{ id: 'fake-container', name: 'fake', image: 'fake', state: 'running' }] }, refresh: vi.fn() }) }))
 vi.mock('element-plus', () => ({ ElDialog: { render: () => null } }))
-vi.mock('@/components/NcpSelect.vue', () => ({ default: { props: ['disabled', 'modelValue'], emits: ['update:modelValue'], template: `<select :disabled="disabled" @change="$emit('update:modelValue', 'fake-container')"><option>fake</option></select>` } }))
+vi.mock('@/components/NcpSelect.vue', () => ({ default: { props: ['disabled', 'modelValue', 'options'], emits: ['update:modelValue'], template: `<select :disabled="disabled" @change="$emit('update:modelValue', 'fake-container')"><option>fake</option></select>` } }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class {
   fit = vi.fn(() => { if (mocks.fail === 'fit') throw Error('fake fit') })
   constructor() { mocks.fits.push(this) }
@@ -93,7 +93,7 @@ function mount(initial = false) {
 function button(text: string) { return [...host.querySelectorAll('button')].find(button => button.textContent?.trim() === text)! }
 async function flush() { await nextTick(); await nextTick() }
 async function connect() { button('连接终端').click(); await flush() }
-function actions() { return (app!._instance!.subTree.component as unknown as { setupState: { close: () => void; connect: () => Promise<void> } }).setupState }
+function actions() { return (host.querySelector('.terminal-panel-content') as unknown as { __vueParentComponent: { setupState: { close: () => void; connect: () => Promise<void> } } }).__vueParentComponent.setupState }
 function paste(text = 'first\nsecond', element = host.querySelector('.terminal-canvas')!) {
   const event = new Event('paste', { bubbles: true, cancelable: true })
   Object.defineProperty(event, 'clipboardData', { value: { getData: () => text } })
@@ -513,5 +513,222 @@ describe('R8 单 owner 输出与输入预算', () => {
     mocks.terminals[0]!.data('a'.repeat(TERMINAL_INPUT_BYTES))
     expect(sockets[0]!.send).toHaveBeenCalledTimes(1)
     expect(sockets[0]!.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('M1b 真正独立的本地终端标签', () => {
+  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  const panels = () => [...host.querySelectorAll<HTMLElement>('[role="tabpanel"]')]
+  const activePanel = () => panels().find(panel => !panel.hidden)!
+  const activeButton = (text: string) => [...activePanel().querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent?.trim() === text)!
+  const closeButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.terminal-tab-close')]
+  async function add() { button('新建标签').click(); await flush() }
+  async function connectActive() { activeButton('连接终端').click(); await flush() }
+
+  it('新增最多四页且不连接，ARIA 关联与方向/Home/End 焦点只切换标签', async () => {
+    mount()
+    for (let i = 0; i < 4; i++) await add()
+    expect(tabs()).toHaveLength(4)
+    expect(button('新建标签').disabled).toBe(true)
+    expect(sockets).toHaveLength(0)
+    expect(mocks.terminals).toHaveLength(0)
+    expect(tabs().filter(tab => tab.tabIndex === 0)).toHaveLength(1)
+    for (const tab of tabs()) {
+      const panel = document.getElementById(tab.getAttribute('aria-controls')!)!
+      expect(panel.getAttribute('aria-labelledby')).toBe(tab.id)
+      expect(tab.querySelector('button')).toBeNull()
+    }
+    for (const [key, index] of [['Home', 0], ['ArrowLeft', 3], ['ArrowRight', 0], ['End', 3]] as const) {
+      const current = tabs().find(tab => tab.getAttribute('aria-selected') === 'true')!
+      current.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+      await flush()
+      expect(document.activeElement).toBe(tabs()[index])
+      expect(tabs()[index]!.getAttribute('aria-selected')).toBe('true')
+      expect(panels().filter(panel => panel.hidden && panel.hasAttribute('inert'))).toHaveLength(3)
+    }
+    expect(host.textContent).toContain('服务端默认全局上限为 1')
+    expect(host.textContent).not.toContain('DH4300Plus')
+    expect(sockets).toHaveLength(0)
+  })
+
+  it('新增意图同步封闭旧 owner；异步渲染前认证撤销不会抢焦点或重连', async () => {
+    mount()
+    await connectActive(); sockets[0]!.started(); await flush()
+    const old = mocks.terminals[0]!
+    sockets[0]!.send.mockClear()
+    button('新建标签').click()
+    old.data('same-stack'); old.resize({ rows: 20, cols: 40 })
+    paste('same-stack')
+    expect(sockets[0]!.send).not.toHaveBeenCalled()
+    const external = document.createElement('button')
+    document.body.append(external); external.focus()
+    invalidateSession()
+    await flush()
+    expect(document.activeElement).toBe(external)
+    expect(sockets).toHaveLength(1)
+    external.remove()
+  })
+
+  it.each(['abort', 'pagehide'])('%s 同步失效后的旧关闭确认不得删除标签或抛错', async cause => {
+    mount(); await connectActive()
+    closeButtons()[0]!.click(); await flush()
+    const confirm = button('断开并关闭标签')
+    const id = tabs()[0]!.id
+    if (cause === 'abort') invalidateSession()
+    else window.dispatchEvent(new Event('pagehide'))
+    confirm.click()
+    await flush()
+    expect(tabs()).toHaveLength(1)
+    expect(tabs()[0]!.id).toBe(id)
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(sockets[0]!.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('删除等待期间较新的选页优先，不把焦点拉回旧相邻标签', async () => {
+    mount(); await add(); await add()
+    closeButtons()[0]!.click()
+    tabs()[1]!.focus(); tabs()[1]!.click()
+    await flush()
+    expect(tabs().find(tab => tab.getAttribute('aria-selected') === 'true')?.id).toBe('tab-terminal-2')
+    expect(document.activeElement?.id).toBe('tab-terminal-2')
+    expect(sockets).toHaveLength(0)
+  })
+
+  it('后台持续有界输出但不能输入/fit/抢焦点，切换取消旧粘贴且目标与能力隔离', async () => {
+    mount()
+    await connectActive()
+    sockets[0]!.started()
+    await flush()
+    paste()
+    await flush()
+    expect(host.querySelector('.paste-confirmation')).not.toBeNull()
+    await add()
+    expect(host.querySelector('.paste-confirmation')).toBeNull()
+    activeButton('Docker 容器容器 Shell').click()
+    await flush()
+    activePanel().querySelector('select')!.dispatchEvent(new Event('change'))
+    await flush()
+    await connectActive()
+    sockets[1]!.started({ resize: false, multilinePaste: false, bracketedPaste: false })
+    await flush()
+    const first = mocks.terminals[0]!
+    const second = mocks.terminals[1]!
+    first.focus.mockClear(); second.focus.mockClear()
+    mocks.fits[0]!.fit.mockClear()
+    sockets[0]!.send.mockClear(); sockets[1]!.send.mockClear()
+    sockets[0]!.onmessage!({ data: new ArrayBuffer(3) })
+    first.data('hidden'); first.resize({ rows: 20, cols: 40 }); observers[0]!.callback()
+    paste('hidden\ninput', panels()[0]!.querySelector('.terminal-canvas')!)
+    vi.advanceTimersByTime(80)
+    expect(first.write).toHaveBeenCalledTimes(1)
+    expect(first.focus).not.toHaveBeenCalled()
+    expect(mocks.fits[0]!.fit).not.toHaveBeenCalled()
+    expect(sockets[0]!.send).not.toHaveBeenCalled()
+    second.data('second')
+    expect(sockets[1]!.send).toHaveBeenCalledTimes(1)
+    expect(sockets[1]!.url).toContain('containerId=fake-container')
+    expect(tabs()[0]!.textContent).toContain('root@主机')
+    expect(tabs()[1]!.textContent).toContain('fake')
+    tabs()[0]!.focus(); tabs()[0]!.click(); await flush(); vi.advanceTimersByTime(80)
+    expect(mocks.fits[0]!.fit).toHaveBeenCalledTimes(1)
+    expect(first.focus).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(tabs()[0])
+    activeButton('清空内容').click()
+    expect(first.clear).toHaveBeenCalledTimes(2)
+    expect(second.clear).toHaveBeenCalledTimes(1)
+    expect(sockets).toHaveLength(2)
+  })
+
+  it('隐藏页超出输出预算仅退役自己；其他页仍可输入且不自动重连', async () => {
+    mount(); await connectActive(); sockets[0]!.started(); await flush()
+    await add(); await connectActive(); sockets[1]!.started(); await flush()
+    const oldMessage = sockets[0]!.onmessage!
+    for (let i = 0; i < 16; i++) oldMessage({ data: new ArrayBuffer(TERMINAL_OUTPUT_FRAME_BYTES) })
+    oldMessage({ data: new ArrayBuffer(1) })
+    expect(sockets[0]!.close).toHaveBeenCalledTimes(1)
+    expect(sockets[1]!.close).not.toHaveBeenCalled()
+    expect(mocks.terminals[0]!.dispose).toHaveBeenCalledTimes(1)
+    sockets[1]!.send.mockClear()
+    mocks.terminals[1]!.data('still-active')
+    expect(sockets[1]!.send).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(tabs()[0]!.textContent).toContain('关闭中')
+    expect(sockets).toHaveLength(2)
+  })
+
+  it.each(['connecting', 'connected'])('关闭 %s 必须确认，保留不关闭；确认后最后一页换为空页且旧 lease 不释放', async state => {
+    mount()
+    await connectActive()
+    if (state === 'connected') sockets[0]!.started()
+    await flush()
+    const oldId = tabs()[0]!.id
+    closeButtons()[0]!.click(); await flush()
+    expect(host.querySelector('[role="alertdialog"]')?.textContent).toContain('不能保证远端任务已结束')
+    expect(document.activeElement).toBe(button('保留标签'))
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
+    button('保留标签').click(); await flush()
+    expect(tabs()).toHaveLength(1)
+    expect(sockets[0]!.close).not.toHaveBeenCalled()
+    closeButtons()[0]!.click(); await flush()
+    button('断开并关闭标签').click(); await flush()
+    expect(tabs()).toHaveLength(1)
+    expect(tabs()[0]!.id).not.toBe(oldId)
+    expect(tabs()[0]!.textContent).toContain('未连接')
+    expect(document.activeElement).toBe(tabs()[0])
+    expect(sockets).toHaveLength(1)
+    expect(sockets[0]!.close).toHaveBeenCalledTimes(1)
+    expect(mocks.terminals[0]!.dispose).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('.terminal-retired-status')?.textContent).toContain('1 个')
+    sockets[0]!.closed(); await flush()
+    expect(host.querySelector('.terminal-retired-status')).toBeNull()
+    expect(host.querySelector('.terminal-capacity-note')?.textContent).toContain('0/4')
+  })
+
+  it('删除再新建不能绕过四个 opening/live/closing lease；准确 onclose 后才重新准入', async () => {
+    mount()
+    for (let i = 0; i < 4; i++) {
+      if (i) await add()
+      await connectActive()
+      sockets[i]!.started()
+    }
+    await flush()
+    closeButtons()[3]!.click(); await flush()
+    button('断开并关闭标签').click(); await flush()
+    await add()
+    expect(activeButton('连接终端').disabled).toBe(true)
+    expect(host.querySelector('.terminal-capacity-note')?.textContent).toContain('4/4')
+    expect(host.querySelector('.terminal-retired-status')?.textContent).toContain('1 个')
+    expect(sockets).toHaveLength(4)
+    sockets[3]!.closed(); await flush()
+    expect(activeButton('连接终端').disabled).toBe(false)
+    await connectActive()
+    expect(sockets).toHaveLength(5)
+    expect(host.querySelector('.terminal-capacity-note')?.textContent).toContain('4/4')
+    for (const socket of sockets.slice(0, 3)) expect(socket.close).not.toHaveBeenCalled()
+    sockets[4]!.control({ type: 'error', code: 'TERMINAL_SESSION_LIMIT_REACHED' })
+    await flush()
+    expect(activePanel().textContent).toContain('终端会话名额暂不可用')
+    expect(activePanel().textContent).toContain('手动重试')
+    expect(sockets).toHaveLength(5)
+  })
+
+  it('关闭空白标签不需要确认；页面失效同步关闭所有独立 owner，不自动恢复', async () => {
+    mount()
+    closeButtons()[0]!.click(); await flush()
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(tabs()).toHaveLength(1)
+    for (let i = 0; i < 3; i++) {
+      if (i) await add()
+      await connectActive(); sockets[i]!.started()
+    }
+    window.dispatchEvent(new Event('pagehide'))
+    for (const terminal of mocks.terminals) terminal.data('late')
+    for (const socket of sockets) {
+      expect(socket.close).toHaveBeenCalledTimes(1)
+      expect(socket.send.mock.calls).toHaveLength(1)
+    }
+    window.dispatchEvent(new Event('pageshow')); await flush()
+    expect(sockets).toHaveLength(3)
+    for (const terminal of mocks.terminals) expect(terminal.dispose).toHaveBeenCalledTimes(1)
   })
 })

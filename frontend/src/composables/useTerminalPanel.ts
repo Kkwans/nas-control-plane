@@ -107,7 +107,7 @@ export function useTerminalPanel({ tabId, page, containers, reducedMotion }: Pan
   }
 
   const containerOptions = computed(() => containers.value.map((item) => ({ label: `${item.name} · ${item.image}`, value: item.id })))
-  const canConnect = computed(() => !targetLocked.value && (target.value === 'host' || Boolean(containerId.value)))
+  const canConnect = computed(() => !targetLocked.value && page.occupiedCount < page.limit && (target.value === 'host' || Boolean(containerId.value)))
   const canClearTerminal = computed(() => state.value === 'connecting' || state.value === 'connected' || state.value === 'error')
   const stateLabel = computed(() => ({
     idle: '未连接',
@@ -230,7 +230,7 @@ export function useTerminalPanel({ tabId, page, containers, reducedMotion }: Pan
     const owner: Attempt = {
       lease, focus: focusIntent(),
       generation: ++attemptGeneration, session: captureSession(), target: target.value, containerId: containerId.value,
-      title: target.value === 'host' ? 'root@DH4300Plus' : containers.value.find(item => item.id === containerId.value)?.name || 'container',
+      title: target.value === 'host' ? 'root@主机' : containers.value.find(item => item.id === containerId.value)?.name || 'container',
       active: true, ready: false, cleaned: false, socket: null, terminal: null, fit: null,
       timers: {}, releases: [], outcome: 'closed', outputBudget: createTerminalOutputBudget(),
     }
@@ -450,6 +450,7 @@ export function useTerminalPanel({ tabId, page, containers, reducedMotion }: Pan
     })
   }
   function clearPage() {
+    shortcutDialogOpen.value = false
     clearSessionDetails()
     terminalTitle.value = ''
     containerId.value = ''
@@ -459,6 +460,7 @@ export function useTerminalPanel({ tabId, page, containers, reducedMotion }: Pan
     select() {
       focusEpoch++
       pendingPaste.value = null
+      shortcutDialogOpen.value = false
       const owner = current
       if (!owner) return
       window.clearTimeout(owner.timers.resize)

@@ -1,3 +1,4 @@
+import { computed } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import { createTerminalPageOwner } from './terminalPageOwner'
@@ -8,6 +9,26 @@ function panel(page: ReturnType<typeof createTerminalPageOwner>, id: string) {
   return { ...callbacks, detach: page.register(id, callbacks) }
 }
 describe('终端页面准确 lease 所有权', () => {
+  it('响应式计数只在准确释放后更新；退役记录不依赖已删除面板', () => {
+    const page = createTerminalPageOwner()
+    const item = panel(page, 'a')
+    const occupied = computed(() => page.occupiedCount)
+    const retired = computed(() => page.retiredCount)
+    expect(occupied.value).toBe(0)
+    expect(retired.value).toBe(0)
+    const lease = page.reserve('a', vi.fn())!
+    const socket = {}
+    page.bindSocket(lease, socket)
+    expect(occupied.value).toBe(1)
+    item.detach()
+    expect(retired.value).toBe(1)
+    page.release(lease, {})
+    expect(occupied.value).toBe(1)
+    expect(retired.value).toBe(1)
+    page.release(lease, socket)
+    expect(occupied.value).toBe(0)
+    expect(retired.value).toBe(0)
+  })
   it('opening/live/closing 共享本页上限；删除不会释放 socket lease', () => {
     const page = createTerminalPageOwner(2)
     const first = panel(page, 'a'); panel(page, 'b'); panel(page, 'c')
