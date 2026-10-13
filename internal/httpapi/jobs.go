@@ -219,26 +219,39 @@ func (api *handler) jobStatus(response http.ResponseWriter, request *http.Reques
 }
 
 func (api *handler) jobEvents(response http.ResponseWriter, request *http.Request) {
-	flusher, supported := response.(http.Flusher)
-	if !supported {
+	if request.Context().Err() != nil {
+		return
+	}
+	controller, err := api.prepareSSEStream(request.Context(), response)
+	if err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
 		api.writeError(response, request, http.StatusNotImplemented, "JOB_STREAM_UNSUPPORTED", "当前连接不支持任务进度流。")
 		return
 	}
 	response.Header().Set("Content-Type", "text/event-stream")
 	response.Header().Set("Cache-Control", "no-cache")
 	response.Header().Set("X-Accel-Buffering", "no")
-	ticker := time.NewTicker(200 * time.Millisecond)
+	ticker := api.realtimeTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	var lastPayload string
 	for {
-		job, exists := api.jobs.get(chi.URLParam(request, "jobID"))
-		if !exists {
+		if request.Context().Err() != nil {
 			return
 		}
-		payload, _ := json.Marshal(job)
+		job, exists := api.jobs.get(chi.URLParam(request, "jobID"))
+		if request.Context().Err() != nil || !exists {
+			return
+		}
+		payload, err := json.Marshal(job)
+		if err != nil {
+			return
+		}
 		if string(payload) != lastPayload {
-			_, _ = response.Write([]byte("event: progress\ndata: " + string(payload) + "\n\n"))
-			flusher.Flush()
+			if err := api.writeSSEFrame(request.Context(), response, controller, "event: progress\ndata: "+string(payload)+"\n\n"); err != nil {
+				return
+			}
 			lastPayload = string(payload)
 		}
 		if job.Status == "completed" || job.Status == "failed" || job.Status == "interrupted" || job.Status == "cancelled" {
@@ -247,7 +260,7 @@ func (api *handler) jobEvents(response http.ResponseWriter, request *http.Reques
 		select {
 		case <-request.Context().Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 		}
 	}
 }

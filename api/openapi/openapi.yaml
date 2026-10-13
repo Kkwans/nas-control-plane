@@ -1083,6 +1083,9 @@ paths:
         外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
         每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；Docker RPC 或正在写入可延迟该节拍。
         每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或主机快照 provider 停止会关闭相应流。
+        长连接建立前重新验证数据库会话并申请服务内租约（默认总上限 256，四类流共享）；
+        注销仅撤销当前会话，改密、禁用或删除账号撤销该用户全部会话；到期无需等待下个 interval 即触发取消。
+        取消不会停止共享采集器；正在进行的写入最多等待当前 5 秒预算。
         不保证每个采样均送达，无重放；客户端必须按内层时间去重并独立判断 15 秒新鲜度。
         每个服务 Handler 的全部 scope 共享最多 64 条连接，不宣称共享编码或整个服务的硬内存上限。
       tags: [system]
@@ -1096,7 +1099,7 @@ paths:
                 type: string
                 description: SSE data 使用 components/schemas/RealtimeSnapshot 定义的 JSON
         '503':
-          description: REALTIME_SUBSCRIBER_LIMIT；认证通过后、提交流响应前拒绝超过 64 的新连接
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED；实时认证能力不可用或服务租约额度已满。REALTIME_SUBSCRIBER_LIMIT 表示此 Handler 超过 64 条连接。均在提交流响应前拒绝
           content:
             application/json:
               schema:
@@ -1702,6 +1705,10 @@ paths:
     get:
       operationId: followJob
       summary: Follow background job progress over SSE
+      description: >-
+        流建立前重新验证数据库会话并登记实时租约；注销、改密、账号禁用、删除及会话到期取消相应观察流。
+        每帧 Write 与 Flush 共用 5 秒 deadline；不支持有界写入时在响应提交前拒绝。
+        关闭观察流不会取消、删除或改变已接受 Job 的状态，重新登录后可继续观察。
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
@@ -1713,7 +1720,19 @@ paths:
             text/event-stream:
               schema: { type: string }
         '501':
-          description: JOB_STREAM_UNSUPPORTED：当前连接不支持 SSE。
+          description: JOB_STREAM_UNSUPPORTED：当前连接不支持有界 SSE 写入。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED；实时认证能力不可用或四类流共享的服务租约额度已满
           content:
             application/json:
               schema:
@@ -2238,6 +2257,9 @@ paths:
     get:
       operationId: streamLogEvents
       summary: 订阅日志实时事件
+      description: >-
+        流建立前重新验证数据库会话并登记实时租约；注销、改密、账号禁用、删除及会话到期取消相应观察流。
+        初始帧、日志事件及 heartbeat 的 Write 与 Flush 均共用 5 秒 deadline；不支持有界写入时在响应提交前拒绝。
       tags: [logs]
       security: [{RootSession: []}]
       parameters:
@@ -2253,7 +2275,19 @@ paths:
             text/event-stream:
               schema: { type: string }
         '503':
-          description: 日志实时流不可用
+          description: 日志实时流不可用；AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED 表示实时认证能力不可用或服务租约额度已满
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: LOG_STREAM_UNSUPPORTED；响应 writer 不支持有界实时流
           content:
             application/json:
               schema:
@@ -2262,7 +2296,11 @@ paths:
     get:
       operationId: openTerminalWebSocket
       summary: 打开 NAS 主机或 Docker 容器终端 WebSocket
-      description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
+      description: >-
+        通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
+        升级前重新验证数据库会话并登记实时租约。注销仅撤销当前会话；改密、禁用或删除账号撤销该用户全部会话。
+        会话撤销或到期立即取消 Server 输入输出并关闭浏览器与 Agent RPC 传输，既有终端超时仍生效。
+        关闭传输不等于确认所有容器 exec、PTY 子孙进程或已提交 Root 命令均已终止。
       tags: [terminal]
       security: [{RootSession: []}]
       parameters:
@@ -2302,7 +2340,13 @@ paths:
         '404':
           description: 终端通道未启用
         '503':
-          description: Root Agent 终端能力不可用或终端会话初始化失败；WebSocket 错误帧使用稳定 code 与用户可读 message。
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED 表示实时认证能力不可用或服务租约额度已满；也可能是 Root Agent 终端能力不可用。升级后错误使用 WebSocket 稳定 code，不追加 HTTP JSON 错误。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
           content:
             application/json:
               schema:

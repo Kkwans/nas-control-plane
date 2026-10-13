@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -29,6 +31,8 @@ type Options struct {
 	SessionLifetime time.Duration
 	Clock           func() time.Time
 	Random          io.Reader
+	StreamLimit     int
+	AfterFunc       func(time.Duration, func()) Timer
 }
 
 type Service struct {
@@ -36,6 +40,14 @@ type Service struct {
 	sessionLifetime time.Duration
 	now             func() time.Time
 	random          io.Reader
+	// 唯一嵌套锁序为 lifecycleMu → streamsMu；登记锁内不执行数据库或回调。
+	lifecycleMu sync.RWMutex
+	streamsMu   sync.Mutex
+	closed      bool
+	closeErr    error
+	streamLimit int
+	afterFunc   func(time.Duration, func()) Timer
+	streams     map[*StreamLease]*streamRegistration
 }
 
 type Principal struct {
@@ -92,6 +104,9 @@ func Open(databasePath string, options Options) (*Service, error) {
 		sessionLifetime: normalizedSessionLifetime(options.SessionLifetime),
 		now:             normalizedClock(options.Clock),
 		random:          normalizedRandom(options.Random),
+		streamLimit:     normalizedStreamLimit(options.StreamLimit),
+		afterFunc:       normalizedAfterFunc(options.AfterFunc),
+		streams:         make(map[*StreamLease]*streamRegistration),
 	}
 	if err := service.migrate(context.Background()); err != nil {
 		_ = database.Close()
@@ -104,7 +119,15 @@ func (s *Service) Close() error {
 	if s == nil || s.database == nil {
 		return nil
 	}
-	return s.database.Close()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return s.closeErr
+	}
+	s.closed = true
+	s.revokeStreams(func(*streamRegistration) bool { return true }, StreamServiceClosed)
+	s.closeErr = s.database.Close()
+	return s.closeErr
 }
 
 func (s *Service) Initialized(ctx context.Context) (bool, error) {
@@ -182,10 +205,48 @@ func (s *Service) Login(ctx context.Context, username, password string) (Session
 	if disabled || comparePassword(passwordHash, password) != nil {
 		return Session{}, invalidCredentials()
 	}
-	if _, err := s.database.ExecContext(ctx, `UPDATE users SET last_login_at_unix = ?, updated_at_unix = MAX(updated_at_unix, ?) WHERE id = ?`, s.now().UTC().Unix(), s.now().UTC().Unix(), principal.ID); err != nil {
+	// bcrypt 和随机数生成不占用准入锁；提交前再次核对已验证的凭据快照。
+	token, err := newToken(s.random)
+	if err != nil {
+		return Session{}, coded("AUTH_SESSION_TOKEN_FAILED", err)
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return Session{}, coded("AUTH_UNAVAILABLE", errors.New("authentication service is closed"))
+	}
+	operationContext, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
+	transaction, err := s.database.BeginTx(operationContext, nil)
+	if err != nil {
 		return Session{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
-	return s.createSession(ctx, principal)
+	defer transaction.Rollback()
+	var currentHash []byte
+	err = transaction.QueryRowContext(operationContext, `
+		SELECT username, role, password_hash, disabled FROM users WHERE id = ?
+	`, principal.ID).Scan(&principal.Username, &principal.Role, &currentHash, &disabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Session{}, invalidCredentials()
+	}
+	if err != nil {
+		return Session{}, coded("AUTH_DATABASE_QUERY_FAILED", err)
+	}
+	if disabled || !bytes.Equal(passwordHash, currentHash) {
+		return Session{}, invalidCredentials()
+	}
+	now := s.now().UTC()
+	if _, err := transaction.ExecContext(operationContext, `UPDATE users SET last_login_at_unix = ?, updated_at_unix = MAX(updated_at_unix, ?) WHERE id = ?`, now.Unix(), now.Unix(), principal.ID); err != nil {
+		return Session{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+	}
+	session, err := s.createSession(operationContext, transaction, principal, token, now)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return Session{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+	}
+	return session, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (Principal, error) {
@@ -219,9 +280,18 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return nil
 	}
-	if _, err := s.database.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token)); err != nil {
+	tokenHash := sha256.Sum256([]byte(token))
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return coded("AUTH_UNAVAILABLE", errors.New("authentication service is closed"))
+	}
+	operationContext, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
+	if _, err := s.database.ExecContext(operationContext, `DELETE FROM sessions WHERE token_hash = ?`, tokenHash[:]); err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
+	s.revokeStreams(func(registration *streamRegistration) bool { return registration.tokenHash == tokenHash }, StreamLoggedOut)
 	return nil
 }
 
@@ -296,39 +366,58 @@ func (s *Service) SetUserDisabled(ctx context.Context, actorID, targetID int64, 
 	if actorID == targetID && disabled {
 		return User{}, coded("AUTH_CURRENT_USER_PROTECTED", errors.New("current user cannot be disabled"))
 	}
+	if err := s.setUserDisabled(ctx, targetID, disabled); err != nil {
+		return User{}, err
+	}
+	queryContext, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
+	return s.userByID(queryContext, targetID)
+}
+
+func (s *Service) setUserDisabled(ctx context.Context, targetID int64, disabled bool) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return coded("AUTH_UNAVAILABLE", errors.New("authentication service is closed"))
+	}
+	ctx, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
-		return User{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
 	defer transaction.Rollback()
 	var currentDisabled bool
 	if err := transaction.QueryRowContext(ctx, `SELECT disabled FROM users WHERE id = ?`, targetID).Scan(&currentDisabled); errors.Is(err, sql.ErrNoRows) {
-		return User{}, coded("AUTH_USER_NOT_FOUND", err)
+		return coded("AUTH_USER_NOT_FOUND", err)
 	} else if err != nil {
-		return User{}, coded("AUTH_DATABASE_QUERY_FAILED", err)
+		return coded("AUTH_DATABASE_QUERY_FAILED", err)
 	}
 	if disabled && !currentDisabled {
 		var enabledCount int
 		if err := transaction.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE disabled = 0`).Scan(&enabledCount); err != nil {
-			return User{}, coded("AUTH_DATABASE_QUERY_FAILED", err)
+			return coded("AUTH_DATABASE_QUERY_FAILED", err)
 		}
 		if enabledCount <= 1 {
-			return User{}, coded("AUTH_LAST_USER_PROTECTED", errors.New("last enabled user cannot be disabled"))
+			return coded("AUTH_LAST_USER_PROTECTED", errors.New("last enabled user cannot be disabled"))
 		}
 	}
 	now := s.now().UTC().Unix()
 	if _, err := transaction.ExecContext(ctx, `UPDATE users SET disabled = ?, updated_at_unix = ? WHERE id = ?`, disabled, now, targetID); err != nil {
-		return User{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
 	if disabled {
 		if _, err := transaction.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, targetID); err != nil {
-			return User{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+			return coded("AUTH_DATABASE_WRITE_FAILED", err)
 		}
 	}
 	if err := transaction.Commit(); err != nil {
-		return User{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
+		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
-	return s.userByID(ctx, targetID)
+	if disabled {
+		s.revokeUserStreams(targetID, StreamUserDisabled)
+	}
+	return nil
 }
 
 func (s *Service) DeleteUser(ctx context.Context, actorID, targetID int64) error {
@@ -338,6 +427,13 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, targetID int64) error
 	if actorID == targetID {
 		return coded("AUTH_CURRENT_USER_PROTECTED", errors.New("current user cannot be deleted"))
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return coded("AUTH_UNAVAILABLE", errors.New("authentication service is closed"))
+	}
+	ctx, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
@@ -364,6 +460,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, targetID int64) error
 	if err := transaction.Commit(); err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
+	s.revokeUserStreams(targetID, StreamUserDeleted)
 	return nil
 }
 
@@ -375,7 +472,8 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 		return err
 	}
 	var passwordHash []byte
-	if err := s.database.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, targetID).Scan(&passwordHash); errors.Is(err, sql.ErrNoRows) {
+	var observedDisabled bool
+	if err := s.database.QueryRowContext(ctx, `SELECT password_hash, disabled FROM users WHERE id = ?`, targetID).Scan(&passwordHash, &observedDisabled); errors.Is(err, sql.ErrNoRows) {
 		return coded("AUTH_USER_NOT_FOUND", err)
 	} else if err != nil {
 		return coded("AUTH_DATABASE_QUERY_FAILED", err)
@@ -387,12 +485,30 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 	if err != nil {
 		return coded("AUTH_PASSWORD_HASH_FAILED", err)
 	}
+	now := s.now().UTC().Unix()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.closed {
+		return coded("AUTH_UNAVAILABLE", errors.New("authentication service is closed"))
+	}
+	ctx, cancel := context.WithTimeout(ctx, authDatabaseTimeout)
+	defer cancel()
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at_unix = ? WHERE id = ?`, nextHash, s.now().UTC().Unix(), targetID); err != nil {
+	var currentHash []byte
+	var currentDisabled bool
+	if err := transaction.QueryRowContext(ctx, `SELECT password_hash, disabled FROM users WHERE id = ?`, targetID).Scan(&currentHash, &currentDisabled); errors.Is(err, sql.ErrNoRows) {
+		return coded("AUTH_USER_NOT_FOUND", err)
+	} else if err != nil {
+		return coded("AUTH_DATABASE_QUERY_FAILED", err)
+	}
+	if !bytes.Equal(passwordHash, currentHash) || currentDisabled != observedDisabled || actorID == targetID && currentDisabled {
+		return coded("AUTH_CURRENT_PASSWORD_INVALID", errors.New("password changed before update"))
+	}
+	if _, err := transaction.ExecContext(ctx, `UPDATE users SET password_hash = ?, updated_at_unix = ? WHERE id = ?`, nextHash, now, targetID); err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
 	if _, err := transaction.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, targetID); err != nil {
@@ -401,6 +517,7 @@ func (s *Service) UpdatePassword(ctx context.Context, actorID, targetID int64, c
 	if err := transaction.Commit(); err != nil {
 		return coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
+	s.revokeUserStreams(targetID, StreamPasswordChanged)
 	return nil
 }
 
@@ -470,17 +587,13 @@ func (s *Service) userByID(ctx context.Context, id int64) (User, error) {
 	return user, nil
 }
 
-func (s *Service) createSession(ctx context.Context, principal Principal) (Session, error) {
-	now := s.now().UTC()
-	if _, err := s.database.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at_unix <= ?`, now.Unix()); err != nil {
+// 调用方持有准入写锁，并已在同一个事务内复核密码和账号状态。
+func (s *Service) createSession(ctx context.Context, transaction *sql.Tx, principal Principal, token string, now time.Time) (Session, error) {
+	if _, err := transaction.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at_unix <= ?`, now.Unix()); err != nil {
 		return Session{}, coded("AUTH_DATABASE_WRITE_FAILED", err)
 	}
-	token, err := newToken(s.random)
-	if err != nil {
-		return Session{}, coded("AUTH_SESSION_TOKEN_FAILED", err)
-	}
 	expiresAt := now.Add(s.sessionLifetime)
-	if _, err := s.database.ExecContext(ctx, `
+	if _, err := transaction.ExecContext(ctx, `
 		INSERT INTO sessions (token_hash, user_id, expires_at_unix, created_at_unix)
 		VALUES (?, ?, ?, ?)
 	`, hashToken(token), principal.ID, expiresAt.Unix(), now.Unix()); err != nil {

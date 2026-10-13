@@ -479,15 +479,38 @@ func TestJobHTTPAllCreationPathsRejectFailedInsert(t *testing.T) {
 }
 
 type jobEventWriter struct {
-	header http.Header
-	buffer strings.Builder
-	events chan string
+	header   http.Header
+	buffer   strings.Builder
+	events   chan string
+	deadline time.Time
 }
 
-func (w *jobEventWriter) Header() http.Header         { return w.header }
-func (w *jobEventWriter) WriteHeader(int)             {}
-func (w *jobEventWriter) Write(p []byte) (int, error) { return w.buffer.Write(p) }
-func (w *jobEventWriter) Flush()                      { w.events <- w.buffer.String(); w.buffer.Reset() }
+func (w *jobEventWriter) Header() http.Header { return w.header }
+func (w *jobEventWriter) WriteHeader(int)     {}
+func (w *jobEventWriter) SetWriteDeadline(deadline time.Time) error {
+	w.deadline = deadline
+	return nil
+}
+func (w *jobEventWriter) Write(p []byte) (int, error) {
+	if w.deadline.IsZero() || !w.deadline.After(time.Now()) {
+		return 0, context.DeadlineExceeded
+	}
+	return w.buffer.Write(p)
+}
+
+// fake 始终非阻塞，并要求每帧同时为 Write 和 Flush 设置预算。
+func (w *jobEventWriter) FlushError() error {
+	if w.deadline.IsZero() || !w.deadline.After(time.Now()) {
+		return context.DeadlineExceeded
+	}
+	select {
+	case w.events <- w.buffer.String():
+		w.buffer.Reset()
+		return nil
+	default:
+		return io.ErrShortWrite
+	}
+}
 func TestJobSSEEmitsTerminalAfterPendingAtSameTimestamp(t *testing.T) {
 	s := &snapshotJobStore{}
 	r := newJobRegistry(s)

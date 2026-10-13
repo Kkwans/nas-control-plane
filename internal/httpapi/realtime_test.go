@@ -540,7 +540,7 @@ func TestMetricsRealtimeWriteAndFlushFailures(t *testing.T) {
 		writer := metricsWriter()
 		recorder := &responseRecorder{ResponseWriter: writer}
 		for _, frame := range []string{"retry: 300000\n\n", "event: snapshot\ndata: {}\n\n", ": heartbeat\n\n"} {
-			if err := api.writeRealtimeFrame(recorder, http.NewResponseController(recorder), frame); err != nil {
+			if err := api.writeSSEFrame(context.Background(), recorder, http.NewResponseController(recorder), frame); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -597,7 +597,7 @@ func TestMetricsRealtimeFramePreservesWriteError(t *testing.T) {
 	writer.writeErr = io.ErrClosedPipe
 	recorder := &responseRecorder{ResponseWriter: writer}
 	api := &handler{}
-	if err := api.writeRealtimeFrame(recorder, http.NewResponseController(recorder), "fixture"); !errors.Is(err, io.ErrClosedPipe) {
+	if err := api.writeSSEFrame(context.Background(), recorder, http.NewResponseController(recorder), "fixture"); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal(err)
 	}
 	if writer.flushes != 0 || !writer.deadline.IsZero() {
@@ -821,7 +821,7 @@ func TestMetricsRealtimeBlockedWriterHonorsDeadline(t *testing.T) {
 	recorder := &responseRecorder{ResponseWriter: writer}
 	// 保留生产 5 秒预算，只将测试服务时间置于 5 秒前，使 fake writer 快速观察 deadline 超时。
 	api := &handler{now: func() time.Time { return time.Now().Add(-realtimeWriteTimeout + 10*time.Millisecond) }}
-	err := api.writeRealtimeFrame(recorder, http.NewResponseController(recorder), "event: snapshot\ndata: {}\n\n")
+	err := api.writeSSEFrame(context.Background(), recorder, http.NewResponseController(recorder), "event: snapshot\ndata: {}\n\n")
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("blocked writer ignored deadline: %v", err)
 	}

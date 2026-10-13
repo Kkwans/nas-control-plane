@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,7 +16,6 @@ const (
 	summaryMaxAge             = 15 * time.Second
 	summaryFutureSkew         = 5 * time.Second
 	realtimeSubscriberLimit   = 64
-	realtimeWriteTimeout      = 5 * time.Second
 	realtimeHeartbeatInterval = 15 * time.Second
 )
 
@@ -82,6 +80,9 @@ func (api *handler) acquireRealtimeSubscriber() bool {
 }
 
 func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
+	if request.Context().Err() != nil {
+		return
+	}
 	if !api.acquireRealtimeSubscriber() {
 		api.writeError(response, request, http.StatusServiceUnavailable, "REALTIME_SUBSCRIBER_LIMIT", "实时连接已达上限，请稍后重试。")
 		return
@@ -91,20 +92,21 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 		return
 	}
 
-	controller := http.NewResponseController(response)
-	// 提交流响应前验证 deadline 支持，不能为测试 writer 静默取消写入预算。
-	if err := controller.SetWriteDeadline(api.currentTime().Add(realtimeWriteTimeout)); err != nil {
+	controller, err := api.prepareSSEStream(request.Context(), response)
+	if err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
 		api.writeError(response, request, http.StatusInternalServerError, "REALTIME_STREAM_UNSUPPORTED", "当前服务不支持有界实时数据流。")
 		return
 	}
-	defer controller.SetWriteDeadline(time.Time{})
 	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	response.Header().Set("Cache-Control", "no-cache, no-transform")
 	response.Header().Set("Connection", "keep-alive")
 	response.Header().Set("X-Accel-Buffering", "no")
 	interval := realtimeInterval(request)
 	scope := realtimeScope(request)
-	if err := api.writeRealtimeFrame(response, controller, fmt.Sprintf("retry: %d\n\n", interval.Milliseconds())); err != nil {
+	if err := api.writeSSEFrame(request.Context(), response, controller, fmt.Sprintf("retry: %d\n\n", interval.Milliseconds())); err != nil {
 		return
 	}
 
@@ -134,6 +136,9 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 		snapshot.CollectedAt = now.UTC()
 		if scope.summary {
 			summary, persistenceError := api.latestSystemSummary(now)
+			if request.Context().Err() != nil {
+				return false
+			}
 			snapshot.Summary = summary
 			if summary == nil {
 				snapshot.Errors = append(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE")
@@ -151,7 +156,7 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 		if err != nil {
 			return false
 		}
-		return api.writeRealtimeFrame(response, controller, fmt.Sprintf("event: snapshot\ndata: %s\n\n", payload)) == nil
+		return api.writeSSEFrame(request.Context(), response, controller, fmt.Sprintf("event: snapshot\ndata: %s\n\n", payload)) == nil
 	}
 	if !sendSnapshot() {
 		return
@@ -171,27 +176,11 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 				return
 			}
 		case <-heartbeat.C():
-			if err := api.writeRealtimeFrame(response, controller, ": heartbeat\n\n"); err != nil {
+			if err := api.writeSSEFrame(request.Context(), response, controller, ": heartbeat\n\n"); err != nil {
 				return
 			}
 		}
 	}
-}
-
-// 每帧覆盖 Write 和 Flush；清除 deadline 后空闲连接可安全等待 300 秒。
-func (api *handler) writeRealtimeFrame(response http.ResponseWriter, controller *http.ResponseController, frame string) (err error) {
-	if err = controller.SetWriteDeadline(api.currentTime().Add(realtimeWriteTimeout)); err != nil {
-		return err
-	}
-	defer func() {
-		if clearErr := controller.SetWriteDeadline(time.Time{}); err == nil {
-			err = clearErr
-		}
-	}()
-	if _, err = io.WriteString(response, frame); err != nil {
-		return err
-	}
-	return controller.Flush()
 }
 
 type realtimeStreamScope struct{ summary, docker bool }

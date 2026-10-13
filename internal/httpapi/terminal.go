@@ -47,88 +47,129 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		return
 	}
 
+	if request.Context().Err() != nil {
+		return
+	}
 	connection, err := websocket.Accept(response, request, nil)
 	if err != nil {
 		return
 	}
-	defer connection.CloseNow()
 	connection.SetReadLimit(maxWebSocketInput)
-
 	sessionContext, cancel := context.WithTimeout(request.Context(), api.terminalTimeout)
 	defer cancel()
-	stream, err := api.terminal.Open(sessionContext, api.agentSocketPath)
-	if err != nil {
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_UNAVAILABLE")
-		_ = connection.Close(websocket.StatusInternalError, "终端验证通道不可用")
-		return
-	}
+	runTerminalProxy(sessionContext, connection, api.terminal, api.agentSocketPath, terminal.Message{
+		Type: terminal.MessageStart, Target: target, ContainerID: containerID, Rows: rows, Cols: cols,
+	})
+}
+
+// CloseNow 必须中止阻塞的 Read/Write；Close 必须可与 Send/Recv 并发且中止二者。
+// 真实实现关闭各自独占的传输，不等待对端 close 握手。
+type terminalConnection interface {
+	terminalInputReader
+	terminalOutputWriter
+	CloseNow() error
+}
+
+type terminalOutputWriter interface {
+	Write(context.Context, websocket.MessageType, []byte) error
+}
+
+func runTerminalProxy(parent context.Context, connection terminalConnection, client TerminalClient, socketPath string, start terminal.Message) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	browserClosed := make(chan struct{})
+	go func() {
+		defer close(browserClosed)
+		<-ctx.Done()
+		_ = connection.CloseNow()
+	}()
 	defer func() {
 		cancel()
-		_ = stream.Close()
+		<-browserClosed
 	}()
 
-	if err := stream.Send(terminal.Message{
-		Type:        terminal.MessageStart,
-		Target:      target,
-		ContainerID: containerID,
-		Rows:        rows,
-		Cols:        cols,
-	}); err != nil {
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
-		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
+	if ctx.Err() != nil {
+		return
+	}
+	stream, err := client.Open(ctx, socketPath)
+	if err != nil {
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_UNAVAILABLE")
+		return
+	}
+	agentClosed := make(chan struct{})
+	go func() {
+		defer close(agentClosed)
+		<-ctx.Done()
+		_ = stream.Close()
+	}()
+	defer func() {
+		cancel()
+		<-agentClosed
+	}()
+
+	if ctx.Err() != nil {
+		return
+	}
+	if err := stream.Send(start); err != nil {
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_INITIALIZATION_FAILED")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	started, err := stream.Recv()
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil || started.Type != terminal.MessageStarted || started.SessionID == "" {
 		if err == nil {
 			err = errors.New("terminal started response is invalid")
 		}
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
-		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_INITIALIZATION_FAILED")
 		return
 	}
-	if err := writeTerminalControl(sessionContext, connection, terminalControl{
-		Type:         "started",
-		SessionID:    started.SessionID,
-		Shell:        started.Shell,
-		Enhancement:  started.Enhancement,
-		Reason:       started.Reason,
-		Capabilities: started.Capabilities,
-		Rows:         int(started.Rows),
-		Cols:         int(started.Cols),
+	if err := writeTerminalControl(ctx, connection, terminalControl{
+		Type: "started", SessionID: started.SessionID, Shell: started.Shell,
+		Enhancement: started.Enhancement, Reason: started.Reason,
+		Capabilities: started.Capabilities, Rows: int(started.Rows), Cols: int(started.Cols),
 	}); err != nil {
 		return
 	}
 
-	// 输出协程只报告一次结果；容量 1 保证接收端退出后仍可完成发送。
 	outputDone := make(chan error, 1)
-	go proxyTerminalOutput(sessionContext, connection, stream, outputDone)
-
+	outputExited := make(chan struct{})
+	go func() {
+		defer close(outputExited)
+		proxyTerminalOutput(ctx, connection, stream, outputDone)
+	}()
 	input := make(chan terminalInput, 1)
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		readTerminalInput(sessionContext, connection, input)
+		readTerminalInput(ctx, connection, input)
 	}()
 	defer func() {
+		// 先取消并关闭两侧传输，再等待两个泵；否则 Recv/Write 可能永远无法退出。
 		cancel()
-		_ = connection.CloseNow()
+		<-browserClosed
+		<-agentClosed
 		<-inputDone
+		<-outputExited
 	}()
 
 	for {
 		select {
-		case <-sessionContext.Done():
+		case <-ctx.Done():
 			return
 		case <-outputDone:
 			return
 		case incoming, ok := <-input:
-			if !ok || incoming.err != nil {
+			// Done 与缓冲输入同时就绪时，select 可能先取输入，必须再次检查。
+			if ctx.Err() != nil || !ok || incoming.err != nil {
 				return
 			}
 			if err := stream.Send(incoming.message); err != nil {
-				_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_SESSION_FAILED")
-				_ = connection.Close(websocket.StatusInternalError, "终端输入无法转发")
+				_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
 				return
 			}
 			if incoming.closeRequested {
@@ -188,6 +229,9 @@ type terminalInputReader interface {
 }
 
 func sendTerminalInput(ctx context.Context, destination chan<- terminalInput, input terminalInput) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	select {
 	case destination <- input:
 		return true
@@ -203,6 +247,9 @@ func readTerminalInput(ctx context.Context, connection terminalInputReader, dest
 			return
 		}
 		messageType, data, err := connection.Read(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			sendTerminalInput(ctx, destination, terminalInput{err: err})
 			return
@@ -246,9 +293,17 @@ func readTerminalInput(ctx context.Context, connection terminalInputReader, dest
 	}
 }
 
-func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream TerminalStream, done chan<- error) {
+func proxyTerminalOutput(ctx context.Context, connection terminalOutputWriter, stream TerminalStream, done chan<- error) {
 	for {
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
 		message, err := stream.Recv()
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
 		if err != nil {
 			_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
 			done <- err
@@ -297,7 +352,10 @@ func decodeTerminalControl(data []byte) (terminalControl, error) {
 	return control, nil
 }
 
-func writeTerminalControl(ctx context.Context, connection *websocket.Conn, control terminalControl) error {
+func writeTerminalControl(ctx context.Context, connection terminalOutputWriter, control terminalControl) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(control)
 	if err != nil {
 		return err
@@ -305,7 +363,7 @@ func writeTerminalControl(ctx context.Context, connection *websocket.Conn, contr
 	return connection.Write(ctx, websocket.MessageText, encoded)
 }
 
-func writeTerminalError(ctx context.Context, connection *websocket.Conn, err error, fallbackCode string) error {
+func writeTerminalError(ctx context.Context, connection terminalOutputWriter, err error, fallbackCode string) error {
 	code := terminalErrorCode(err, fallbackCode)
 	return writeTerminalControl(ctx, connection, terminalControl{Type: "error", Code: code, Message: terminalErrorMessage(code)})
 }

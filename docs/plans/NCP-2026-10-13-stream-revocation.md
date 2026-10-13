@@ -254,3 +254,7 @@ GOCACHE=/workspace/scratch/a2c31a226a28/ncp-tools/go-cache \
 本调查不运行包级全测试，因 existing `terminal_test.go` / `terminal_linux_integration_test.go` / `terminal/host_linux_test.go` 包含真实 listener、Unix socket 或 PTY。未来实现若沿用上面的允许范围，必须使用精确测试名选择；不能误把 `go test ./...` 当作纯 fake。
 
 未运行：新方案测试、完整 Go build/vet、前端 lint/typecheck/build、浏览器、真实 Docker/PTY/NAS；未改 repo、commit、push、部署、账号或访问设置。
+
+## M08-B 实施审查补充
+
+Login 与 UpdatePassword 的昂贵计算结束后均重新核对凭据及最终启用状态，但不引入账号 epoch，因此二者都无法识别计算期间“禁用后又启用”的 ABA 历史。原有 token 与流租约仍保持撤销，不能把最终状态核对扩大为“所有禁用前开始的凭据操作必被拒绝”。即时流撤销仍限同一 owning Service。

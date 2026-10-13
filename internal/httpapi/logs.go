@@ -68,8 +68,14 @@ func (api *handler) collectLogs(request *http.Request) (logResponse, int, error)
 }
 
 func (api *handler) logEvents(response http.ResponseWriter, request *http.Request) {
-	flusher, ok := response.(http.Flusher)
-	if !ok {
+	if request.Context().Err() != nil {
+		return
+	}
+	controller, err := api.prepareSSEStream(request.Context(), response)
+	if err != nil {
+		if request.Context().Err() != nil {
+			return
+		}
 		api.writeError(response, request, http.StatusInternalServerError, "LOG_STREAM_UNSUPPORTED", "当前服务不支持日志实时流。")
 		return
 	}
@@ -77,10 +83,10 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 	response.Header().Set("Cache-Control", "no-cache, no-transform")
 	response.Header().Set("Connection", "keep-alive")
 	response.Header().Set("X-Accel-Buffering", "no")
-	response.WriteHeader(http.StatusOK)
 	interval := realtimeInterval(request)
-	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
-	flusher.Flush()
+	if err := api.writeSSEFrame(request.Context(), response, controller, fmt.Sprintf("retry: %d\n\n", interval.Milliseconds())); err != nil {
+		return
+	}
 
 	streamRequest := request.Clone(request.Context())
 	streamQuery := streamRequest.URL.Query()
@@ -88,9 +94,16 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 	streamRequest.URL.RawQuery = streamQuery.Encode()
 	seen := make(map[string]struct{})
 	send := func() bool {
+		if request.Context().Err() != nil {
+			return false
+		}
 		result, _, err := api.collectLogs(streamRequest)
+		if request.Context().Err() != nil {
+			return false
+		}
+		var frame string
 		if err != nil {
-			_, err = fmt.Fprintf(response, "event: unavailable\ndata: {}\n\n")
+			frame = "event: unavailable\ndata: {}\n\n"
 		} else {
 			incremental := make([]logEntry, 0, len(result.Entries))
 			var latest time.Time
@@ -105,16 +118,15 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 				}
 			}
 			if len(incremental) == 0 {
-				_, err = fmt.Fprint(response, ": heartbeat\n\n")
-				flusher.Flush()
-				return err == nil
+				return api.writeSSEFrame(request.Context(), response, controller, ": heartbeat\n\n") == nil
 			}
 			result.Entries = incremental
 			var payload []byte
 			payload, err = json.Marshal(result)
-			if err == nil {
-				_, err = fmt.Fprintf(response, "event: logs\ndata: %s\n\n", payload)
+			if err != nil {
+				return false
 			}
+			frame = fmt.Sprintf("event: logs\ndata: %s\n\n", payload)
 			query := streamRequest.URL.Query()
 			if result.NextCursor != "" {
 				query.Set("cursor", result.NextCursor)
@@ -124,22 +136,18 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 			}
 			streamRequest.URL.RawQuery = query.Encode()
 		}
-		if err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
+		return api.writeSSEFrame(request.Context(), response, controller, frame) == nil
 	}
 	if !send() {
 		return
 	}
-	ticker := time.NewTicker(interval)
+	ticker := api.realtimeTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-request.Context().Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			if !send() {
 				return
 			}

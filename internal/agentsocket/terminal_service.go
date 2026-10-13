@@ -25,7 +25,13 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if s.manager == nil {
 		return grpcstatus.Error(codes.FailedPrecondition, "TERMINAL_UNAVAILABLE")
 	}
+	if stream.Context().Err() != nil {
+		return nil
+	}
 	startFrame, err := stream.Recv()
+	if stream.Context().Err() != nil {
+		return nil
+	}
 	if err != nil {
 		return terminalStreamReceiveError(err)
 	}
@@ -57,6 +63,9 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if err != nil {
 		return grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
 	}
+	if sessionContext.Err() != nil {
+		return nil
+	}
 	if err := stream.Send(started); err != nil {
 		return terminalStreamSendError(err)
 	}
@@ -75,6 +84,10 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 		case outputError := <-outputDone:
 			return outputError
 		case received, ok := <-incoming:
+			// 取消与缓冲输入可能同时就绪；出队后重新检查，不能继续准入输入。
+			if sessionContext.Err() != nil {
+				return nil
+			}
 			if !ok {
 				return nil
 			}
@@ -84,6 +97,9 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 			message, err := terminalMessageFromStruct(received.message)
 			if err != nil {
 				return grpcstatus.Error(codes.InvalidArgument, "TERMINAL_MESSAGE_INVALID")
+			}
+			if sessionContext.Err() != nil {
+				return nil
 			}
 			switch message.Type {
 			case terminal.MessageInput:
@@ -114,11 +130,23 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 func (s *terminalPOCService) copyTerminalOutput(ctx context.Context, stream AgentTerminalPOCService_OpenServer, sessionID string, done chan<- error) {
 	output := make([]byte, terminalOutputChunkSize)
 	for {
+		if ctx.Err() != nil {
+			done <- nil
+			return
+		}
 		read, err := s.manager.Read(ctx, sessionID, output)
+		if ctx.Err() != nil {
+			done <- nil
+			return
+		}
 		if read > 0 {
 			frame, frameErr := terminalMessageToStruct(terminal.Message{Type: terminal.MessageOutput, Data: append([]byte(nil), output[:read]...)})
 			if frameErr != nil {
 				done <- grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
+				return
+			}
+			if ctx.Err() != nil {
+				done <- nil
 				return
 			}
 			if sendErr := stream.Send(frame); sendErr != nil {
@@ -136,6 +164,10 @@ func (s *terminalPOCService) copyTerminalOutput(ctx context.Context, stream Agen
 		closed, closeErr := terminalMessageToStruct(terminal.Message{Type: terminal.MessageClosed, SessionID: sessionID})
 		if closeErr != nil {
 			done <- grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
+			return
+		}
+		if ctx.Err() != nil {
+			done <- nil
 			return
 		}
 		if sendErr := stream.Send(closed); sendErr != nil {

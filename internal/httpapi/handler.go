@@ -292,10 +292,10 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/proxy/mihomo/capability", api.mihomoCapability)
 			protected.Post("/proxy/mihomo/invoke", api.invokeMihomo)
 			protected.Post("/proxy/mihomo/inspect", api.inspectMihomo)
-			protected.Get("/system/events", api.systemEvents)
+			protected.With(api.requireLiveSession).Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
 			protected.Get("/logs", api.logs)
-			protected.Get("/logs/events", api.logEvents)
+			protected.With(api.requireLiveSession).Get("/logs/events", api.logEvents)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/preferences/lists/{listKey}", api.listPreference)
@@ -327,7 +327,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/compose/deploy", api.deployComposeConfig)
 			protected.Get("/docker/compose/revisions", api.composeRevisions)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
-			protected.Get("/jobs/{jobID}/events", api.jobEvents)
+			protected.With(api.requireLiveSession).Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Get("/jobs", api.listJobs)
 			protected.Post("/jobs/{jobID}/retry", api.retryJob)
 			protected.Post("/jobs/{jobID}/cancel", api.cancelJob)
@@ -361,7 +361,7 @@ func NewHandler(config Config) http.Handler {
 		})
 	})
 	if api.terminalEnabled {
-		router.With(api.requireAuthentication).Get("/ws/terminal", api.terminalWebSocket)
+		router.With(api.requireAuthentication, api.requireLiveSession).Get("/ws/terminal", api.terminalWebSocket)
 	}
 	router.NotFound(func(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "请求的资源不存在。")
