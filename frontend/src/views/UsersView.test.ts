@@ -10,13 +10,16 @@ const messages = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: 
 vi.mock('@/api/control', () => api)
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 1 } }) }))
 vi.mock('@/components/WorkspaceHeader.vue', () => ({ default: { render: () => null } }))
-vi.mock('@/components/ConfirmDangerDialog.vue', () => ({ default: { render: () => null } }))
+vi.mock('@/components/ConfirmDangerDialog.vue', () => ({ default: defineComponent({
+  props: ['modelValue', 'busy', 'confirmationTarget'], emits: ['update:modelValue', 'confirm'],
+  setup(props, { emit }) { return () => h('section', { 'data-danger': '', 'data-target': props.confirmationTarget }, [h('button', { 'data-danger-close': '', onClick: () => emit('update:modelValue', false) }, 'fixture close')]) },
+}) }))
 vi.mock('element-plus', () => {
   const passthrough = defineComponent({ setup(_, { slots }) { return () => h('div', [slots.default?.(), slots.footer?.()]) } })
   return {
     ElMessage: messages,
     ElButton: defineComponent({ props: ['disabled', 'loading'], emits: ['click'], setup(props, { slots, emit }) { return () => h('button', { disabled: props.disabled, onClick: () => emit('click') }, slots.default?.()) } }),
-    ElDialog: passthrough, ElDropdown: passthrough, ElDropdownItem: passthrough, ElDropdownMenu: passthrough,
+    ElDialog: defineComponent({ props: ['modelValue', 'title'], emits: ['update:modelValue'], setup(props, { slots, emit }) { return () => h('section', { 'data-dialog': props.title, onKeydown: (event: KeyboardEvent) => { if (event.key === 'Escape') emit('update:modelValue', false) } }, [h('button', { 'data-model-close': '', onClick: () => emit('update:modelValue', false) }, 'fixture close'), slots.default?.(), slots.footer?.()]) } }), ElDropdown: passthrough, ElDropdownItem: passthrough, ElDropdownMenu: passthrough,
     ElInput: passthrough, ElInputNumber: passthrough, ElSwitch: passthrough,
   }
 })
@@ -31,6 +34,7 @@ function deferred<T>() {
 type State = {
   users: ManagedUser[]; usersLoading: boolean; usersError: string; policyLoading: boolean; policyError: string;
   policyDraft: PasswordPolicy | null; confirmedPolicy: PasswordPolicy | null; policyDirty: boolean; policySaving: boolean; policyReady: boolean;
+  createOpen: boolean; passwordOpen: boolean; dangerOpen: boolean; createBusy: boolean; passwordBusy: boolean; dangerBusy: boolean;
   createForm: { username: string; password: string }; passwordForm: { currentPassword: string; newPassword: string; confirmation: string };
   loadUsers(): Promise<void>; loadPasswordPolicy(): Promise<void>; savePasswordPolicy(): Promise<void>;
   requestStatusChange(user: ManagedUser): void; requestDelete(user: ManagedUser): void; confirmDanger(): Promise<void>;
@@ -50,7 +54,7 @@ beforeEach(() => {
   vi.resetAllMocks(); beginSession()
   api.requestUsers.mockResolvedValue([user]); api.requestPasswordPolicy.mockResolvedValue({ ...policy })
 })
-afterEach(() => { app?.unmount(); app = undefined; host?.remove() })
+afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('UsersView 独立读取与已确认密码规则', () => {
   it('列表先成功可见；规则 pending/失败时 UI 和 handler 均禁止密码写入', async () => {
@@ -150,7 +154,7 @@ describe('UsersView 独立读取与已确认密码规则', () => {
     const old = deferred<ManagedUser[]>(); const refresh = deferred<ManagedUser[]>()
     api.requestUsers.mockReturnValueOnce(old.promise).mockReturnValueOnce(refresh.promise)
     api.createUser.mockResolvedValue(user); mount(); await flush()
-    state.createForm = { username: user.username, password: 'fixture-password-only' }; await state.submitCreate()
+    state.createOpen = true; state.createForm = { username: user.username, password: 'fixture-password-only' }; await state.submitCreate()
     old.resolve([]); await flush(); expect(state.users).toEqual([user])
     refresh.reject(new Error('fixture')); await flush()
     expect(state.users).toEqual([user]); expect(state.usersLoading).toBe(false); expect(api.createUser).toHaveBeenCalledTimes(1)
@@ -233,4 +237,133 @@ describe('UsersView 独立读取与已确认密码规则', () => {
     invalidateSession()
   })
 
+})
+
+
+describe('UsersView 写入弹窗与目标归属', () => {
+  const second = { ...user, id: 3, username: 'fixture-second' }
+  const password = { currentPassword: 'fixture-current-only', newPassword: 'fixture-password-only', confirmation: 'fixture-password-only' }
+  function enterCreate(name = 'fixture-new') { state.createOpen = true; state.createForm = { username: name, password: password.newPassword } }
+  function enterPassword(target = user) { state.openPassword(target); state.passwordForm = { ...password } }
+
+  it.each(['success', 'failure'] as const)('创建关闭重开后旧 %s 不清新草稿、不发 toast；锁跨弹窗保留', async (outcome) => {
+    const write = deferred<ManagedUser>(); api.createUser.mockReturnValue(write.promise)
+    mount(); await flush(); enterCreate(); const pending = state.submitCreate()
+    state.createForm.username = 'fixture-edited'; state.createForm.password = 'fixture-edited-secret'
+    expect(api.createUser).toHaveBeenCalledWith({ username: 'fixture-new', password: password.newPassword })
+    state.createOpen = false; expect(state.createForm.password).toBe('')
+    enterCreate('fixture-next'); await state.submitCreate(); expect(api.createUser).toHaveBeenCalledTimes(1)
+    expect(state.createBusy).toBe(true)
+    if (outcome === 'success') { api.requestUsers.mockRejectedValue(new Error('fixture read')); write.resolve(second) } else write.reject(new Error('fixture old error'))
+    await pending; await flush()
+    expect(state.createOpen).toBe(true); expect(state.createForm.username).toBe('fixture-next'); expect(state.createForm.password).toBe(password.newPassword)
+    expect(state.createBusy).toBe(false); expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled()
+    if (outcome === 'success') expect(state.users).toContainEqual(second)
+  })
+
+  it.each(['success', 'failure'] as const)('改密 A 关闭后 B 可独立提交，A 的 %s/finally 不影响 B', async (outcome) => {
+    const old = deferred<void>(); const latest = deferred<void>()
+    api.updateUserPassword.mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise)
+    mount(); await flush(); enterPassword(); const first = state.submitPassword()
+    state.passwordForm.newPassword = 'fixture-edited-password'
+    state.passwordOpen = false; expect(state.passwordForm.newPassword).toBe('')
+    enterPassword(); await state.submitPassword(); expect(api.updateUserPassword).toHaveBeenCalledTimes(1)
+    enterPassword(second); const next = state.submitPassword(); await state.submitPassword()
+    expect(api.updateUserPassword.mock.calls).toEqual([[user.id, { currentPassword: '', newPassword: password.newPassword }], [second.id, { currentPassword: '', newPassword: password.newPassword }]])
+    if (outcome === 'success') old.resolve(); else old.reject(new Error('old fixture error'))
+    await first; await flush()
+    expect(state.passwordOpen).toBe(true); expect(state.passwordBusy).toBe(true); expect(state.passwordForm).toEqual(password)
+    expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled()
+    latest.resolve(); await next
+    expect(state.passwordOpen).toBe(false); expect(state.passwordBusy).toBe(false); expect(state.passwordForm.newPassword).toBe('')
+    expect(messages.success).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['success', 'failure'] as const)('危险操作 A/status 到 B/delete，旧 %s 保留新弹窗和 busy', async (outcome) => {
+    const old = deferred<ManagedUser>(); const latest = deferred<void>()
+    api.updateUserStatus.mockReturnValue(old.promise); api.deleteUser.mockReturnValue(latest.promise)
+    mount(); await flush(); state.users = [user, second]; state.requestStatusChange(user); const first = state.confirmDanger()
+    state.dangerOpen = false; state.requestDelete(second); const next = state.confirmDanger(); await state.confirmDanger()
+    expect(api.updateUserStatus).toHaveBeenCalledWith(user.id, true); expect(api.deleteUser).toHaveBeenCalledTimes(1); expect(api.deleteUser).toHaveBeenCalledWith(second.id)
+    api.requestUsers.mockRejectedValue(new Error('fixture read'))
+    if (outcome === 'success') old.resolve({ ...user, disabled: true }); else old.reject('fixture non-Error')
+    await first; await flush()
+    expect(state.dangerOpen).toBe(true); expect(state.dangerBusy).toBe(true)
+    expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled()
+    if (outcome === 'success') expect(state.users.find((item) => item.id === user.id)?.disabled).toBe(true)
+    latest.resolve(); await next; await flush()
+    expect(state.dangerOpen).toBe(false); expect(state.users.some((item) => item.id === second.id)).toBe(false)
+    expect(messages.success).toHaveBeenCalledWith('账号已删除。')
+  })
+
+  it('目标写入锁跨密码与危险操作，创建独立；关闭不释放锁', async () => {
+    const write = deferred<void>(); const create = deferred<ManagedUser>()
+    api.updateUserPassword.mockReturnValue(write.promise); api.createUser.mockReturnValue(create.promise)
+    mount(); await flush(); enterPassword(); const pending = state.submitPassword()
+    state.passwordOpen = false; state.requestDelete(user); await state.confirmDanger()
+    expect(state.dangerBusy).toBe(true); expect(api.deleteUser).not.toHaveBeenCalled()
+    state.requestStatusChange(user); await state.confirmDanger(); expect(api.updateUserStatus).not.toHaveBeenCalled()
+    enterCreate(); const creating = state.submitCreate(); expect(api.createUser).toHaveBeenCalledTimes(1)
+    write.reject(new Error('fixture')); await pending; expect(state.createBusy).toBe(true); expect(state.dangerBusy).toBe(false)
+    create.reject(new Error('fixture')); await creating
+  })
+
+  it.each(['Escape', 'model', 'cancel'] as const)('%s 关闭路径清密码且旧失败不恢复敏感输入', async (close) => {
+    const write = deferred<void>(); api.updateUserPassword.mockReturnValue(write.promise)
+    mount(); await flush(); enterPassword(); const pending = state.submitPassword(); await flush()
+    const dialog = host.querySelector('[data-dialog^="重置"]')!
+    if (close === 'Escape') dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    else if (close === 'model') (dialog.querySelector('[data-model-close]') as HTMLButtonElement).click()
+    else ([...dialog.querySelectorAll('button')].find((item) => item.textContent === '取消')!).click()
+    expect(state.passwordOpen).toBe(false); expect(Object.values(state.passwordForm)).toEqual(['', '', ''])
+    write.reject(new Error('fixture')); await pending; expect(messages.error).not.toHaveBeenCalled()
+  })
+
+  it('危险弹窗 model 关闭使旧失败失去观察权', async () => {
+    const write = deferred<void>(); api.deleteUser.mockReturnValue(write.promise)
+    mount(); await flush(); state.requestDelete(user); const pending = state.confirmDanger(); await flush()
+    ;(host.querySelector('[data-danger-close]') as HTMLButtonElement).click()
+    expect(state.dangerOpen).toBe(false); write.reject('fixture'); await pending
+    expect(messages.error).not.toHaveBeenCalled()
+  })
+
+  it.each(['Escape', 'model', 'cancel'] as const)('创建经 %s 关闭清空密码，旧请求仍保持单飞', async (close) => {
+    const write = deferred<ManagedUser>(); api.createUser.mockReturnValue(write.promise)
+    mount(); await flush(); enterCreate(); const pending = state.submitCreate(); await flush()
+    const dialog = host.querySelector('[data-dialog="新增 Root 账号"]')!
+    if (close === 'Escape') dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    else if (close === 'model') (dialog.querySelector('[data-model-close]') as HTMLButtonElement).click()
+    else ([...dialog.querySelectorAll('button')].find((item) => item.textContent === '取消')!).click()
+    expect(state.createOpen).toBe(false); expect(state.createForm.password).toBe(''); expect(state.createBusy).toBe(true)
+    write.reject(new Error('fixture')); await pending; expect(messages.error).not.toHaveBeenCalled()
+  })
+
+  it('自身改密关闭后成功仍提醒原会话重新登录，但不清后来弹窗；只触发一次 reload', async () => {
+    vi.useFakeTimers(); const write = deferred<void>(); api.updateUserPassword.mockReturnValue(write.promise)
+    mount(); await flush(); enterPassword({ ...user, id: 1 }); const pending = state.submitPassword()
+    state.passwordOpen = false; enterPassword(second); write.resolve(); await pending
+    expect(state.passwordOpen).toBe(true); expect(state.passwordForm).toEqual(password)
+    expect(messages.success).toHaveBeenCalledWith('密码已修改，请重新登录。')
+    expect(api.updateUserPassword).toHaveBeenCalledWith(1, { currentPassword: password.currentPassword, newPassword: password.newPassword })
+    const reload = vi.fn(); vi.stubGlobal('window', { location: { reload } })
+    vi.advanceTimersByTime(600); expect(reload).toHaveBeenCalledTimes(1); vi.advanceTimersByTime(600); expect(reload).toHaveBeenCalledTimes(1)
+    vi.unstubAllGlobals(); expect(api.requestUsers).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['unmount', 'session', 'new-session'] as const)('自身改密成功后 %s 回收原会话 reload 定时器', async (cleanup) => {
+    vi.useFakeTimers(); api.updateUserPassword.mockResolvedValue(undefined)
+    mount(); await flush(); enterPassword({ ...user, id: 1 }); await state.submitPassword()
+    expect(messages.success).toHaveBeenCalledWith('密码已修改，请重新登录。'); expect(vi.getTimerCount()).toBe(1)
+    if (cleanup === 'unmount') { app!.unmount(); app = undefined } else if (cleanup === 'session') invalidateSession(); else beginSession()
+    expect(vi.getTimerCount()).toBe(0); vi.advanceTimersByTime(600)
+    expect(api.updateUserPassword).toHaveBeenCalledTimes(1); expect(api.requestUsers).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['success', 'failure'] as const)('离开会话后 pending 写入 %s 不 toast/对账/reload', async (outcome) => {
+    vi.useFakeTimers(); const write = deferred<void>(); api.updateUserPassword.mockReturnValue(write.promise)
+    mount(); await flush(); enterPassword({ ...user, id: 1 }); const pending = state.submitPassword(); beginSession()
+    if (outcome === 'success') write.resolve(); else write.reject(new Error('fixture'))
+    await pending; expect(messages.success).not.toHaveBeenCalled(); expect(messages.error).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0)
+    expect(api.requestUsers).toHaveBeenCalledTimes(1)
+  })
 })
