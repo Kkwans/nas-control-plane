@@ -67,7 +67,12 @@ test('日志分页未完成时换筛选，旧结果不污染新查询且仍可�
   await expect(page.getByText('system 首批记录', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '加载更多结果' }).click()
   await expect.poll(() => waiting).toBe(true)
-  await page.getByRole('combobox', { name: '日志来源' }).click()
+  // Element Plus 的输入节点被选中项覆盖；点击实际选择器，并避开粘性顶栏。
+  const sourceSelect = page.locator('.log-filter-field--source .el-select__wrapper')
+  await sourceSelect.evaluate((element) => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+  await expect(sourceSelect).toBeVisible()
+  await sourceSelect.click()
+  await expect(page.getByRole('combobox', { name: '日志来源' })).toHaveAttribute('aria-expanded', 'true')
   await page.getByRole('option', { name: 'NCP Agent', exact: true }).click()
   await expect(page.getByText('agent 首批记录', { exact: true })).toBeVisible()
   delayed.release()
