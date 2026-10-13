@@ -198,7 +198,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	dockerCollector, err := dockerrealtime.NewCollector(socketDockerSource{socketPath: *agentSocketPath})
+	dockerCollector, err := dockerrealtime.NewEventCollector(socketDockerSource{socketPath: *agentSocketPath}, socketDockerSource{socketPath: *agentSocketPath})
 	if err != nil {
 		return err
 	}
@@ -278,6 +278,10 @@ func (s socketSummarySource) CollectSystemSummary(ctx context.Context) (system.S
 }
 
 type socketDockerSource struct{ socketPath string }
+
+func (s socketDockerSource) WatchDockerInventory(ctx context.Context, notify func(bool)) error {
+	return agentsocket.WatchDockerInventory(ctx, s.socketPath, notify)
+}
 
 func (s socketDockerSource) CollectDockerInventory(ctx context.Context) (docker.Inventory, error) {
 	return agentsocket.CollectDockerInventory(ctx, s.socketPath)

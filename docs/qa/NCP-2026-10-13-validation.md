@@ -201,3 +201,11 @@
 - collector race十轮、HTTP精确选择race二十轮与独立混合SSE/三个GET集成race五轮、八个既有sites及三个dashboard回归race十轮通过；48项store测试、110项相关前端测试、类型/lint/build、Go仅编译/build/vet和OpenAPI解析通过。完整分支CI尚待验收。
 - /readyz保留独立3秒探测，不纳入最长12秒强刷新屏障，仍可与共享源重叠；C2事件重连对账尚未完成。此片只保证规定共享读取路径的序列化，非整个进程所有Docker调用唯一。
 - 80cb4bc已独立推送：图表动画与xterm光标闪烁实时响应减少动态效果偏好，监听随组件销毁，重连读取当前偏好且不额外创建终端。27项聚焦单测与独立复核、类型/lint/build通过；mock ECharts/xterm测试不等于真实渲染验收。共享工作树469项前端测试同时包含C1，不能算作该独立提交的精确测试总数。
+
+
+## 13:10 UTC 事件断线对账
+
+- [80cb4bc CI 38400736140](https://github.com/Kkwans/nas-control-plane/actions/runs/38400736140)完整通过，454项单元、157项Chromium；[7855d23 CI 38400983759](https://github.com/Kkwans/nas-control-plane/actions/runs/38400983759)完整通过，469项单元、157项Chromium及Go/构建/Compose，闭环C1强刷新屏障。
+- C2共11个代码/测试文件冻结，两层独立审查无阻塞。首订阅与重连全量对账、epoch/需求代次保护、事件dirty合并、1/2/4/8/16/30秒退避及5秒周期真实采集已实现；旧Agent不支持新RPC明确不可用，需要配套升级。
+- 根审查发现Agent同步Send可能挡住provider EOF，已改为唯一sender与主生命周期分离；实际fake负对照证明在释放阻塞transport前handler可返回并释放Watch名额。reader协作取消后join，transport sender不能在RPC返回前强制join。
+- 核心fake race三轮、Agent独立fake/bufconn race二十轮、五包TestDockerRealtime组合race及编译/vet检查通过。1KiB帧限额、旧Agent协议不匹配、无ready超时、SDK Err/EOF、64需求、重连删除、storm合并和取消代次均覆盖；完整CI待验收。无真实Docker/NAS操作。

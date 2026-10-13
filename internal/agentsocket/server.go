@@ -37,24 +37,25 @@ const (
 var BuildVersion = "dev"
 
 type SocketConfig struct {
-	SocketPath          string
-	SocketGroup         string
-	SocketMode          os.FileMode
-	EnableTerminalPOC   bool
-	TerminalManager     *terminal.Manager
-	DashboardProvider   DashboardProvider
-	DockerControl       DockerControlProvider
-	DockerLogs          DockerLogsProvider
-	DockerImages        DockerImageProvider
-	DockerResources     DockerResourcesProvider
-	Filesystem          FilesystemProvider
-	OutboundProxy       string
-	ComposeRegistryPath string
-	Compose             ComposeProvider
-	Database            DatabaseProvider
-	Journal             JournalProvider
-	System              SystemProvider
-	Proxy               ProxyProvider
+	SocketPath            string
+	SocketGroup           string
+	SocketMode            os.FileMode
+	EnableTerminalPOC     bool
+	TerminalManager       *terminal.Manager
+	DashboardProvider     DashboardProvider
+	DockerControl         DockerControlProvider
+	DockerLogs            DockerLogsProvider
+	DockerImages          DockerImageProvider
+	DockerResources       DockerResourcesProvider
+	DockerInventoryEvents DockerInventoryEventsProvider
+	Filesystem            FilesystemProvider
+	OutboundProxy         string
+	ComposeRegistryPath   string
+	Compose               ComposeProvider
+	Database              DatabaseProvider
+	Journal               JournalProvider
+	System                SystemProvider
+	Proxy                 ProxyProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
@@ -105,6 +106,10 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		if err != nil {
 			return coded("AGENT_DOCKER_RESOURCES_INITIALIZATION_FAILED", err)
 		}
+	}
+	dockerInventoryEvents := config.DockerInventoryEvents
+	if dockerInventoryEvents == nil {
+		dockerInventoryEvents = docker.NewLiveInventoryEventSource()
 	}
 	filesystemProvider := config.Filesystem
 	if filesystemProvider == nil {
@@ -187,6 +192,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
 	RegisterAgentDockerResourcesServiceServer(grpcServer, newDockerResourcesService(dockerResources))
+	RegisterAgentDockerInventoryEventsServiceServer(grpcServer, newDockerInventoryEventsService(dockerInventoryEvents))
 	RegisterAgentFilesystemServiceServer(grpcServer, newFilesystemService(filesystemProvider))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
 	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))

@@ -169,3 +169,24 @@ B2单独完成SQL上下界及limit+1检测、明确响应预算与完整图表ga
 此片不增加Docker事件RPC或重连状态机，C2断线强制对账仍未完成。Info/List/Inspect也不是Engine事务性快照，单个inspect失败的既有完整性边界不因共享而消失。
 
 C1保留/readyz既有独立3秒探测，不将它排入最长12秒的强刷新屏障，以免健康检查因正常节流误判故障。它仍可能与共享采集重叠；本片不宣称诊断/就绪检查在内的所有进程调用都只有一个RPC。后续是否共享须先统一readiness时效与超时语义。
+
+## 14. C2实施契约：事件失效通知与断线全量对账
+
+2026-10-13开始设计后的实施。Agent保持Docker能力唯一入口；新增独立的强类型失效通知RPC，不传Docker事件属性、labels、执行命令或可选socket路径。Server按需只维持一条事件订阅，Agent订阅数量也须显式有界。
+
+- 事件只置dirty，合并为容量一通知/单调代次；读取事件不等待inventory RPC或浏览器发送。继续5秒真实周期采集，事件心跳不得重写原始CollectedAt或延长15秒UI新鲜度。
+- 首次订阅与每次重新连接都要求完整inventory对账。采集开始捕获事件epoch/dirty代次；期间新事件必须保留下一轮需求。旧epoch结果不能清除断线或恢复中状态。
+- SDK Events返回并非严格成功握手证明：错误发布存在就绪时序窗口。必须消费Err关闭/EOF/context，不能等待永不关闭的Messages channel；ready仅表示该尝试可以启动对账。失败立即标记失效并覆盖先前健康判断。
+- 重连退避1/2/4/8/16/30秒，需求或owner取消立即打断；只有当前epoch真实对账成功才重置，避免ready→EOF循环绕过退避。新旧订阅不能重叠，最后需求释放关闭订阅与采集。
+- 保留C1采集开始屏障、等待者限额和单请求取消隔离。事件流不可用的退化语义、老Agent不支持新RPC时的处理须明确；不得无提示声称已完成事件恢复。
+- fake/barrier/bufconn验证首次/重连必对账、期间删除容器后清除旧条目、storm合并、list期间事件、旧epoch拒绝、EOF/错误channel关闭、退避与shutdown；不调用真实Docker/NAS。
+
+事件不是可靠审计日志，不保证所有事件送达或事务性清单。五秒全量兜底帮助未观察变化收敛；源若不合作取消，不能通过遗留goroutine和重复连接伪造硬结束保证。
+
+
+### C2已实现的兼容与验收边界
+
+- 生产显式使用带事件源的collector；旧Agent缺少新Watch RPC会得到protocol mismatch并保持DOCKER_INVENTORY_UNAVAILABLE，部署时Server/Agent需配套升级。polling-only构造仅保留既有隔离场景，生产不静默回退。
+- 事件恢复中，unary强刷新即使取得轮询清单也不会伪称健康成功。新epoch在ready之前启动的旧轮询不能确认该epoch恢复；需求释放/重订阅的代次在最后持锁准入点再次核对。
+- Agent每实例最多一个Watch，通知只含ready/invalidated，接收帧限1KiB并严格校验字段/枚举/顺序。source reader与唯一sender分离，source终止可使handler返回，即使sender被流控阻塞；reader在释放名额前协作取消并等待。transport sender由RPC返回后的gRPC取消解除，不能在返回前反向等待它。
+- 两层独立审查与fake/bufconn多轮race通过；覆盖一万个事件合并、64需求一条订阅、首次/每次重连对账、删除旧容器、旧epoch拒绝、完整退避序列、无ready超时、旧Agent、阻塞发送与EOF。没有实际Docker或NAS验收。

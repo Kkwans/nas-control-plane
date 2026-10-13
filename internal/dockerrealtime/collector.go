@@ -46,6 +46,14 @@ type State struct {
 
 type Collector struct {
 	source            Source
+	events            EventSource
+	eventCancel       context.CancelFunc
+	eventEpoch        uint64
+	dirtyGeneration   uint64
+	reconciledDirty   uint64
+	eventReady        bool
+	everReady         bool
+	reconciledEpoch   uint64
 	mu                sync.Mutex
 	state             State
 	started, stopped  bool
@@ -59,6 +67,8 @@ type Collector struct {
 	done              chan struct{}
 }
 
+// NewCollector 构造显式的仅轮询 owner，保留隔离 fixture 与旧接口兼容。
+// 生产装配必须用 NewEventCollector，事件缺失不得静默降级为此构造器。
 func NewCollector(source Source) (*Collector, error) {
 	if source == nil {
 		return nil, errors.New("docker realtime source is required")
@@ -165,6 +175,9 @@ func (c *Collector) removeDemandLocked() {
 	if c.demand == 0 {
 		c.generation++
 		c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
+		if c.eventCancel != nil {
+			c.eventCancel()
+		}
 		if c.cancel != nil {
 			c.cancel()
 		}
@@ -221,14 +234,54 @@ func (c *Collector) Run(ctx context.Context) error {
 		close(c.done)
 	}()
 	var lastStart time.Time
+	var eventDone chan struct{}
+	var eventCancel context.CancelFunc
+	var eventGeneration uint64
+	defer func() {
+		if eventCancel != nil {
+			eventCancel()
+			<-eventDone // Done 不早于响应取消的事件 reader 退出。
+		}
+	}()
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		c.mu.Lock()
-		demand := c.demand
+		demand, generation := c.demand, c.generation
 		c.mu.Unlock()
+		if eventDone != nil && (demand == 0 || generation != eventGeneration) {
+			eventCancel()
+			<-eventDone
+			eventDone = nil
+			eventCancel = nil
+		}
+		if c.events != nil && demand > 0 && eventDone == nil {
+			c.mu.Lock()
+			if c.demand == 0 || generation != c.generation {
+				c.mu.Unlock()
+				continue
+			}
+			eventCtx, cancel := context.WithCancel(ctx)
+			eventCancel, c.eventCancel = cancel, cancel
+			eventGeneration = generation
+			c.everReady, c.eventReady = false, false
+			eventDone = make(chan struct{})
+			c.mu.Unlock()
+			go func(done chan struct{}) { defer close(done); c.watchEvents(eventCtx, generation) }(eventDone)
+		}
 		if demand == 0 {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-c.wake:
+			}
+			continue
+		}
+		c.mu.Lock()
+		awaitReady := c.events != nil && !c.everReady
+		c.mu.Unlock()
+		if awaitReady {
 			select {
 			case <-ctx.Done():
 				return nil
@@ -250,11 +303,12 @@ func (c *Collector) Run(ctx context.Context) error {
 			}
 		}
 		c.mu.Lock()
-		if c.demand == 0 || ctx.Err() != nil {
+		if c.demand == 0 || ctx.Err() != nil || (c.events != nil && (c.generation != eventGeneration || !c.everReady)) {
 			c.mu.Unlock()
 			continue
 		}
-		generation := c.generation
+		generation = c.generation
+		epoch, dirty, ready := c.eventEpoch, c.dirtyGeneration, c.eventReady
 		revision := c.requestedRevision
 		request, cancel := context.WithTimeout(ctx, SourceTimeout)
 		c.cancel = cancel
@@ -285,14 +339,20 @@ func (c *Collector) Run(ctx context.Context) error {
 				code = "DOCKER_INVENTORY_UNAVAILABLE"
 			}
 			c.state.LastErrorCode = code
+			if c.events != nil && (!ready || !c.eventReady || epoch != c.eventEpoch) {
+				c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
+			}
 			if code == "" {
+				if c.events != nil && ready && c.eventReady && epoch == c.eventEpoch {
+					c.reconciledEpoch, c.reconciledDirty = epoch, dirty
+				}
 				c.state.Inventory = copied
 				c.state.LastSuccessAt = received
 			}
 			for requested, waiter := range c.waiters {
 				if requested <= revision && !waiter.completed {
 					waiter.completed = true
-					if code == "" {
+					if c.state.LastErrorCode == "" {
 						waiter.inventory = copied
 					} else {
 						waiter.err = ErrUnavailable
