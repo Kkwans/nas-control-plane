@@ -28,9 +28,10 @@ type SummarySnapshots interface {
 	Done() <-chan struct{}
 }
 
-// DockerSnapshots 的需求与服务生命周期分离，Latest 不触发 RPC。
+// DockerSnapshots 的需求与服务生命周期分离；GET 通过 Refresh 屏障取值，SSE 的 Latest 不触发 RPC。
 type DockerSnapshots interface {
 	Acquire(context.Context) (func(), error)
+	Refresh(context.Context) (docker.Inventory, error)
 	Latest() dockerrealtime.State
 	Done() <-chan struct{}
 }

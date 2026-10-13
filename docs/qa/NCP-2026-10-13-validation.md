@@ -186,3 +186,18 @@
 - M02增加真实上传/读取handler的共享契约回归，核对恶意SVG与PNG原字节、内容类型、CSP和nosniff等响应；使用recorder/tempdir，不启动HTTP服务。
 - 三项Chromium用例分别验证独立文档脚本/onload阻止、iframe不透明源隔离及SVG/PNG解码与绿色像素兼容；同一未保护SVG正对照必须实际执行。Go独立固定CSP断言防止fixture与handler一同弱化。
 - 精确Go测试、ESLint、严格TypeScript及Playwright三项发现、独立审查和diff检查通过；审查删去了图片宿主上无意义的空属性断言。真实浏览器执行仍待分支CI，不将路由fixture重放描述为真实后端网络或NAS部署验证。
+
+
+## 12:49 UTC CI与视觉闭环
+
+- [b967c53 CI 38398946480](https://github.com/Kkwans/nas-control-plane/actions/runs/38398946480)完整通过：446项单元、154项Chromium。实际复核六张超限错误截图，四张能显示结果头的图仅标题文字像素改变为执行失败；独立校验225个控件命中点，未发现该修复的布局回归，完整证据见[预算视觉复核](NCP-2026-10-13-budget-visual.md)。
+- [88f36ef CI 38399324201](https://github.com/Kkwans/nas-control-plane/actions/runs/38399324201)完整通过，C0共享Docker SSE已闭环隔离验证；C1强刷新屏障另片实施中。
+- [ad412d8 CI 38399545409](https://github.com/Kkwans/nas-control-plane/actions/runs/38399545409)完整通过：446项单元、157项Chromium，含三项新增图标安全测试。未保护SVG正对照、受保护独立文档/iframe脚本与同源隔离、SVG/PNG像素兼容已在真实Chromium执行；网络响应为与真实handler回归锁定的fixture，不冒充实际部署验证。
+
+
+## 12:54 UTC 强刷新屏障与动态效果偏好
+
+- M13-C1共11个代码/测试文件冻结并完成分层独立审查：采集开始序号屏障、64等待者、共享串行化与取消、12秒HTTP等待，以及五个既有操作后调用的强制刷新。旧在途采集/Promise不得冒充操作后状态核对，过时请求不覆盖新状态但仍向自己的调用者准确返回结果。
+- collector race十轮、HTTP精确选择race二十轮与独立混合SSE/三个GET集成race五轮、八个既有sites及三个dashboard回归race十轮通过；48项store测试、110项相关前端测试、类型/lint/build、Go仅编译/build/vet和OpenAPI解析通过。完整分支CI尚待验收。
+- /readyz保留独立3秒探测，不纳入最长12秒强刷新屏障，仍可与共享源重叠；C2事件重连对账尚未完成。此片只保证规定共享读取路径的序列化，非整个进程所有Docker调用唯一。
+- 80cb4bc已独立推送：图表动画与xterm光标闪烁实时响应减少动态效果偏好，监听随组件销毁，重连读取当前偏好且不额外创建终端。27项聚焦单测与独立复核、类型/lint/build通过；mock ECharts/xterm测试不等于真实渲染验收。共享工作树469项前端测试同时包含C1，不能算作该独立提交的精确测试总数。

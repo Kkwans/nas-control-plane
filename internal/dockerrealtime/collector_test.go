@@ -260,3 +260,306 @@ func TestDockerRealtimeConcurrentReadersAndRelease(t *testing.T) {
 		<-c.Done()
 	})
 }
+
+func TestDockerRealtimeRefreshStartBarrierAndCoalescing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		old := make(chan struct{})
+		c, cancel := start(t, sourceFunc(func(ctx context.Context) (docker.Inventory, error) {
+			n := calls.Add(1)
+			if n == 1 {
+				<-old
+			}
+			return docker.Inventory{CollectedAt: time.Now(), Engine: docker.EngineInfo{Containers: int(n)}}, nil
+		}))
+		release, _ := c.Acquire(context.Background())
+		synctest.Wait()
+		type result struct {
+			value docker.Inventory
+			err   error
+		}
+		results := make(chan result, 2)
+		for range 2 {
+			go func() { v, e := c.Refresh(context.Background()); results <- result{v, e} }()
+		}
+		synctest.Wait()
+		close(old)
+		synctest.Wait()
+		if len(results) != 0 {
+			t.Fatal("older in-flight sample satisfied refresh")
+		}
+		time.Sleep(Interval - time.Nanosecond)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatal("refresh bypassed start spacing")
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		for range 2 {
+			r := <-results
+			if r.err != nil || r.value.Engine.Containers != 2 {
+				t.Fatalf("bad refresh: %+v", r)
+			}
+		}
+		if calls.Load() != 2 {
+			t.Fatal("requests did not coalesce")
+		}
+		release()
+		cancel()
+		synctest.Wait()
+		<-c.Done()
+	})
+}
+
+func TestDockerRealtimeRefreshCapacityCancellationAndFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		var request context.Context
+		unblock := make(chan struct{})
+		c, cancel := start(t, sourceFunc(func(ctx context.Context) (docker.Inventory, error) {
+			request = ctx
+			if calls.Add(1) == 1 {
+				return docker.Inventory{CollectedAt: time.Now()}, nil
+			}
+			<-unblock
+			return docker.Inventory{}, errors.New("fixture failure")
+		}))
+		release, _ := c.Acquire(context.Background())
+		synctest.Wait()
+		good := c.Latest().Inventory.CollectedAt
+		results := make(chan error, MaxRefreshWaiters)
+		contexts := make([]context.CancelFunc, MaxRefreshWaiters)
+		for i := range contexts {
+			ctx, stop := context.WithCancel(context.Background())
+			contexts[i] = stop
+			go func() { _, err := c.Refresh(ctx); results <- err }()
+		}
+		synctest.Wait()
+		if _, err := c.Refresh(context.Background()); !errors.Is(err, ErrRefreshLimit) {
+			t.Fatal("missing waiter limit", err)
+		}
+		time.Sleep(Interval)
+		synctest.Wait()
+		contexts[0]()
+		synctest.Wait()
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		if request.Err() != nil {
+			t.Fatal("single cancellation canceled shared RPC")
+		}
+		close(unblock)
+		synctest.Wait()
+		for range MaxRefreshWaiters - 1 {
+			if err := <-results; !errors.Is(err, ErrUnavailable) {
+				t.Fatal("failure returned last-good success", err)
+			}
+		}
+		if !c.Latest().Inventory.CollectedAt.Equal(good) {
+			t.Fatal("failure replaced last-good")
+		}
+		c.mu.Lock()
+		remaining := len(c.waiters)
+		demand := c.demand
+		c.mu.Unlock()
+		if remaining != 0 || demand != 1 {
+			t.Fatal("waiter demand leaked", remaining, demand)
+		}
+		release()
+		cancel()
+		synctest.Wait()
+		<-c.Done()
+	})
+}
+
+func TestDockerRealtimeRefreshIdleCancellationAndShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		var request context.Context
+		c, cancel := start(t, sourceFunc(func(ctx context.Context) (docker.Inventory, error) {
+			calls.Add(1)
+			request = ctx
+			<-ctx.Done()
+			return docker.Inventory{}, ctx.Err()
+		}))
+		ctx, stop := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() { _, err := c.Refresh(ctx); result <- err }()
+		synctest.Wait()
+		stop()
+		synctest.Wait()
+		if !errors.Is(<-result, context.Canceled) || request.Err() == nil {
+			t.Fatal("last waiter did not cancel source")
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatal("idle polling continued")
+		}
+		go func() { _, err := c.Refresh(context.Background()); result <- err }()
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		<-c.Done()
+		if !errors.Is(<-result, ErrUnavailable) {
+			t.Fatal("shutdown did not release waiter")
+		}
+		if _, err := c.Refresh(context.Background()); !errors.Is(err, ErrUnavailable) {
+			t.Fatal("shutdown admitted refresh")
+		}
+	})
+}
+
+func TestDockerRealtimeRefreshBudgetsAndRecovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int32
+		c, cancel := start(t, sourceFunc(func(ctx context.Context) (docker.Inventory, error) {
+			n := calls.Add(1)
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) != SourceTimeout {
+				t.Error("source budget changed")
+			}
+			if n <= 2 {
+				<-ctx.Done()
+				return docker.Inventory{}, ctx.Err()
+			}
+			return docker.Inventory{CollectedAt: time.Now(), Containers: []docker.InventoryContainer{{Labels: map[string]string{"a": "b"}}}}, nil
+		}))
+		releases := make([]func(), 64)
+		for i := range releases {
+			releases[i], _ = c.Acquire(context.Background())
+		}
+		synctest.Wait()
+		ctx, stop := context.WithTimeout(context.Background(), RefreshTimeout)
+		defer stop()
+		result := make(chan error, 1)
+		go func() { _, err := c.Refresh(ctx); result <- err }()
+		synctest.Wait()
+		time.Sleep(SourceTimeout)
+		synctest.Wait()
+		if len(result) != 0 {
+			t.Fatal("old source timeout completed newer barrier")
+		}
+		time.Sleep(SourceTimeout)
+		synctest.Wait()
+		if err := <-result; !errors.Is(err, ErrUnavailable) {
+			t.Fatal("covered failure hidden by recovery", err)
+		}
+		if calls.Load() != 3 {
+			t.Fatal("unexpected calls", calls.Load())
+		}
+		go func() { _, err := c.Refresh(ctx); result <- err }()
+		synctest.Wait()
+		// The existing 12-second request budget expires while waiting for the next start.
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("HTTP wait budget ignored", err)
+		}
+		for _, release := range releases {
+			release()
+		}
+		cancel()
+		synctest.Wait()
+		<-c.Done()
+	})
+}
+
+func TestDockerRealtimeRefreshOnlyCancellationCapacityReuseAndCopies(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		unblock := make(chan struct{})
+		var request context.Context
+		var calls atomic.Int32
+		c, err := NewCollector(sourceFunc(func(ctx context.Context) (docker.Inventory, error) {
+			request = ctx
+			calls.Add(1)
+			<-unblock
+			now := time.Now()
+			return docker.Inventory{CollectedAt: now, Containers: []docker.InventoryContainer{{Labels: map[string]string{"a": "b"}, Ports: []docker.PortMapping{{Protocol: "tcp"}}, StartedAt: &now, FinishedAt: &now}}, Projects: []docker.Project{{ConfigFiles: []string{"compose.yaml"}}}}, nil
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			value docker.Inventory
+			err   error
+		}
+		results := make(chan result, MaxRefreshWaiters)
+		contexts := make([]context.CancelFunc, MaxRefreshWaiters)
+		for i := range contexts {
+			ctx, stop := context.WithCancel(context.Background())
+			contexts[i] = stop
+			go func() { v, e := c.Refresh(ctx); results <- result{v, e} }()
+		}
+		synctest.Wait()
+		if _, err := c.Refresh(context.Background()); !errors.Is(err, ErrRefreshLimit) {
+			t.Fatal(err)
+		}
+		contexts[0]()
+		synctest.Wait()
+		if r := <-results; !errors.Is(r.err, context.Canceled) {
+			t.Fatal(r.err)
+		}
+		go func() { v, e := c.Refresh(context.Background()); results <- result{v, e} }()
+		synctest.Wait()
+		c.mu.Lock()
+		count := len(c.waiters)
+		c.mu.Unlock()
+		if count != MaxRefreshWaiters {
+			t.Fatal("canceled capacity was not reusable", count)
+		}
+		owner, cancel := context.WithCancel(context.Background())
+		go func() {
+			if err := c.Run(owner); err != nil {
+				t.Error(err)
+			}
+		}()
+		synctest.Wait()
+		contexts[1]()
+		synctest.Wait()
+		if r := <-results; !errors.Is(r.err, context.Canceled) {
+			t.Fatal(r.err)
+		}
+		if request.Err() != nil {
+			t.Fatal("one refresh cancellation canceled peers' source")
+		}
+		close(unblock)
+		synctest.Wait()
+		first := <-results
+		if first.err != nil {
+			t.Fatal(first.err)
+		}
+		first.value.Containers[0].Labels["a"] = "bad"
+		first.value.Containers[0].Ports[0].Protocol = "bad"
+		*first.value.Containers[0].StartedAt = time.Time{}
+		*first.value.Containers[0].FinishedAt = time.Time{}
+		first.value.Projects[0].ConfigFiles[0] = "bad"
+		assertCopy := func(v docker.Inventory) {
+			if v.Containers[0].Labels["a"] != "b" || v.Containers[0].Ports[0].Protocol != "tcp" || v.Containers[0].StartedAt.IsZero() || v.Containers[0].FinishedAt.IsZero() || v.Projects[0].ConfigFiles[0] != "compose.yaml" {
+				t.Fatal("Refresh result shared mutable storage")
+			}
+		}
+		for range MaxRefreshWaiters - 2 {
+			r := <-results
+			if r.err != nil {
+				t.Fatal(r.err)
+			}
+			assertCopy(r.value)
+		}
+		assertCopy(*c.Latest().Inventory)
+		c.mu.Lock()
+		count = len(c.waiters)
+		demand := c.demand
+		c.mu.Unlock()
+		if count != 0 || demand != 0 || calls.Load() != 1 {
+			t.Fatal("refresh-only demand leaked or duplicated", count, demand, calls.Load())
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatal("refresh-only demand kept polling")
+		}
+		cancel()
+		synctest.Wait()
+		<-c.Done()
+	})
+}

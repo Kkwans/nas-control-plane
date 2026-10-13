@@ -14,6 +14,7 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/dockerrealtime"
 	"github.com/Kkwans/nas-control-plane/internal/filesystem"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -498,9 +499,12 @@ func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, e
 }
 
 func (api *handler) collectDockerInventoryContext(ctx context.Context) (docker.Inventory, error) {
-	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
+	if api.dockerSnapshots == nil {
+		return docker.Inventory{}, dockerrealtime.ErrUnavailable
+	}
+	requestContext, cancel := context.WithTimeout(ctx, dockerrealtime.RefreshTimeout)
 	defer cancel()
-	return api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
+	return api.dockerSnapshots.Refresh(requestContext)
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {

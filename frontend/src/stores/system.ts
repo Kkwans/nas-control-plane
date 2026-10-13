@@ -31,6 +31,8 @@ export interface RefreshOptions {
   summary?: boolean
   inventory?: boolean
   capabilities?: boolean
+  // 操作完成后必须新发请求，不能复用操作前已开始的读取。
+  force?: boolean
 }
 
 export type RefreshResource = 'summary' | 'inventory' | 'capabilities'
@@ -101,6 +103,7 @@ export const useSystemStore = defineStore('system', () => {
   type RefreshOutcome = { resource: RefreshResource; error?: unknown; stale?: boolean; failed?: boolean }
   const refreshPromises = new Map<RefreshResource, Promise<RefreshOutcome>>()
   const pendingRefreshes = new Map<RefreshResource, number>()
+  let refreshSequence = 0
   const refreshErrors = new Map<RefreshResource, string>()
   const realtimeErrors = new Map<RefreshResource, string>()
   const observedResources = new Set<RefreshResource>()
@@ -133,7 +136,7 @@ export const useSystemStore = defineStore('system', () => {
         }
     const requested = (['summary', 'inventory', 'capabilities'] as RefreshResource[])
       .filter((resource) => normalized[resource])
-    const outcomes = await Promise.all(requested.map((resource) => refreshResource(resource)))
+    const outcomes = await Promise.all(requested.map((resource) => refreshResource(resource, options.force === true)))
     const failed = outcomes
       .filter((outcome): outcome is RefreshOutcome & { failed: true } => outcome.failed === true && !outcome.stale)
       .map(({ resource, error }) => ({ resource, error }))
@@ -227,11 +230,11 @@ export const useSystemStore = defineStore('system', () => {
     applyExperiencePreferences(input)
   }
 
-  function refreshResource(resource: RefreshResource) {
+  function refreshResource(resource: RefreshResource, force: boolean) {
     const pending = refreshPromises.get(resource)
-    if (pending) return pending
+    if (pending && !force) return pending
 
-    const request = runRefreshResource(resource)
+    const request = runRefreshResource(resource, force)
     const promise = request.finally(() => {
       if (refreshPromises.get(resource) === promise) refreshPromises.delete(resource)
     })
@@ -239,39 +242,46 @@ export const useSystemStore = defineStore('system', () => {
     return promise
   }
 
-  async function runRefreshResource(resource: RefreshResource) {
+  async function runRefreshResource(resource: RefreshResource, force: boolean) {
     const session = captureSession()
     const sequence = storeSequence
-    const current = () => isCurrentSession(session.generation) && sequence === storeSequence
+    const requestSequence = ++refreshSequence
+    const currentSession = () => isCurrentSession(session.generation) && sequence === storeSequence
+    const current = () => currentSession() && pendingRefreshes.get(resource) === requestSequence
     const initialSample = freshness.get(resource)
     observedResources.add(resource)
-    pendingRefreshes.set(resource, session.generation)
+    pendingRefreshes.set(resource, requestSequence)
     updateRefreshState()
     try {
       if (resource === 'summary') {
         const next = await requestSystemSummary(fetch, session.signal)
         if (current()) acceptResource('summary', next)
+        else if (force && currentSession()) validateResourceTimestamp('summary', next)
       }
       if (resource === 'inventory') {
         const next = await requestDockerInventory(fetch, session.signal)
         if (current()) acceptResource('inventory', next)
+        else if (force && currentSession()) validateResourceTimestamp('inventory', next)
       }
       if (resource === 'capabilities') {
         const next = await requestCapabilities(fetch, session.signal)
         if (current()) capabilities.value = next
       }
-      if (!current()) return { resource, stale: true }
-      if (resource === 'capabilities') refreshErrors.delete(resource)
+      if (!currentSession() || (!current() && !force)) return { resource, stale: true }
+      if (current() && resource === 'capabilities') refreshErrors.delete(resource)
       return { resource }
     } catch (error) {
-      if (!current() || isAbortError(error)) return { resource, stale: true }
-      if (freshness.get(resource) !== initialSample && isFresh(resource)) return { resource, stale: true }
+      if (!currentSession() || isAbortError(error)) return { resource, stale: true }
+      // 被后一次强刷替代仅撤销写入权，不能吞掉本次操作调用方需要的失败结果。
+      if (!current()) return force ? { resource, error, failed: true } : { resource, stale: true }
+      // SSE 的较新快照不证明操作后强刷成功；仍需保留强刷自身的失败结果。
+      if (!force && freshness.get(resource) !== initialSample && isFresh(resource)) return { resource, stale: true }
       refreshErrors.set(resource, errorCodeFor(error))
       return { resource, error, failed: true }
     } finally {
-      if (current() && pendingRefreshes.get(resource) === session.generation) {
+      if (current()) {
         pendingRefreshes.delete(resource)
-        if (current()) updateRefreshState()
+        updateRefreshState()
       }
     }
   }
@@ -396,9 +406,14 @@ export const useSystemStore = defineStore('system', () => {
     updateRefreshState()
   }
 
-  function acceptResource(resource: 'summary' | 'inventory', data: SystemSummary | DockerInventory): boolean {
+  function validateResourceTimestamp(resource: 'summary' | 'inventory', data: SystemSummary | DockerInventory) {
     const timestamp = snapshotTimestamp(data.collectedAt)
     if (timestamp === null) throw new NcpApiError(resource === 'summary' ? 'SYSTEM_SUMMARY_RESPONSE_INVALID' : 'DOCKER_INVENTORY_RESPONSE_INVALID', '快照采集时间无效。')
+    return timestamp
+  }
+
+  function acceptResource(resource: 'summary' | 'inventory', data: SystemSummary | DockerInventory): boolean {
+    const timestamp = validateResourceTimestamp(resource, data)
     const previous = freshness.get(resource)
     if (previous && timestamp <= previous.timestamp) return false
     freshness.set(resource, { timestamp, receivedAt: performance.now(), ageAtReceipt: Math.max(Date.now() - timestamp, 0) })

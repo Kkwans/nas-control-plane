@@ -1,4 +1,4 @@
-// Package dockerrealtime 管理仅由 Docker SSE 需求驱动的共享快照。
+// Package dockerrealtime 管理 Docker SSE 与强刷新共享的按需清单。
 package dockerrealtime
 
 import (
@@ -14,12 +14,26 @@ import (
 )
 
 const (
-	Interval         = 5 * time.Second
-	SourceTimeout    = 5 * time.Second
-	MaxAge           = 15 * time.Second
-	FutureSkew       = 5 * time.Second
-	MaxSnapshotBytes = 1 << 20
+	Interval          = 5 * time.Second
+	SourceTimeout     = 5 * time.Second
+	RefreshTimeout    = 12 * time.Second
+	MaxRefreshWaiters = 64
+	MaxAge            = 15 * time.Second
+	FutureSkew        = 5 * time.Second
+	MaxSnapshotBytes  = 1 << 20
 )
+
+var (
+	ErrUnavailable  = errors.New("docker realtime unavailable")
+	ErrRefreshLimit = errors.New("docker refresh waiter limit reached")
+)
+
+// 每个等待者只引用一份不可变的轮次结果，不分配 payload 队列。
+type refreshWaiter struct {
+	completed bool
+	inventory *docker.Inventory
+	err       error
+}
 
 type Source interface {
 	CollectDockerInventory(context.Context) (docker.Inventory, error)
@@ -31,22 +45,25 @@ type State struct {
 }
 
 type Collector struct {
-	source           Source
-	mu               sync.Mutex
-	state            State
-	started, stopped bool
-	demand           int
-	generation       uint64
-	cancel           context.CancelFunc
-	wake             chan struct{}
-	done             chan struct{}
+	source            Source
+	mu                sync.Mutex
+	state             State
+	started, stopped  bool
+	demand            int
+	generation        uint64
+	requestedRevision uint64
+	waiters           map[uint64]*refreshWaiter
+	changed           chan struct{}
+	cancel            context.CancelFunc
+	wake              chan struct{}
+	done              chan struct{}
 }
 
 func NewCollector(source Source) (*Collector, error) {
 	if source == nil {
 		return nil, errors.New("docker realtime source is required")
 	}
-	return &Collector{source: source, wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
+	return &Collector{source: source, wake: make(chan struct{}, 1), done: make(chan struct{}), changed: make(chan struct{}), waiters: make(map[uint64]*refreshWaiter)}, nil
 }
 func (c *Collector) Done() <-chan struct{} { return c.done }
 func (c *Collector) signal() {
@@ -61,33 +78,97 @@ func (c *Collector) Acquire(ctx context.Context) (func(), error) {
 	c.mu.Lock()
 	if c.stopped || ctx.Err() != nil {
 		c.mu.Unlock()
-		return nil, errors.New("docker realtime unavailable")
+		return nil, ErrUnavailable
 	}
-	if c.demand == 0 {
-		c.generation++
-		c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
-	}
-	c.demand++
+	c.addDemandLocked()
 	c.mu.Unlock()
 	c.signal()
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
 			c.mu.Lock()
-			c.demand--
-			if c.demand == 0 {
-				c.generation++
-				c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
-				if c.cancel != nil {
-					c.cancel()
-				}
-			}
+			c.removeDemandLocked()
 			c.mu.Unlock()
 			c.signal()
 		})
 	}
 	stop := context.AfterFunc(ctx, release)
 	return func() { stop(); release() }, nil
+}
+
+// Refresh 只接受登记后开始的采集；失败轮次不会用 last-good 冒充成功。
+// 取消只释放自身需求；其他等待者或 SSE 仍需要的源 RPC 保持运行。
+func (c *Collector) Refresh(ctx context.Context) (docker.Inventory, error) {
+	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return docker.Inventory{}, err
+	}
+	if c.stopped {
+		c.mu.Unlock()
+		return docker.Inventory{}, ErrUnavailable
+	}
+	if len(c.waiters) >= MaxRefreshWaiters {
+		c.mu.Unlock()
+		return docker.Inventory{}, ErrRefreshLimit
+	}
+	c.requestedRevision++
+	revision := c.requestedRevision
+	waiter := &refreshWaiter{}
+	c.waiters[revision] = waiter
+	c.addDemandLocked()
+	c.mu.Unlock()
+	c.signal()
+	defer func() {
+		c.mu.Lock()
+		delete(c.waiters, revision)
+		c.removeDemandLocked()
+		c.mu.Unlock()
+		c.signal()
+	}()
+	for {
+		c.mu.Lock()
+		changed := c.changed
+		completed, value, err := waiter.completed, waiter.inventory, waiter.err
+		stopped := c.stopped
+		c.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return docker.Inventory{}, err
+		}
+		if stopped {
+			return docker.Inventory{}, ErrUnavailable
+		}
+		if completed {
+			if err != nil {
+				return docker.Inventory{}, err
+			}
+			return clone(*value), nil
+		}
+		select {
+		case <-ctx.Done():
+			return docker.Inventory{}, ctx.Err()
+		case <-c.done:
+			return docker.Inventory{}, ErrUnavailable
+		case <-changed:
+		}
+	}
+}
+func (c *Collector) addDemandLocked() {
+	if c.demand == 0 {
+		c.generation++
+		c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
+	}
+	c.demand++
+}
+func (c *Collector) removeDemandLocked() {
+	c.demand--
+	if c.demand == 0 {
+		c.generation++
+		c.state.LastErrorCode = "DOCKER_INVENTORY_UNAVAILABLE"
+		if c.cancel != nil {
+			c.cancel()
+		}
+	}
 }
 
 func (c *Collector) Latest() State {
@@ -174,6 +255,7 @@ func (c *Collector) Run(ctx context.Context) error {
 			continue
 		}
 		generation := c.generation
+		revision := c.requestedRevision
 		request, cancel := context.WithTimeout(ctx, SourceTimeout)
 		c.cancel = cancel
 		lastStart = time.Now()
@@ -207,6 +289,18 @@ func (c *Collector) Run(ctx context.Context) error {
 				c.state.Inventory = copied
 				c.state.LastSuccessAt = received
 			}
+			for requested, waiter := range c.waiters {
+				if requested <= revision && !waiter.completed {
+					waiter.completed = true
+					if code == "" {
+						waiter.inventory = copied
+					} else {
+						waiter.err = ErrUnavailable
+					}
+				}
+			}
+			close(c.changed)
+			c.changed = make(chan struct{})
 		}
 		c.mu.Unlock()
 	}

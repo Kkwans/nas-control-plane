@@ -1104,7 +1104,7 @@ paths:
         保留 retry 行和 snapshot 事件，事件 data 为 RealtimeSnapshot JSON；新连接立即发送当前状态。
         summary 与 Docker 只读各自共享缓存，不触发每连接主机/Docker RPC或历史写入。
         Docker仅在有docker scope订阅时由单worker按5秒节拍采集，源RPC预算5秒；冷启动、失败或双年龄过期时省略docker并返回源不可用状态。
-        最后一个Docker订阅释放会取消在途采集与周期工作；GET inventory/services/sites仍独立新鲜读取，可与SSE源调用重叠。
+        最后一个Docker订阅释放会取消在途采集与周期工作；GET inventory/services/sites通过同一采集器的强刷新屏障读取，要求采集开始不早于该刷新请求；最多64个unary等待者，HTTP等待预算12秒，源RPC预算5秒。
         外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
         每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；正在写入可延迟该节拍，Docker采集不阻塞summary或heartbeat。
         每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或所订阅快照 provider 停止会关闭相应流。
@@ -1145,6 +1145,7 @@ paths:
     get:
       operationId: getDockerInventory
       summary: Get Docker Engine, container, and Compose project inventory
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [docker]
       security: [{RootSession: []}]
       responses:
@@ -1857,6 +1858,7 @@ paths:
     get:
       operationId: listServices
       summary: List discovered Compose projects and standalone containers
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [services]
       security: [{RootSession: []}]
       responses:
@@ -1876,6 +1878,7 @@ paths:
     get:
       operationId: listSites
       summary: List automatically discovered NAS websites with editable profiles
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [sites]
       security: [{RootSession: []}]
       responses:

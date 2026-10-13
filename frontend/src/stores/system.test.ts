@@ -94,6 +94,203 @@ describe('useSystemStore.refresh', () => {
     await Promise.all([first, second])
   })
 
+  it('操作后强刷不能被操作前请求满足，普通刷新复用新的请求', async () => {
+    const before = deferred<DockerInventory>()
+    const after = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(before.promise).mockReturnValueOnce(after.promise)
+    const store = useSystemStore()
+    const oldRefresh = store.refresh({ inventory: true })
+    const strongRefresh = store.refresh({ inventory: true, force: true })
+    expect(apiMocks.requestDockerInventory).toHaveBeenCalledTimes(2)
+
+    before.resolve(inventory)
+    expect(await oldRefresh).toEqual({ requested: ['inventory'], succeeded: [], failed: [] })
+    expect(store.inventory).toBeNull()
+    expect(store.isRefreshing).toBe(true)
+    const ordinaryRefresh = store.refresh({ inventory: true })
+    expect(apiMocks.requestDockerInventory).toHaveBeenCalledTimes(2)
+
+    const fresh = nextInventory(1000)
+    after.resolve(fresh)
+    const results = await Promise.all([strongRefresh, ordinaryRefresh])
+    expect(results.every((result) => result.succeeded.includes('inventory'))).toBe(true)
+    expect(store.inventory).toEqual(fresh)
+    expect(store.isRefreshing).toBe(false)
+  })
+
+  it.each(['success', 'failure'])('强刷完成后，旧请求迟到的 %s 不覆盖数据或错误', async (outcome) => {
+    const before = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(before.promise)
+    const store = useSystemStore()
+    const oldRefresh = store.refresh({ inventory: true })
+    await store.refresh({ inventory: true, force: true })
+    if (outcome === 'success') before.resolve(nextInventory(1000))
+    else before.reject(new Error('old failure'))
+    await oldRefresh
+    expect(store.inventory).toEqual(inventory)
+    expect(store.errorCode).toBeNull()
+    expect(store.connectionState).toBe('connected')
+    expect(store.isRefreshing).toBe(false)
+  })
+
+  it('连续操作各自新发强刷，前一次 finally 不释放后一次的刷新状态', async () => {
+    const first = deferred<DockerInventory>()
+    const second = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const store = useSystemStore()
+    const firstRefresh = store.refresh({ inventory: true, force: true })
+    const secondRefresh = store.refresh({ inventory: true, force: true })
+    expect(apiMocks.requestDockerInventory).toHaveBeenCalledTimes(2)
+    first.resolve(inventory)
+    expect((await firstRefresh).succeeded).toEqual(['inventory'])
+    expect(store.isRefreshing).toBe(true)
+    second.resolve(nextInventory(1000))
+    await secondRefresh
+    expect(store.inventory?.collectedAt).toBe(nextInventory(1000).collectedAt)
+    expect(store.isRefreshing).toBe(false)
+  })
+
+  it.each(['pending', 'completed'])('后一次强刷 %s 时，前一次强刷失败仍通知其调用方但不写入展示状态', async (status) => {
+    const first = deferred<DockerInventory>()
+    const second = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const store = useSystemStore()
+    const firstRefresh = store.refresh({ inventory: true, force: true })
+    const secondRefresh = store.refresh({ inventory: true, force: true })
+    if (status === 'completed') {
+      second.resolve(inventory)
+      await secondRefresh
+    }
+    const error = new Error('first operation refresh failed')
+    first.reject(error)
+    expect((await firstRefresh).failed).toEqual([{ resource: 'inventory', error }])
+    expect(store.errorCode).toBeNull()
+    expect(store.isRefreshing).toBe(status === 'pending')
+    if (status === 'pending') {
+      second.resolve(inventory)
+      await secondRefresh
+    }
+    expect(store.inventory).toEqual(inventory)
+    expect(store.connectionState).toBe('connected')
+  })
+
+  it('注销后的强刷失败不再归因于新会话', async () => {
+    const pending = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(pending.promise)
+    const store = useSystemStore()
+    const strongRefresh = store.refresh({ inventory: true, force: true })
+    invalidateSession()
+    store.clear()
+    beginSession()
+    pending.reject(new Error('old session failure'))
+    expect(await strongRefresh).toEqual({ requested: ['inventory'], succeeded: [], failed: [] })
+    expect(store.errorCode).toBeNull()
+  })
+
+  it.each(['invalid', 'future'])('被后一次强刷替代后仍校验 %s 采集时间，不向调用方误报成功', async (timestamp) => {
+    const first = deferred<DockerInventory>()
+    const second = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const store = useSystemStore()
+    const firstRefresh = store.refresh({ inventory: true, force: true })
+    const secondRefresh = store.refresh({ inventory: true, force: true })
+    first.resolve({ ...inventory, collectedAt: timestamp === 'invalid' ? 'invalid' : nextInventory(60_000).collectedAt })
+    expect((await firstRefresh).failed).toEqual([{ resource: 'inventory', error: expect.objectContaining({ code: 'DOCKER_INVENTORY_RESPONSE_INVALID' }) }])
+    expect(store.inventory).toBeNull()
+    expect(store.errorCode).toBeNull()
+    expect(store.isRefreshing).toBe(true)
+    second.resolve(inventory)
+    await secondRefresh
+    expect(store.inventory).toEqual(inventory)
+  })
+
+  it('inventory 强刷不替换其他资源的请求或提前清除全局 busy', async () => {
+    const pendingSummary = deferred<SystemSummary>()
+    apiMocks.requestSystemSummary.mockReturnValueOnce(pendingSummary.promise)
+    const store = useSystemStore()
+    const summaryRefresh = store.refresh({ summary: true })
+    await store.refresh({ inventory: true, force: true })
+    expect(apiMocks.requestSystemSummary).toHaveBeenCalledTimes(1)
+    expect(apiMocks.requestCapabilities).not.toHaveBeenCalled()
+    expect(store.isRefreshing).toBe(true)
+    pendingSummary.resolve(summary)
+    await summaryRefresh
+    expect(store.summary).toEqual(summary)
+    expect(store.isRefreshing).toBe(false)
+  })
+
+  it('强刷失败不会被旧请求的迟到成功清除', async () => {
+    const before = deferred<DockerInventory>()
+    const error = new Error('strong refresh failed')
+    apiMocks.requestDockerInventory.mockReturnValueOnce(before.promise).mockRejectedValueOnce(error)
+    const store = useSystemStore()
+    const oldRefresh = store.refresh({ inventory: true })
+    const result = await store.refresh({ inventory: true, force: true })
+    expect(result.failed).toEqual([{ resource: 'inventory', error }])
+    before.resolve(inventory)
+    await oldRefresh
+    expect(store.inventory).toBeNull()
+    expect(store.errorCode).toBe('NETWORK_UNAVAILABLE')
+  })
+
+  it('强刷保留共享 SSE 和时间门控，不能用旧 HTTP 覆盖更新的推送', async () => {
+    const after = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(after.promise)
+    const store = useSystemStore()
+    store.startRealtime(['docker'])
+    stream().snapshot({ collectedAt: inventory.collectedAt, docker: inventory })
+    const strongRefresh = store.refresh({ force: true })
+    const fresh = nextInventory(1000)
+    stream().snapshot({ collectedAt: fresh.collectedAt, docker: fresh })
+    after.resolve(inventory)
+    await strongRefresh
+    expect(store.inventory).toEqual(fresh)
+    expect(apiMocks.subscribeSystemEvents).toHaveBeenCalledTimes(1)
+    expect(apiMocks.subscribeSystemEvents.mock.results[0]?.value.close).not.toHaveBeenCalled()
+    expect(apiMocks.requestSystemSummary).not.toHaveBeenCalled()
+  })
+
+  it('新 SSE 不能替代强刷自身的失败结果', async () => {
+    const after = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(after.promise)
+    const store = useSystemStore()
+    store.startRealtime(['docker'])
+    const strongRefresh = store.refreshStrict({ inventory: true, force: true })
+    stream().snapshot({ collectedAt: inventory.collectedAt, docker: inventory })
+    after.reject(new Error('post-operation refresh failed'))
+    await expect(strongRefresh).rejects.toBeInstanceOf(RefreshFailureError)
+    expect(store.inventory).toEqual(inventory)
+    expect(store.connectionState).toBe('degraded')
+  })
+
+  it.each(['clear', 'logout'])('%s 隔离全部强刷；旧 finally 不能释放新请求', async (action) => {
+    const before = deferred<DockerInventory>()
+    const after = deferred<DockerInventory>()
+    const next = deferred<DockerInventory>()
+    apiMocks.requestDockerInventory.mockReturnValueOnce(before.promise).mockReturnValueOnce(after.promise).mockReturnValueOnce(next.promise)
+    const store = useSystemStore()
+    const oldRefresh = store.refresh({ inventory: true })
+    const strongRefresh = store.refresh({ inventory: true, force: true })
+    const signal = apiMocks.requestDockerInventory.mock.calls[1]![1] as AbortSignal
+    if (action === 'logout') invalidateSession()
+    store.clear()
+    if (action === 'logout') {
+      expect(signal.aborted).toBe(true)
+      beginSession()
+    }
+    const currentRefresh = store.refresh({ inventory: true })
+    before.resolve(inventory)
+    after.resolve(nextInventory(1000))
+    await Promise.all([oldRefresh, strongRefresh])
+    expect(store.inventory).toBeNull()
+    expect(store.isRefreshing).toBe(true)
+    const fresh = nextInventory(2000)
+    next.resolve(fresh)
+    await currentRefresh
+    expect(store.inventory).toEqual(fresh)
+    expect(store.isRefreshing).toBe(false)
+  })
+
   it('keeps successful data when another requested resource fails', async () => {
     apiMocks.requestDockerInventory.mockRejectedValueOnce(new Error('inventory unavailable'))
 

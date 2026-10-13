@@ -243,7 +243,7 @@ async function performAction(containerId: string, action: ContainerAction) {
   let failure: string | null = null
   try {
     await requestContainerAction(containerId, action)
-    const refreshResult = await systemStore.refresh({ inventory: true })
+    const refreshResult = await systemStore.refresh({ inventory: true, force: true })
     if (refreshResult.failed.length) ElMessage.warning(`容器已${dockerActionLabel(action)}，但状态刷新失败，请手动重新加载。`)
     else ElMessage.success(`容器已${dockerActionLabel(action)}`)
   } catch (error) {
@@ -311,7 +311,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
       ElMessage.success(`项目“${project.name}”已${dockerActionLabel(action)}`)
     }
-    const refreshResult = await systemStore.refresh({ inventory: true })
+    const refreshResult = await systemStore.refresh({ inventory: true, force: true })
     if (refreshResult.failed.length) actionError.value = '项目操作已完成，但状态刷新失败，请手动重新加载。'
   } catch (error) {
     actionError.value = errorMessage(error, `项目${dockerActionLabel(action)}失败，请稍后重试。`)
@@ -337,14 +337,14 @@ async function confirmDeleteProject(project: DockerProject) {
   try {
     await deleteDockerProject(project)
     if (selectedProject.value?.id === project.id) await updateSelectedProject(null)
-    const refreshResult = await systemStore.refresh({ inventory: true })
+    const refreshResult = await systemStore.refresh({ inventory: true, force: true })
     if (refreshResult.failed.length) ElMessage.warning(`项目“${project.name}”已删除，但状态刷新失败，请手动重新加载。`)
     else ElMessage.success(`项目“${project.name}”已删除；镜像、卷和配置文件均已保留。`)
   } catch (error) {
     const message = errorMessage(error, '项目删除失败，未确认的资源不会继续删除。')
     actionError.value = message
     ElMessage.error(message)
-    await systemStore.refresh({ inventory: true })
+    await systemStore.refresh({ inventory: true, force: true })
   } finally {
     projectDeletePending.value = null
   }

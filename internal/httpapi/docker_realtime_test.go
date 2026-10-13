@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -18,12 +17,14 @@ import (
 
 // 所有测试仅使用内存 provider、Agent spy 和 HTTP writer，不连接真实服务。
 type dockerRealtimeSnapshotProvider struct {
-	state    dockerrealtime.State
-	done     chan struct{}
-	acquired chan context.Context
-	reads    atomic.Int32
-	acquires atomic.Int32
-	releases atomic.Int32
+	state     dockerrealtime.State
+	done      chan struct{}
+	acquired  chan context.Context
+	refresh   func(context.Context) (docker.Inventory, error)
+	reads     atomic.Int32
+	acquires  atomic.Int32
+	releases  atomic.Int32
+	refreshes atomic.Int32
 }
 
 func dockerRealtimeProvider(at time.Time) *dockerRealtimeSnapshotProvider {
@@ -40,6 +41,13 @@ func (p *dockerRealtimeSnapshotProvider) Acquire(ctx context.Context) (func(), e
 func (p *dockerRealtimeSnapshotProvider) Latest() dockerrealtime.State {
 	p.reads.Add(1)
 	return p.state
+}
+func (p *dockerRealtimeSnapshotProvider) Refresh(ctx context.Context) (docker.Inventory, error) {
+	p.refreshes.Add(1)
+	if p.refresh != nil {
+		return p.refresh(ctx)
+	}
+	return docker.Inventory{}, dockerrealtime.ErrUnavailable
 }
 func (p *dockerRealtimeSnapshotProvider) Done() <-chan struct{} { return p.done }
 
@@ -95,7 +103,7 @@ func TestDockerRealtimeCachedSnapshotDoesNotBlockSummaryOrHeartbeat(t *testing.T
 	}
 	cancel()
 	metricsAwaitDone(t, done)
-	if agent.dockerCalls.Load() != 0 || provider.reads.Load() != 2 || provider.acquires.Load() != 1 || provider.releases.Load() != 1 {
+	if agent.dockerCalls.Load() != 0 || provider.refreshes.Load() != 0 || provider.reads.Load() != 2 || provider.acquires.Load() != 1 || provider.releases.Load() != 1 {
 		t.Fatal("SSE did not use one demand lease and cached reads")
 	}
 	if !poll.stopped.Load() || !heartbeat.stopped.Load() {
@@ -115,7 +123,7 @@ func TestDockerRealtimeScopeDemandAndCancellation(t *testing.T) {
 			writer.frame(t)
 			snapshot := writer.snapshot(t)
 			want := boolCount(strings.Contains(query, "scope=docker"))
-			if provider.acquires.Load() != want || provider.reads.Load() != want || (snapshot.Docker != nil) != (want == 1) {
+			if provider.acquires.Load() != want || provider.refreshes.Load() != 0 || provider.reads.Load() != want || (snapshot.Docker != nil) != (want == 1) {
 				t.Fatalf("scope %q acquired or read wrong resource", query)
 			}
 			var acquiredContext context.Context
@@ -149,7 +157,7 @@ func TestDockerRealtimeRejectedSetupDoesNotAcquireDemand(t *testing.T) {
 				request = request.WithContext(ctx)
 			}
 			api.systemEvents(httptest.NewRecorder(), request)
-			if provider.acquires.Load() != 0 || provider.reads.Load() != 0 || provider.releases.Load() != 0 {
+			if provider.acquires.Load() != 0 || provider.refreshes.Load() != 0 || provider.reads.Load() != 0 || provider.releases.Load() != 0 {
 				t.Fatal("rejected stream touched Docker provider")
 			}
 			expected := int32(0)
@@ -189,15 +197,17 @@ func TestDockerRealtimeMixedScopeStopsWhenEitherOwnerStops(t *testing.T) {
 	}
 }
 
-func TestDockerRealtimeGETInventoryStillUsesFreshAgentRPC(t *testing.T) {
+func TestDockerRealtimeGETInventoryUsesRefreshBarrier(t *testing.T) {
 	now := time.Now()
 	provider := dockerRealtimeProvider(now.Add(-time.Hour))
-	agent := &metricsAgentSpy{docker: func(ctx context.Context) (docker.Inventory, error) {
-		if _, ok := ctx.Deadline(); !ok {
-			return docker.Inventory{}, errors.New("direct GET must set RPC deadline")
+	provider.refresh = func(ctx context.Context) (docker.Inventory, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > dockerrealtime.RefreshTimeout || time.Until(deadline) < dockerrealtime.RefreshTimeout-time.Second {
+			t.Fatalf("GET refresh deadline = %v, set = %t", deadline, ok)
 		}
-		return docker.Inventory{CollectedAt: now, Engine: docker.EngineInfo{ServerVersion: "fresh-direct"}}, nil
-	}}
+		return docker.Inventory{CollectedAt: now, Engine: docker.EngineInfo{ServerVersion: "fresh-refresh"}}, nil
+	}
+	agent := &metricsAgentSpy{}
 	api := &handler{dockerSnapshots: provider, agent: agent, agentTimeout: time.Second}
 	response := httptest.NewRecorder()
 	api.dockerInventory(response, httptest.NewRequest(http.MethodGet, "/api/v1/docker/inventory", nil))
@@ -205,11 +215,11 @@ func TestDockerRealtimeGETInventoryStillUsesFreshAgentRPC(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != http.StatusOK || inventory.Engine.ServerVersion != "fresh-direct" || !inventory.CollectedAt.Equal(now) {
+	if response.Code != http.StatusOK || inventory.Engine.ServerVersion != "fresh-refresh" || !inventory.CollectedAt.Equal(now) {
 		t.Fatalf("GET response=%d %s", response.Code, response.Body.String())
 	}
-	if agent.dockerCalls.Load() != 1 || provider.reads.Load() != 0 || provider.acquires.Load() != 0 {
-		t.Fatal("direct GET unexpectedly used realtime cache")
+	if agent.dockerCalls.Load() != 0 || provider.refreshes.Load() != 1 || provider.reads.Load() != 0 || provider.acquires.Load() != 0 {
+		t.Fatal("GET did not use the shared refresh barrier exclusively")
 	}
 }
 
@@ -262,7 +272,7 @@ func TestDockerRealtimeFreshnessAndErrorIsolation(t *testing.T) {
 			if snapshot.Summary == nil || (snapshot.Docker != nil) != tc.available || slices.Contains(snapshot.Errors, "DOCKER_INVENTORY_UNAVAILABLE") == tc.available {
 				t.Fatalf("snapshot=%#v", snapshot)
 			}
-			if agent.dockerCalls.Load() != 0 || agent.summaryCalls.Load() != 0 {
+			if agent.dockerCalls.Load() != 0 || agent.summaryCalls.Load() != 0 || provider.refreshes.Load() != 0 {
 				t.Fatal("invalid cache caused direct Agent fallback")
 			}
 			if provider.acquires.Load() != 1 || provider.releases.Load() != 1 {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -38,22 +39,30 @@ func TestSystemSummaryUsesSharedRootAgentSnapshot(t *testing.T) {
 	}
 }
 
-func TestDockerInventoryAndServicesShareAgentInventory(t *testing.T) {
+func TestDockerInventoryAndServicesShareRefreshInventory(t *testing.T) {
 	collectedAt := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	agent := &fakeAgentClient{inventory: docker.Inventory{
+	refreshed := docker.Inventory{
 		CollectedAt: collectedAt,
 		Engine:      docker.EngineInfo{ContainersRunning: 2},
 		Containers: []docker.InventoryContainer{{
 			ID: "container-1", Name: "ncp-server", Labels: map[string]string{"private": "do-not-send"},
 		}},
 		Projects: []docker.Project{{ID: "compose:ncp", Name: "ncp", Kind: docker.ProjectKindCompose, ContainerCount: 1, RunningCount: 1, State: "running"}},
-	}}
-	handler := NewHandler(Config{Agent: agent, AgentTimeout: time.Second, RequestID: func() string { return "req-docker" }})
+	}
+	provider := dockerRealtimeProvider(collectedAt)
+	provider.refresh = func(ctx context.Context) (docker.Inventory, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("GET refresh must have a deadline")
+		}
+		return refreshed, nil
+	}
+	agent := &metricsAgentSpy{}
+	handler := NewHandler(Config{Agent: agent, DockerSnapshots: provider, AgentTimeout: time.Second, RequestID: func() string { return "req-docker" }})
 
 	inventoryResponse := httptest.NewRecorder()
 	handler.ServeHTTP(inventoryResponse, httptest.NewRequest(http.MethodGet, "/api/v1/docker/inventory", nil))
-	if inventoryResponse.Code != http.StatusOK || !agent.deadlineObserved {
-		t.Fatalf("inventory status = %d, deadlineObserved = %t", inventoryResponse.Code, agent.deadlineObserved)
+	if inventoryResponse.Code != http.StatusOK {
+		t.Fatalf("inventory status = %d", inventoryResponse.Code)
 	}
 	var inventory map[string]any
 	if err := json.NewDecoder(inventoryResponse.Body).Decode(&inventory); err != nil {
@@ -75,6 +84,9 @@ func TestDockerInventoryAndServicesShareAgentInventory(t *testing.T) {
 	}
 	if services.CollectedAt != collectedAt || len(services.Services) != 1 || services.Services[0].Name != "ncp" {
 		t.Fatalf("services = %#v", services)
+	}
+	if provider.refreshes.Load() != 2 || provider.reads.Load() != 0 || agent.dockerCalls.Load() != 0 {
+		t.Fatal("inventory and services must both use the refresh barrier")
 	}
 }
 

@@ -55,7 +55,7 @@ function openCreateDrawer(image: DockerImageSummary) {
 }
 
 async function handleContainerCreated() {
-  const refreshResult = await systemStore.refresh({ inventory: true })
+  const refreshResult = await systemStore.refresh({ inventory: true, force: true })
   if (refreshResult.failed.length) {
     ElMessage.warning('容器已创建，但状态刷新失败，请手动重新加载。')
   }
