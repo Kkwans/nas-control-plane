@@ -138,3 +138,12 @@
 - [f9c3fc3 CI 38387732185](https://github.com/Kkwans/nas-control-plane/actions/runs/38387732185)完整通过：355项单元、148项Chromium，以及Go与Compose检查。两项移动传感器下拉/搜索测试和七项SQL截图场景已实际执行。发布任务保持跳过。
 - 监控最终artifact中的四张320/390px下拉/搜索图已实际打开：长名称在限定宽度内换行、原始标签文字未解释为HTML、选中标记和第八项上限可见；既有28张监控与6张总览图与上一已审查轮RGB一致。
 - SQL结果、刷新失败提示、影响行数未知和确认换行在实际图中可读，但部分工作台元素截图被sticky面包屑覆盖顶部；现有产物缺滚动坐标，尚不能断定为产品控件不可达。正在规范化捕获并补视口/坐标/命中证据，不以CI通过替代视觉闭环。
+
+
+## 11:38 UTC 编辑基线与 SQL 视觉闭环
+
+- 47c078c已推送：Compose磁盘原始hash、必填基线、checked-only RPC、锁内两次写前核对和命令成功后核对；界面复读目标与冻结提交相等才推进hash，保留后续dirty编辑。三层独立审查通过；审查补齐revision存储期间取消检查及两种持久化交错，已提交revision不伪称撤销。
+- [47c078c CI 38390439962](https://github.com/Kkwans/nas-control-plane/actions/runs/38390439962)全部必需检查成功：420项前端单元、151项Chromium，Go及Compose检查通过。新兼容/冲突验证使用fake/tempfile/SQLite/bufconn，实际Compose E2E为浏览器mock API。未执行真实NAS部署。
+- [c4f4473 CI 38389527278](https://github.com/Kkwans/nas-control-plane/actions/runs/38389527278)通过，SQL截图规范化未改产品CSS/API。实际打开29张SQL图并核对9份JSON，135个工具栏命中点全部有效；控件在sticky页头下方、回顶全页与拍后scrollY为0。先前截图验收缺口在这些状态下关闭，[完整视觉证据](NCP-2026-10-13-sql-visual.md)保留成因边界。
+- 少数即时采样的补全菜单坐标落后滚动一帧，实际PNG位置正确；不把该非阻塞坐标限制隐藏成全部动态坐标稳定。
+- 下一片M08-B正在实现活动流会话租约、提交后撤销/到期、WS连接关闭和logs/jobs SSE写入预算；不宣称全部容器exec/PTY子进程已回收。

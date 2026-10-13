@@ -1,5 +1,9 @@
 # NCP SQL 实际截图复核（只读）
 
+## 最新结论（c4f4473，2026-10-13 11:28 UTC）
+
+已完成新产物的 29 张 SQL PNG 原始像素复核与 9 份 capture-state JSON 校验。先前的移动工具栏 sticky-header 遮挡**验收证据缺口已关闭**：规范全页图与主动滚动视口图均完整显示模式标签、选择框和执行按钮；所有 9 种捕获状态的 135 个控制器命中采样均通过。此结论是截图与测试证据闭环，不表示修复了已证实的产品 CSS 缺陷。完整新证据及剩余边界见本文末尾；下方保留原 f9c3fc3 发现与中间审查，供追溯。
+
 复核时间：2026-10-13 UTC。范围：M14 B1 SQL 结果模式与执行反馈；实际打开并查看 11 张 CI PNG 原始像素，并对照该提交的 E2E、组件及样式源码。
 
 ## 结论
@@ -105,3 +109,81 @@
 
 - `/workspace/scratch/a2c31a226a28/ncp-artifacts/ui-f9c3fc3/database-query-results-返回行、未知影响及刷新失败在-390px-18px-字号下保持可读-chromium/ui-captures/fixture-sql-rows-unknown-390-font-18.png`
   - 366 × 1024px；SHA-256 `0f8b32c75d1b298043d21e52a4b7324b8639aea2a48bc0e7422cb5d1d3c73cd3`
+
+## 后续捕获 helper 独立源码复核（2026-10-13 11:18 UTC）
+
+已审阅冻结后的 `frontend/e2e/database-query-results.spec.ts` 工作树版本，文件 SHA-256 `572437843278ae01f6f518926f15a971b4d52b9ee1113fd35e815af67c50d192`。结论：源码方案通过，无阻塞发现；尚不代表新截图通过。
+
+- 捕获真实执行后的 viewport，再将工具栏显式放在实测 sticky-header 底部下方 12px 目标位置，最后从 scrollY=0 捕获规范全页图。
+- 请求滚动范围做 0/max 钳制并取整，轮询到达目标，避免分数像素差异导致无关失败。
+- label/select/execute 各做中心及四个内侧命中采样，同时要求视口边界和 header 下方位置。
+- 保存 initial/scrolled/canonical/afterCapture 的滚动坐标、几何、焦点、编辑器 ARIA、自动完成菜单状态；文件名 `*-capture-state.json` 与现有 CI artifact 上传规则一致。
+- 无 blur/focus/Escape、遮盖或隐藏 topbar、删除自动完成菜单、产品 CSS 修改。真实 query 次数、返回内容、模式、取消测试断言所在的全部 test body 与原 HEAD 逐字节一致。
+- 本复核独立完成：严格 TypeScript 编译、单文件 ESLint、7 项测试发现、diff 空白检查均通过。未启动浏览器/服务器。
+- 后续需新提交 CI 产物验证真实 post-execution 状态、规范全页图与有意滚动态控件命中，旧 artifact 的上述结论保持不变。
+
+## c4f4473 实际 CI 产物复验与闭环
+
+### 完整来源链
+
+- `76a461c376c702e7b30d5dd18627ccf943a93235`：M14 B1 SQL 产品实现。
+- `f9c3fc34dba7a09520098380d264643832b07f40`：[原 CI 38387732185](https://github.com/Kkwans/nas-control-plane/actions/runs/38387732185) 与 artifact 11806559065，产生上述初次证据缺口。
+- `d982b50`：中间文档提交。
+- `c4f447300c083acc56f177c4b067dad609c052d4`：只修改 SQL E2E 捕获 helper 与复核文档，没有 SQL 产品/样式变化。helper 文件 SHA-256 与独立审查冻结版完全一致：`572437843278ae01f6f518926f15a971b4d52b9ee1113fd35e815af67c50d192`。
+- [新 CI 38389527278](https://github.com/Kkwans/nas-control-plane/actions/runs/38389527278)，attempt 1，2026-10-13T11:20:22Z 开始，11:23:17Z 完成，`completed / success`。独立读取 run、jobs、Frontend 115269572829 日志：Frontend、Go、Compose 均成功；355 单元测试、148 E2E 通过；共享 ConfirmDangerDialog 5 项单测通过；发布任务跳过。
+- [新 artifact 11807841631](https://github.com/Kkwans/nas-control-plane/actions/runs/38389527278/artifacts/11807841631)：`ncp-fixture-ui-c4f447300c083acc56f177c4b067dad609c052d4-1`，13,260,416 bytes，SHA-256 `8f0b06028cbacbee5816bc116b7cb1189081683688f57e05d6805ff4f73e9234`。下载后独立比对大小与 digest，并检查 CRC、路径穿越、重复文件名、符号链接、PNG/JSON 类型与展开大小限制后，解包到新目录。
+- 解包目录 `/workspace/scratch/a2c31a226a28/ncp-artifacts/ui-c4f4473/`：166 文件（153 PNG、13 JSON），展开 14,245,515 bytes。其中 SQL 集合为 29 PNG、9 JSON。
+- 所有 38 个 SQL 文件的确切路径、字节数、SHA-256，以及 PNG 尺寸，记录在仓库外 `/workspace/scratch/a2c31a226a28/ncp-artifacts/sql-review-c4f4473-manifest.json`。
+
+### 实际打开与验证范围
+
+实际打开全部 29 PNG：8 个移动结果状态 × 3 种捕获（执行后视口、主动滚动视口、回顶规范全页）=24 张；desktop legacy 对应 3 张；320/390px 确认框 2 张。9 份 JSON 均独立读取校验。
+
+- 移动端：320/390px，15/18px 字号，`rows-unknown` 与 `refresh-failed` 两种状态。控件文字完整、原 SQL、模式说明、未知影响行数、返回 `fixture-updated` 及橙色刷新失败警告仍符合 fixture。
+- 18px 字号结果表/警告在部分 900px 视口图底部自然延续到视口外；规范全页图确认完整内容。此处是正常垂直页面长度，不把单个视口外内容误称为裁切缺陷。
+- legacy：1280px/18px，自动模式、执行成功及未知影响行数可读，未出现「影响 7 行」。
+- 两个确认框继续保持注释后的实际换行和 80 字符长 token 的换行，取消与确认执行按钮完整。未见 SQL 快照内容错误。
+
+### 几何与控制器命中证据
+
+9 份 JSON 的 initial scrollY 均为 0；canonicalState 与 afterCaptureState 的 scrollY 也均为 0。按宽度/字号读取的主动滚动状态如下，两个结果状态分别独立验证，并非共用推断：
+
+- 320/390px，15px 字号：scrollY=317；sticky header bottom=58；toolbar top=69.671875；select top=107.109375、height=42；execute top=158.109375、height=42；模式标签 top=120.015625。工具栏距 header 11.671875px，取整滚动与目标 12px 的微差正常。
+- 320/390px，18px 字号：scrollY=338；header bottom=58；toolbar top=70.1875；select top=111.328125、height=42；execute top=162.328125、height=42；模式标签 top=122.609375。
+- desktop legacy：scrollY=220；header bottom=64；toolbar top=76；select 与 execute top=83、height=42；标签 top=94.28125。
+- 所有状态 header top=0。每份 JSON 中模式标签、select、execute 都在视口水平边界内，顶部不低于 header bottom、底部不超过 viewport height；每个控件中心与四个内侧点都命中自身/子元素。9 × 3 × 5 = 135 个采样全部为 `unobscured:true`（其中移动端 120 个）。
+- 对照实际 scrolled-viewport PNG，可见上述 toolbar 与 header 间距，未再出现旧元素裁图中 header 压在模式选择器顶部的情况。canonical full-page PNG 同样完整显示工具栏。
+
+### 焦点与自动完成菜单的真实状态
+
+所有 9 份 JSON 的 initial/scrolled/canonical/afterCapture 焦点描述均为 BODY，编辑器 focused=false；代码没有主动 blur/focus/Escape。8 个移动状态的自动完成列表在四种记录中都保持 visible=true、两个选项 `value / values`、选中 `value`；desktop legacy 没有该菜单。实际 PNG 中菜单同样保留，未通过隐藏菜单换取通过。
+
+实际像素中的菜单位置随文档滚动，320px 列表贴到右视口边缘但内容可读，390px 列表在视口内；未遮住模式选择或执行按钮，也未挡住结果。
+
+**小范围诊断记录限制：** 某些 `scrolledState` 或 `canonicalState` 的自动完成菜单 bounding box 是滚动后的立即采样，存在上一帧位置，不能把这些菜单坐标当作与 PNG 同一帧的精确位置。例如 `fixture-sql-refresh-failed-320-font-18-capture-state.json` 的 scrolledState 菜单 y=810.421875，但对应滚动视口 PNG 的菜单位于约 y=472；afterCaptureState 回到 y=810.421875，与规范全页图相符。类似现象出现在 320/15、390/15 刷新失败及 390/18 返回行的部分菜单记录。控件自身坐标/命中及实际 PNG 一致，不影响本次工具栏遮挡闭环；若以后要求菜单逐帧坐标精确，可等待其布局稳定后再记录。这里不声称诊断 JSON 每个异步菜单框均为截图帧精确坐标，也不据此推断产品菜单 bug。
+
+### 新文件定位
+
+根目录为 `/workspace/scratch/a2c31a226a28/ncp-artifacts/ui-c4f4473/`。
+
+四个移动目录分别为：
+
+- `database-query-results-返回行、未知影响及刷新失败在-320px-15px-字号下保持可读-chromium/ui-captures/`
+- `database-query-results-返回行、未知影响及刷新失败在-320px-18px-字号下保持可读-chromium/ui-captures/`
+- `database-query-results-返回行、未知影响及刷新失败在-390px-15px-字号下保持可读-chromium/ui-captures/`
+- `database-query-results-返回行、未知影响及刷新失败在-390px-18px-字号下保持可读-chromium/ui-captures/`
+
+每个目录包含两个状态 `fixture-sql-rows-unknown-W-font-F`、`fixture-sql-refresh-failed-W-font-F`；W/F 为该目录的宽度/字号。每个状态四个文件后缀为 `.png`、`-post-execution-viewport.png`、`-scrolled-viewport.png`、`-capture-state.json`。
+
+桌面目录 `database-query-results-旧响应缺少计数标志时显示未知，自动模式不发送-resultMode-chromium/ui-captures/`，前缀 `fixture-sql-legacy-affected-unknown`，同样四种后缀。
+
+确认图：
+
+- `database-query-results-SQL-确认预览在-320px-大字号下保留注释后的换行-chromium/ui-captures/fixture-sql-confirmation-newline-320-font-18.png`
+- `database-query-results-SQL-确认预览在-390px-大字号下保留注释后的换行-chromium/ui-captures/fixture-sql-confirmation-newline-390-font-18.png`
+
+### 本轮最终验收范围
+
+先前「无法从被遮挡元素截图确认移动工具栏完整可见」的证据缺口已关闭。结论基于新视口/规范全页实际像素、真实 header/toolbar 坐标、控制器 hit-test、未削弱的交互与请求计数断言及同 SHA 成功 CI。没有修改产品 CSS，没有必要声称旧图证明的是真实永久不可访问缺陷。
+
+仍不扩展为：真实 NAS/数据库验收、所有滚动位置/全部屏幕/所有状态下无任何问题、所有共享旧危险弹窗的像素回归，或 SQL 图与历史基线逐像素相等。首次报告说明的这些边界继续有效。没有启动本地浏览器/服务器或接触 NAS/生产。
