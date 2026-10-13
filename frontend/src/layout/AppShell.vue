@@ -39,6 +39,8 @@ const sidebar = ref<HTMLElement | null>(null)
 const closeButton = ref<HTMLButtonElement | null>(null)
 let disposed = false
 let focusRevision = 0
+let lastFocusedElement: Element | null = null
+let focusEntryRevision = 0
 const sidebarCollapsed = ref(props.sidebarDefault === 'collapsed')
 const menuButton = ref<HTMLButtonElement | null>(null)
 
@@ -124,17 +126,36 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function onFocusIn(event: FocusEvent) {
+  ++focusEntryRevision
+  lastFocusedElement = event.target instanceof Element ? event.target : null
   if (mobileNavigationOpen.value && !sidebar.value?.contains(event.target as Node)) closeButton.value?.focus()
 }
 
+function onFocusOut(event: FocusEvent) {
+  // CSS 可在 change 回调前隐藏元素并触发 blur。只为尚未处理的断点变化
+  // 保留焦点记录；普通 blur 必须清除，避免后续 resize 抢回旧焦点。
+  if (event.target === lastFocusedElement && mobileViewport.matches === isMobile.value) lastFocusedElement = null
+}
+
 function onViewportChange(event: MediaQueryListEvent) {
-  const active = document.activeElement
+  // 快速往返断点时，丢弃已经被实际 viewport 超越的排队事件。
+  if (event.matches !== mobileViewport.matches || event.matches === isMobile.value) return
+  const current = document.activeElement
+  const active = (!current || current === document.body) && lastFocusedElement?.isConnected
+    ? lastFocusedElement
+    : current
   const focusWillHide = event.matches
     ? sidebar.value?.contains(active)
     : active === closeButton.value || active === menuButton.value
   isMobile.value = event.matches
   setMobileNavigation(false)
-  if (focusWillHide) focusAfterRender(() => event.matches ? menuButton.value : document.getElementById('app-main'))
+  lastFocusedElement = null
+  const entryRevision = focusEntryRevision
+  if (focusWillHide) focusAfterRender(() => {
+    // nextTick 前若用户/页面已聚焦新目标，尊重新焦点而非覆盖它。
+    if (focusEntryRevision !== entryRevision) return null
+    return event.matches ? menuButton.value : document.getElementById('app-main')
+  })
 }
 
 function onNavigationClick(event: MouseEvent) {
@@ -157,6 +178,7 @@ watch(() => props.sidebarDefault, (value) => { sidebarCollapsed.value = value ==
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('focusin', onFocusIn)
+  window.addEventListener('focusout', onFocusOut)
   mobileViewport.addEventListener('change', onViewportChange)
 })
 onBeforeUnmount(() => {
@@ -164,6 +186,8 @@ onBeforeUnmount(() => {
   ++focusRevision
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('focusin', onFocusIn)
+  window.removeEventListener('focusout', onFocusOut)
+  lastFocusedElement = null
   mobileViewport.removeEventListener('change', onViewportChange)
   document.body.classList.remove('mobile-navigation-open')
 })
