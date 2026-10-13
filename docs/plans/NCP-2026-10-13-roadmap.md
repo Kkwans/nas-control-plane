@@ -31,7 +31,7 @@
 |---|---|---|---|---|
 | M00 | P0 接手与持续CI | 保留基线，审计与计划；只增加开发分支push CI，不触发release | 文档可追溯，分支CI实际运行，工具限制明确 | 已推送f451fe2，CI通过 |
 | M01 | P0 Job快照隔离 | registry锁内深复制Layers及指针字段，返回值/持久化不持有内部可变对象 | 并发progress/get/list/JSON测试+race，无别名写回 | 已推送192fed6，CI通过 |
-| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 已推送32b2a47，响应测试/CI通过，浏览器脚本行为待验收 |
+| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 已推送32b2a47，响应测试/CI通过；新增真实上传读取契约与恶意SVG正对照浏览器测试，执行待CI |
 | M03 | P1 Compose前端事务 | project/path/session/revision绑定；提交与确认冻结payload；保存期间新编辑仍dirty | 延迟保存、切项目、关闭、编辑后迟到校验、重复确认回归 | 已推送d014705；后代f06479f完整CI通过 |
 | M04 | P1 数据库连接隔离 | source变化清空敏感草稿；旧请求无权更新新页面；发现/缺失/错误分态 | A慢B快、卸载、失败重试和深链验证 | 已推送c2ee5ba，聚焦测试与CI通过 |
 | M05 | P1 Docker/日志请求隔离 | 详情latest-wins；日志query/cursor/follow/busy同一代次 | A/B详情、筛选中加载更多、迟到实时/历史合并回归 | 已推送bfbe091；f06479f修正可见点击目标，CI全部通过 |

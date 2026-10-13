@@ -3,7 +3,10 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,6 +118,90 @@ func TestProxySiteIconPolicyForSVGAndRaster(t *testing.T) {
 				t.Fatal("proxy response changed")
 			}
 			assertIconPolicy(t, res)
+		})
+	}
+}
+
+func (s *iconSecurityStore) UpsertSiteProfile(_ context.Context, profile controlstore.SiteProfile) (controlstore.SiteProfile, error) {
+	s.profile = profile
+	return profile, nil
+}
+
+// Chromium 重放此契约；这里使用真实上传/读取 handler 验证契约，不启动网络服务。
+func TestUploadedSiteIconMatchesBrowserSecurityContract(t *testing.T) {
+	var fixture struct {
+		Headers   map[string]string `json:"headers"`
+		SVG       string            `json:"svg"`
+		PNGBase64 string            `json:"pngBase64"`
+	}
+	raw, err := os.ReadFile("../../frontend/e2e/fixtures/site-icon-security.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	png, err := base64.StdEncoding.DecodeString(fixture.PNGBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, contentType string
+		body              []byte
+	}{
+		{"svg", "image/svg+xml", []byte(fixture.SVG)},
+		{"png", "image/png", png},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &iconSecurityStore{profile: controlstore.SiteProfile{ProjectID: "fixture"}}
+			api := &handler{siteAssetsDirectory: t.TempDir(), controlStore: store}
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			part, err := writer.CreateFormFile("icon", "fixture."+tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := part.Write(tc.body); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			routeRequest := func(method string, body io.Reader) *http.Request {
+				req := httptest.NewRequest(method, "http://ncp.test/api/v1/sites/fixture/icon", body)
+				rc := chi.NewRouteContext()
+				rc.URLParams.Add("siteID", "fixture")
+				return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rc))
+			}
+			upload := routeRequest(http.MethodPost, &body)
+			upload.Header.Set("Content-Type", writer.FormDataContentType())
+			uploaded := httptest.NewRecorder()
+			api.uploadSiteIcon(uploaded, upload)
+			if uploaded.Code != http.StatusOK {
+				t.Fatalf("upload status=%d body=%s", uploaded.Code, uploaded.Body.String())
+			}
+			if !strings.HasSuffix(store.profile.LocalIconName, "."+tc.name) {
+				t.Fatalf("stored icon=%q", store.profile.LocalIconName)
+			}
+			res := httptest.NewRecorder()
+			api.siteIcon(res, routeRequest(http.MethodGet, nil))
+			if res.Code != http.StatusOK || !bytes.Equal(res.Body.Bytes(), tc.body) {
+				t.Fatal("uploaded icon bytes changed")
+			}
+			if got := res.Header().Get("Content-Type"); got != tc.contentType {
+				t.Fatalf("content type=%q", got)
+			}
+			assertIconPolicy(t, res)
+			for key, want := range fixture.Headers {
+				if got := res.Header().Get(key); got != want {
+					t.Fatalf("browser contract %s=%q, handler=%q", key, want, got)
+				}
+			}
+			for _, key := range []string{"Content-Security-Policy", "X-Content-Type-Options", "Cache-Control"} {
+				if fixture.Headers[key] == "" {
+					t.Fatalf("browser contract missing %s", key)
+				}
+			}
 		})
 	}
 }

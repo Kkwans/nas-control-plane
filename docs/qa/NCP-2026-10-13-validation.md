@@ -179,3 +179,10 @@
 - [6cb1688 CI 38397142273](https://github.com/Kkwans/nas-control-plane/actions/runs/38397142273)完整通过，闭环容器终端C1隔离验证。保留预握手、主机PTY和后代进程边界。
 - M13-C0十个代码/测试文件冻结，独立复核无阻塞；Docker SSE按需单worker、5秒最小启动间隔及RPC预算、深复制/容量/双年龄状态、最后需求取消和旧代结果拒绝。SSE只读缓存不等待Docker，GET仍新鲜直读且可与SSE并行；事件重连对账尚未交付。
 - 四包精确TestDockerRealtime测试及race三轮、独立race与六项既有纯fake SSE名额/慢读/心跳/写预算回归通过；全仓仅编译、受影响包vet、OpenAPI与diff检查通过。内存RPC检查1MiB JSON/3MiB protobuf完整清单预算，不改变全局gRPC上限；无真实Docker/NAS采集。
+
+
+## 12:43 UTC 图标隔离验证补齐
+
+- M02增加真实上传/读取handler的共享契约回归，核对恶意SVG与PNG原字节、内容类型、CSP和nosniff等响应；使用recorder/tempdir，不启动HTTP服务。
+- 三项Chromium用例分别验证独立文档脚本/onload阻止、iframe不透明源隔离及SVG/PNG解码与绿色像素兼容；同一未保护SVG正对照必须实际执行。Go独立固定CSP断言防止fixture与handler一同弱化。
+- 精确Go测试、ESLint、严格TypeScript及Playwright三项发现、独立审查和diff检查通过；审查删去了图片宿主上无意义的空属性断言。真实浏览器执行仍待分支CI，不将路由fixture重放描述为真实后端网络或NAS部署验证。
