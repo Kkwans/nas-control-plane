@@ -72,7 +72,8 @@ test('持久化历史不会被 5 秒实时尾点或不完整 summary 改写', as
   await expect(page.locator('.topbar .connection-state')).toContainText('部分指标不可用')
   await expect(page.getByText('18.0%', { exact: true })).toBeVisible()
   expect(requests).toBe(1)
-  await expect(page.getByText('服务端每分钟记录首个有效样本；此处仅展示已保存的历史，点击刷新读取最新记录')).toBeVisible()
+  await expect(page.getByText('当前资源提示独立评估；历史图表每分钟记录首个有效样本，时间范围仅作用于历史', { exact: true })).toBeVisible()
+  await expect(page.locator('.monitor-history-note')).toContainText('折线空白表示缺少可用样本')
   await capture(page, testInfo, 'monitoring-persisted-only')
 })
 
