@@ -412,7 +412,12 @@ export async function readComposeConfig(
     isComposeProjectConfig,
     fetcher,
     'COMPOSE_CONFIG_RESPONSE_INVALID',
-  )
+  ).catch((caught: unknown) => {
+    if (caught instanceof NcpApiError && caught.code === 'COMPOSE_CONFIG_RESPONSE_INVALID') {
+      throw new NcpApiError(caught.code, '无法核实 Compose 配置及磁盘基线，请更新 Agent/Server 后重新读取。', caught.requestId)
+    }
+    throw caught
+  })
 }
 
 export async function validateComposeConfig(
@@ -437,6 +442,9 @@ export async function deployComposeConfig(
   input: ComposeDeployInput,
   fetcher: typeof fetch = fetch,
 ): Promise<JobSnapshot> {
+  if (!isComposeContentHash(input.baseContentHash)) {
+    throw new NcpApiError('COMPOSE_BASELINE_INVALID', '缺少有效的 Compose 编辑基线，请重新读取配置后再发布。')
+  }
   return requestJobSnapshot(
     '/api/v1/docker/compose/deploy',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
@@ -730,13 +738,17 @@ function isDockerProjectDeleteResult(value: unknown): value is DockerProjectDele
   )
 }
 
+export function isComposeContentHash(value: unknown): value is string {
+  return typeof value === 'string' && value.length === 64 && /^[0-9a-f]{64}$/.test(value)
+}
+
 function isComposeProjectConfig(value: unknown): value is ComposeProjectConfig {
   return isRecord(value) &&
     typeof value.projectId === 'string' &&
     typeof value.workingDirectory === 'string' &&
     typeof value.collectedAt === 'string' &&
     Array.isArray(value.files) &&
-    value.files.every((file) => isRecord(file) && typeof file.path === 'string' && typeof file.name === 'string' && typeof file.content === 'string' && typeof file.size === 'number')
+    value.files.every((file) => isRecord(file) && typeof file.path === 'string' && typeof file.name === 'string' && typeof file.content === 'string' && isComposeContentHash(file.contentHash) && typeof file.size === 'number')
 }
 
 function isComposeValidationResult(value: unknown): value is ComposeValidationResult {

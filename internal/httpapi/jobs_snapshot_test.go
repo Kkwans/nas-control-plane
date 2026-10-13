@@ -452,7 +452,7 @@ func TestJobHTTPAllCreationPathsRejectFailedInsert(t *testing.T) {
 				body = `{"reference":"fixture:latest"}`
 			case "compose":
 				serve = api.deployComposeConfig
-				body = `{"projectId":"fixture"}`
+				body = `{"projectId":"fixture","baseContentHash":"0000000000000000000000000000000000000000000000000000000000000000"}`
 			case "retry":
 				previous := r.create("docker-image-pull", "fixture")
 				r.update(previous.ID, "completed", "done", "", 100)

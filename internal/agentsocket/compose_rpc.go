@@ -4,20 +4,29 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
-	agentComposeServiceName              = "ncp.agent.v1.AgentComposeService"
-	agentComposeReadConfigFullMethod     = "/ncp.agent.v1.AgentComposeService/ReadConfig"
-	agentComposeValidateConfigFullMethod = "/ncp.agent.v1.AgentComposeService/ValidateConfig"
-	agentComposeDeployConfigFullMethod   = "/ncp.agent.v1.AgentComposeService/DeployConfig"
+	agentComposeServiceName                   = "ncp.agent.v1.AgentComposeService"
+	agentComposeReadConfigFullMethod          = "/ncp.agent.v1.AgentComposeService/ReadConfig"
+	agentComposeValidateConfigFullMethod      = "/ncp.agent.v1.AgentComposeService/ValidateConfig"
+	agentComposeDeployConfigCheckedFullMethod = "/ncp.agent.v1.AgentComposeService/DeployConfigChecked"
+	agentComposeDeployConfigFullMethod        = "/ncp.agent.v1.AgentComposeService/DeployConfig"
 )
 
 type AgentComposeServiceClient interface {
 	ReadConfig(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 	ValidateConfig(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 	DeployConfig(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+}
+
+// AgentComposeCheckedServiceClient 是可选扩展，避免对旧 Agent 静默降级。
+type AgentComposeCheckedServiceClient interface {
+	AgentComposeServiceClient
+	DeployConfigChecked(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
 type agentComposeServiceClient struct{ connection grpc.ClientConnInterface }
@@ -50,10 +59,24 @@ func (client *agentComposeServiceClient) DeployConfig(ctx context.Context, reque
 	return response, nil
 }
 
+func (client *agentComposeServiceClient) DeployConfigChecked(ctx context.Context, request *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	response := new(structpb.Struct)
+	if err := client.connection.Invoke(ctx, agentComposeDeployConfigCheckedFullMethod, request, response, options...); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 type AgentComposeServiceServer interface {
 	ReadConfig(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ValidateConfig(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	DeployConfig(context.Context, *structpb.Struct) (*structpb.Struct, error)
+}
+
+// AgentComposeCheckedServiceServer 保持旧服务的必需方法集合不变。
+type AgentComposeCheckedServiceServer interface {
+	AgentComposeServiceServer
+	DeployConfigChecked(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func RegisterAgentComposeServiceServer(server grpc.ServiceRegistrar, implementation AgentComposeServiceServer) {
@@ -105,6 +128,25 @@ func agentComposeDeployConfigHandler(server any, ctx context.Context, decoder fu
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentComposeDeployConfigCheckedHandler(server any, ctx context.Context, decoder func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	request := new(structpb.Struct)
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	handler := func(ctx context.Context, request any) (any, error) {
+		checked, ok := server.(AgentComposeCheckedServiceServer)
+		if !ok {
+			return nil, grpcstatus.Error(codes.Unimplemented, "COMPOSE_BASELINE_UNSUPPORTED")
+		}
+		return checked.DeployConfigChecked(ctx, request.(*structpb.Struct))
+	}
+	if interceptor == nil {
+		return handler(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: server, FullMethod: agentComposeDeployConfigCheckedFullMethod}
+	return interceptor(ctx, request, info, handler)
+}
+
 var agentComposeServiceDescription = grpc.ServiceDesc{
 	ServiceName: agentComposeServiceName,
 	HandlerType: (*AgentComposeServiceServer)(nil),
@@ -112,5 +154,6 @@ var agentComposeServiceDescription = grpc.ServiceDesc{
 		{MethodName: "ReadConfig", Handler: agentComposeReadConfigHandler},
 		{MethodName: "ValidateConfig", Handler: agentComposeValidateConfigHandler},
 		{MethodName: "DeployConfig", Handler: agentComposeDeployConfigHandler},
+		{MethodName: "DeployConfigChecked", Handler: agentComposeDeployConfigCheckedHandler},
 	},
 }

@@ -1,7 +1,10 @@
+/// <reference types="node" />
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
-import { subscribeJob } from './docker'
+import { deployComposeConfig, readComposeConfig, subscribeJob } from './docker'
+import type { ComposeDeployInput } from './system'
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -98,5 +101,55 @@ describe('任务订阅会话清理', () => {
     await expect(subscription.done).rejects.toMatchObject({ name: 'AbortError' })
     expect(progress).not.toHaveBeenCalled()
     expect(source.close).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Compose 磁盘基线协议', () => {
+  const content = '\uFEFFservices:\r\n  web: # 中文 🐳\r\n    image: nginx  \r\n'
+  const contentHash = createHash('sha256').update(content, 'utf8').digest('hex')
+  const project = { id: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'] }
+  const response = () => ({ projectId: 'a', workingDirectory: '/a', collectedAt: '', files: [{ path: '/a/compose.yml', name: 'compose.yml', content, contentHash, size: Buffer.byteLength(content, 'utf8') }] })
+  const payload: ComposeDeployInput = { projectId: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'], targetPath: '/a/compose.yml', content: 'edited', baseContentHash: contentHash }
+  const invalidHashes = [undefined, null, '', 123, {}, '0'.repeat(63), '0'.repeat(65), 'g'.repeat(64), 'A'.repeat(64), ` ${contentHash}`, `${contentHash} `, `${contentHash}\n`]
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('完整保留原始文本和服务端 hash，不依赖浏览器 crypto', async () => {
+    vi.stubGlobal('crypto', undefined)
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(response())))
+    await expect(readComposeConfig(project, fetcher)).resolves.toEqual(response())
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ projectId: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'] })
+  })
+
+  it.each(invalidHashes)('读取拒绝缺失或非 canonical hash：%j', async (invalid) => {
+    const result = response()
+    Object.assign(result.files[0]!, { contentHash: invalid })
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(result)))
+    await expect(readComposeConfig(project, fetcher)).rejects.toMatchObject({ code: 'COMPOSE_CONFIG_RESPONSE_INVALID', message: expect.stringContaining('重新读取') })
+  })
+
+  it('每份文件都必须携带有效 hash，不能只检查首份', async () => {
+    const result = response()
+    result.files.push({ ...result.files[0]!, path: '/a/other.yml', contentHash: '' })
+    await expect(readComposeConfig(project, vi.fn().mockResolvedValue(new Response(JSON.stringify(result))))).rejects.toMatchObject({ code: 'COMPOSE_CONFIG_RESPONSE_INVALID' })
+  })
+
+  it('发布 JSON 必须原样携带编辑会话的磁盘 hash，而非提交内容 hash', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(job('queued'))))
+    await deployComposeConfig(payload, fetcher)
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual(payload)
+    expect(fetcher.mock.calls[0]![0]).toBe('/api/v1/docker/compose/deploy')
+  })
+
+  it.each(invalidHashes)('缺失或无效的发布基线在请求前拒绝：%j', async (invalid) => {
+    const fetcher = vi.fn()
+    await expect(deployComposeConfig({ ...payload, baseContentHash: invalid } as ComposeDeployInput, fetcher)).rejects.toMatchObject({ code: 'COMPOSE_BASELINE_INVALID' })
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('全零 hash 格式有效，不能擅自改成当前内容 hash', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(job('queued'))))
+    await deployComposeConfig({ ...payload, baseContentHash: '0'.repeat(64) }, fetcher)
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body).baseContentHash).toBe('0'.repeat(64))
   })
 })

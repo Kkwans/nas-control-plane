@@ -1561,10 +1561,15 @@ paths:
   /api/v1/docker/compose/deploy:
     post:
       operationId: deployComposeConfig
-      summary: Validate, back up, atomically save and deploy a Compose project
+      summary: Check the disk baseline, back up, save and deploy a Compose project
       description: |
-        校验并备份目标文件后发布。部署命令失败时，仅当最终恢复 rename 前读取到的当前普通文件原始字节仍与本次写入相同，才尝试写回旧配置并重新应用。
-        该检查不是跨进程原子 CAS，检查与写入之间仍有竞态；不包含客户端编辑基线校验或容器健康验证。
+        baseContentHash 必须是本次编辑会话读取的目标磁盘原始字节 SHA-256；缺少或格式无效时，在创建 Job 前返回 HTTP 400 COMPOSE_BASELINE_INVALID。
+        Agent 在目标锁内、校验前和最终写入 rename 前核对同一个磁盘基线；COMPOSE_CONFIG_CONFLICT 表示内容、存在性或普通文件类型变化，COMPOSE_CONFIG_UNVERIFIED 表示无法核实目标，两者均不写入目标或执行部署。
+        新 Server 仅调用 DeployConfigChecked；旧 Agent 不支持时，Job failed COMPOSE_BASELINE_UNSUPPORTED，绝不降级调用旧部署入口。
+        命令成功后再次核对目标字节；COMPOSE_DEPLOY_POSTCHECK_CONFLICT 表示目标已变化，COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED 表示无法核实。两者都为 Job failed，不自动恢复，不保存成功版本，但命令可能已改变运行态。
+        上述异步业务失败发生于已接收的 Job，不是 POST 的 HTTP 409。只有命令成功且随后一次核对通过才记录成功版本，不证明容器健康或此后文件不再变化。
+        这些检查是 best-effort TOCTOU 防护，不是跨进程原子 CAS；检查与 rename 之间仍有竞态，不保护 ABA 历史、多文件配置或父目录别名。
+        部署命令失败时，仅当最终恢复 rename 前读取到的当前普通文件原始字节仍与本次写入相同，才尝试写回旧配置并重新应用。
         已确认业务失败以 Job failed 和稳定 errorCode 返回：COMPOSE_DEPLOY_ROLLBACK_CONFLICT 表示发现内容、存在性或文件类型变化，跳过恢复；COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED 表示无法核实当前文件，跳过恢复。
         COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED 表示旧配置写回失败且未重新应用；COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED 表示旧配置已写回但重新应用命令失败；COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED 仅表示旧配置已写回且重新应用命令成功，部署仍失败，运行健康未验证。
         COMPOSE_CONFIG_INVALID、COMPOSE_REQUEST_INVALID 分别表示配置校验或请求失败；通用 COMPOSE_DEPLOY_FAILED 不确认任何恢复结果。
@@ -1578,6 +1583,12 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeDeployInput'
       responses:
+        '400':
+          description: 请求无效或缺少有效的磁盘编辑基线（COMPOSE_BASELINE_INVALID）；未创建 Job，未调用 Agent。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '202':
@@ -3478,11 +3489,17 @@ components:
         collectedAt: { type: string, format: date-time }
     ComposeFileSnapshot:
       type: object
-      required: [path, name, content, size]
+      required: [path, name, content, contentHash, size]
       properties:
         path: { type: string }
         name: { type: string }
         content: { type: string }
+        contentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+          description: 目标磁盘文件原始 UTF-8 字节的 SHA-256，小写十六进制；与同一响应的 content 字节一致，不做换行或 YAML 归一化。
         size: { type: integer, minimum: 0 }
     ComposeValidateRequest:
       type: object
@@ -3516,7 +3533,7 @@ components:
             updatedAt: { type: string, format: date-time }
     ComposeDeployInput:
       type: object
-      required: [projectId, workingDirectory, configFiles, targetPath, content]
+      required: [projectId, workingDirectory, configFiles, targetPath, content, baseContentHash]
       properties:
         projectId: { type: string }
         workingDirectory: { type: string }
@@ -3526,6 +3543,12 @@ components:
           items: { type: string }
         targetPath: { type: string }
         content: { type: string, maxLength: 2097152 }
+        baseContentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+          description: 本次编辑会话读取的目标磁盘原始字节 hash；不可用草稿、历史版本或本次提交内容的 hash 替代。
     ComposeRevision:
       type: object
       required: [id, projectId, configPath, content, contentHash, backupPath, createdAt]

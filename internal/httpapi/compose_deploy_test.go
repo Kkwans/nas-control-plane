@@ -39,7 +39,7 @@ type fakeComposeDeployRPC struct {
 	err error
 }
 
-func (client fakeComposeDeployRPC) DeployConfig(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error) {
+func (client fakeComposeDeployRPC) DeployConfigChecked(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error) {
 	return nil, client.err
 }
 
@@ -101,7 +101,7 @@ func runComposeDeployJob(t *testing.T, client ComposeAgentClient, wantRevisions 
 	}
 	t.Cleanup(closeFixture)
 	api := &handler{compose: client, controlStore: store, jobs: jobs}
-	request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"0000000000000000000000000000000000000000000000000000000000000000"}`))
 	response := httptest.NewRecorder()
 	api.deployComposeConfig(response, request)
 	if response.Code != http.StatusAccepted {
@@ -131,6 +131,11 @@ func runComposeDeployJob(t *testing.T, client ComposeAgentClient, wantRevisions 
 	if err != nil || len(revisions) != wantRevisions {
 		t.Fatalf("revisions = %+v, err = %v", revisions, err)
 	}
+	for _, revision := range revisions {
+		if revision.Content != "services: {}" || revision.ConfigPath != "/srv/fixture/compose.yaml" {
+			t.Fatalf("revision changed frozen input: %+v", revision)
+		}
+	}
 	closeFixture()
 
 	reopened, err := controlstore.Open(databasePath)
@@ -154,6 +159,12 @@ func TestComposeDeployConfirmedFailuresPersistRecoveryDetail(t *testing.T) {
 		code    string
 		message string
 	}{
+		{"COMPOSE_BASELINE_INVALID", "缺少有效的 Compose 编辑基线，请重新读取配置后再发布。"},
+		{"COMPOSE_BASELINE_UNSUPPORTED", "当前 Agent 不支持安全的编辑基线检查，未执行部署；请更新 Agent 后重新读取。"},
+		{"COMPOSE_CONFIG_CONFLICT", "Compose 配置已发生变化，未写入或部署；请保留编辑内容，重新读取并比较。"},
+		{"COMPOSE_CONFIG_UNVERIFIED", "无法核实当前 Compose 配置，未写入或部署；请检查文件并重新读取。"},
+		{"COMPOSE_DEPLOY_POSTCHECK_CONFLICT", "Compose 应用命令已完成，但目标配置随后发生变化；未自动覆盖或保存成功版本，请核对配置和运行状态。"},
+		{"COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED", "Compose 应用命令已完成，但无法核实目标配置；未保存成功版本，请核对配置和运行状态。"},
 		{"COMPOSE_DEPLOY_ROLLBACK_CONFLICT", "Compose 部署失败；检测到配置已被外部修改，未覆盖当前配置，已跳过自动恢复；容器状态未确认。"},
 		{"COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED", "Compose 部署失败；无法确认当前配置，已跳过自动恢复；容器状态未确认。"},
 		{"COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED", "Compose 部署失败；旧配置未能写回，未重新应用；容器状态未确认。"},
@@ -257,17 +268,212 @@ func TestComposeDeployLocalCancellationDoesNotConfirmLateRecovery(t *testing.T) 
 }
 
 func TestComposeDeployConfirmedSuccessStillRecordsRevision(t *testing.T) {
-	client := fakeComposeDeployClient{run: func(context.Context, ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+	client := fakeComposeDeployClient{run: func(_ context.Context, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+		if request.BaseContentHash != strings.Repeat("0", 64) || request.Content != "services: {}" {
+			t.Fatalf("HTTP changed frozen request: %+v", request)
+		}
 		return ncpcompose.DeployResult{ProjectID: "fixture", BackupPath: "/srv/fixture/compose.backup", Completed: true, Output: composeSecretFixture}, nil
 	}}
 	finished, restored := runComposeDeployJob(t, client, 1)
 	for _, job := range []jobSnapshot{finished, restored} {
-		if job.Status != "completed" || job.ErrorCode != "" || job.Error != "" || job.Message != "Compose 项目部署完成并已保存版本" || job.CompletedAt == nil {
+		if job.Status != "completed" || job.ErrorCode != "" || job.Error != "" || job.Message != "Compose 应用命令已完成，已核对目标配置并保存版本" || job.CompletedAt == nil {
 			t.Fatalf("successful result changed: %+v", job)
 		}
 		encoded, err := json.Marshal(job)
 		if err != nil || strings.Contains(string(encoded), composeSecretFixture) {
 			t.Fatalf("unsafe successful result: %s, err = %v", encoded, err)
 		}
+	}
+}
+
+func TestComposeDeployRejectsInvalidBaselineBeforeJobAdmission(t *testing.T) {
+	for name, value := range map[string]any{"missing": nil, "empty": "", "short": "abc", "uppercase": strings.Repeat("A", 64), "nonhex": strings.Repeat("g", 64), "leading space": " " + strings.Repeat("a", 64), "trailing space": strings.Repeat("a", 64) + " ", "long": strings.Repeat("a", 65)} {
+		t.Run(name, func(t *testing.T) {
+			input := map[string]any{"projectId": "fixture", "workingDirectory": "/srv/fixture", "configFiles": []string{"/srv/fixture/compose.yaml"}, "targetPath": "/srv/fixture/compose.yaml", "content": "services: {}"}
+			if value != nil {
+				input["baseContentHash"] = value
+			}
+			body, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// nil jobs/store 使任何误接收、执行或版本写入立即失败。
+			api := &handler{compose: fakeComposeDeployClient{run: func(context.Context, ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+				t.Fatal("invalid baseline reached Agent")
+				return ncpcompose.DeployResult{}, nil
+			}}}
+			response := httptest.NewRecorder()
+			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(string(body))))
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "COMPOSE_BASELINE_INVALID") {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestComposeDeployLocalCancellationDoesNotRecordLateSuccess(t *testing.T) {
+	entered := make(chan struct{})
+	client := fakeComposeDeployClient{run: func(ctx context.Context, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+		close(entered)
+		<-ctx.Done()
+		return ncpcompose.DeployResult{ProjectID: request.ProjectID, TargetPath: request.TargetPath, BackupPath: "backup", Completed: true}, nil
+	}}
+	finished, restored := runComposeDeployJob(t, client, 0, func(jobs *jobRegistry, id string) { <-entered; jobs.lookup(id).cancel() })
+	for _, job := range []jobSnapshot{finished, restored} {
+		if job.Status != "interrupted" || job.ErrorCode != "JOB_EXECUTION_INTERRUPTED" {
+			t.Fatalf("late success recorded: %+v", job)
+		}
+	}
+}
+
+type composeRevisionFailureStore struct{ *composeDeployJobStore }
+
+func (store composeRevisionFailureStore) RecordComposeRevision(context.Context, controlstore.ComposeRevision) (controlstore.ComposeRevision, error) {
+	store.revisionCalls.Add(1)
+	return controlstore.ComposeRevision{}, errors.New(composeSecretFixture)
+}
+
+func TestComposeDeploySuccessMessageMatchesRevisionOutcome(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		name := "store absent"
+		if failure {
+			name = "revision save failed"
+		}
+		t.Run(name, func(t *testing.T) {
+			database, err := controlstore.Open(filepath.Join(t.TempDir(), "control.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			store := &composeDeployJobStore{Store: database, terminal: make(chan struct{}, 1)}
+			jobs, err := NewJobEngine(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = jobs.Close(ctx)
+			})
+			api := &handler{jobs: jobs, compose: fakeComposeDeployClient{run: func(_ context.Context, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+				return ncpcompose.DeployResult{ProjectID: request.ProjectID, TargetPath: request.TargetPath, BackupPath: "backup", Completed: true}, nil
+			}}}
+			if failure {
+				api.controlStore = composeRevisionFailureStore{store}
+			}
+			response := httptest.NewRecorder()
+			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`)))
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var submitted jobSnapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-store.terminal:
+			case <-time.After(5 * time.Second):
+				t.Fatal("job did not finish")
+			}
+			entry := jobs.lookup(submitted.ID)
+			entry.opMu.Lock()
+			job := entry.snapshot()
+			entry.opMu.Unlock()
+			want := "Compose 应用命令已完成，已核对目标配置"
+			calls := int32(0)
+			if failure {
+				want += "，但版本记录保存失败"
+				calls = 1
+			}
+			if job.Status != "completed" || job.Message != want || store.revisionCalls.Load() != calls {
+				t.Fatalf("job=%+v calls=%d", job, store.revisionCalls.Load())
+			}
+		})
+	}
+}
+
+type composeRevisionBarrierStore struct {
+	*composeDeployJobStore
+	entered      chan struct{}
+	persistFirst bool
+}
+
+func (store *composeRevisionBarrierStore) RecordComposeRevision(ctx context.Context, revision controlstore.ComposeRevision) (controlstore.ComposeRevision, error) {
+	var saved controlstore.ComposeRevision
+	var err error
+	if store.persistFirst {
+		saved, err = store.composeDeployJobStore.RecordComposeRevision(ctx, revision)
+	} else {
+		store.revisionCalls.Add(1)
+	}
+	close(store.entered)
+	<-ctx.Done()
+	if store.persistFirst {
+		return saved, err
+	}
+	return controlstore.ComposeRevision{}, ctx.Err()
+}
+
+func TestComposeDeployCancellationDuringRevisionStorageDoesNotComplete(t *testing.T) {
+	for _, persistFirst := range []bool{false, true} {
+		name := "canceled before revision persisted"
+		if persistFirst {
+			name = "confirmed revision persisted before cancellation"
+		}
+		t.Run(name, func(t *testing.T) {
+			database, err := controlstore.Open(filepath.Join(t.TempDir(), "control.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			store := &composeRevisionBarrierStore{composeDeployJobStore: &composeDeployJobStore{Store: database, terminal: make(chan struct{}, 1)}, entered: make(chan struct{}), persistFirst: persistFirst}
+			jobs, err := NewJobEngine(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = jobs.Close(ctx)
+			})
+			api := &handler{jobs: jobs, controlStore: store, compose: fakeComposeDeployClient{run: func(_ context.Context, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+				return ncpcompose.DeployResult{ProjectID: request.ProjectID, TargetPath: request.TargetPath, BackupPath: "backup", Completed: true}, nil
+			}}}
+			response := httptest.NewRecorder()
+			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`)))
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var submitted jobSnapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &submitted); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-store.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("revision storage did not start")
+			}
+			jobs.lookup(submitted.ID).cancel()
+			select {
+			case <-store.terminal:
+			case <-time.After(5 * time.Second):
+				t.Fatal("job did not finish")
+			}
+			entry := jobs.lookup(submitted.ID)
+			entry.opMu.Lock()
+			job := entry.snapshot()
+			entry.opMu.Unlock()
+			if job.Status != "interrupted" || job.ErrorCode != "JOB_EXECUTION_INTERRUPTED" || job.Message != "Compose 应用命令及目标配置已确认；本地调用在后续处理期间结束，请核对版本记录。" {
+				t.Fatalf("late storage completion overrode cancellation: %+v", job)
+			}
+			revisions, err := store.ComposeRevisions(context.Background(), "fixture", 30)
+			want := 0
+			if persistFirst {
+				want = 1
+			}
+			if err != nil || len(revisions) != want || store.revisionCalls.Load() != 1 {
+				t.Fatalf("revision history=%+v calls=%d err=%v", revisions, store.revisionCalls.Load(), err)
+			}
+		})
 	}
 }

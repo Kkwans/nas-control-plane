@@ -1,4 +1,6 @@
+/// <reference types="node" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { effectScope, ref } from 'vue'
 import type { ComposeProjectConfig, DockerProject, JobSnapshot } from '@/api/system'
 import { invalidateSession } from '@/session/sessionLifecycle'
@@ -10,7 +12,7 @@ vi.mock('@/api/system', () => ({
   readComposeConfig: api.read, validateComposeConfig: api.validate, deployComposeConfig: api.deploy,
   NcpApiError: class extends Error { constructor(public code: string, message = code) { super(message) } },
 }))
-vi.mock('@/api/docker', () => ({ subscribeJob: api.subscribe }))
+vi.mock('@/api/docker', async (importOriginal) => ({ ...await importOriginal<typeof import('@/api/docker')>(), subscribeJob: api.subscribe }))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -20,11 +22,13 @@ function deferred<T>() {
 }
 const flush = async () => { for (let i = 0; i < 15; i++) await Promise.resolve() }
 const project = (id: string): DockerProject => ({ id, name: id, kind: 'compose', state: 'running', workingDirectory: `/${id}`, configFiles: [`/${id}/compose.yml`], containerCount: 1, runningCount: 1 })
-const config = (id: string): ComposeProjectConfig => ({ projectId: id, workingDirectory: `/${id}`, collectedAt: '', files: [{ path: `/${id}/compose.yml`, name: 'compose.yml', content: 'original', size: 8 }] })
+const hash = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+const config = (id: string, content = 'original'): ComposeProjectConfig => ({ projectId: id, workingDirectory: `/${id}`, collectedAt: '', files: [{ path: `/${id}/compose.yml`, name: 'compose.yml', content, contentHash: hash(content), size: Buffer.byteLength(content, 'utf8') }] })
+const historical = () => ({ id: 1, projectId: 'a', configPath: '/a/compose.yml', content: 'historical', contentHash: hash('historical'), backupPath: '', createdAt: '2026-10-12' })
 const scopes: ReturnType<typeof effectScope>[] = []
-function setup() {
+function setup(initialProject = project('a')) {
   const open = ref(true)
-  const target = ref<DockerProject | null>(project('a'))
+  const target = ref<DockerProject | null>(initialProject)
   const feedback = { success: vi.fn(), info: vi.fn(), confirm: vi.fn().mockResolvedValue(true) }
   const scope = effectScope()
   scopes.push(scope)
@@ -40,7 +44,7 @@ beforeEach(() => {
   api.deploy.mockResolvedValue({ id: 'job-a' })
   api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status: 'completed', message: 'done' }) })
 })
-afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()) })
+afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.unstubAllGlobals() })
 
 describe('Compose 工作区事务隔离', () => {
   it('保存 A 期间编辑 B：仅 A 成为已保存基线，下一次提交 B', async () => {
@@ -104,7 +108,7 @@ describe('Compose 工作区事务隔离', () => {
     expect(feedback.success).not.toHaveBeenCalled()
   })
   it('切文件令旧校验失效，全部文件未保存数保留', async () => {
-    const value = config('a'); value.files.push({ path: '/a/other.yml', name: 'other.yml', content: 'original', size: 8 })
+    const value = config('a'); value.files.push({ path: '/a/other.yml', name: 'other.yml', content: 'original', contentHash: hash('original'), size: 8 })
     api.read.mockResolvedValue(value)
     const { state } = setup(); await flush()
     const result = deferred<{ valid: boolean; services: string[] }>()
@@ -134,10 +138,11 @@ describe('Compose 工作区事务隔离', () => {
     const first = state.deploy(); await flush()
     state.activeContent.value = 'B'
     await state.deploy()
+    api.read.mockResolvedValueOnce(config('a', 'A'))
     confirmation.resolve(true); await first
     expect(feedback.confirm).toHaveBeenCalledTimes(1)
     expect(api.deploy).toHaveBeenCalledTimes(1)
-    expect(api.deploy).toHaveBeenCalledWith({ projectId: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'], targetPath: '/a/compose.yml', content: 'A' })
+    expect(api.deploy).toHaveBeenCalledWith({ projectId: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'], targetPath: '/a/compose.yml', content: 'A', baseContentHash: hash('original') })
     expect(state.activeContent.value).toBe('B')
     expect(state.dirty.value).toBe(true)
     expect(state.changedLines.value).toBe(1)
@@ -182,12 +187,13 @@ describe('Compose 工作区事务隔离', () => {
     expect(feedback.success).not.toHaveBeenCalledWith(detail)
   })
   it('回滚确认冻结版本内容，关闭后确认不得提交', async () => {
-    const revision = { id: 1, projectId: 'a', configPath: '/a/compose.yml', content: 'historical', contentHash: 'hash', backupPath: '', createdAt: '2026-10-12' }
+    const revision = historical()
     api.revisions.mockResolvedValue([revision])
     const { state, feedback, open } = setup(); await flush()
     const confirmation = deferred<boolean>(); feedback.confirm.mockReturnValueOnce(confirmation.promise)
     const rollback = state.rollback(revision)
     revision.content = 'mutated'
+    api.read.mockResolvedValueOnce(config('a', 'historical'))
     confirmation.resolve(true); await rollback
     expect(api.deploy.mock.calls[0]?.[0].content).toBe('historical')
     expect(feedback.confirm.mock.calls[0]?.[0]).toContain('发现外部修改或无法核实当前文件时会停止')
@@ -213,5 +219,283 @@ describe('Compose 工作区事务隔离', () => {
     invalidateSession(); save.resolve({ updatedAt: 'now' }); await operation
     expect(state.files.value).toEqual([])
     expect(state.error.value).toBeNull()
+  })
+})
+
+describe('Compose 磁盘基线与完成后窄复读', () => {
+  it('加载和保存草稿均不替换磁盘基线，文件对象 hash 也不是发布基线来源', async () => {
+    api.draft.mockResolvedValue({ content: 'draft D', contentHash: hash('draft D'), updatedAt: 'draft-time' })
+    api.save.mockResolvedValue({ content: 'draft E', contentHash: hash('draft E'), updatedAt: 'saved-time' })
+    const { state } = setup(); await flush()
+    expect(state.activeContent.value).toBe('draft D')
+    expect(state.dirty.value).toBe(false)
+    state.activeContent.value = 'draft E'
+    state.files.value[0]!.contentHash = hash('draft E')
+    await state.saveDraft()
+    api.read.mockResolvedValueOnce(config('a', 'draft E'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenCalledWith(expect.objectContaining({ content: 'draft E', baseContentHash: hash('original') }))
+    expect(state.dirty.value).toBe(false)
+    expect(state.draftUpdatedAt.value['/a/compose.yml']).toBe('saved-time')
+  })
+
+  it.each(['rollback', 'loadRevision'])('历史版本 %s 使用当前磁盘基线，历史 hash 不授权覆盖', async (mode) => {
+    const revision = historical()
+    api.revisions.mockResolvedValue([revision])
+    const { state } = setup(); await flush()
+    api.read.mockResolvedValueOnce(config('a', 'historical'))
+    if (mode === 'rollback') await state.rollback(revision)
+    else { state.loadRevision(revision); await state.deploy() }
+    expect(api.deploy).toHaveBeenCalledWith(expect.objectContaining({ content: 'historical', baseContentHash: hash('original') }))
+    expect(state.activeContent.value).toBe(mode === 'rollback' ? 'original' : 'historical')
+    state.activeContent.value = 'next'
+    api.read.mockResolvedValueOnce(config('a', 'next'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ content: 'next', baseContentHash: hash('historical') }))
+    expect(state.dirty.value).toBe(true)
+  })
+
+  it.each([undefined, '', 'bad', 'A'.repeat(64), `${hash('original')}\n`])('冻结时拒绝缺失或非法磁盘基线 %j，不校验、不确认、不提交', async (invalid) => {
+    const result = config('a'); Object.assign(result.files[0]!, { contentHash: invalid })
+    api.read.mockResolvedValueOnce(result)
+    const { state, feedback } = setup(); await flush()
+    state.activeContent.value = 'keep this draft'
+    await state.deploy()
+    expect(api.validate).not.toHaveBeenCalled()
+    expect(feedback.confirm).not.toHaveBeenCalled()
+    expect(api.deploy).not.toHaveBeenCalled()
+    expect(state.activeContent.value).toBe('keep this draft')
+    expect(state.error.value).toContain('重新读取')
+  })
+
+  it('确认冻结 A/hash(O)，复读 A 后保留新编辑 B 和草稿保存基线，下一次 B 使用 hash(A)', async () => {
+    api.draft.mockResolvedValue({ content: 'saved draft', updatedAt: 'saved-time' })
+    const { state, feedback } = setup(); await flush()
+    const confirmation = deferred<boolean>()
+    const reread = deferred<ComposeProjectConfig>()
+    feedback.confirm.mockReturnValueOnce(confirmation.promise)
+    api.read.mockReturnValueOnce(reread.promise)
+    state.activeContent.value = 'A'
+    const first = state.deploy(); await flush()
+    state.activeContent.value = 'B'
+    confirmation.resolve(true); await flush()
+    expect(api.deploy).toHaveBeenCalledWith(expect.objectContaining({ content: 'A', baseContentHash: hash('original') }))
+    expect(api.read).toHaveBeenLastCalledWith({ id: 'a', workingDirectory: '/a', configFiles: ['/a/compose.yml'] })
+    expect(state.deploying.value).toBe(true)
+    await state.deploy()
+    expect(api.deploy).toHaveBeenCalledTimes(1)
+    expect(feedback.confirm).toHaveBeenCalledTimes(1)
+    reread.resolve(config('a', 'A')); await first
+    expect(state.deploying.value).toBe(false)
+    expect(state.activeContent.value).toBe('B')
+    expect(state.dirty.value).toBe(true)
+    expect(state.draftUpdatedAt.value['/a/compose.yml']).toBe('saved-time')
+    expect(state.changedLines.value).toBe(1)
+    state.activeContent.value = 'saved draft'
+    expect(state.dirty.value).toBe(false)
+    state.activeContent.value = 'B'
+    api.read.mockResolvedValueOnce(config('a', 'B'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ content: 'B', baseContentHash: hash('A') }))
+    expect(state.dirty.value).toBe(true)
+  })
+
+  it('当前编辑器仍为 A 时也推进磁盘基线，但不会替用户保存草稿', async () => {
+    const { state } = setup(); await flush()
+    state.activeContent.value = 'A'
+    api.read.mockResolvedValueOnce(config('a', 'A'))
+    await state.deploy()
+    expect(state.changedLines.value).toBe(0)
+    expect(state.dirty.value).toBe(true)
+    expect(state.dirtyCount.value).toBe(1)
+    expect(state.draftUpdatedAt.value['/a/compose.yml']).toBe('2026-10-13')
+    state.activeContent.value = 'original'
+    expect(state.dirty.value).toBe(false)
+    expect(state.changedLines.value).toBe(1)
+    api.read.mockResolvedValueOnce(config('a', 'original'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('A') }))
+  })
+
+  it.each([
+    ['failed', 'COMPOSE_CONFIG_CONFLICT'], ['failed', 'COMPOSE_CONFIG_UNVERIFIED'],
+    ['failed', 'COMPOSE_DEPLOY_POSTCHECK_CONFLICT'], ['failed', 'COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED'],
+    ['failed', 'COMPOSE_BASELINE_INVALID'], ['failed', 'COMPOSE_BASELINE_UNSUPPORTED'],
+    ['cancelled', 'JOB_CANCELLED'], ['interrupted', 'AGENT_RPC_TIMEOUT'],
+  ])('终态 %s/%s 不复读、不推进基线或报告完成', async (status, errorCode) => {
+    const { state, feedback } = setup(); await flush()
+    state.activeContent.value = 'A'
+    api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status, errorCode, error: `safe ${errorCode}` }) })
+    await state.deploy()
+    expect(state.error.value).toBe(`safe ${errorCode}`)
+    expect(api.read).toHaveBeenCalledTimes(1)
+    expect(api.revisions).toHaveBeenCalledTimes(1)
+    expect(feedback.success).not.toHaveBeenCalledWith('done')
+    expect(state.activeContent.value).toBe('A')
+    expect(state.changedLines.value).toBe(1)
+    expect(state.dirty.value).toBe(true)
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('original') }))
+  })
+
+  it.each(['history succeeds', 'history fails'])('任务完成后外部变更只提示核对，%s 不遮住警告或重写文本', async (historyOutcome) => {
+    const { state, feedback } = setup(); await flush()
+    state.activeContent.value = 'A'
+    api.read.mockResolvedValueOnce(config('a', 'external E'))
+    if (historyOutcome === 'history fails') api.revisions.mockRejectedValueOnce(new Error('unavailable'))
+    else api.revisions.mockResolvedValueOnce([historical()])
+    await state.deploy()
+    expect(state.error.value).toContain('任务已完成，但目标配置已变化')
+    expect(state.error.value).not.toContain('部署失败')
+    expect(state.error.value).not.toContain('版本记录')
+    expect(feedback.success).not.toHaveBeenCalledWith('done')
+    expect(state.activeContent.value).toBe('A')
+    expect(state.dirty.value).toBe(true)
+    expect(state.changedLines.value).toBe(1)
+    if (historyOutcome === 'history succeeds') expect(state.revisions.value).toEqual([historical()])
+    api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status: 'failed', errorCode: 'COMPOSE_CONFIG_CONFLICT' }) })
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('original') }))
+  })
+
+  it.each(['rejected read', 'missing target', 'duplicate target', 'wrong path', 'wrong project', 'wrong directory', 'missing hash', 'invalid hash'])('完成后的 %s 不推进基线，刷新历史失败不改称部署失败', async (failure) => {
+    const { state, feedback } = setup(); await flush()
+    state.activeContent.value = 'A'
+    const result = config('a', 'A')
+    switch (failure) {
+      case 'missing target': result.files = []; break
+      case 'duplicate target': result.files.push({ ...result.files[0]! }); break
+      case 'wrong path': result.files[0]!.path = '/a/other.yml'; break
+      case 'wrong project': result.projectId = 'b'; break
+      case 'wrong directory': result.workingDirectory = '/elsewhere'; break
+      case 'missing hash': Reflect.deleteProperty(result.files[0]!, 'contentHash'); break
+      case 'invalid hash': result.files[0]!.contentHash = 'NOT-A-HASH'; break
+    }
+    if (failure === 'rejected read') api.read.mockRejectedValueOnce(new Error('unavailable'))
+    else api.read.mockResolvedValueOnce(result)
+    api.revisions.mockRejectedValueOnce(new Error('history unavailable'))
+    await state.deploy()
+    expect(state.error.value).toContain('任务已完成，但无法重新核实目标配置')
+    expect(state.error.value).not.toContain('部署失败')
+    expect(state.error.value).not.toContain('版本记录')
+    expect(feedback.success).not.toHaveBeenCalledWith('done')
+    expect(state.activeContent.value).toBe('A')
+    expect(state.dirty.value).toBe(true)
+    expect(state.changedLines.value).toBe(1)
+    api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status: 'failed', errorCode: 'COMPOSE_CONFIG_CONFLICT' }) })
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('original') }))
+  })
+
+  it('核对成功但版本记录刷新失败，仍保留已推进基线与完成事实', async () => {
+    const { state, feedback } = setup(); await flush()
+    state.activeContent.value = 'A'
+    api.read.mockResolvedValueOnce(config('a', 'A'))
+    api.revisions.mockRejectedValueOnce(new Error('unavailable'))
+    await state.deploy()
+    expect(state.error.value).toContain('任务已完成，但版本记录刷新失败')
+    expect(feedback.success).toHaveBeenCalledWith('done')
+    expect(state.changedLines.value).toBe(0)
+    api.read.mockResolvedValueOnce(config('a', 'A'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('A') }))
+  })
+
+  it('复读期间切活动文件并编辑，只推进冻结目标且不覆盖其他文件', async () => {
+    const initial = config('a')
+    initial.files.push({ path: '/a/other.yml', name: 'other.yml', content: 'original other', contentHash: hash('original other'), size: 14 })
+    api.read.mockResolvedValueOnce(initial)
+    api.draft.mockImplementation((_projectId: string, path: string) => Promise.resolve({ content: path.endsWith('other.yml') ? 'original other' : 'original', updatedAt: 'saved-time' }))
+    const { state } = setup({ ...project('a'), configFiles: ['/a/compose.yml', '/a/other.yml'] }); await flush()
+    const reread = deferred<ComposeProjectConfig>(); api.read.mockReturnValueOnce(reread.promise)
+    state.activeContent.value = 'A'; const first = state.deploy(); await flush()
+    state.activePath.value = '/a/other.yml'; state.activeContent.value = 'B'
+    const result = config('a', 'A')
+    result.files.push({ ...initial.files[1]!, content: 'external other', contentHash: hash('external other') })
+    reread.resolve(result); await first
+    expect(state.activePath.value).toBe('/a/other.yml')
+    expect(state.activeContent.value).toBe('B')
+    expect(state.files.value[0]!.content).toBe('A')
+    expect(state.dirtyCount.value).toBe(2)
+    const otherResult = config('a', 'B'); otherResult.files[0]!.path = '/a/other.yml'
+    api.read.mockResolvedValueOnce(otherResult)
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ targetPath: '/a/other.yml', content: 'B', baseContentHash: hash('original other') }))
+    expect(api.read).toHaveBeenLastCalledWith({ id: 'a', workingDirectory: '/a', configFiles: ['/a/other.yml'] })
+    state.activePath.value = '/a/compose.yml'
+    api.read.mockResolvedValueOnce(config('a', 'A'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ targetPath: '/a/compose.yml', baseContentHash: hash('A') }))
+  })
+
+  it.each(['project switch', 'close and reopen'])('复读期间 %s，迟到响应和 finally 不影响新工作区部署', async (change) => {
+    const { state, target, open, feedback } = setup(); await flush()
+    const oldRead = deferred<ComposeProjectConfig>(); api.read.mockReturnValueOnce(oldRead.promise)
+    state.activeContent.value = 'old A'; const oldDeployment = state.deploy(); await flush()
+    expect(state.deploying.value).toBe(true)
+    const newId = change === 'project switch' ? 'b' : 'a'
+    if (change === 'project switch') target.value = project('b')
+    else { open.value = false; open.value = true }
+    await flush()
+    const newRead = deferred<ComposeProjectConfig>(); api.read.mockReturnValueOnce(newRead.promise)
+    state.activeContent.value = 'new B'; const newDeployment = state.deploy(); await flush()
+    feedback.success.mockClear()
+    oldRead.resolve(config('a', 'old A')); await oldDeployment
+    expect(state.deploying.value).toBe(true)
+    expect(state.activeContent.value).toBe('new B')
+    expect(state.error.value).toBeNull()
+    expect(feedback.success).not.toHaveBeenCalled()
+    expect(api.revisions).toHaveBeenCalledTimes(2)
+    newRead.resolve(config(newId, 'new B')); await newDeployment
+    expect(state.deploying.value).toBe(false)
+    expect(state.changedLines.value).toBe(0)
+    expect(state.dirty.value).toBe(true)
+    api.read.mockResolvedValueOnce(config(newId, 'new B'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: newId, baseContentHash: hash('new B') }))
+  })
+
+  it.each(['logout', 'unmount', 'close'])('复读期间 %s，迟到成功不能回写或刷新历史', async (action) => {
+    const { state, scope, open, feedback } = setup(); await flush()
+    const reread = deferred<ComposeProjectConfig>(); api.read.mockReturnValueOnce(reread.promise)
+    state.activeContent.value = 'A'; const deployment = state.deploy(); await flush()
+    feedback.success.mockClear()
+    if (action === 'logout') invalidateSession()
+    else if (action === 'unmount') scope.stop()
+    else open.value = false
+    reread.resolve(config('a', 'A')); await deployment
+    expect(state.files.value).toEqual([])
+    expect(state.error.value).toBeNull()
+    expect(state.deploying.value).toBe(false)
+    expect(api.revisions).toHaveBeenCalledTimes(1)
+    expect(feedback.success).not.toHaveBeenCalled()
+  })
+
+  it('复读 pending 期间继续编辑不影响成功推进，全流程不依赖 global crypto', async () => {
+    vi.stubGlobal('crypto', undefined)
+    const { state } = setup(); await flush()
+    const reread = deferred<ComposeProjectConfig>(); api.read.mockReturnValueOnce(reread.promise)
+    const raw = '\uFEFFservices:\r\n  web: # 中文 🐳  \r\n'
+    state.activeContent.value = raw
+    const deployment = state.deploy(); await flush()
+    state.activeContent.value = 'newer'
+    reread.resolve(config('a', raw)); await deployment
+    expect(state.activeContent.value).toBe('newer')
+    expect(state.dirty.value).toBe(true)
+    api.read.mockResolvedValueOnce(config('a', 'newer'))
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ content: 'newer', baseContentHash: hash(raw) }))
+  })
+
+  it('语义相同但字节不同的复读内容也不能推进基线', async () => {
+    const { state } = setup(); await flush()
+    state.activeContent.value = 'services:\n  web: {}\n'
+    api.read.mockResolvedValueOnce(config('a', 'services:\r\n  web: {}\r\n'))
+    await state.deploy()
+    expect(state.error.value).toContain('目标配置已变化')
+    expect(state.activeContent.value).toBe('services:\n  web: {}\n')
+    api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status: 'failed' }) })
+    await state.deploy()
+    expect(api.deploy).toHaveBeenLastCalledWith(expect.objectContaining({ baseContentHash: hash('original') }))
   })
 })

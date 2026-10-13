@@ -760,6 +760,7 @@ export interface ComposeFileSnapshot {
   path: string
   name: string
   content: string
+  contentHash: string
   size: number
 }
 
@@ -782,6 +783,7 @@ export interface ComposeDeployInput {
   configFiles: string[]
   targetPath: string
   content: string
+  baseContentHash: string
 }
 
 export { NcpApiError } from './systemTransport'

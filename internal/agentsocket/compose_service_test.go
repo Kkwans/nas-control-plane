@@ -21,6 +21,12 @@ import (
 
 var composeDeployFailureCodes = []string{
 	"COMPOSE_DEPLOY_FAILED",
+	"COMPOSE_BASELINE_INVALID",
+	"COMPOSE_BASELINE_UNSUPPORTED",
+	"COMPOSE_CONFIG_CONFLICT",
+	"COMPOSE_CONFIG_UNVERIFIED",
+	"COMPOSE_DEPLOY_POSTCHECK_CONFLICT",
+	"COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED",
 	"COMPOSE_CONFIG_INVALID",
 	"COMPOSE_REQUEST_INVALID",
 	"COMPOSE_DEPLOY_ROLLBACK_CONFLICT",
@@ -37,7 +43,7 @@ func TestComposeDeployFailurePreservesAllowlistedCodes(t *testing.T) {
 			if grpcstatus.Code(err) != codes.Internal || grpcstatus.Convert(err).Message() != code {
 				t.Fatalf("composeDeployFailure() = %v", err)
 			}
-			_, clientErr := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{err: err}, ncpcompose.DeployRequest{})
+			_, clientErr := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{err: err}, validComposeDeployRequest())
 			if ErrorCode(clientErr) != code || !errors.Is(clientErr, err) {
 				t.Fatalf("client error = %v, want wrapped %q", clientErr, code)
 			}
@@ -82,14 +88,14 @@ func TestComposeServiceDeploySanitizesProviderErrors(t *testing.T) {
 	}
 }
 
-func TestComposeServiceDeployPreservesManagerValidationCodes(t *testing.T) {
+func TestComposeServiceDeployPreservesManagerRequestAndPrecheckCodes(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		directory string
 		code      string
 	}{
 		{name: "request", directory: "/outside-data-volumes", code: "COMPOSE_REQUEST_INVALID"},
-		{name: "content", directory: "/volume1/project", code: "COMPOSE_CONFIG_INVALID"},
+		{name: "missing baseline target", directory: "/volume1/project", code: "COMPOSE_CONFIG_CONFLICT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := newComposeService(ncpcompose.NewManager(failingComposeValidationRunner{}))
@@ -168,7 +174,7 @@ func TestComposeRPCErrorKeepsTransportFailuresUnknown(t *testing.T) {
 		{name: "deadline status overrides recovery", err: grpcstatus.Error(codes.DeadlineExceeded, "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED"), want: "AGENT_RPC_TIMEOUT"},
 		{name: "wrapped canceled context", err: fmt.Errorf("request: %w", context.Canceled), want: "AGENT_RPC_CANCELED"},
 		{name: "wrapped deadline context", err: fmt.Errorf("request: %w", context.DeadlineExceeded), want: "AGENT_RPC_TIMEOUT"},
-		{name: "unimplemented overrides business code", err: grpcstatus.Error(codes.Unimplemented, "COMPOSE_DEPLOY_FAILED"), want: "AGENT_PROTOCOL_MISMATCH"},
+		{name: "unimplemented refuses old agent", err: grpcstatus.Error(codes.Unimplemented, "COMPOSE_DEPLOY_FAILED"), want: "COMPOSE_BASELINE_UNSUPPORTED"},
 		{name: "transport unavailable", err: grpcstatus.Error(codes.Unavailable, "connection closed"), want: "AGENT_RPC_UNAVAILABLE"},
 		{name: "unavailable overrides business code", err: grpcstatus.Error(codes.Unavailable, "COMPOSE_DEPLOY_FAILED"), want: "AGENT_RPC_UNAVAILABLE"},
 		{name: "raw business code text", err: errors.New("COMPOSE_DEPLOY_FAILED"), want: "AGENT_RPC_UNAVAILABLE"},
@@ -178,7 +184,7 @@ func TestComposeRPCErrorKeepsTransportFailuresUnknown(t *testing.T) {
 		{name: "aborted recovery status", err: grpcstatus.Error(codes.Aborted, "COMPOSE_DEPLOY_ROLLBACK_CONFLICT"), want: "COMPOSE_DEPLOY_ROLLBACK_CONFLICT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{err: test.err}, ncpcompose.DeployRequest{})
+			_, err := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{err: test.err}, validComposeDeployRequest())
 			if ErrorCode(err) != test.want || !errors.Is(err, test.err) {
 				t.Fatalf("client error=%v, want wrapped %q", err, test.want)
 			}
@@ -189,8 +195,9 @@ func TestComposeRPCErrorKeepsTransportFailuresUnknown(t *testing.T) {
 func TestDeployComposeConfigWithClientPreservesPayloadAndResponse(t *testing.T) {
 	request := ncpcompose.DeployRequest{
 		ProjectID: "compose:project", WorkingDirectory: "/volume1/project",
-		ConfigFiles: []string{"/volume1/project/compose.yaml", "/volume1/project/extra.yaml"},
-		TargetPath:  "/volume1/project/compose.yaml", Content: "services:\n  app:\n    image: app:v2\n",
+		ConfigFiles:     []string{"/volume1/project/compose.yaml", "/volume1/project/extra.yaml"},
+		BaseContentHash: ncpcompose.ContentHash([]byte("original")),
+		TargetPath:      "/volume1/project/compose.yaml", Content: "services:\n  app:\n    image: app:v2\n",
 	}
 	response, err := structpb.NewStruct(map[string]any{
 		"projectId": request.ProjectID, "targetPath": request.TargetPath, "backupPath": "/volume1/project/.ncp-backups/backup.yaml",
@@ -207,6 +214,7 @@ func TestDeployComposeConfigWithClientPreservesPayloadAndResponse(t *testing.T) 
 	wantPayload := map[string]any{
 		"project_id": request.ProjectID, "working_directory": request.WorkingDirectory,
 		"config_files": []any{request.ConfigFiles[0], request.ConfigFiles[1]}, "target_path": request.TargetPath, "content": request.Content,
+		"base_content_hash": request.BaseContentHash,
 	}
 	if !reflect.DeepEqual(client.request.AsMap(), wantPayload) {
 		t.Fatalf("payload=%#v, want %#v", client.request.AsMap(), wantPayload)
@@ -216,7 +224,7 @@ func TestDeployComposeConfigWithClientPreservesPayloadAndResponse(t *testing.T) 
 func TestDeployComposeConfigWithClientRejectsIncompleteResponse(t *testing.T) {
 	for name, response := range map[string]*structpb.Struct{"nil": nil, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
-			_, err := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{response: response}, ncpcompose.DeployRequest{})
+			_, err := DeployComposeConfigWithClient(context.Background(), &fakeComposeDeployRPC{response: response}, validComposeDeployRequest())
 			if ErrorCode(err) != "AGENT_RPC_RESPONSE_INVALID" {
 				t.Fatalf("client error=%v", err)
 			}
@@ -243,7 +251,7 @@ func TestDeployComposeConfigWithClientStopsExpiredRequests(t *testing.T) {
 			ctx, cancel := test.ctx()
 			defer cancel()
 			client := &fakeComposeDeployRPC{err: grpcstatus.Error(codes.Internal, "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED")}
-			_, err := DeployComposeConfigWithClient(ctx, client, ncpcompose.DeployRequest{})
+			_, err := DeployComposeConfigWithClient(ctx, client, validComposeDeployRequest())
 			if ErrorCode(err) != test.want || client.request != nil {
 				t.Fatalf("client error=%v, request=%v", err, client.request)
 			}
@@ -274,7 +282,7 @@ func TestDeployComposeConfigWithClientDeadlineDoesNotConfirmLateRecovery(t *test
 	defer cancel()
 	clientResult := make(chan error, 1)
 	go func() {
-		_, err := DeployComposeConfigWithClient(ctx, NewAgentComposeServiceClient(connection), ncpcompose.DeployRequest{})
+		_, err := DeployComposeConfigWithClient(ctx, NewAgentComposeServiceClient(connection), validComposeDeployRequest())
 		clientResult <- err
 	}()
 	select {
@@ -308,7 +316,8 @@ func validComposeDeployPayload(t *testing.T) *structpb.Struct {
 	payload, err := structpb.NewStruct(map[string]any{
 		"project_id": "compose:project", "working_directory": "/volume1/project",
 		"config_files": []any{"/volume1/project/compose.yaml"}, "target_path": "/volume1/project/compose.yaml",
-		"content": "services:\n  app:\n    image: app:v2\n",
+		"content":           "services:\n  app:\n    image: app:v2\n",
+		"base_content_hash": ncpcompose.ContentHash([]byte("original")),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -349,7 +358,7 @@ type fakeComposeDeployRPC struct {
 	err      error
 }
 
-func (client *fakeComposeDeployRPC) DeployConfig(_ context.Context, request *structpb.Struct, _ ...grpc.CallOption) (*structpb.Struct, error) {
+func (client *fakeComposeDeployRPC) DeployConfigChecked(_ context.Context, request *structpb.Struct, _ ...grpc.CallOption) (*structpb.Struct, error) {
 	client.request = request
 	return client.response, client.err
 }
@@ -361,9 +370,13 @@ type blockedComposeRecoveryService struct {
 	returned chan struct{}
 }
 
-func (service *blockedComposeRecoveryService) DeployConfig(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+func (service *blockedComposeRecoveryService) DeployConfigChecked(context.Context, *structpb.Struct) (*structpb.Struct, error) {
 	close(service.started)
 	<-service.release
 	defer close(service.returned)
 	return nil, composeDeployFailure("COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED")
+}
+
+func validComposeDeployRequest() ncpcompose.DeployRequest {
+	return ncpcompose.DeployRequest{ProjectID: "compose:project", WorkingDirectory: "/volume1/project", ConfigFiles: []string{"/volume1/project/compose.yaml"}, TargetPath: "/volume1/project/compose.yaml", Content: "services: {}", BaseContentHash: ncpcompose.ContentHash([]byte("original"))}
 }

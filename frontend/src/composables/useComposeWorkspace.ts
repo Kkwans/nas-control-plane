@@ -2,7 +2,7 @@ import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
 
 import { requestComposeDraft, requestComposeRevisions, saveComposeDraft, type ComposeRevision } from '@/api/control'
 import { deployComposeConfig, NcpApiError, readComposeConfig, validateComposeConfig, type ComposeDeployInput, type ComposeFileSnapshot, type DockerProject } from '@/api/system'
-import { subscribeJob } from '@/api/docker'
+import { isComposeContentHash, subscribeJob } from '@/api/docker'
 import { createRequestSequenceGate } from '@/domain/requestSequence'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
@@ -25,6 +25,7 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
   const validation = ref<{ services: string[] } | null>(null)
   const savedContent = ref<Record<string, string>>({})
   const baseContent = ref<Record<string, string>>({})
+  const baseContentHash = ref<Record<string, string>>({})
   const draftUpdatedAt = ref<Record<string, string>>({})
   const revisions = ref<ComposeRevision[]>([])
   const historyOpen = ref(false)
@@ -73,6 +74,7 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
     activePath.value = ''
     savedContent.value = {}
     baseContent.value = {}
+    baseContentHash.value = {}
     draftUpdatedAt.value = {}
     revisions.value = []
     historyOpen.value = false
@@ -100,6 +102,7 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
       if (!owns()) return
       const loaded = result.files.map((file) => ({ ...file }))
       const baseline = Object.fromEntries(loaded.map((file) => [file.path, file.content]))
+      const baselineHashes = Object.fromEntries(loaded.map((file) => [file.path, file.contentHash]))
       const timestamps: Record<string, string> = {}
       for (const file of loaded) {
         try {
@@ -116,6 +119,7 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
       if (!owns()) return
       files.value = loaded
       baseContent.value = baseline
+      baseContentHash.value = baselineHashes
       savedContent.value = Object.fromEntries(loaded.map((file) => [file.path, file.content]))
       draftUpdatedAt.value = timestamps
       revisions.value = history
@@ -180,9 +184,15 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
     if (!current() || !target || !file || deploying.value || loading.value) return
     if (revision && (!revisions.value.some((item) => item.id === revision.id) || revision.configPath !== file.path)) return
     const owns = current
+    const targetPath = revision?.configPath ?? file.path
+    const baselineHash = baseContentHash.value[targetPath]
+    if (!isComposeContentHash(baselineHash)) {
+      error.value = '缺少有效的 Compose 编辑基线，请保留编辑内容，重新读取配置后再发布。'
+      return
+    }
     const payload: ComposeDeployInput = {
       projectId: target.id, workingDirectory: target.workingDirectory, configFiles: [...target.configFiles],
-      targetPath: revision?.configPath ?? file.path, content: revision?.content ?? file.content,
+      targetPath, content: revision?.content ?? file.content, baseContentHash: baselineHash,
     }
     const name = file.name
     const changes = countChanges(payload.targetPath, payload.content)
@@ -208,16 +218,37 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
       if (!owns()) return
       closeObservation = undefined
       if (completed.status !== 'completed') {
-        throw new NcpApiError('COMPOSE_DEPLOY_FAILED', completed.error || completed.message || 'Compose 任务未完成。')
+        throw new NcpApiError(completed.errorCode || 'COMPOSE_DEPLOY_FAILED', completed.error || completed.message || 'Compose 任务未完成。')
       }
-      baseContent.value[payload.targetPath] = payload.content
+      // 仅复读冻结目标；草稿保存基线和编辑器里的新文本不随部署完成而改变。
+      let verificationWarning: string | null = null
+      const unverified = 'Compose 任务已完成，但无法重新核实目标配置；已保留编辑内容，请先保留文本，再重新读取并比较。'
+      try {
+        if (!owns()) return
+        const result = await readComposeConfig({ id: payload.projectId, workingDirectory: payload.workingDirectory, configFiles: [payload.targetPath] })
+        if (!owns()) return
+        const targets = result.files.filter((snapshot) => snapshot.path === payload.targetPath)
+        const snapshot = targets[0]
+        if (result.projectId !== payload.projectId || result.workingDirectory !== payload.workingDirectory || targets.length !== 1 || !snapshot || !isComposeContentHash(snapshot.contentHash)) {
+          verificationWarning = unverified
+        } else if (snapshot.content !== payload.content) {
+          verificationWarning = 'Compose 任务已完成，但目标配置已变化；已保留编辑内容，请先保留文本，再重新读取并比较。'
+        } else {
+          baseContent.value[payload.targetPath] = payload.content
+          baseContentHash.value[payload.targetPath] = snapshot.contentHash
+        }
+      } catch {
+        if (!owns()) return
+        verificationWarning = unverified
+      }
       historyOpen.value = false
-      feedback.success(completed.message || 'Compose 配置已部署')
+      if (verificationWarning) error.value = verificationWarning
+      else feedback.success(completed.message || 'Compose 应用命令已完成，已核对目标配置')
       try {
         const history = await requestComposeRevisions(payload.projectId)
         if (owns()) revisions.value = history
       } catch {
-        if (owns()) error.value = 'Compose 已部署，但版本记录刷新失败；可重新读取。'
+        if (owns() && !verificationWarning) error.value = 'Compose 任务已完成，但版本记录刷新失败；请先保留编辑内容，再重新读取。'
       }
     } catch (caught) {
       if (owns()) error.value = caught instanceof NcpApiError ? caught.message : 'Compose 部署状态读取失败，请检查任务状态。'
