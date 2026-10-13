@@ -1,192 +1,24 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { toRef } from 'vue'
 import { CheckCircle2, CloudUpload, FileCode2, History, LoaderCircle, RefreshCw, RotateCcw, Save, X } from '@lucide/vue'
 import { ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
 
-import { requestComposeDraft, requestComposeRevisions, saveComposeDraft, type ComposeRevision } from '@/api/control'
-import { deployComposeConfig, followJob, NcpApiError, readComposeConfig, validateComposeConfig, type ComposeFileSnapshot, type DockerProject } from '@/api/system'
+import type { DockerProject } from '@/api/system'
 import PlainCodeEditor from '@/components/PlainCodeEditor.vue'
+import { useComposeWorkspace } from '@/composables/useComposeWorkspace'
 
 const props = defineProps<{ modelValue: boolean; project: DockerProject | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
-const loading = ref(false)
-const validating = ref(false)
-const saving = ref(false)
-const deploying = ref(false)
-const deployProgress = ref(0)
-const error = ref<string | null>(null)
-const files = ref<ComposeFileSnapshot[]>([])
-const activePath = ref('')
-const validation = ref<{ services: string[] } | null>(null)
-const savedContent = ref<Record<string, string>>({})
-const baseContent = ref<Record<string, string>>({})
-const draftUpdatedAt = ref<Record<string, string>>({})
-const revisions = ref<ComposeRevision[]>([])
-const historyOpen = ref(false)
-const activeFile = computed(() => files.value.find((file) => file.path === activePath.value) ?? null)
-const activeRevisions = computed(() => revisions.value.filter((revision) => revision.configPath === activePath.value))
-const activeContent = computed({
-  get: () => activeFile.value?.content ?? '',
-  set: (content: string) => {
-    if (activeFile.value) activeFile.value.content = content
-    validation.value = null
-  },
+const { loading, validating, saving, deploying, deployProgress, error, files, activePath, validation, draftUpdatedAt,
+  revisions, historyOpen, activeFile, activeRevisions, activeContent, dirty, dirtyCount, changedLines,
+  load, saveDraft, validate, deploy, rollback, loadRevision, draftTimeLabel,
+} = useComposeWorkspace(toRef(props, 'modelValue'), toRef(props, 'project'), {
+  confirm: (message, title, rollback) => ElMessageBox.confirm(message, title, {
+    confirmButtonText: rollback ? '备份并回滚' : '备份并部署', cancelButtonText: '取消', type: 'warning',
+  }),
+  success: (message) => { ElMessage.success(message) },
+  info: (message) => { ElMessage.info(message) },
 })
-const dirty = computed(() => Boolean(activeFile.value && savedContent.value[activeFile.value.path] !== activeFile.value.content))
-const changedLines = computed(() => {
-  const file = activeFile.value
-  if (!file) return 0
-  const before = (baseContent.value[file.path] ?? '').split('\n')
-  const after = file.content.split('\n')
-  let changes = 0
-  for (let index = 0; index < Math.max(before.length, after.length); index += 1) {
-    if (before[index] !== after[index]) changes += 1
-  }
-  return changes
-})
-
-async function load() {
-  if (!props.project || props.project.kind !== 'compose' || !props.project.configFiles.length) return
-  loading.value = true
-  error.value = null
-  try {
-    const result = await readComposeConfig(props.project)
-    files.value = result.files.map((file) => ({ ...file }))
-    baseContent.value = Object.fromEntries(result.files.map((file) => [file.path, file.content]))
-    savedContent.value = { ...baseContent.value }
-    draftUpdatedAt.value = {}
-    for (const file of files.value) {
-      try {
-        const draft = await requestComposeDraft(props.project.id, file.path)
-        file.content = draft.content
-        savedContent.value[file.path] = draft.content
-        draftUpdatedAt.value[file.path] = draft.updatedAt
-      } catch (caught) {
-        if (!(caught instanceof NcpApiError) || caught.code !== 'COMPOSE_DRAFT_NOT_FOUND') throw caught
-      }
-    }
-    activePath.value = result.files[0]?.path ?? ''
-    revisions.value = await requestComposeRevisions(props.project.id)
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 配置读取失败。'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function saveDraft() {
-  const file = activeFile.value
-  if (!file || !props.project || saving.value) return
-  saving.value = true
-  error.value = null
-  try {
-    const draft = await saveComposeDraft({ projectId: props.project.id, configPath: file.path, content: file.content })
-    savedContent.value[file.path] = file.content
-    draftUpdatedAt.value[file.path] = draft.updatedAt
-    ElMessage.success('Compose 草稿已保存到 NCP')
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 草稿保存失败。'
-  } finally {
-    saving.value = false
-  }
-}
-
-async function validate() {
-  const file = activeFile.value
-  if (!file || validating.value) return false
-  validating.value = true
-  error.value = null
-  try {
-    const result = await validateComposeConfig(file.path, file.content)
-    validation.value = { services: result.services }
-    ElMessage.success(`配置有效，识别到 ${result.services.length} 个服务`)
-    return true
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 配置校验失败。'
-    return false
-  } finally {
-    validating.value = false
-  }
-}
-
-async function deploy() {
-  const file = activeFile.value
-  if (!file || !props.project || deploying.value || !(await validate())) return
-  try {
-    await ElMessageBox.confirm(
-      `将发布 ${file.name}，预计变更 ${changedLines.value} 行。NCP 会先备份原文件；部署失败时自动恢复并重新应用旧配置。`,
-      '确认部署 Compose 项目',
-      { confirmButtonText: '备份并部署', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch { return }
-  deploying.value = true
-  deployProgress.value = 0
-  try {
-    const job = await deployComposeConfig({
-      projectId: props.project.id, workingDirectory: props.project.workingDirectory,
-      configFiles: props.project.configFiles, targetPath: file.path, content: file.content,
-    })
-    const completed = await followJob(job.id, (snapshot) => { deployProgress.value = snapshot.progress })
-    if (completed.status === 'failed') throw new NcpApiError('COMPOSE_DEPLOY_FAILED', completed.error || completed.message)
-    ElMessage.success(completed.message)
-    await load()
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 部署失败。'
-  } finally {
-    deploying.value = false
-    deployProgress.value = 0
-  }
-}
-
-async function rollback(revision: ComposeRevision) {
-  if (!props.project || deploying.value) return
-  try {
-    await ElMessageBox.confirm(
-      `将把 ${activeFile.value?.name ?? '当前配置'} 回滚到 ${new Date(revision.createdAt).toLocaleString('zh-CN')} 的版本。NCP 仍会先备份现有文件，并在应用失败时自动恢复。`,
-      '确认回滚 Compose 配置',
-      { confirmButtonText: '备份并回滚', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch { return }
-  deploying.value = true
-  deployProgress.value = 0
-  error.value = null
-  try {
-    const job = await deployComposeConfig({
-      projectId: props.project.id,
-      workingDirectory: props.project.workingDirectory,
-      configFiles: props.project.configFiles,
-      targetPath: revision.configPath,
-      content: revision.content,
-    })
-    const completed = await followJob(job.id, (snapshot) => { deployProgress.value = snapshot.progress })
-    if (completed.status === 'failed') throw new NcpApiError('COMPOSE_ROLLBACK_FAILED', completed.error || completed.message)
-    historyOpen.value = false
-    ElMessage.success('Compose 配置已回滚并重新部署')
-    await load()
-  } catch (caught) {
-    error.value = caught instanceof NcpApiError ? caught.message : 'Compose 回滚失败。'
-  } finally {
-    deploying.value = false
-    deployProgress.value = 0
-  }
-}
-
-function loadRevision(revision: ComposeRevision) {
-  const file = files.value.find((candidate) => candidate.path === revision.configPath)
-  if (!file) return
-  activePath.value = revision.configPath
-  file.content = revision.content
-  historyOpen.value = false
-  validation.value = null
-  ElMessage.info('历史版本已载入编辑器，尚未部署')
-}
-
-function draftTimeLabel(path: string) {
-  const value = draftUpdatedAt.value[path]
-  return value ? new Date(value).toLocaleString('zh-CN') : ''
-}
-
-watch(() => props.modelValue, (open) => { if (open) void load() })
 </script>
 
 <template>
@@ -196,7 +28,7 @@ watch(() => props.modelValue, (open) => { if (open) void load() })
       <header class="compose-toolbar">
         <nav><button v-for="file in files" :key="file.path" type="button" :class="{ active: activePath === file.path }" @click="activePath = file.path">{{ file.name }}</button></nav>
         <div>
-          <button class="secondary-button" type="button" :disabled="loading" @click="load"><RefreshCw :class="{ spin: loading }" :size="16" />重新读取</button>
+          <button class="secondary-button" type="button" :disabled="loading || saving || deploying" @click="load"><RefreshCw :class="{ spin: loading }" :size="16" />重新读取</button>
           <button class="secondary-button" type="button" :disabled="!activeFile || saving || !dirty" @click="saveDraft"><LoaderCircle v-if="saving" class="spin" :size="16" /><Save v-else :size="16" />保存草稿</button>
           <button class="secondary-button" type="button" :disabled="!activeRevisions.length" @click="historyOpen = true"><History :size="16" />版本</button>
           <button class="primary-button" type="button" :disabled="!activeFile || validating" @click="validate"><LoaderCircle v-if="validating" class="spin" :size="16" /><CheckCircle2 v-else :size="16" />校验</button>
@@ -234,7 +66,7 @@ watch(() => props.modelValue, (open) => { if (open) void load() })
         </div>
       </aside>
       <footer>
-        <span>{{ dirty ? '当前修改尚未保存' : draftUpdatedAt[activePath] ? `草稿已保存 · ${draftTimeLabel(activePath)}` : '当前显示项目原始配置' }} · 变更 {{ changedLines }} 行</span>
+        <span>{{ dirty ? '当前修改尚未保存' : draftUpdatedAt[activePath] ? `草稿已保存 · ${draftTimeLabel(activePath)}` : '当前显示项目原始配置' }} · 变更 {{ changedLines }} 行 · {{ dirtyCount }} 个文件未保存</span>
         <span class="revision-count"><History :size="14" />{{ revisions.length }} 个部署版本</span>
         <code>{{ activeFile?.path }}</code>
       </footer>
