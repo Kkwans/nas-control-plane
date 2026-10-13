@@ -67,3 +67,17 @@ describe('monitoring history API', () => {
     })])
   })
 })
+
+describe('monitoring history bounded response errors', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it.each([
+    [422, 'MONITORING_HISTORY_LIMIT_EXCEEDED'],
+    [500, 'MONITORING_HISTORY_INVALID'],
+    [500, 'MONITORING_READ_FAILED'],
+    [400, 'MONITORING_RANGE_INVALID'],
+  ])('preserves the stable error code for HTTP %s / %s', async (status, code) => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ code, message: 'history unavailable' }), { status, headers: { 'Content-Type': 'application/json' } })))
+    await expect(requestMetricSamples('7d')).rejects.toMatchObject({ code })
+  })
+})

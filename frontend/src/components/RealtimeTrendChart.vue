@@ -15,30 +15,33 @@ use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent
 export interface TrendSeries {
   name: string
   color: string
-  values: number[]
+  values: (number | null)[]
   unit?: string
   decimals?: number
   axis?: 'left' | 'right'
 }
 
 const props = withDefaults(defineProps<{
-  timestamps: string[]
+  timestamps: (string | number)[]
   series: TrendSeries[]
+  history?: boolean
   unit?: string
   decimals?: number
   emptyMessage?: string
 }>(), {
   decimals: 1,
   emptyMessage: '',
+  history: false,
 })
 
 const reducedMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const availableSeries = computed(() => props.series.filter((item) => item.values.length > 0))
 const hasRightSeries = computed(() => availableSeries.value.some((item) => item.axis === 'right'))
 const hasFiniteValue = computed(() => availableSeries.value.some((item) => item.values.some((value) => Number.isFinite(value))))
-const enoughData = computed(() => props.timestamps.length >= 2 && hasFiniteValue.value)
+const enoughData = computed(() => props.timestamps.length >= (props.history ? 1 : 2) && hasFiniteValue.value)
 const stateMessage = computed(() => {
   if (!props.timestamps.length) return props.emptyMessage || '当前范围暂无监控样本。'
+  if (props.history && props.timestamps.length === 1) return props.emptyMessage || '一条已保存样本，暂不能计算速率。'
   if (!availableSeries.value.length || !hasFiniteValue.value) return props.emptyMessage || '当前范围暂无可用指标数据。'
   return '正在积累实时样本，收到第二个有效快照后开始绘制趋势。'
 })
@@ -55,13 +58,13 @@ function pad(value: number) {
   return String(value).padStart(2, '0')
 }
 
-function formatFullTimestamp(value: string) {
+function formatFullTimestamp(value: string | number) {
   const date = new Date(value)
-  if (Number.isNaN(date.valueOf())) return value || '时间未知'
+  if (Number.isNaN(date.valueOf())) return String(value || '时间未知')
   return `${String(date.getFullYear()).padStart(4, '0')}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-function timestampSpan(values: string[]) {
+function timestampSpan(values: (string | number)[]) {
   const timestamps = values
     .map((value) => new Date(value).valueOf())
     .filter((value) => Number.isFinite(value))
@@ -69,7 +72,7 @@ function timestampSpan(values: string[]) {
   return Math.max(...timestamps) - Math.min(...timestamps)
 }
 
-function formatAxisLabels(values: string[]) {
+function formatAxisLabels(values: (string | number)[]) {
   const dates = values.map((value) => new Date(value))
   const span = timestampSpan(values)
   const spansDays = dates.some((date, index) => {
@@ -77,7 +80,7 @@ function formatAxisLabels(values: string[]) {
     return Boolean(previous && !Number.isNaN(date.valueOf()) && !Number.isNaN(previous.valueOf()) && dateKey(date) !== dateKey(previous))
   })
   return dates.map((date, index) => {
-    if (Number.isNaN(date.valueOf())) return values[index] ?? ''
+    if (Number.isNaN(date.valueOf())) return String(values[index] ?? '')
     const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`
     if (!spansDays) return span > 0 && span < 2 * 60 * 60 * 1000 ? `${time}:${pad(date.getSeconds())}` : time
     const previous = dates[index - 1]
@@ -87,7 +90,7 @@ function formatAxisLabels(values: string[]) {
   })
 }
 
-function shouldShowAxisLabel(index: number, values: string[]) {
+function shouldShowAxisLabel(index: number, values: (string | number)[]) {
   if (index === 0 || index === values.length - 1) return true
   const date = new Date(values[index] ?? '')
   const previous = new Date(values[index - 1] ?? '')
@@ -96,8 +99,36 @@ function shouldShowAxisLabel(index: number, values: string[]) {
   return index % step === 0
 }
 
-function formatSeriesValue(value: number, series?: TrendSeries) {
-  if (!Number.isFinite(value)) return '暂无数据'
+const historyTimestamps = computed(() => props.timestamps.map((value) => new Date(value).valueOf()))
+const historyRange = computed(() => {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (const value of historyTimestamps.value) {
+    if (!Number.isFinite(value)) continue
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  }
+  if (!Number.isFinite(min)) return {}
+  return min === max ? { min: min - 30_000, max: max + 30_000 } : { min, max }
+})
+const historySpansDays = computed(() => {
+  const first = historyTimestamps.value[0]
+  const last = historyTimestamps.value.at(-1)
+  return first !== undefined && last !== undefined && dateKey(new Date(first)) !== dateKey(new Date(last))
+})
+
+function formatHistoryTick(value: number) {
+  const date = new Date(value)
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return historySpansDays.value ? `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${time}` : time
+}
+
+function finiteValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function formatSeriesValue(value: number | null | undefined, series?: TrendSeries) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '暂无数据'
   const formatted = new Intl.NumberFormat('zh-CN', {
     minimumFractionDigits: series?.decimals ?? props.decimals,
     maximumFractionDigits: series?.decimals ?? props.decimals,
@@ -108,6 +139,7 @@ function formatSeriesValue(value: number, series?: TrendSeries) {
 
 type TooltipEntry = {
   dataIndex?: number
+  axisValue?: string | number
   marker?: string
   seriesName?: string
   value?: unknown
@@ -123,14 +155,29 @@ function tooltipNumber(value: unknown) {
   return typeof reading === 'number' ? reading : Number.NaN
 }
 
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]!)
+}
+
+function tooltipTimestamp(entries: TooltipEntry[]) {
+  if (props.history) {
+    for (const entry of entries) {
+      const value: unknown = Array.isArray(entry.value) ? entry.value[0] : entry.axisValue
+      if ((typeof value === 'number' || typeof value === 'string') && Number.isFinite(new Date(value).valueOf())) return value
+    }
+  }
+  const dataIndex = entries.find((entry) => Number.isInteger(entry.dataIndex))?.dataIndex
+  return props.timestamps[dataIndex ?? 0] ?? ''
+}
+
 function formatTooltip(value: unknown) {
   const entries = tooltipEntries(value)
-  const dataIndex = entries.find((entry) => Number.isInteger(entry.dataIndex))?.dataIndex
-  const timestamp = props.timestamps[dataIndex ?? 0]
-  const title = formatFullTimestamp(timestamp ?? '')
+  const title = escapeHtml(formatFullTimestamp(tooltipTimestamp(entries)))
   const lines = entries.map((entry) => {
     const series = availableSeries.value.find((item) => item.name === entry.seriesName)
-    return `${entry.marker ?? ''}${entry.seriesName ?? '监控指标'}：${formatSeriesValue(tooltipNumber(entry.value), series)}`
+    return `${entry.marker ?? ''}${escapeHtml(entry.seriesName ?? '监控指标')}：${escapeHtml(formatSeriesValue(tooltipNumber(entry.value), series))}`
   })
   return [title, ...lines].join('<br/>')
 }
@@ -171,7 +218,18 @@ const option = computed<EChartsOption>(() => ({
     textStyle: { color: monitoringChartTokens.tooltipText, fontSize: 11 },
     formatter: formatTooltip,
   },
-  xAxis: {
+  xAxis: props.history ? {
+    type: 'time',
+    ...historyRange.value,
+    axisLine: { lineStyle: { color: monitoringChartTokens.line } },
+    axisTick: { show: false },
+    axisLabel: {
+      color: monitoringChartTokens.axis,
+      fontSize: 10,
+      hideOverlap: true,
+      formatter: formatHistoryTick,
+    },
+  } : {
     type: 'category',
     boundaryGap: false,
     data: formatAxisLabels(props.timestamps),
@@ -186,12 +244,12 @@ const option = computed<EChartsOption>(() => ({
   },
   yAxis: [
     {
-      type: 'value', min: 0, name: availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit ?? '',
+      type: 'value', min: props.history ? (range) => Math.min(0, range.min) : 0, name: availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit ?? '',
       axisLabel: { color: monitoringChartTokens.axis, fontSize: 10, formatter: (value: number) => `${value}${(availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit) === '%' ? '%' : ''}` },
       splitLine: { lineStyle: { color: monitoringChartTokens.grid, type: 'dashed' } },
     },
     {
-      type: 'value', min: 0, show: hasRightSeries.value, name: availableSeries.value.find((item) => item.axis === 'right')?.unit ?? '',
+      type: 'value', min: props.history ? (range) => Math.min(0, range.min) : 0, show: hasRightSeries.value, name: availableSeries.value.find((item) => item.axis === 'right')?.unit ?? '',
       axisLabel: { color: monitoringChartTokens.axis, fontSize: 10, formatter: (value: number) => `${value}${availableSeries.value.find((item) => item.axis === 'right')?.unit === '%' ? '%' : ''}` },
       splitLine: { show: false },
     },
@@ -199,10 +257,17 @@ const option = computed<EChartsOption>(() => ({
   series: availableSeries.value.map((item) => ({
     name: item.name,
     type: 'line',
-    data: item.values,
-    showSymbol: false,
-    symbolSize: 7,
-    smooth: 0.24,
+    data: props.history
+      ? historyTimestamps.value.map((timestamp, index) => [timestamp, finiteValue(item.values[index])])
+      : item.values.map(finiteValue),
+    showSymbol: props.history,
+    symbol: props.history ? (_value, params) => {
+      const index = params.dataIndex
+      if (finiteValue(item.values[index]) === null) return 'none'
+      return finiteValue(item.values[index - 1]) === null && finiteValue(item.values[index + 1]) === null ? 'circle' : 'none'
+    } : undefined,
+    symbolSize: props.history ? 4 : 7,
+    smooth: props.history ? false : 0.24,
     connectNulls: false,
     lineStyle: { width: 2.2 },
     areaStyle: { opacity: .07 },
