@@ -2103,7 +2103,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SiteProfileInput'
+                $ref: '#/components/schemas/SiteProfileResponse'
         '400':
           description: 站点资料参数无效
           content:
@@ -2165,7 +2165,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SiteProfileInput'
+                $ref: '#/components/schemas/SiteProfileResponse'
         '400':
           description: Invalid site profile
           content:
@@ -2291,7 +2291,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/SiteProfileInput'
+                  $ref: '#/components/schemas/SiteProfileResponse'
   /api/v1/sites/{siteID}/restore:
     post:
       operationId: restoreSite
@@ -2931,6 +2931,38 @@ components:
           maximum: 100000
         hidden:
           type: boolean
+    SiteProfileResponse:
+      type: object
+      description: >-
+        保存的站点资料，与写入输入分离。projectId 是服务端返回的真实身份；
+        手工创建时为 manual: 前缀的 ID，更新时为目标 ID。
+        ignored 列表可以包含尚未编辑的占位资料，此时 name 合法地为空字符串。
+        source、ignored、lastVisitedAt 与探测及图标元数据在当前服务端返回，
+        为兼容旧响应保持可选；允许未知附加字段。此响应不继承输入的长度或排序范围限制。
+      required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
+      properties:
+        projectId: { type: string, minLength: 1 }
+        name: { type: string }
+        description: { type: string }
+        iconUrl: { type: string }
+        category: { type: string }
+        launchUrl: { type: string }
+        primaryPort: { type: integer, minimum: 0, maximum: 65535 }
+        favorite: { type: boolean }
+        sortOrder: { type: integer }
+        hidden: { type: boolean }
+        source:
+          type: string
+          enum: [auto, labels, built-in, edited, manual]
+        ignored: { type: boolean }
+        detectedTitle: { type: string }
+        autoIconUrl: { type: string }
+        localIconName: { type: string }
+        lastVisitedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
     Site:
       allOf:
         - $ref: '#/components/schemas/SiteProfileInput'

@@ -1,4 +1,5 @@
 import { NcpApiError } from '@/api/system'
+import { parseIgnoredSitesResponse, parseSiteListResponse } from './siteResponse'
 
 export interface UserPreferences {
   refreshIntervalSeconds: number
@@ -32,7 +33,7 @@ export interface Site {
   description: string
   iconUrl: string
   category: string
-  state: 'running' | 'stopped' | 'degraded'
+  state: string
   primaryPort: number
   ports: number[]
   launchUrl: string
@@ -76,6 +77,16 @@ export interface SiteProfileInput {
   favorite: boolean
   sortOrder: number
   hidden: boolean
+}
+
+export interface SiteProfileResponse extends SiteProfileInput {
+  projectId: string
+  source?: Site['source']
+  ignored?: boolean
+  lastVisitedAt?: string | null
+  detectedTitle?: string
+  autoIconUrl?: string
+  localIconName?: string
 }
 
 export interface ComposeDraft {
@@ -184,30 +195,7 @@ export function updateDatabaseProjectPreference(
 }
 
 export function requestSites(signal?: AbortSignal): Promise<SiteListResponse> {
-  return request<SiteListResponse>('/api/v1/sites', signal ? { signal } : {}).then((result) => ({
-    ...result,
-    discovery: {
-      status: result.discovery?.status ?? 'unavailable',
-      probeAvailable: result.discovery?.probeAvailable ?? false,
-      candidateCount: result.discovery?.candidateCount ?? result.sites?.length ?? 0,
-      verifiedCount: result.discovery?.verifiedCount ?? result.sites?.length ?? 0,
-      failedCount: result.discovery?.failedCount ?? 0,
-      issues: Array.isArray(result.discovery?.issues)
-        ? result.discovery.issues.map((issue) => ({
-            ...issue,
-            ports: Array.isArray(issue.ports) ? issue.ports : [],
-          }))
-        : [],
-    },
-    sites: (result.sites ?? []).map((site) => ({
-      ...site,
-      ports: Array.isArray(site.ports) ? site.ports : [],
-      description: site.description ?? '',
-      iconUrl: site.iconUrl ?? '',
-      category: site.category ?? '',
-      launchUrl: site.launchUrl ?? '',
-    })),
-  }))
+  return request<unknown>('/api/v1/sites', signal ? { signal } : {}).then(parseSiteListResponse)
 }
 
 export function updateSite(
@@ -233,8 +221,8 @@ export function deleteSite(siteId: string, signal?: AbortSignal): Promise<void> 
   return request(`/api/v1/sites/${encodeURIComponent(siteId)}`, { method: 'DELETE', ...(signal ? { signal } : {}) })
 }
 
-export function requestIgnoredSites(signal?: AbortSignal): Promise<Array<SiteProfileInput & { projectId: string }>> {
-  return request('/api/v1/sites/ignored', signal ? { signal } : {})
+export function requestIgnoredSites(signal?: AbortSignal): Promise<SiteProfileResponse[]> {
+  return request<unknown>('/api/v1/sites/ignored', signal ? { signal } : {}).then(parseIgnoredSitesResponse)
 }
 
 export function restoreSite(siteId: string, signal?: AbortSignal): Promise<void> {

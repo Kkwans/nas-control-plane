@@ -167,3 +167,14 @@ F09现状复核仍成立：站点save/create/restore/icon写入完成后忽略re
 已有create图标失败补偿删除路径会吞掉补偿失败，可能留下站点；需明确记录部分结果，不能借本片新增自动删除或声称跨HTTP事务原子。实现是否包含最小结果分类由精确变更审查确定。
 
 M18-A实现与独立审查完成：复用SiteSyncError并附已写入ID，后置refresh置于图标补偿catch之外；新成功同步可覆盖被替代旧读取，避免误警告。编辑器保留新草稿、只读重查、采用已创建ID进行后续更新，提交/校验捕获快照并隔离会话与编辑代次；收藏按资源独立等待，保存期间不接受图标变更。720项单元、lint/typecheck/构建通过；五项浏览器fixture及实际画面待CI。图标失败且补偿删除失败的结果不确定性仍属于M18-B，未在本片掩盖或宣称已解决。
+
+
+### M18-B前置：站点读取契约与结果不确定性
+
+已确认requestSites会把缺sites或sites:null等坏成功响应归一为空表，requestIgnoredSites没有运行时校验。先交付只读响应校验：顶层集合与身份无效则整体稳定报错，不过滤坏行冒充完整；保留原有缺discovery、nullish说明/图标/分类/入口与ports的旧服务端默认兼容。忽略资料的name空串是合法占位，不能套用创建输入的minLength1规则；OpenAPI应独立描述包含projectId及实际metadata的SiteProfileResponse。
+
+创建/更新的2xx坏响应可能已写入，故本片先不接入生产写响应校验，避免让界面把新增协议错误当作可以直接重提的普通写失败。写侧身份校验需和后续“结果未确认”消费逻辑共同落地。
+
+图标失败且一次补偿DELETE也失败时，应保留真实createdId，不自动补偿第二次或重放创建；两份已验证列表只能支持“本次核对未发现该手工记录”。两GET非原子，目录collectedAt不是资料版本；不能证明补偿成功、未来不会出现或图标文件已清理。discovery=complete更不能证明整个NAS资源不存在。
+
+读取前置实现完成：新增站点专用解析器，GET sites/ignored接入整份校验，Site.state按后端契约保持string；create/update仅有可复用解析器与纯测试，生产调用未接入。独立SiteProfileResponse描述实际Go类型，忽略空名、projectId和元数据同步，输入要求不变。789项全量单元、lint/typecheck/构建及OpenAPI全套通过，独立审查无阻断；后端仅验证真实Go值的JSON及schema，不称endpoint已运行。

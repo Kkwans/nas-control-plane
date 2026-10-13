@@ -39,3 +39,24 @@
 ## 后续提示色优化（尚待新CI）
 
 ab7c102截图中的红色提示作为原始证据保留。后续只按稳定BOOTSTRAP_RECONCILED码使用中性提示色，保留真正校验/登录/退出错误的危险样式与status/alert语义，不根据文案文本判断；新颜色需要后续提交的真实截图复核。
+
+
+# 中性恢复提示复验：82d69f（2026-10-13 16:12 UTC）
+
+结论：中性提示色修正通过。前文ab7c1027的红色提示备注是历史状态，本节关闭该非阻断问题。
+
+- 精确SHA82d69fcbf8c998816fe563be7d6d17b02674aabf。
+- [CI38427377203](https://github.com/Kkwans/nas-control-plane/actions/runs/38427377203)，attempt1；Frontend job115400193942。57文件697单元通过；206浏览器全部通过（2.9分钟）；Go及Compose成功，release条件跳过。
+- [Artifact11829262294](https://github.com/Kkwans/nas-control-plane/actions/runs/38427377203/artifacts/11829262294)：ncp-fixture-ui-82d69fcbf8c998816fe563be7d6d17b02674aabf-1。
+- ZIP24,448,387bytes，SHA25626d604912866be87b6a8e046c8473f499fc4fdbed9f1153dcbba839222ff7015，与GitHub匹配；290文件，总解压26,535,517bytes。制品安全路径/CRC/大小/类型/压缩比检查通过，截图摘要见下。
+- 实际逐张查看六张恢复PNG：390/409与1440/503各100/200%提示“控制台已初始化，请登录。”已由红色变为中性蓝灰色；位置、文字、密码清空与登录按钮均保持可读，没有新增裁切。
+- 390结果未确认态两张仍为警示视觉、长错误码200%完整折行；没有变成成功说明，也没有新增布局回归。
+- 保留先前fixture、fullPage、根字号而非真实zoom、无真实NAS/无真实账号操作边界。普通错误danger保持情况由该次源码与单元门禁覆盖，本次六张截图仅直接证明恢复notice及未确认状态，没有凭空声明截图覆盖所有错误状态。
+
+## 本轮已查看PNG摘要
+- fixture-bootstrap-already-409-390-root-100.png: e5e9e0fd6f4fcde3e3f95842f35b7cf4f66c99a6ad60d35ab75d026d2b11f318 (128324bytes)
+- fixture-bootstrap-already-409-390-root-200.png: fdd30f98c7c3d9f7d7447c043e391f2d75aff8e774f87f828b4ff59a3923f58f (132909bytes)
+- fixture-bootstrap-partial-503-1440-root-100.png: d0b5c5a592ca2b0d96eac6fe5240ce929ffe4c3f99d7eddc9eb9b75b194500b9 (513995bytes)
+- fixture-bootstrap-partial-503-1440-root-200.png: 2d14fd01936ced2449532d86efae4cfe40ad569da1c960b004dcd8fbacb641b6 (700832bytes)
+- fixture-bootstrap-status-unconfirmed-390-root-100.png: 2501925093d9853897b787837c606629653475f3ca9e424fc174f556358cfe1a (146319bytes)
+- fixture-bootstrap-status-unconfirmed-390-root-200.png: 9def66e62a98e1a5d48b524e51835d6ea96a590ddae09d292487d4c568c733fd (122671bytes)

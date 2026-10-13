@@ -411,3 +411,16 @@ d146b11的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/r
 - M18-A覆盖save/create/remove/restore/icon/favorite成功写入后的同步失败，显示部分成功而非错误地重放操作。编辑器保留真实创建ID和新草稿，只读同步后继续编辑；所有迟到结果按会话/编辑归属隔离，收藏按资源独立等待。
 - 独立审查发现创建后图标分支仍按旧selectedSite及保存期间可换文件的遗漏，已分别按已保存ID路由、保存期阻止图标变更修复。后置刷新不进入图标补偿删除catch。
 - 完整58文件720项单元（含24项聚焦）、限定lint、类型及生产构建/包预算通过；五项新隔离浏览器fixture覆盖只读重试、返回ID、草稿和旧请求，实际浏览器/截图待验。图标上传失败且补偿删除失败仍是明确M18-B边界。
+
+
+## 16:12 UTC 初始化提示色复验
+
+82d69fc的[CI 38427377203](https://github.com/Kkwans/nas-control-plane/actions/runs/38427377203)通过697项单元/206项浏览器及Go/Compose。六张恢复状态实际PNG确认普通复核提示为中性蓝灰色，未确认状态仍警示，390双倍根字号长码折行保持，未新增裁切；截图仅覆盖这六态，不扩展为全部错误态视觉验收。
+
+
+## 16:18 UTC 站点读取协议校验
+
+- GET sites/ignored拒绝缺核心集合、坏身份与坏数组项，不将坏成功响应变成权威空表；整份拒绝而非过滤丢行。兼容旧服务端缺discovery及nullish辅助字段/ports、忽略项空name与额外字段。
+- OpenAPI将POST/PUT/ignored返回资料与输入分开，声明projectId和实际metadata；单测序列化真实Go SiteProfile验证schema，没有运行endpoint或数据库。
+- 生产POST/PUT校验接线明确未启用，防止未知写结果被现有UI误当可重复提交的普通失败；新增回归固定这一分阶段边界。
+- 独立76项API聚焦及OpenAPI全套通过，完整59文件789项单元、lint/typecheck/生产构建与预算通过。隔离浏览器回归待CI；未知写入与图标补偿并未因此解决。
