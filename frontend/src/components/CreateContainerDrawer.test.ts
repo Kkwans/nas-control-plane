@@ -157,7 +157,7 @@ describe('创建容器草稿所有权', () => {
 })
 
 
-describe('坏成功响应的未确认创建尝试', () => {
+describe('未确认的创建尝试', () => {
   it('编辑中迟到未知属于原尝试，保留最小摘要并阻止所有创建入口', async () => {
     const write = deferred(); api.create.mockReturnValue(write.promise)
     const { host, created, state } = await mount()
@@ -170,6 +170,8 @@ describe('坏成功响应的未确认创建尝试', () => {
     await edit(name(host), 'edited-B')
     write.reject(new CreateContainerOutcomeUnknownError()); await flush()
     const notice = host.querySelector('[aria-label="创建结果未知"]')!
+    expect(notice.textContent).toContain('无法确认本次容器创建是否完成')
+    expect(notice.textContent).not.toContain('成功响应')
     expect(notice.textContent).toContain('alpine:latest')
     expect(notice.textContent).toContain('创建并启动')
     expect(notice.textContent).not.toContain('edited-B')

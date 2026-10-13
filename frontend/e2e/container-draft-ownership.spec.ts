@@ -44,7 +44,7 @@ async function fixture(page: Page) {
     const gate = index < 0 ? undefined : gates.splice(index, 1)[0]!
     if (gate) { gate.received.resolve(); await gate.release.promise }
     try {
-      if (gate && gate.status !== 200) return await route.fulfill({ status: gate.status, json: { code: 'FIXTURE_CREATE_FAILED', message: '旧草稿 A 创建失败', requestId: 'fixture-create-a' } })
+      if (gate && gate.status !== 200) return await route.fulfill({ status: gate.status, json: { code: 'DOCKER_CONTAINER_CREATE_INVALID', message: '容器创建参数无效。', requestId: 'fixture-create-a' } })
       if (body) return await route.fulfill({ status: 201, json: { containerId: 'created-fixture-a', name: body.name, image: body.image, state: 'running', created: true, started: true, runContainer: true } })
       if (path === resourcePath) return await route.fulfill({ json: { collectedAt: '2026-10-13T12:00:00Z', networks: [{ id: 'old-network', name: 'old-network', driver: 'bridge', scope: 'local', internal: false, subnets: [], gateways: [] }], volumes: [] } })
       if (gate && path === entriesPath) return await route.fulfill({ json: { path: '/obsolete', parent: '/', nextCursor: '', collectedAt: '2026-10-13T12:00:00Z', entries: [{ name: 'obsolete-entry', path: '/obsolete/entry', type: 'directory', readable: true }] } })
@@ -143,7 +143,7 @@ async function capturePendingB(page: Page, info: TestInfo) {
   }
 }
 
-for (const outcome of [{ status: 200, close: 'x' }, { status: 503, close: 'escape' }] as const) {
+for (const outcome of [{ status: 200, close: 'x' }, { status: 400, close: 'escape' }] as const) {
   test(`A 提交后普通 ${outcome.close} 关闭，迟到 ${outcome.status} 保留 B 且不重放`, async ({ page }, info) => {
     const api = await fixture(page)
     await openImages(page); await openDraft(page)

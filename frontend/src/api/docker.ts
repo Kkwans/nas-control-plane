@@ -1,6 +1,7 @@
 import { captureSession } from '@/session/sessionLifecycle'
 import {
   NcpApiError,
+  isApiErrorResponse,
   jsonRequest,
   requestJson,
   requestOptions,
@@ -371,20 +372,48 @@ export class CreateContainerOutcomeUnknownError extends NcpApiError {
   }
 }
 
+// 仅已核实在创建副作用之前返回的状态/稳定码配对允许作为普通拒绝处理。
+// Agent 不可用及创建/启动/检查/补偿失败均可能发生在创建之后，不能加入此表。
+const createContainerRejections = new Map<string, number>([
+  ['DOCKER_CONTAINER_CREATE_INVALID', 400],
+  ['CONTROL_INPUT_INVALID', 400],
+  ['AUTH_UNAUTHORIZED', 401],
+  ['HTTP_CROSS_ORIGIN_REJECTED', 403],
+  ['ROUTE_NOT_FOUND', 404],
+  ['METHOD_NOT_ALLOWED', 405],
+  ['HTTP_REQUEST_BODY_TOO_LARGE', 413],
+  ['HTTP_UNSUPPORTED_MEDIA_TYPE', 415],
+  ['AUTH_UNAVAILABLE', 503],
+])
+
 export async function createDockerContainer(
   input: DockerContainerCreateInput,
   fetcher: typeof fetch = fetch,
 ): Promise<DockerContainerCreateResult> {
   // 固定本次提交意图，避免等待响应时表单变化影响核验。
   const runContainer = input.runContainer
-  // 仅已收到的成功响应进入结果未知分支；网络拒绝和非 2xx 保持原有边界。
-  const response = await fetcher('/api/v1/docker/containers', requestOptions(jsonRequest(input)))
-  if (!response.ok) throw await responseError(response)
+  // 本地序列化与请求构造失败尚未调用 fetch，不能误报为远端结果未知。
+  // 禁止 fetch 通过 307/308 自动向跳转目标重发创建 POST。
+  const options = requestOptions({ ...jsonRequest(input), redirect: 'error' })
+  let response: Response
+  try {
+    response = await fetcher('/api/v1/docker/containers', options)
+  } catch {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  // 跳转后的响应只描述后续请求，不能确认原始创建请求的结果。
+  if (response.redirected) throw new CreateContainerOutcomeUnknownError()
 
   let payload: unknown
   try {
     payload = await response.json()
   } catch {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  if (!response.ok) {
+    if (isApiErrorResponse(payload) && createContainerRejections.get(payload.code) === response.status) {
+      throw new NcpApiError(payload.code, payload.message, payload.requestId)
+    }
     throw new CreateContainerOutcomeUnknownError()
   }
   if (!isDockerContainerCreateResult(payload, runContainer)) {

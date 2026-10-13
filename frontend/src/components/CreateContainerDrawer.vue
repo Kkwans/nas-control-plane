@@ -536,7 +536,7 @@ async function refreshUnresolvedInventory() {
 
     <section v-if="unresolvedAttempt" class="unresolved-attempt" aria-label="创建结果未知" role="status">
       <strong>容器可能已经创建，结果尚未确认</strong>
-      <p>服务器返回了无法确认的成功响应。为避免重复创建，本页已暂停新的创建提交。</p>
+      <p>无法确认本次容器创建是否完成。为避免重复创建，本页已暂停新的创建提交。</p>
       <dl>
         <dt>提交名称</dt><dd>{{ unresolvedAttempt.name }}</dd>
         <dt>提交镜像</dt><dd>{{ unresolvedAttempt.image }}</dd>

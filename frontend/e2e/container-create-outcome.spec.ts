@@ -10,6 +10,7 @@ import { installMockApi } from './mockApi'
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
 
 const createPath = '/api/v1/docker/containers'
+const redirectTargetPath = '/api/v1/docker/containers/fixture-redirect-denied'
 const inventoryPath = '/api/v1/docker/inventory'
 const submittedName = 'unknown-draft-a'
 const submittedImage = 'media-api:latest'
@@ -28,11 +29,14 @@ function deferred() {
   return { promise, resolve }
 }
 
-type Reply = { status: number; body: string }
-type Gate = { received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; finished: ReturnType<typeof deferred> }
+type Reply = { status: number; body: string; headers?: Record<string, string> } | { abort: 'failed' | 'aborted' }
+type Gate = { transportFailure: boolean; received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; finished: ReturnType<typeof deferred> }
 type InventoryMode = 'empty' | 'same-name' | 'failure'
 const invalidJson: Reply = { status: 201, body: '{' }
-const knownFailure: Reply = { status: 503, body: JSON.stringify({ code: 'FIXTURE_CREATE_FAILED', message: '旧草稿 A 创建失败', requestId: 'fixture-create-a' }) }
+const validationFailure: Reply = { status: 400, body: JSON.stringify({ code: 'DOCKER_CONTAINER_CREATE_INVALID', message: '容器创建参数无效。', requestId: 'fixture-create-a' }) }
+const transportFailure: Reply = { abort: 'failed' }
+const cleanupFailure: Reply = { status: 409, body: JSON.stringify({ code: 'DOCKER_CONTAINER_CREATE_CLEANUP_FAILED', message: 'private-cleanup-diagnostic', requestId: 'fixture-cleanup', containerId: 'untrusted-partial-id' }) }
+const agentFailure: Reply = { status: 503, body: JSON.stringify({ code: 'AGENT_DOCKER_CONTROL_UNAVAILABLE', message: 'private-agent-diagnostic', requestId: 'fixture-agent' }) }
 
 // 严格内存 fixture：只放行逐次授权的一个 POST，所有其他 API 变更和未知路径失败关闭。
 // 不访问 Docker/NAS；事件流也由通用 fixture 的手动 EventSource 接管。
@@ -56,6 +60,11 @@ async function fixture(page: Page) {
     const method = request.method()
     const target = `${method} ${path}`
     requests.push(target)
+    // 即使跳转策略回归，也只会命中失败关闭的内存端点。
+    if (path === redirectTargetPath) {
+      denied.push(target)
+      return route.fulfill({ status: 503, json: { code: 'FIXTURE_REDIRECT_TARGET_DENIED', message: '禁止跟随创建跳转' } })
+    }
     if (method === 'POST' && path === createPath && permitted) {
       const submission = permitted
       permitted = undefined
@@ -63,7 +72,8 @@ async function fixture(page: Page) {
       try {
         submission.gate?.received.resolve()
         if (submission.gate) await submission.gate.release.promise
-        await route.fulfill({ ...submission.reply, contentType: 'application/json' })
+        if ('abort' in submission.reply) await route.abort(submission.reply.abort)
+        else await route.fulfill({ ...submission.reply, contentType: 'application/json' })
       } finally { submission.gate?.finished.resolve() }
       return
     }
@@ -89,15 +99,17 @@ async function fixture(page: Page) {
     inventory(mode: InventoryMode) { inventoryMode = mode },
     allowOneCreate(reply: Reply = invalidJson, hold = false) {
       expect(permitted, '不能覆盖尚未消费的 fixture 提交许可').toBeUndefined()
-      const gate: Gate | undefined = hold ? { received: deferred(), release: deferred(), finished: deferred() } : undefined
+      const gate: Gate | undefined = hold ? { transportFailure: 'abort' in reply, received: deferred(), release: deferred(), finished: deferred() } : undefined
       permitted = { reply, gate }
       return gate
     },
     async release(gate: Gate) {
-      const response = page.waitForResponse((value) => new URL(value.url()).pathname === createPath && value.request().method() === 'POST')
+      const completed = gate.transportFailure
+        ? page.waitForEvent('requestfailed', (request) => new URL(request.url()).pathname === createPath && request.method() === 'POST').then(() => undefined)
+        : page.waitForResponse((value) => new URL(value.url()).pathname === createPath && value.request().method() === 'POST').then((response) => response.finished())
       gate.release.resolve()
       await gate.finished.promise
-      await (await response).finished()
+      await completed
       await settle(page)
     },
   }
@@ -139,6 +151,10 @@ async function attemptSummary(page: Page) {
 async function expectUnknown(page: Page, runContainer = true) {
   await expect(notice(page)).toContainText('容器可能已经创建，结果尚未确认')
   await expect(notice(page)).toContainText('空列表或同名容器都不能证明成功或失败')
+  await expect(notice(page)).toContainText('无法确认本次容器创建是否完成')
+  await expect(notice(page)).not.toContainText('成功响应')
+  await expect(notice(page)).not.toContainText('private-')
+  await expect(notice(page)).not.toContainText('untrusted-partial-id')
   await expect(notice(page).locator('dd')).toHaveText([
     submittedName, submittedImage, runContainer ? '创建并启动' : '仅创建', submittedTime,
   ])
@@ -328,6 +344,9 @@ for (const sample of [
   { label: '200 缺失容器身份', reply: { status: 200, body: '{}' }, runContainer: true },
   { label: '201 启动标志与提交不符', reply: { status: 201, body: JSON.stringify({ containerId: 'fixture-result', name: submittedName, image: submittedImage, state: 'stopped', created: true, started: false, runContainer: false }) }, runContainer: true },
   { label: '仅创建 201 无效 JSON', reply: invalidJson, runContainer: false },
+  { label: '创建传输失败', reply: transportFailure, runContainer: true },
+  { label: '409 补偿失败', reply: cleanupFailure, runContainer: true },
+  { label: '503 Agent 结果不明', reply: agentFailure, runContainer: true },
 ]) {
   test(`${sample.label} 进入未知状态且没有创建后刷新`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
@@ -344,7 +363,9 @@ for (const sample of [
 
 for (const outcome of [
   { label: '无效成功响应', reply: invalidJson, unknown: true, close: 'x' },
-  { label: '普通 503 错误', reply: knownFailure, unknown: false, close: 'escape' },
+  { label: '400 参数校验拒绝', reply: validationFailure, unknown: false, close: 'escape' },
+  { label: '传输失败', reply: transportFailure, unknown: true, close: 'escape' },
+  { label: '409 补偿失败', reply: cleanupFailure, unknown: true, close: 'x' },
 ] as const) {
   test(`A 迟到${outcome.label}不覆盖 B，不弹旧错误或重放提交`, async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
@@ -378,7 +399,7 @@ for (const outcome of [
       await expectUnknown(page)
       expect(await attemptSummary(page)).toEqual(originalAttempt)
     } else {
-      // 非 2xx 沿用当前既有边界，仅核对 B 可重新预览，不实际提交第二次。
+      // 已核实的派发前 400 拒绝仍允许修改和预览，不实际提交第二次。
       await expect(notice(page)).toHaveCount(0)
       await expect(createButton(page)).toBeEnabled()
       await createButton(page).click()
@@ -389,3 +410,30 @@ for (const outcome of [
     await expectOnePost(api)
   })
 }
+
+test('当前草稿收到 400 参数校验拒绝后可修改并重新预览', async ({ page }) => {
+  const api = await fixture(page)
+  await openImages(page); await openDraft(page)
+  api.allowOneCreate(validationFailure)
+  await submitA(page)
+  await expect(page.locator('.el-message')).toContainText('容器创建参数无效。')
+  await expect(notice(page)).toHaveCount(0)
+  await expect(createButton(page)).toBeEnabled()
+  await nameInput(page).fill('corrected-draft')
+  await createButton(page).click()
+  await expect(preview(page)).toContainText('corrected-draft')
+  await preview(page).getByRole('button', { name: '返回修改', exact: true }).click()
+  await expectOnePost(api)
+})
+
+test('307 创建跳转直接进入未知，不向内存跳转目标重发 POST', async ({ page }) => {
+  const api = await fixture(page)
+  await openImages(page); await openDraft(page)
+  const before = api.requests.length
+  api.allowOneCreate({ status: 307, body: '', headers: { location: redirectTargetPath } })
+  await submitA(page)
+  await expectUnknown(page)
+  expect(api.requests.slice(before)).toEqual([`POST ${createPath}`])
+  expect(api.requests.some((request) => request.endsWith(` ${redirectTargetPath}`))).toBe(false)
+  await expectOnePost(api)
+})
