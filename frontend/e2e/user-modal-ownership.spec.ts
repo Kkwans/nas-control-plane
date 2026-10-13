@@ -63,9 +63,16 @@ async function fixture(page: Page) {
     },
     async release(held: (typeof gates)[number]) {
       const response = page.waitForResponse((value) => new URL(value.url()).pathname === held.path && value.request().method() === held.method)
+      // 改密成功处理函数必定发起只读对账；先注册观察，避免错过快速的 204 回调。
+      const reconciled = held.status === 200 && held.path.endsWith('/password')
+        ? page.waitForRequest((request) => new URL(request.url()).pathname === usersPath && request.method() === 'GET')
+        : undefined
       held.release.resolve()
-      await (await response).finished()
-      // 消费响应、Vue 更新和 Element 消息挂载完成后再检查没有错归属提示。
+      const result = await response
+      if (reconciled) await reconciled
+      else await result.finished()
+      // 不依赖 CI 中未结束的 204 body-completion 等待；对账请求证明业务成功分支已执行。
+      // 失败仍等待 JSON 响应传输完成，再等待 Vue 更新和 Element 消息挂载，保留错归属断言。
       await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
     },
   }
