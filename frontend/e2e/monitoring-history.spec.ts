@@ -12,8 +12,8 @@ test.use({
 const minuteMs = 60_000
 const historyEnd = Date.parse(summary.collectedAt)
 const historyStart = historyEnd - 60 * minuteMs
-// 与 RealtimeTrendChart 的单行图例 grid 保持同步；不使用页面绝对坐标。
-const plotGrid = { left: 45, right: 12, top: 42, bottom: 26 }
+// 与 RealtimeTrendChart 的 canvas grid 保持同步；图例和单位在 canvas 外，不使用页面绝对坐标。
+const plotGrid = { left: 45, right: 12, top: 10, bottom: 26 }
 const regions = { left: [0.015, 0.075], center: [0.2, 0.8], right: [0.925, 0.985] } as const
 type RegionName = keyof typeof regions
 type RGB = readonly [number, number, number]
@@ -232,3 +232,116 @@ test('只有成功的空数组呈现单一历史空态', async ({ page }, testIn
   await expect(page.locator('.trend-chart')).toHaveCount(0)
   await capture(empty, testInfo, 'successful-empty')
 })
+
+const longSensorNames = Array.from({ length: 64 }, (_, index) => `sensor-${String(index).padStart(2, '0')}-机箱内部温度探针-coretemp:Package-id-${index}-<img src=x onerror=alert(1)>-very-long-sensor-name`)
+
+function manySensorSamples(): MetricSample[] {
+  return Array.from({ length: 6 }, (_, minute) => ({
+    ...sampleAt(minute, historyEnd - 5 * minuteMs),
+    temperatures: longSensorNames.map((name, index) => ({ name, temperatureCelsius: 30 + index + minute })),
+  }))
+}
+
+async function expectSeparatedChartLayout(card: Locator) {
+  await expect(card.locator('.trend-chart__canvas canvas').first()).toBeVisible()
+  const layout = await card.evaluate((element) => {
+    const chart = element.querySelector('.trend-chart')!
+    const chartBounds = chart.getBoundingClientRect()
+    const legend = chart.querySelector('.trend-chart__legend')!.getBoundingClientRect()
+    const units = chart.querySelector('.trend-chart__axis-units')!.getBoundingClientRect()
+    const canvas = chart.querySelector('.trend-chart__canvas')!.getBoundingClientRect()
+    const items = [...chart.querySelectorAll('.trend-chart__legend-item')].map((item) => item.getBoundingClientRect())
+    return {
+      legendToUnits: units.top - legend.bottom,
+      unitsToCanvas: canvas.top - units.bottom,
+      canvasHeight: canvas.height,
+      rightEdge: chartBounds.right,
+      leftEdge: chartBounds.left,
+      viewport: window.innerWidth,
+      contained: items.every((item) => item.width > 0 && item.left >= chartBounds.left - 1 && item.right <= chartBounds.right + 1 && item.bottom <= units.top + 1),
+      overlap: items.some((item, index) => items.slice(index + 1).some((other) => Math.min(item.right, other.right) - Math.max(item.left, other.left) > 1 && Math.min(item.bottom, other.bottom) - Math.max(item.top, other.top) > 1)),
+    }
+  })
+  expect(layout.legendToUnits, '图例与单位使用独立的布局行').toBeGreaterThanOrEqual(-1)
+  expect(layout.unitsToCanvas, '单位行不会覆盖实际绘图区').toBeGreaterThanOrEqual(-1)
+  expect(layout.canvasHeight, '长图例不能压扁趋势绘图区').toBeGreaterThanOrEqual(170)
+  expect(layout.leftEdge).toBeGreaterThanOrEqual(0)
+  expect(layout.rightEdge).toBeLessThanOrEqual(layout.viewport)
+  expect(layout.contained).toBe(true)
+  expect(layout.overlap).toBe(false)
+}
+
+async function captureViewport(page: Page, testInfo: TestInfo, state: string) {
+  if (process.env.NCP_CAPTURE_UI !== '1') return
+  const name = `fixture-monitoring-history-${state}`
+  const path = testInfo.outputPath('ui-captures', `${name}.png`)
+  await page.screenshot({ path, animations: 'disabled' })
+  await testInfo.attach(name, { path, contentType: 'image/png' })
+}
+
+for (const width of [320, 390]) {
+  test(`${width}px 下六张监控图表分隔单位与图例，八个长传感器名称和真实下拉菜单不溢出`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    await startHistory(page, { status: 200, body: manySensorSamples() })
+    for (const title of ['cpu', 'memory', 'storage', 'network', 'disk-io', 'temperature']) {
+      const card = chartCard(page, title)
+      await expectSeparatedChartLayout(card)
+      await capture(card, testInfo, `${width}px-${title}-separated-labels`)
+    }
+    const temperature = chartCard(page, 'temperature')
+    const legends = temperature.locator('.trend-chart__legend-item')
+    await expect(legends).toHaveCount(8)
+    await expect(temperature.locator('img')).toHaveCount(0)
+    await expect(temperature.locator('.monitor-sensor-select__count')).toHaveText('已显示 8 / 64 个传感器，最多同时显示 8 个')
+    for (let index = 0; index < 8; index += 1) {
+      await expect(legends.nth(index)).toHaveAttribute('title', longSensorNames[index]!)
+      await expect(legends.nth(index)).toHaveAccessibleName(longSensorNames[index]!)
+    }
+    // HTML 图例保留键盘切换行为，并用真实 canvas 证明隐藏/恢复曲线生效。
+    const memory = chartCard(page, 'memory')
+    const memoryLegend = memory.getByRole('button', { name: '内存', exact: true })
+    await expectSeriesPixels(memory, rgb(monitoringChartTokens.memory), ['left', 'center', 'right'])
+    await memoryLegend.focus()
+    await memoryLegend.press('Space')
+    await expect(memoryLegend).toHaveAttribute('aria-pressed', 'false')
+    await expect.poll(async () => (await readPlotPixels(memory, rgb(monitoringChartTokens.memory))).regions.center.pixels).toBe(0)
+    await memoryLegend.press('Space')
+    await expect(memoryLegend).toHaveAttribute('aria-pressed', 'true')
+    await expectSeriesPixels(memory, rgb(monitoringChartTokens.memory), ['left', 'center', 'right'])
+
+    const select = temperature.getByRole('combobox', { name: '选择温度传感器，最多 8 个' })
+    await select.scrollIntoViewIfNeeded()
+    await select.click()
+    const dropdown = page.locator('.el-popper.monitor-sensor-select-popper:visible')
+    await expect(dropdown).toBeVisible()
+    await expect(dropdown.getByRole('option')).toHaveCount(50)
+    await expect(dropdown.locator('img')).toHaveCount(0)
+    const ninth = dropdown.getByRole('option', { name: longSensorNames[8]!, exact: true })
+    await expect(ninth).toHaveAttribute('aria-disabled', 'true')
+    const dropdownBox = await dropdown.boundingBox()
+    expect(dropdownBox).not.toBeNull()
+    expect(dropdownBox!.x).toBeGreaterThanOrEqual(0)
+    expect(dropdownBox!.x + dropdownBox!.width).toBeLessThanOrEqual(width)
+    await captureViewport(page, testInfo, `${width}px-eight-long-sensors-dropdown`)
+
+    await dropdown.getByRole('option', { name: longSensorNames[0]!, exact: true }).click()
+    await expect(temperature.locator('.monitor-sensor-select__count')).toContainText('已显示 7 / 64')
+    await expect(ninth).not.toHaveAttribute('aria-disabled', 'true')
+    await ninth.click()
+    await expect(temperature.locator('.monitor-sensor-select__count')).toContainText('已显示 8 / 64')
+    await expect(legends).toHaveCount(8)
+    await expect(temperature.getByRole('button', { name: longSensorNames[0]!, exact: true })).toHaveCount(0)
+    await expect(temperature.getByRole('button', { name: longSensorNames[8]!, exact: true })).toBeVisible()
+    await select.fill('sensor-63')
+    const searched = dropdown.getByRole('option', { name: longSensorNames[63]!, exact: true })
+    await expect(searched).toBeVisible()
+    await expect(searched).toHaveAttribute('aria-disabled', 'true')
+    await expect(dropdown.getByRole('option')).toHaveCount(9)
+    await captureViewport(page, testInfo, `${width}px-bounded-sensor-search`)
+    await select.press('Escape')
+    await expect(dropdown).toHaveCount(0)
+    await expectSeparatedChartLayout(temperature)
+    const overflow = await page.evaluate(() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) - window.innerWidth)
+    expect(overflow, '传感器名称、标签与已关闭的下拉面板不能撑宽页面').toBeLessThanOrEqual(0)
+  })
+}

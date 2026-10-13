@@ -38,6 +38,8 @@ function update(value: unknown) {
       filterable
       clearable
       collapse-tags
+      fit-input-width
+      popper-class="monitor-sensor-select-popper"
       :max-collapse-tags="2"
       :multiple-limit="8"
       :filter-method="(value: string) => query = value"
@@ -45,7 +47,7 @@ function update(value: unknown) {
       placeholder="搜索并选择传感器"
       @update:model-value="update"
     >
-      <ElOption v-for="name in options" :key="name" :label="name" :value="name" />
+      <ElOption v-for="name in options" :key="name" :label="name" :value="name" :title="name" />
     </ElSelect>
     <p v-if="matches.count > 50" class="monitor-sensor-select__hint" role="status">匹配 {{ matches.count }} 项，仅显示前 50 项，请继续搜索。</p>
     <p v-if="modelValue.length >= 8 && names.length > 8" class="monitor-sensor-select__hint">已达到 8 个上限，请先取消一个再选择。</p>
@@ -56,4 +58,11 @@ function update(value: unknown) {
 .monitor-sensor-select { display:grid; gap:6px; margin-bottom:10px; }
 .monitor-sensor-select__count, .monitor-sensor-select__hint { margin:0; color:var(--ncp-text-subtle); font-size:.7rem; line-height:1.5; }
 .monitor-sensor-select :deep(.el-select) { min-width:0; width:100%; }
+</style>
+
+
+<style>
+/* 下拉面板挂载到 body，不能依赖父卡片或 scoped 后代约束宽度。 */
+.monitor-sensor-select-popper { max-width: calc(100vw - 24px); }
+.monitor-sensor-select-popper .el-select-dropdown__item { height: auto; min-height: 34px; padding-top: 8px; padding-bottom: 8px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
 </style>

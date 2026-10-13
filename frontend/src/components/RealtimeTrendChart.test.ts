@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, type App } from 'vue'
+import { createApp, h, nextTick, type App } from 'vue'
 import RealtimeTrendChart, { type TrendSeries } from './RealtimeTrendChart.vue'
 
 type ChartSeries = {
@@ -21,8 +21,9 @@ type ChartOption = {
     data?: string[]
     axisLabel: { formatter?: (value: number) => string }
   }
-  legend: { data: string[] }[]
-  yAxis: { min: number | ((range: { min: number }) => number) }[]
+  grid: { left: number; right: number; top: number; bottom: number }
+  legend: { show: boolean; data: string[]; selected: Record<string, boolean> }
+  yAxis: { min: number | ((range: { min: number }) => number); name: string; show?: boolean }[]
   series: ChartSeries[]
 }
 let option: ChartOption | undefined
@@ -34,7 +35,7 @@ afterEach(() => { app?.unmount(); host?.remove(); app = undefined; option = unde
 const start = new Date(2026, 9, 13, 0, 0, 0).valueOf()
 const minute = 60_000
 
-function mountChart(props: { timestamps: (string | number)[]; series: TrendSeries[]; history?: boolean; emptyMessage?: string }) {
+function mountChart(props: { timestamps: (string | number)[]; series: TrendSeries[]; history?: boolean; emptyMessage?: string; unit?: string }) {
   host = document.createElement('div'); document.body.append(host)
   app = createApp({ render: () => h(RealtimeTrendChart, props) })
   app.mount(host)
@@ -133,7 +134,7 @@ describe('历史时间轴与独立缺口', () => {
     const last = new Date(2026, 9, 14, 0, 0, 0).valueOf()
     expect(option!.xAxis.max).toBe(last)
     expect(option!.series[0]!.data).toEqual([[last - minute, 37], [last, 43]])
-    expect(option!.xAxis.axisLabel.formatter!(last)).toBe('10/14 00:00')
+    expect(option!.xAxis.axisLabel.formatter!(last)).toBe('10/14 00:00:00')
   })
 
   it('单个真实零值可见，并给时间轴前后各 30 秒范围', () => {
@@ -194,7 +195,7 @@ describe('历史时间轴与独立缺口', () => {
     expect(host.textContent).toContain('coretemp:Core 0最新样本：暂无数据')
     expect(host.textContent).not.toContain('38.0')
     expect(option!.series[1]!.symbol!([start, 38], { dataIndex: 0 })).toBe('circle')
-    expect(option!.legend[0]!.data).toEqual(['coretemp:Package id 0', 'coretemp:Core 0', 'nvme:Composite'])
+    expect(option!.legend.data).toEqual(['coretemp:Package id 0', 'coretemp:Core 0', 'nvme:Composite'])
   })
 
   it('历史纵轴包含有效负温度，正常非负指标仍从零开始', () => {
@@ -253,6 +254,72 @@ describe('历史 tooltip 的时间和值', () => {
     expect(tooltip).toContain(marker)
     expect(tooltip).not.toContain('<img')
     expect(host.querySelector('img')).toBeNull()
-    expect(option!.legend[0]!.data).toEqual([name])
+    expect(option!.legend.data).toEqual([name])
+  })
+})
+
+
+describe('图例、单位与绘图区分层', () => {
+  it('网络单位拥有独立行，canvas 不再叠画图例或轴名', () => {
+    mountChart({
+      history: true,
+      timestamps: [start, start + minute],
+      series: [
+        { name: '接收', color: '#16866a', values: [1, 2], unit: 'KB/s' },
+        { name: '发送', color: '#2468d8', values: [2, 3], unit: 'KB/s' },
+      ],
+    })
+    expect(option!.legend.show).toBe(false)
+    expect(option!.yAxis.every((axis) => axis.name === '')).toBe(true)
+    expect(host.querySelector('.trend-chart__legend')?.textContent).toContain('接收')
+    expect(host.querySelector('.trend-chart__legend')?.textContent).not.toContain('KB/s')
+    expect(host.querySelector('.trend-chart__axis-units')?.textContent).toBe('KB/s')
+    expect(option!.grid).toMatchObject({ top: 10, right: 12, bottom: 26, left: 45 })
+  })
+
+  it('双纵轴独立标识百分比和无单位负载，并预留右侧刻度空间', () => {
+    mountChart({
+      timestamps: [start, start + minute],
+      series: [
+        { name: 'CPU', color: '#2468d8', values: [20, 25], unit: '%' },
+        { name: '负载', color: '#d28a1b', values: [1, 2], unit: '', axis: 'right' },
+      ],
+    })
+    expect(host.querySelector('.trend-chart__axis-units')?.textContent).toContain('左轴 · %')
+    expect(host.querySelector('.trend-chart__axis-units')?.textContent).toContain('右轴 · 负载')
+    expect(option!.grid.right).toBe(42)
+    expect(option!.yAxis[1]!.show).toBe(true)
+  })
+
+  it('八条长传感器名称完整保留且安全，图例按钮切换原名称对应的折线', async () => {
+    const names = Array.from({ length: 8 }, (_, index) => `sensor-${index}-<img src=x onerror=1>-很长的原始传感器名称-${'name'.repeat(20)}`)
+    mountChart({
+      history: true,
+      timestamps: [start, start + minute],
+      unit: '°C',
+      series: names.map((name, index) => ({ name, color: '#d28a1b', values: [30 + index, 31 + index] })),
+    })
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.trend-chart__legend-item')]
+    expect(buttons).toHaveLength(8)
+    expect(buttons.map((button) => button.title)).toEqual(names)
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(names)
+    expect(host.querySelector('img')).toBeNull()
+    expect(option!.legend.data).toEqual(names)
+    expect(host.querySelector('.trend-chart__axis-units')?.textContent).toBe('°C')
+    buttons[0]!.click()
+    await nextTick()
+    expect(buttons[0]!.getAttribute('aria-pressed')).toBe('false')
+    expect(option!.legend.selected[names[0]!]).toBe(false)
+    expect(option!.legend.selected[names[1]!]).toBe(true)
+    buttons[0]!.click()
+    await nextTick()
+    expect(buttons[0]!.getAttribute('aria-pressed')).toBe('true')
+    expect(option!.legend.selected[names[0]!]).toBe(true)
+  })
+
+  it('单点历史的短时间窗口显示秒，避免多个不同刻度重复同一分钟', () => {
+    mountChart({ history: true, timestamps: [start], series: [{ name: '温度', color: '#d28a1b', values: [30] }] })
+    const format = option!.xAxis.axisLabel.formatter!
+    expect([0, 10_000, 20_000].map((offset) => format(start + offset))).toEqual(['00:00:00', '00:00:10', '00:00:20'])
   })
 })
