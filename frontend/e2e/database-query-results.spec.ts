@@ -301,3 +301,116 @@ for (const width of [320, 390]) {
     expect(queryRequests).toBe(0)
   })
 }
+
+for (const width of [320, 390]) {
+  test(`字节截断、空前缀及超预算错误在 ${width}px 大字号下保留真实语义`, async ({ page }, testInfo) => {
+    await openWorkbench(page, width, 18)
+    let queryRequests = 0
+    let rowsRequests = 0
+    await page.route('**/api/v1/databases/rows', async (route) => {
+      rowsRequests += 1
+      await route.fallback()
+    })
+    await page.route('**/api/v1/databases/query', async (route) => {
+      queryRequests += 1
+      if (queryRequests === 3) {
+        return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture result too large' }) })
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        columns: ['id', 'amount'],
+        rows: queryRequests === 1 ? [['9007199254740993', '1.234567890123456789002500']] : [],
+        rowsAffected: 0, rowsAffectedKnown: false, truncated: true, truncationReason: 'byte_limit', durationMs: 2,
+      }) })
+    })
+    await navigateWorkbench(page, 18)
+    await page.locator('.cm-content').fill('UPDATE settings SET value = value WHERE id = 1 RETURNING id, value')
+    await page.getByRole('combobox', { name: 'SQL 结果模式' }).selectOption('rows')
+    const execute = page.locator('.sql-toolbar__actions').getByRole('button', { name: /执行/ })
+    const warning = page.locator('.query-truncation-warning')
+    await execute.click()
+    await expect(warning).toContainText('受 1 MiB 结果字节预算限制')
+    await expect(warning).toContainText('仅展示前 1 行完整结果，单元内容未被裁剪')
+    await expect(page.locator('.query-table')).toContainText('9007199254740993')
+    await expect(page.locator('.query-table')).toContainText('1.234567890123456789002500')
+    await expect(page.locator('.query-affected-summary')).toContainText('数据库未提供可用的影响行数')
+    await expect(execute).toBeEnabled()
+    expect(queryRequests).toBe(1)
+    expect(rowsRequests).toBe(2)
+    await expectWorkbenchFits(page, width)
+    await expectUnclippedText(warning)
+    await capture(page, testInfo, `fixture-sql-byte-prefix-${width}-font-18`)
+
+    await execute.click()
+    await expect(page.locator('.query-result header')).toContainText('结果行未能展示')
+    await expect(page.locator('.query-result')).not.toContainText('返回 0 行')
+    await expect(page.locator('.query-result')).not.toContainText('影响 0 行')
+    await expect(warning).toContainText('没有可展示的完整行，不代表查询无匹配')
+    await expect(warning).toContainText('不代表写入未生效或已回滚')
+    await expect(page.locator('.query-table .el-table__empty-text')).toHaveText('完整结果行未能展示。')
+    await expect(execute).toBeEnabled()
+    expect(queryRequests).toBe(2)
+    expect(rowsRequests).toBe(3)
+    await expectWorkbenchFits(page, width)
+    await expectUnclippedText(warning)
+    await expectUnclippedText(page.locator('.query-result header'))
+    await capture(page, testInfo, `fixture-sql-byte-empty-${width}-font-18`)
+
+    await execute.click()
+    const error = page.locator('.query-message--error')
+    await expect(error).toContainText('SQL 结果超过 1 MiB 响应预算')
+    await expect(error).toContainText('写操作可能已生效')
+    await expect(error).toContainText('result_too_large')
+    await expect(error).not.toContainText('Agent')
+    await expect(error).not.toContainText('SQL 未提交执行')
+    await expect(warning).toHaveCount(0)
+    await expect(execute).toBeEnabled()
+    expect(queryRequests).toBe(3)
+    expect(rowsRequests).toBe(3)
+    await expectWorkbenchFits(page, width)
+    await expectUnclippedText(error)
+    await capture(page, testInfo, `fixture-sql-result-too-large-${width}-font-18`)
+  })
+}
+
+test('整页超预算连续失败后不会跳页，最后一页仍可回退', async ({ page }) => {
+  await openWorkbench(page, 1280, 18)
+  const offsets: number[] = []
+  let failures = 2
+  await page.route('**/api/v1/databases/rows', async (route) => {
+    const { limit, offset } = route.request().postDataJSON() as { limit: number; offset: number }
+    offsets.push(offset)
+    if (offset === limit && failures > 0) {
+      failures -= 1
+      return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture table page too large' }) })
+    }
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      table: { schema: '', name: 'settings', type: 'table', columns: [] },
+      rows: [{ id: offset + 1, key: `page-offset-${offset}`, value: 'fixture' }],
+      limit, offset, hasMore: offset === 0, ordering: { stable: true, columns: ['id'] },
+    }) })
+  })
+  await navigateWorkbench(page, 18)
+  await page.getByRole('tab', { name: '表数据', exact: true }).click()
+  const next = page.getByRole('button', { name: '下一页', exact: true })
+  const previous = page.getByRole('button', { name: '上一页', exact: true })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await next.click()
+    await expect(page.locator('.database-error')).toContainText('result_too_large')
+    await expect(page.locator('.data-table')).toContainText('page-offset-0')
+    await expect(previous).toBeDisabled()
+    await expect(next).toBeEnabled()
+  }
+  await next.click()
+  await expect(next).toBeDisabled()
+  await expect(previous).toBeEnabled()
+  expect(offsets).toHaveLength(4)
+  expect(offsets.slice(1)).toEqual([offsets[1], offsets[1], offsets[1]])
+  expect(offsets[1]).toBeGreaterThan(0)
+  await expect(page.locator('.data-table')).toContainText(`page-offset-${offsets[1]}`)
+  await previous.click()
+  await expect(page.locator('.data-table')).toContainText('page-offset-0')
+  await expect(previous).toBeDisabled()
+  await expect(next).toBeEnabled()
+  expect(offsets).toHaveLength(5)
+  expect(offsets[4]).toBe(0)
+})

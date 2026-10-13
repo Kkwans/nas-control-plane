@@ -163,3 +163,11 @@
 - 独立审查用纯fake负对照复现了首帧Send阻塞取消、Close先于本地Read收尾的缺口。最终采用唯一输出sender负责started及后续帧，等待已准入Read与输入gate使用剩余关闭预算，耗尽时明确本地清理未确认；不把返回RPC之前强制join依赖RPC返回的transport泵当作正确方案。
 - 最终28项新cleanup测试与4项M08-B回归，race重复20轮通过；独立复核race重复10轮通过。三包仅编译、terminal/agentsocket vet、server/agent构建及精确diff检查通过。实际连接用内存net.Pipe，Agent使用受控fake Session，退出超时/错误通过fake gateway注入；没有真实Docker/PTY/NAS操作。
 - 预会话ExecAttach握手、Manager.Start全局持锁、宿主机PTY和任意子孙进程清理仍不在此片。两秒Close预算加100ms最后通知及调度开销不能表述为严格2.000秒RPC保证；预算耗尽不能表述为全部本地owner已结束。
+
+
+## 12:27 UTC 数据库结果字节预算
+
+- M14-C核心、RPC/HTTP、UI/OpenAPI共21个文件冻结。1MiB保守结果计费与最终编码复核、Scanner复制前拒绝超大值、完整行前缀截断、固定offset整页失败、AsMap前节点/深度预算与稳定result_too_large已实现；不提高gRPC默认上限、不重放SQL。
+- 两路独立审查补齐自定义编码/匿名字段及旧protobuf展开边界，以及翻页、排序、页大小失败后的导航跳行问题；最终均无阻塞。首行超限明确提示不是无匹配或未写入，UI保留完整单元且写入错误先提示核对状态。
+- 完整database与OpenAPI包、agentsocket/httpapi数据库精确选择、三包相关race、四包vet及native/linux-arm64双命令构建通过。完整前端445测试、typecheck、lint、build/bundle预算和E2E源码检查通过；新浏览器用例与截图待分支CI。
+- 最终验证中一次过宽的agentsocket/httpapi测试选择触发既有Unix socket集成，bind被环境拒绝；没有创建listener、没有提权或绕过。该次整包测试明确不算通过，完整集成由授权普通Linux CI另验。测试没有访问用户电脑、NAS或真实生产数据库。

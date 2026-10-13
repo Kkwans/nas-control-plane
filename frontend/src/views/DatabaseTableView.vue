@@ -83,6 +83,7 @@ const databaseErrorCopy: Record<string, DatabaseErrorCopy> = {
   permission_denied: { message: '当前账号没有执行该操作的权限。', nextStep: '改用具备目录读取或操作权限的账号后重试。' },
   sql_invalid: { message: 'SQL 或数据库请求无效。', nextStep: '检查 SQL 语句、表名和参数后重试。' },
   constraint_failed: { message: '数据约束未满足，请检查提交内容。', nextStep: '检查必填字段、唯一键和外键约束后重试。' },
+  result_too_large: { message: '结果超过 1 MiB 响应预算，无法展示。', nextStep: '减少每页行数；若单行仍超预算，请在 SQL 中只选择必要字段或预览大字段的部分内容。' },
   agent_unavailable: { message: 'Root Agent 暂不可用，请确认代理服务状态。', nextStep: '确认 Root Agent 正常运行后重新读取数据表。' },
   timeout: { message: '数据库操作超时，请稍后重试。', nextStep: '检查网络和数据库负载，稍后重新读取。' },
   credential_store_unavailable: { message: '数据库凭据服务暂不可用。', nextStep: '确认凭据服务正常后返回详情页重新测试连接。' },
@@ -107,6 +108,7 @@ const table = computed(() => catalog.value?.tables.find((item) => item.name === 
 const mode = ref<TableMode>('data')
 const tableRows = ref<DatabaseRows | null>(null)
 const rowsLoading = ref(false)
+const rowsInitialized = ref(false)
 const errorState = ref<DatabaseErrorState | null>(null)
 const offset = ref(0)
 const sortColumn = ref('')
@@ -158,6 +160,23 @@ const sqlRisk = computed(() => classifySqlRisk(sql.value))
 const affectedSummary = computed(() => queryResult.value?.rowsAffectedKnown === true
   ? `执行完成；影响 ${queryResult.value.rowsAffected} 行（驱动报告）。`
   : '执行完成；数据库未提供可用的影响行数。')
+const queryResultTitle = computed(() => {
+  const result = queryResult.value
+  if (!result?.columns.length) return '执行结果'
+  if (result.truncated && !result.rows.length) return '结果行未能展示'
+  return `返回 ${result.rows.length} 行`
+})
+const queryTruncationSummary = computed(() => {
+  const result = queryResult.value
+  if (!result?.truncated) return ''
+  const reason = result.truncationReason === 'byte_limit' ? '受 1 MiB 结果字节预算限制。'
+    : result.truncationReason === 'row_limit' ? '达到 500 行展示上限。'
+      : '返回结果已截断。'
+  const retained = result.rows.length ? `仅展示前 ${result.rows.length} 行完整结果，单元内容未被裁剪。`
+    : '没有可展示的完整行，不代表查询无匹配。'
+  return `${reason}${retained}截断不限制写入范围，也不代表写入未生效或已回滚。`
+})
+const queryEmptyText = computed(() => queryResult.value?.truncated ? '完整结果行未能展示。' : '无返回行')
 const dangerTitle = computed(() => dangerAction.value === 'sql' ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.title ?? '确认执行 SQL') : '确认删除数据行')
 const dangerDescription = computed(() => dangerAction.value === 'sql'
   ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
@@ -206,6 +225,7 @@ function resetRouteState() {
   mutationController = null
   tableRows.value = null
   rowsLoading.value = false
+  rowsInitialized.value = false
   errorState.value = null
   queryResult.value = null
   queryPending.value = false
@@ -228,7 +248,7 @@ function connection() {
   return databaseStore.connection(sourceId.value)
 }
 
-async function refreshRows(reportError = true): Promise<RowsRefreshOutcome> {
+async function refreshRows(reportError = true, requestedOffset = offset.value): Promise<RowsRefreshOutcome> {
   if (!table.value) return { status: 'stale' }
   const sequence = ++rowsSequence
   const requestKey = routeKey.value
@@ -243,12 +263,13 @@ async function refreshRows(reportError = true): Promise<RowsRefreshOutcome> {
       schema: table.value.schema,
       table: table.value.name,
       limit: pageSize.value,
-      offset: offset.value,
+      offset: requestedOffset,
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
     }, controller.signal)
     if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted) return { status: 'stale' }
     tableRows.value = result
+    offset.value = requestedOffset
     if (reportError) queryRefreshError.value = null
     return { status: 'success' }
   } catch (error) {
@@ -257,14 +278,30 @@ async function refreshRows(reportError = true): Promise<RowsRefreshOutcome> {
     if (reportError) errorState.value = failure
     return { status: 'failed', error: failure }
   } finally {
-    if (sequence === rowsSequence) rowsLoading.value = false
+    if (sequence === rowsSequence) {
+      rowsLoading.value = false
+      rowsInitialized.value = true
+    }
   }
+}
+
+async function changePage(direction: -1 | 1) {
+  if (rowsLoading.value || !tableRows.value || !stablePagination.value) return
+  if (direction === 1 && !tableRows.value.hasMore || direction === -1 && offset.value === 0) return
+  // 失败页不推进游标，避免下次翻页跳过超预算但尚未展示的数据。
+  await refreshRows(true, Math.max(0, offset.value + direction * pageSize.value))
+}
+
+function invalidateRowsPage() {
+  // 新排序或页大小必须先成功读取首屏，旧页不能作为新设置的翻页依据。
+  tableRows.value = null
+  offset.value = 0
 }
 
 async function onSortChange(event: { prop?: string | null; order?: 'ascending' | 'descending' | null }) {
   sortColumn.value = event.prop ?? ''
   sortDirection.value = event.order === 'descending' ? 'desc' : event.order === 'ascending' ? 'asc' : ''
-  offset.value = 0
+  invalidateRowsPage()
   await refreshRows()
 }
 
@@ -504,6 +541,9 @@ function toQueryErrorState(error: unknown): DatabaseErrorState {
   if (code === 'DATABASE_INPUT_INVALID') {
     return { code, message: 'SQL 请求未通过服务端校验。', nextStep: 'SQL 未提交执行；请核对请求格式及 Server 是否支持所选结果模式。' }
   }
+  if (code === 'result_too_large') {
+    return { code, message: 'SQL 结果超过 1 MiB 响应预算，无法展示。', nextStep: '写操作可能已生效；请先核对数据库状态，再决定是否重试。读取时可减少返回列或预览大字段的部分内容。' }
+  }
   const message = code === 'timeout' ? 'SQL 执行超时。'
     : code === 'DATABASE_OPERATION_FAILED' ? '未能确认 SQL 执行结果。'
       : errorMessage(error, 'SQL 执行失败。')
@@ -521,7 +561,7 @@ function clearError() {
 watch(routeKey, () => { void initialize() }, { immediate: true })
 watch(pageSize, (next, previous) => {
   if (next === previous) return
-  offset.value = 0
+  invalidateRowsPage()
   sql.value = table.value ? `SELECT * FROM ${sqlTableName()} LIMIT ${next}` : sql.value
   void refreshRows()
 })
@@ -582,7 +622,7 @@ onBeforeUnmount(() => {
       <div v-if="tableRows && !stablePagination" class="object-warning">当前表缺少稳定分页键，仅显示首批数据；如需完整浏览，请在 SQL Workbench 中使用自定义排序查询。</div>
       <div class="data-table-hint"><span>表数据</span><small>左右滑动查看字段，编号和行操作已固定</small></div>
       <div class="data-table">
-        <div v-if="rowsLoading && !tableRows" class="data-table-skeleton">
+        <div v-if="rowsLoading && !rowsInitialized" class="data-table-skeleton">
           <div class="data-table-skeleton__head"><i v-for="cell in Math.min(columns.length + 2, 8)" :key="cell" class="ncp-skeleton"></i></div>
           <div v-for="row in 9" :key="row" class="data-table-skeleton__row"><i v-for="cell in Math.min(columns.length + 2, 8)" :key="cell" class="ncp-skeleton"></i></div>
         </div>
@@ -604,7 +644,7 @@ onBeforeUnmount(() => {
       </div>
       <footer class="data-pagination">
         <ListPageSizeControl list-key="database.table.rows" />
-        <div><ElButton :disabled="offset === 0 || rowsLoading || !stablePagination" @click="offset = Math.max(0, offset - pageSize); refreshRows()">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading || !stablePagination" @click="offset += pageSize; refreshRows()">下一页</ElButton></div>
+        <div><ElButton :disabled="offset === 0 || rowsLoading || !stablePagination" @click="changePage(-1)">上一页</ElButton><ElButton :disabled="!tableRows?.hasMore || rowsLoading || !stablePagination" @click="changePage(1)">下一页</ElButton></div>
       </footer>
     </section>
 
@@ -643,15 +683,16 @@ onBeforeUnmount(() => {
         <div class="sql-toolbar__actions">
           <label class="sql-result-mode"><span>结果模式</span><select v-model="resultMode" class="ncp-select" :disabled="queryPending" aria-label="SQL 结果模式"><option v-for="(label, value) in resultModeLabels" :key="value" :value="value">{{ label }}</option></select></label>
           <small v-if="sqlRisk" class="sql-risk-hint" role="status"><CircleAlert :size="14" />{{ sqlRisk.hint }}</small>
-          <small v-else>最多返回 500 行</small>
+          <small v-else>最多 500 行 / 1 MiB</small>
           <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim() || queryPending || dangerOpen || dangerBusy" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton>
         </div>
       </div>
-      <div class="sql-mode-note" role="note">自动模式仅按开头语句类型选择结果方式，不能完整识别 RETURNING 或 CTE 写入。RETURNING 请选“返回行”；无返回行的 CTE 写入请选“执行”以获取驱动影响行数。返回行模式也会执行写操作；500 行仅是展示上限，不限制写入范围。</div>
+      <div class="sql-mode-note" role="note">自动模式仅按开头语句类型选择结果方式，不能完整识别 RETURNING 或 CTE 写入。RETURNING 请选“返回行”；无返回行的 CTE 写入请选“执行”以获取驱动影响行数。返回行模式也会执行写操作；500 行与 1 MiB 仅限制展示结果，不限制写入范围。</div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
-        <header><strong>{{ queryResult?.columns.length ? `返回 ${queryResult.rows.length} 行` : '执行结果' }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryPending ? '正在执行' : '等待执行' }}</span></header>
+        <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryPending ? '正在执行' : '等待执行' }}</span></header>
         <div v-if="queryRefreshError" class="query-refresh-warning" role="alert"><strong>SQL 已执行，表数据刷新失败。</strong><span>{{ queryRefreshError.message }} 请在“表数据”中重新读取，勿为刷新而重跑 SQL。</span><small>代码 {{ queryRefreshError.code }}</small></div>
+        <div v-if="queryTruncationSummary" class="query-truncation-warning" role="status">{{ queryTruncationSummary }}</div>
         <div v-if="queryResult?.columns.length" class="query-affected-summary">{{ affectedSummary }}</div>
         <div v-if="queryError" class="query-message query-message--error">
           <CircleAlert :size="22" />
@@ -659,7 +700,7 @@ onBeforeUnmount(() => {
           <code>代码 {{ queryError.code }}</code>
         </div>
         <div v-else-if="queryResult?.columns.length" class="query-table">
-          <ElTable :data="queryRows" height="100%" border stripe>
+          <ElTable :data="queryRows" :empty-text="queryEmptyText" height="100%" border stripe>
             <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="150" show-overflow-tooltip>
               <template #default="{ row }"><span v-if="row[column] === null" class="null-value">NULL</span><span v-else class="cell-value">{{ displayValue(column, row[column]) }}</span></template>
             </ElTableColumn>
@@ -1201,7 +1242,8 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 
-.query-refresh-warning {
+.query-refresh-warning,
+.query-truncation-warning {
   display: grid;
   flex-shrink: 0;
   gap: 3px;
@@ -1271,9 +1313,10 @@ onBeforeUnmount(() => {
   display: flex;
   min-height: 42px;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--ncp-line);
   background: var(--ncp-surface-quiet);
   font-size: .75rem;
@@ -1281,12 +1324,11 @@ onBeforeUnmount(() => {
 }
 
 .query-result > header span {
-  overflow: hidden;
+  min-width: 0;
   color: var(--ncp-text-subtle);
   font-family: var(--ncp-font-mono);
   font-size: .68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .query-table {

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -152,9 +154,23 @@ func callDatabaseClient(client AgentDatabaseServiceClient, request, result any, 
 	if response == nil {
 		return coded("AGENT_RPC_RESPONSE_INVALID", errors.New("数据库响应为空"))
 	}
-	encoded, err = json.Marshal(response.AsMap())
+	// 兼容旧 Agent 或自定义 provider：先检查线格式大小，再创建第二份结果树。
+	if err := validateDatabaseProtoBudget(response); err != nil {
+		return databaseRPCError(databaseResultTooLargeStatus())
+	}
+	if proto.Size(response) > ncpdatabase.MaxResultBytes {
+		return databaseRPCError(databaseResultTooLargeStatus())
+	}
+	responseValues := response.AsMap()
+	if err := ncpdatabase.ValidateResultBudget(responseValues); err != nil {
+		return databaseRPCError(databaseResultTooLargeStatus())
+	}
+	encoded, err = json.Marshal(responseValues)
 	if err != nil {
 		return coded("AGENT_RPC_RESPONSE_INVALID", err)
+	}
+	if len(encoded) > ncpdatabase.MaxResultBytes {
+		return databaseRPCError(databaseResultTooLargeStatus())
 	}
 	if err := json.Unmarshal(encoded, result); err != nil {
 		return coded("AGENT_RPC_RESPONSE_INVALID", err)
@@ -170,8 +186,79 @@ func databaseRPCError(err error) error {
 	if status.Code() == codes.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return coded(string(ncpdatabase.CodeTimeout), errors.New(string(ncpdatabase.CodeTimeout)))
 	}
+	// 旧 Agent 的默认 gRPC 4 MiB 接收限制同样表示结果过大，不能误报 Agent 断连。
+	if status.Code() == codes.ResourceExhausted {
+		return coded(string(ncpdatabase.CodeResultTooLarge), errors.New(string(ncpdatabase.CodeResultTooLarge)))
+	}
 	if code := ncpdatabase.CodeFromString(status.Message()); code != "" {
 		return coded(string(code), errors.New(string(code)))
 	}
 	return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
+}
+
+// 默认传输上限只约束线格式；密集小值在 AsMap 中会膨胀为接口/容器树。
+// 先直接遍历 protobuf，限制节点、文本转义和深度，再进行转换或递归 Size。
+func validateDatabaseProtoBudget(response *structpb.Struct) error {
+	return chargeDatabaseProtoStruct(ncpdatabase.NewResultBudget(), response, 0)
+}
+
+func chargeDatabaseProtoStruct(budget *ncpdatabase.ResultBudget, object *structpb.Struct, depth int) error {
+	if depth > 32 {
+		return databaseResultTooLargeStatus()
+	}
+	if err := budget.AddValue(nil); err != nil {
+		return err
+	}
+	for key, value := range object.GetFields() {
+		if err := budget.AddValue(key); err != nil {
+			return err
+		}
+		if err := chargeDatabaseProtoValue(budget, value, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func chargeDatabaseProtoValue(budget *ncpdatabase.ResultBudget, value *structpb.Value, depth int) error {
+	if depth > 32 {
+		return databaseResultTooLargeStatus()
+	}
+	if value == nil {
+		return budget.AddValue(nil)
+	}
+	switch typed := value.Kind.(type) {
+	case *structpb.Value_StringValue:
+		if typed != nil {
+			return budget.AddValue(typed.StringValue)
+		}
+	case *structpb.Value_NumberValue:
+		if typed != nil {
+			switch {
+			case math.IsNaN(typed.NumberValue):
+				return budget.AddValue("NaN")
+			case math.IsInf(typed.NumberValue, 1):
+				return budget.AddValue("Infinity")
+			case math.IsInf(typed.NumberValue, -1):
+				return budget.AddValue("-Infinity")
+			}
+		}
+	case *structpb.Value_StructValue:
+		if typed != nil {
+			return chargeDatabaseProtoStruct(budget, typed.StructValue, depth+1)
+		}
+	case *structpb.Value_ListValue:
+		if typed != nil {
+			if err := budget.AddValue(nil); err != nil {
+				return err
+			}
+			for _, item := range typed.ListValue.GetValues() {
+				if err := chargeDatabaseProtoValue(budget, item, depth+1); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	return budget.AddValue(nil)
 }

@@ -22,6 +22,7 @@ const (
 	CodePermissionDenied      ErrorCode = "permission_denied"
 	CodeSQLInvalid            ErrorCode = "sql_invalid"
 	CodeResultModeUnsupported ErrorCode = "result_mode_unsupported"
+	CodeResultTooLarge        ErrorCode = "result_too_large"
 	CodeConstraintFailed      ErrorCode = "constraint_failed"
 	CodeAgentUnavailable      ErrorCode = "agent_unavailable"
 	CodeTimeout               ErrorCode = "timeout"
@@ -82,7 +83,7 @@ func CodeFromString(value string) ErrorCode {
 	switch code {
 	case CodeCredentialsRequired, CodeAuthFailed, CodeUnreachable,
 		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid, CodeResultModeUnsupported,
-		CodeConstraintFailed, CodeAgentUnavailable, CodeTimeout,
+		CodeConstraintFailed, CodeResultTooLarge, CodeAgentUnavailable, CodeTimeout,
 		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeKeyUnavailable,
 		CodeKeyRotationFailed, CodeMigrationFailed:
 		return code

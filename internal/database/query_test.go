@@ -122,8 +122,7 @@ func (r *fakeQueryRows) Scan(values ...any) error {
 	if r.scanErr != nil {
 		return r.scanErr
 	}
-	*values[0].(*any) = int64(r.next)
-	return nil
+	return values[0].(sql.Scanner).Scan(int64(r.next))
 }
 func (r *fakeQueryRows) Close() error {
 	r.closes++

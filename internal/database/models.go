@@ -129,6 +129,7 @@ type QueryResult struct {
 	RowsAffected      int64    `json:"rowsAffected"`
 	RowsAffectedKnown bool     `json:"rowsAffectedKnown"`
 	Truncated         bool     `json:"truncated"`
+	TruncationReason  string   `json:"truncationReason,omitempty"`
 	DurationMs        int64    `json:"durationMs"`
 }
 

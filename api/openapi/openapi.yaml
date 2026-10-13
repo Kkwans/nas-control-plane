@@ -485,6 +485,8 @@ paths:
           required: false
           schema: { type: boolean, default: false }
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '200':
           description: 数据库来源列表
           content:
@@ -510,6 +512,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -549,6 +553,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -588,6 +594,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -615,8 +623,10 @@ paths:
       description: >-
         结果模式只决定读取返回行还是驱动影响行数，不限制 SQL 写入权限。
         NCP 对单次请求仅选择一次 Query 或 Exec 调用，不因错误、不支持模式或未知影响行数自动切换路径或重放；不承诺数据库驱动或网络层的 exactly-once。
-        行结果最多展示 500 行，这不是写入行数上限；返回行也不代表只读。
-        SQL 失败或超时不保证未执行或已回滚，应先核对实际状态再决定是否重试。
+        行结果最多展示 500 行，并采用 1 MiB（1048576 字节）的保守结果保留预算；预算包含转义字符串、base64、列名及容器等结构开销，可能在实际编码大小达到上限前截断。
+        只保留预算内的完整行前缀，不裁剪单元文本；首行超预算时可返回 columns 和空 rows，并标记 truncated=true、truncationReason=byte_limit，不能解读为零匹配或零写入。
+        行数与字节预算都不限制数据库写入范围；返回行也不代表只读。元数据本身过大或最终 JSON/protobuf 响应超过 1 MiB 时返回 HTTP 422 result_too_large。
+        SQL 失败、超时、截断或结果超预算不保证未执行或已回滚，应先核对实际状态再决定是否重试。
         当前响应仅表示驱动暴露的一个结果集，多语句的执行、结果与原子性取决于驱动和数据库。
       tags: [databases]
       security: [{RootSession: []}]
@@ -627,6 +637,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseQueryRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -657,6 +669,10 @@ paths:
     post:
       operationId: listDatabaseRows
       summary: 分页读取数据表行
+      description: >-
+        每页最多 200 行，整页数据与表元数据受 1 MiB（1048576 字节）的保守结果保留预算保护；计入转义、base64、对象键与结构开销。
+        超预算返回 HTTP 422 result_too_large，不按字节预算缩短成功页，也不裁剪单元内容；调用方应保留失败页的 offset，避免跳过未展示的行。
+        最终 JSON/protobuf 响应同样不得超过 1 MiB。应用层预算限制累计保留结果及响应，不能保证数据库驱动分配大单元时的峰值内存。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
@@ -666,6 +682,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseRowsRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -693,6 +711,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '201':
@@ -720,6 +740,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -747,6 +769,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -2353,6 +2377,15 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   responses:
+    DatabaseResultTooLarge:
+      description: >-
+        数据库结果超过 1 MiB（1048576 字节）的保守结果保留预算，或最终 JSON/protobuf 编码响应超过该上限；稳定错误码 result_too_large。
+        数据库目录、元数据或完整表页过大时返回此错误，不将其误报为 Agent 断连，也不返回被静默缩短的表页。
+        SQL 可能已经执行或写入；此错误不保证未执行或回滚，不得自动重试 SQL，应先核对实际数据库状态。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     CrossOriginRejected:
       description: 浏览器写请求的来源校验失败；命令行可省略 Origin，仍需原有会话认证。
       content:
@@ -2531,6 +2564,9 @@ components:
                 其他非空值（含大小写变体或前后空格）在准备数据库连接前返回 sql_invalid。
     DatabaseQueryResult:
       type: object
+      description: >-
+        返回预算内的完整行前缀，保留大整数与高精度小数字符串原文。
+        行数或字节截断只影响结果展示，不能推断匹配总数、写入行数或回滚状态。
       required: [columns, rows, rowsAffected, truncated, durationMs]
       properties:
         columns: { type: array, items: { type: string } }
@@ -2548,7 +2584,13 @@ components:
             返回行路径始终未知；执行路径在计数不支持、出错、为负或超过 JavaScript 安全整数范围时也未知，但 SQL 本身仍可执行成功。
         truncated:
           type: boolean
-          description: 表示返回行超过 500 行展示上限；不限制或推断数据库写入行数。
+          description: 表示结果因 500 行上限或 1 MiB 保守字节预算只保留完整行前缀；不限制或推断数据库写入行数。旧 Agent 可省略 truncationReason，调用方应保留通用截断提示。
+        truncationReason:
+          type: string
+          enum: [row_limit, byte_limit]
+          description: >-
+            可选截断原因，仅 truncated=true 时提供。row_limit 表示达到 500 行展示上限，byte_limit 表示下一完整行无法放入 1 MiB 保守结果预算。
+            byte_limit 可以伴随空 rows，但不代表查询无匹配或写入未生效；返回行路径的 rowsAffectedKnown 仍为 false。
         durationMs: { type: integer, minimum: 0 }
     DatabaseRowsRequest:
       allOf:
@@ -2564,6 +2606,7 @@ components:
             sortDirection: { type: string, enum: [asc, desc] }
     DatabaseRowsResult:
       type: object
+      description: 成功页不会按字节预算缩短或裁剪值；整页或元数据超预算返回 HTTP 422 result_too_large，客户端不得当作空页或推进 offset。
       required: [table, rows, limit, offset, hasMore, ordering]
       properties:
         table: { $ref: '#/components/schemas/DatabaseTable' }

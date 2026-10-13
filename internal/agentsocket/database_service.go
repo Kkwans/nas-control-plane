@@ -7,6 +7,7 @@ import (
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -185,8 +186,37 @@ func databaseResponse(result any, err error) (*structpb.Struct, error) {
 			grpcCode = codes.NotFound
 		case ncpdatabase.CodeConstraintFailed:
 			grpcCode = codes.FailedPrecondition
+		case ncpdatabase.CodeResultTooLarge:
+			grpcCode = codes.ResourceExhausted
 		}
 		return nil, grpcstatus.Error(grpcCode, string(code))
 	}
-	return dashboardStruct(result, "AGENT_DATABASE_RESPONSE_INVALID")
+	// provider 不一定经过 Manager；必须在 Marshal 分配大缓冲区前再次核查预算。
+	if err := ncpdatabase.ValidateResultBudget(result); err != nil {
+		return nil, databaseResultTooLargeStatus()
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_DATABASE_RESPONSE_INVALID")
+	}
+	if len(encoded) > ncpdatabase.MaxResultBytes {
+		return nil, databaseResultTooLargeStatus()
+	}
+	values := make(map[string]any)
+	if err := json.Unmarshal(encoded, &values); err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_DATABASE_RESPONSE_INVALID")
+	}
+	response, err := structpb.NewStruct(values)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_DATABASE_RESPONSE_INVALID")
+	}
+	// JSON 与 protobuf 的结构开销不同；最终线格式也必须低于同一预算。
+	if proto.Size(response) > ncpdatabase.MaxResultBytes {
+		return nil, databaseResultTooLargeStatus()
+	}
+	return response, nil
+}
+
+func databaseResultTooLargeStatus() error {
+	return grpcstatus.Error(codes.ResourceExhausted, string(ncpdatabase.CodeResultTooLarge))
 }

@@ -114,3 +114,15 @@ GOCACHE=/workspace/scratch/a2c31a226a28/ncp-tools/go-cache \
 临时 SQLite 诊断确认：501 行 UPDATE RETURNING 会修改全部 501 行而只展示 500 行；INSERT 后接无效语句的批次可在返回错误前持久化 INSERT；当前 SQLite 驱动的双 SELECT 批次展示最后一个结果集。不得从响应截断、失败或驱动行为推导跨数据库的事务/多结果集保证。
 
 验收包括旧客户端/旧 Agent/旧 provider 兼容、零 SQL 调用的模式不支持结果、真实 protobuf 往返、零与未知计数、带注释查询、RETURNING 只执行一次、499/500/501 边界、Rows.Close 错误、取消资源释放及界面快照。全自动 SQL lexer、多结果集、总字节预算与真实 MySQL/PostgreSQL/NAS验证仍在本片之外。
+
+## M14-C 实施闭环（2026-10-13）
+
+结果预算实现为1 MiB保守累计计费与最终JSON/protobuf编码复核，保留默认4 MiB gRPC接收限额。计费包含列/键、行结构、控制字符/Unicode/HTML转义、base64和元数据；保守计费可能在编码字节数达到1 MiB之前截断。它不是数据库驱动峰值内存硬限制。
+
+- 自定义Scanner在database/sql复制[]byte之前检查原值，计费后才转文本/base64；精确整数/小数、完整单元内容与NULL语义保留。不支持的驱动容器值和自定义编码钩子在转换前拒绝。
+- Query返回完整行前缀，新增可选truncationReason为row_limit或byte_limit。首行超大时可返回零行且明确byte_limit；不等同于查询无匹配、写入未执行或回滚。Rows.Close/Err/取消仍决定最终是否可返回成功。
+- 固定offset表分页超预算时整页失败；limit+1探测行不Scan。界面翻页仅在成功后提交offset，排序/页大小切换失败也不得沿旧页面继续跳过尚未显示的目标页。
+- Agent在结构/自定义编码预检后再JSON/protobuf转换并复核尺寸；Server客户端在AsMap前限制protobuf节点、文本、深度及编码体积，避免小线性载荷展开为过多接口节点。稳定result_too_large不会误报Agent掉线。
+- 前端分别显示行数/字节截断、完整行未能展示和整页超预算；写SQL结果错误提示先核对数据库状态，不自动重跑SQL。OpenAPI同步可选字段与错误码。
+
+独立审查补齐匿名嵌入字段、JSON编码钩子、protobuf超多null节点及循环fake的负对照，以及排序/页大小失败后的分页状态。临时SQLite确认超大RETURNING可写入完整2 MiB值而展示空前缀，因此展示限制不限制写入范围。真实MySQL/PostgreSQL/NAS和驱动侧峰值内存仍未验证。

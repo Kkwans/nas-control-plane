@@ -211,3 +211,73 @@ func TestUnsafeAPIOperationsDeclareOriginRejection(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabaseResultBudgetCompatibilityContract(t *testing.T) {
+	document, err := openapi3.NewLoader().LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := document.Components.Schemas["DatabaseQueryResult"].Value
+	reason := result.Properties["truncationReason"]
+	if reason == nil || reason.Value == nil {
+		t.Fatal("query result missing truncationReason")
+	}
+	if len(reason.Value.Enum) != 2 || reason.Value.Enum[0] != "row_limit" || reason.Value.Enum[1] != "byte_limit" {
+		t.Fatalf("unexpected truncation reasons: %v", reason.Value.Enum)
+	}
+	for _, name := range result.Required {
+		if name == "truncationReason" || name == "rowsAffectedKnown" {
+			t.Fatalf("%s must remain optional for older responses", name)
+		}
+	}
+	for _, fixture := range []struct {
+		name   string
+		reason string
+		rows   []any
+	}{
+		{name: "legacy truncated result", rows: []any{[]any{"9007199254740993", "1.234567890123456789002500"}}},
+		{name: "row prefix", reason: "row_limit", rows: []any{[]any{"9007199254740993", "1.234567890123456789002500"}}},
+		{name: "byte prefix", reason: "byte_limit", rows: []any{[]any{"9007199254740993", "1.234567890123456789002500"}}},
+		{name: "first oversized row", reason: "byte_limit", rows: []any{}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			value := map[string]any{
+				"columns": []any{"id", "amount"}, "rows": fixture.rows,
+				"rowsAffected": float64(0), "truncated": true, "durationMs": float64(1),
+			}
+			if fixture.reason != "" {
+				value["truncationReason"] = fixture.reason
+				value["rowsAffectedKnown"] = false
+			}
+			if err := result.VisitJSON(value); err != nil {
+				t.Fatalf("compatible budget response rejected: %v", err)
+			}
+		})
+	}
+	if err := reason.Value.VisitJSON("unknown_limit"); err == nil {
+		t.Fatal("truncationReason must retain its documented enum")
+	}
+	for _, endpoint := range []string{"discovery", "connect", "test-connection", "catalog", "query", "rows", "rows/insert", "rows/update", "rows/delete"} {
+		path := "/api/v1/databases/" + endpoint
+		operation := document.Paths.Value(path).Post
+		if endpoint == "discovery" {
+			operation = document.Paths.Value(path).Get
+		}
+		response := operation.Responses.Value("422")
+		if response == nil || response.Ref != "#/components/responses/DatabaseResultTooLarge" {
+			t.Fatalf("%s lacks shared result_too_large 422 response", path)
+		}
+		media := response.Value.Content.Get("application/json")
+		if media == nil || media.Schema.Ref != "#/components/schemas/ErrorResponse" {
+			t.Fatalf("%s has invalid budget error schema", path)
+		}
+		for _, clause := range []string{"result_too_large", "1 MiB", "不得自动重试 SQL"} {
+			if response.Value.Description == nil || !strings.Contains(*response.Value.Description, clause) {
+				t.Fatalf("%s missing budget error clause %q", path, clause)
+			}
+		}
+	}
+	if !strings.Contains(document.Components.Schemas["DatabaseRowsResult"].Value.Description, "客户端不得当作空页或推进 offset") {
+		t.Fatal("table page budget failure must not silently advance pagination")
+	}
+}

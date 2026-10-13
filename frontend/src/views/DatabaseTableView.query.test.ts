@@ -8,6 +8,7 @@ import DatabaseTableView from './DatabaseTableView.vue'
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(), rows: vi.fn(), store: vi.fn(), success: vi.fn(),
+  pageSize: { value: 25 },
   route: { params: { sourceId: 'a', table: 'sample' }, query: { schema: '' } },
 }))
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ replace: vi.fn() }) }))
@@ -18,7 +19,8 @@ vi.mock('@/api/database', () => ({
 }))
 vi.mock('@/composables/useListPreference', async () => {
   const { ref } = await import('vue')
-  return { useListPreference: () => ({ pageSize: ref(25) }) }
+  mocks.pageSize = ref(25)
+  return { useListPreference: () => ({ pageSize: mocks.pageSize }) }
 })
 vi.mock('@/components/ListPageSizeControl.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/WorkspaceHeader.vue', () => ({ default: { render: () => null } }))
@@ -50,8 +52,12 @@ vi.mock('element-plus', async () => {
         ? h('section', { role: 'dialog' }, [h('h2', props.title), slots.default?.(), slots.footer?.()]) : null,
     }),
     ElTable: defineComponent({
-      props: ['data'],
-      setup: (props) => () => h('div', { 'data-table-rows': JSON.stringify(props.data) }),
+      props: ['data', 'emptyText'],
+      emits: ['sort-change'],
+      setup: (props, { emit }) => () => h('div', {
+        'data-table-rows': JSON.stringify(props.data), 'data-empty-text': props.emptyText,
+        onSort: (event: Event) => emit('sort-change', (event as CustomEvent).detail),
+      }),
     }),
     ElTableColumn: { render: () => null },
     ElForm: content, ElFormItem: content, ElSwitch: content, ElTag: content, ElInput: content,
@@ -93,6 +99,10 @@ function button(label: string, root: ParentNode = host) {
   return found
 }
 async function openSQL() { button('执行 SQL').click(); await settle() }
+async function sortRows(order: 'ascending' | 'descending') {
+  host.querySelector('.data-table [data-table-rows]')!.dispatchEvent(new CustomEvent('sort', { detail: { prop: 'id', order } }))
+  await settle()
+}
 async function editSQL(statement: string) {
   const input = host.querySelector('textarea')!
   input.value = statement
@@ -112,6 +122,7 @@ async function confirm() { button('确认执行', dialog()!).click(); await sett
 
 beforeEach(() => {
   vi.resetAllMocks()
+  mocks.pageSize.value = 25
   mocks.route = reactive({ params: { sourceId: 'a', table: 'sample' }, query: { schema: '' } })
   mocks.store.mockReturnValue({
     sources: [source('a'), source('b')],
@@ -163,7 +174,7 @@ describe('SQL 结果模式与计数', () => {
     expect(host.querySelector('.query-result')?.textContent).toContain('数据库未提供可用的影响行数')
     expect(host.querySelector('.query-result')?.textContent).not.toContain('影响 1 行')
     expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"n":2}]')
-    expect(host.textContent).toContain('500 行仅是展示上限，不限制写入范围')
+    expect(host.textContent).toContain('500 行与 1 MiB 仅限制展示结果，不限制写入范围')
   })
 
   it('零行 RETURNING 保留结果列，显示返回 0 行且影响未知', async () => {
@@ -197,6 +208,263 @@ describe('SQL 结果模式与计数', () => {
     expect(host.querySelector('.query-refresh-warning')).toBeNull()
     expect(host.querySelector('.query-table')).not.toBeNull()
   })
+})
+
+describe('SQL 结果字节预算', () => {
+  it.each([
+    { reason: 'row_limit' as const, expected: '达到 500 行展示上限' },
+    { reason: 'byte_limit' as const, expected: '受 1 MiB 结果字节预算限制' },
+    { reason: undefined, expected: '返回结果已截断' },
+  ])('区分截断原因 $reason 并保留大整数和小数字符串', async ({ reason, expected }) => {
+    const values = ['9007199254740993', '1.234567890123456789002500']
+    mocks.execute.mockResolvedValue(result({ columns: ['id', 'amount'], rows: [values], truncated: true, truncationReason: reason }))
+    await mount()
+    executeButton().click()
+    await settle()
+    const warning = host.querySelector('.query-truncation-warning')
+    expect(warning?.textContent).toContain(expected)
+    expect(warning?.textContent).toContain('仅展示前 1 行完整结果，单元内容未被裁剪')
+    expect(warning?.textContent).toContain('不代表写入未生效或已回滚')
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe(JSON.stringify([{ id: values[0], amount: values[1] }]))
+    expect(host.querySelector('.query-result')?.textContent).not.toContain('影响 1 行')
+    if (reason === undefined) expect(warning?.textContent).not.toMatch(/1 MiB|500 行/)
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.rows).toHaveBeenCalledTimes(2)
+  })
+
+  it('首行超预算仍保留列，空前缀不冒充零匹配或零影响', async () => {
+    mocks.execute.mockResolvedValue(result({ columns: ['id'], truncated: true, truncationReason: 'byte_limit' }))
+    await mount()
+    await editSQL('UPDATE sample SET id = id WHERE id = 1 RETURNING id')
+    await selectMode('rows')
+    executeButton().click()
+    await settle()
+    expect(host.querySelector('.query-result header')?.textContent).toContain('结果行未能展示')
+    expect(host.querySelector('.query-result')?.textContent).not.toContain('返回 0 行')
+    expect(host.querySelector('.query-truncation-warning')?.textContent).toContain('没有可展示的完整行，不代表查询无匹配')
+    expect(host.querySelector('.query-truncation-warning')?.textContent).toContain('不代表写入未生效或已回滚')
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[]')
+    expect(host.querySelector('.query-table [data-empty-text]')?.getAttribute('data-empty-text')).toBe('完整结果行未能展示。')
+    expect(host.querySelector('.query-result')?.textContent).toContain('数据库未提供可用的影响行数')
+    expect(host.querySelector('.query-result')?.textContent).not.toContain('影响 0 行')
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.rows).toHaveBeenCalledTimes(2)
+  })
+
+  it('后续完整结果清除旧截断提示', async () => {
+    mocks.execute.mockResolvedValueOnce(result({ columns: ['id'], truncated: true, truncationReason: 'byte_limit' }))
+    await mount()
+    executeButton().click()
+    await settle()
+    expect(host.querySelector('.query-truncation-warning')).not.toBeNull()
+    mocks.execute.mockResolvedValueOnce(result({ columns: ['id'] }))
+    executeButton().click()
+    await settle()
+    expect(host.querySelector('.query-truncation-warning')).toBeNull()
+    expect(host.querySelector('.query-result header')?.textContent).toContain('返回 0 行')
+    expect(host.querySelector('.query-table [data-empty-text]')?.getAttribute('data-empty-text')).toBe('无返回行')
+  })
+
+  it('结果超预算错误不会冒充 Agent 断连、未执行或自动重试', async () => {
+    mocks.execute.mockRejectedValue(new NcpApiError('result_too_large', '超预算'))
+    await mount()
+    executeButton().click()
+    await settle()
+    const error = host.querySelector('.query-message--error')?.textContent
+    expect(error).toContain('SQL 结果超过 1 MiB 响应预算')
+    expect(error).toContain('写操作可能已生效')
+    expect(error).toContain('result_too_large')
+    expect(error).not.toMatch(/Agent|SQL 未提交执行|已回滚/)
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(mocks.rows).toHaveBeenCalledTimes(1)
+  })
+
+  it('表页重复超预算保留已展示页，前后翻页仍读取相邻 offset', async () => {
+    mocks.rows.mockResolvedValue({ ...tableRows, hasMore: true })
+    await mount()
+    button('表数据').click()
+    await settle()
+    for (const call of [1, 2]) {
+      mocks.rows.mockRejectedValueOnce(new NcpApiError('result_too_large', '超预算'))
+      button('下一页').click()
+      await settle()
+      expect(mocks.rows.mock.calls[call]![0]).toMatchObject({ limit: 25, offset: 25 })
+      expect(host.querySelector('.database-error')?.textContent).toContain('result_too_large')
+      expect(host.querySelector('.database-error')?.textContent).toContain('减少每页行数')
+      expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":1}]')
+      expect(button('上一页').disabled).toBe(true)
+    }
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, offset: 25, rows: [{ id: 26 }], hasMore: true })
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[3]![0]).toMatchObject({ limit: 25, offset: 25 })
+    expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":26}]')
+    expect(button('上一页').disabled).toBe(false)
+    expect(host.querySelector('.database-error')).toBeNull()
+    for (const call of [4, 5]) {
+      mocks.rows.mockRejectedValueOnce(new NcpApiError('result_too_large', '超预算'))
+      button('上一页').click()
+      await settle()
+      expect(mocks.rows.mock.calls[call]![0]).toMatchObject({ limit: 25, offset: 0 })
+      expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":26}]')
+      expect(button('上一页').disabled).toBe(false)
+    }
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, offset: 50, rows: [{ id: 51 }], hasMore: false })
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[6]![0]).toMatchObject({ limit: 25, offset: 50 })
+    expect(button('下一页').disabled).toBe(true)
+    expect(button('上一页').disabled).toBe(false)
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, offset: 25, rows: [{ id: 26 }], hasMore: true })
+    button('上一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[7]![0]).toMatchObject({ limit: 25, offset: 25 })
+    expect(button('下一页').disabled).toBe(false)
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+})
+
+describe('表分页设置重置与请求归属', () => {
+  async function openSecondPage() {
+    mocks.rows.mockResolvedValue({ ...tableRows, hasMore: true })
+    await mount()
+    button('表数据').click()
+    await settle()
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, offset: 25, rows: [{ id: 26 }], hasMore: true })
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows).toHaveBeenCalledTimes(2)
+    expect(button('上一页').disabled).toBe(false)
+  }
+
+  async function changeSetting(setting: 'sort' | 'pageSize') {
+    if (setting === 'sort') await sortRows('descending')
+    else { mocks.pageSize.value = 50; await settle() }
+  }
+
+  it('排序及页大小重新读取期间保留表组件实例，连续排序不重置组件状态', async () => {
+    await openSecondPage()
+    const tableElement = host.querySelector('.data-table [data-table-rows]')
+    const ascending = deferred<DatabaseRows>()
+    mocks.rows.mockReturnValueOnce(ascending.promise)
+    await sortRows('ascending')
+    expect(host.querySelector('.data-table-skeleton')).toBeNull()
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+    expect(tableElement?.getAttribute('data-table-rows')).toBe('[]')
+    expect(mocks.rows.mock.calls[2]![0]).toMatchObject({ offset: 0, sortColumn: 'id', sortDirection: 'asc' })
+    ascending.resolve({ ...tableRows, hasMore: true })
+    await settle()
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+    const descending = deferred<DatabaseRows>()
+    mocks.rows.mockReturnValueOnce(descending.promise)
+    await sortRows('descending')
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+    expect(mocks.rows.mock.calls[3]![0]).toMatchObject({ offset: 0, sortColumn: 'id', sortDirection: 'desc' })
+    descending.reject(new NcpApiError('result_too_large', '超预算'))
+    await settle()
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+    const resized = deferred<DatabaseRows>()
+    mocks.rows.mockReturnValueOnce(resized.promise)
+    mocks.pageSize.value = 50
+    await settle()
+    expect(host.querySelector('.data-table-skeleton')).toBeNull()
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+    expect(mocks.rows.mock.calls[4]![0]).toMatchObject({ offset: 0, limit: 50, sortColumn: 'id', sortDirection: 'desc' })
+    resized.resolve({ ...tableRows, limit: 50, hasMore: true })
+    await settle()
+    expect(host.querySelector('.data-table [data-table-rows]')).toBe(tableElement)
+  })
+
+  it.each(['sort', 'pageSize'] as const)('%s 首屏连续超预算时清除旧页，禁止跳页并可刷新恢复', async (setting) => {
+    await openSecondPage()
+    mocks.rows.mockRejectedValueOnce(new NcpApiError('result_too_large', '超预算'))
+    await changeSetting(setting)
+    const expected = { offset: 0, limit: setting === 'pageSize' ? 50 : 25, sortColumn: setting === 'sort' ? 'id' : '', sortDirection: setting === 'sort' ? 'desc' : '' }
+    expect(mocks.rows.mock.calls[2]![0]).toMatchObject(expected)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[]')
+      expect(host.querySelector('.database-error')?.textContent).toContain('result_too_large')
+      expect(button('下一页').disabled).toBe(true)
+      expect(button('上一页').disabled).toBe(true)
+      button('下一页').click()
+      button('下一页').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      button('上一页').click()
+      await settle()
+      expect(mocks.rows).toHaveBeenCalledTimes(3 + attempt)
+      if (attempt === 0) {
+        mocks.rows.mockRejectedValueOnce(new NcpApiError('result_too_large', '再次超预算'))
+        button('刷新').click()
+        await settle()
+        expect(mocks.rows.mock.calls[3]![0]).toMatchObject(expected)
+      }
+    }
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, limit: expected.limit, rows: [{ id: 101 }], hasMore: true })
+    button('刷新').click()
+    await settle()
+    expect(mocks.rows.mock.calls[4]![0]).toMatchObject(expected)
+    expect(host.querySelector('.database-error')).toBeNull()
+    expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":101}]')
+    expect(button('上一页').disabled).toBe(true)
+    expect(button('下一页').disabled).toBe(false)
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[5]![0]).toMatchObject({ ...expected, offset: expected.limit })
+    expect(mocks.execute).not.toHaveBeenCalled()
+  })
+
+  for (const setting of ['sort', 'pageSize'] as const) {
+    for (const latestOutcome of ['success', 'failure'] as const) {
+      it.each(['success', 'failure'] as const)(`${setting} 连续变化后旧请求 %s 不覆盖新请求 ${latestOutcome} 的页面、错误或游标`, async (oldOutcome) => {
+        await openSecondPage()
+        const old = deferred<DatabaseRows>()
+        const middle = deferred<DatabaseRows>()
+        const latest = deferred<DatabaseRows>()
+        mocks.rows.mockReturnValueOnce(old.promise).mockReturnValueOnce(middle.promise).mockReturnValueOnce(latest.promise)
+        await changeSetting(setting)
+        mocks.pageSize.value = 100
+        await settle()
+        mocks.pageSize.value = 50
+        await settle()
+        expect(mocks.rows).toHaveBeenCalledTimes(5)
+        expect((mocks.rows.mock.calls[2]![1] as AbortSignal).aborted).toBe(true)
+        expect((mocks.rows.mock.calls[3]![1] as AbortSignal).aborted).toBe(true)
+        expect(mocks.rows.mock.calls[4]![0]).toMatchObject({ offset: 0, limit: 50 })
+        const current = { ...tableRows, limit: 50, rows: [{ id: 101 }], hasMore: true }
+        if (latestOutcome === 'success') latest.resolve(current)
+        else latest.reject(new NcpApiError('result_too_large', '新设置超预算'))
+        await settle()
+        if (oldOutcome === 'success') {
+          old.resolve({ ...tableRows, offset: 25, rows: [{ id: 900 }], hasMore: true })
+          middle.resolve({ ...tableRows, offset: 100, rows: [{ id: 800 }], hasMore: false })
+        } else {
+          old.reject(new NcpApiError('timeout', '旧请求失败'))
+          middle.reject(new NcpApiError('database_not_found', '旧请求失败'))
+        }
+        await settle()
+        expect(mocks.rows).toHaveBeenCalledTimes(5)
+        expect(button('上一页').disabled).toBe(true)
+        if (latestOutcome === 'failure') {
+          expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[]')
+          expect(host.querySelector('.database-error')?.textContent).toContain('result_too_large')
+          expect(button('下一页').disabled).toBe(true)
+          button('下一页').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+          await settle()
+          expect(mocks.rows).toHaveBeenCalledTimes(5)
+          mocks.rows.mockResolvedValueOnce(current)
+          button('刷新').click()
+          await settle()
+          expect(mocks.rows.mock.calls[5]![0]).toMatchObject({ offset: 0, limit: 50 })
+        }
+        expect(host.querySelector('.database-error')).toBeNull()
+        expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":101}]')
+        expect(button('下一页').disabled).toBe(false)
+        button('下一页').click()
+        await settle()
+        expect(mocks.rows.mock.calls.at(-1)![0]).toMatchObject({ offset: 50, limit: 50, sortDirection: setting === 'sort' ? 'desc' : '' })
+        expect(mocks.execute).not.toHaveBeenCalled()
+      })
+    }
+  }
 })
 
 describe('SQL 确认、并发与路由归属', () => {
@@ -390,7 +658,7 @@ describe('SQL 失败没有自动重放', () => {
     if (code === 'result_mode_unsupported') expect(host.textContent).toContain('当前 Agent 不支持结果模式，请先升级 Agent')
   })
 
-  it.each(['sql_invalid', 'timeout', 'constraint_failed', 'DATABASE_OPERATION_FAILED'])('%s 提醒可能已有写入，不建议盲目重试', async (code) => {
+  it.each(['sql_invalid', 'timeout', 'constraint_failed', 'result_too_large', 'DATABASE_OPERATION_FAILED'])('%s 提醒可能已有写入，不建议盲目重试', async (code) => {
     mocks.execute.mockRejectedValue(new NcpApiError(code, '数据库错误'))
     await mount()
     executeButton().click()

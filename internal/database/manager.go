@@ -279,35 +279,19 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	if ordering.Columns == nil {
 		return RowsResult{}, newDatabaseError(CodeSQLInvalid, source, "rows", errors.New("sort column does not exist"))
 	}
+	result := RowsResult{Table: table, Rows: []Row{}, Limit: limit, Offset: request.Offset, Ordering: ordering}
+	budget, err := newResultBudget(result)
+	if err != nil {
+		return RowsResult{}, MapError(ctx, source, "rows", err)
+	}
 	query := "SELECT * FROM " + qualified(source.Driver, table.Schema, table.Name) + order +
 		" LIMIT " + strconv.Itoa(limit+1) + " OFFSET " + strconv.Itoa(request.Offset)
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
-	defer rows.Close()
-	names, err := rows.Columns()
-	if err != nil {
-		return RowsResult{}, MapError(ctx, source, "rows", err)
-	}
-	result := RowsResult{Table: table, Rows: make([]Row, 0, limit), Limit: limit, Offset: request.Offset, Ordering: ordering}
-	columnTypes, _ := rows.ColumnTypes()
-	for rows.Next() {
-		values, scanErr := scanValues(rows, len(names), columnTypes)
-		if scanErr != nil {
-			return RowsResult{}, MapError(ctx, source, "rows", scanErr)
-		}
-		if len(result.Rows) == limit {
-			result.HasMore = ordering.Stable
-			break
-		}
-		row := make(Row, len(names))
-		for index, name := range names {
-			row[name] = values[index]
-		}
-		result.Rows = append(result.Rows, row)
-	}
-	return result, MapError(ctx, source, "rows", rows.Err())
+	result, err = readPagedRows(ctx, rows, result, budget)
+	return result, MapError(ctx, source, "rows", err)
 }
 
 func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationResult, error) {
@@ -718,29 +702,6 @@ func execMutation(ctx context.Context, db *sql.DB, statement string, args []any)
 	}
 	affected, _ := result.RowsAffected()
 	return MutationResult{RowsAffected: affected}, nil
-}
-
-func scanValues(rows interface{ Scan(...any) error }, count int, columnTypes ...[]*sql.ColumnType) ([]any, error) {
-	raw := make([]any, count)
-	targets := make([]any, count)
-	for index := range raw {
-		targets[index] = &raw[index]
-	}
-	if err := rows.Scan(targets...); err != nil {
-		return nil, err
-	}
-	var types []*sql.ColumnType
-	if len(columnTypes) > 0 {
-		types = columnTypes[0]
-	}
-	for index := range raw {
-		databaseType := ""
-		if index < len(types) && types[index] != nil {
-			databaseType = types[index].DatabaseTypeName()
-		}
-		raw[index] = normalizeDatabaseValue(raw[index], databaseType)
-	}
-	return raw, nil
 }
 
 func normalizeValue(value any) any {

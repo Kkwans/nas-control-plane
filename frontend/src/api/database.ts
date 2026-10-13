@@ -3,6 +3,7 @@ import { NcpApiError } from './system'
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
 export type DatabaseQueryResultMode = 'auto' | 'rows' | 'exec'
+export type DatabaseQueryTruncationReason = 'row_limit' | 'byte_limit'
 
 export interface DatabaseSource {
   id: string
@@ -105,6 +106,7 @@ export interface QueryResult {
   rowsAffected: number
   rowsAffectedKnown?: boolean
   truncated: boolean
+  truncationReason?: DatabaseQueryTruncationReason
   durationMs: number
 }
 

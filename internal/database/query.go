@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -79,21 +80,7 @@ func executeQuery(ctx context.Context, runner queryRunner, driver Driver, reques
 }
 
 func readQueryRows(ctx context.Context, rows queryRows) (QueryResult, error) {
-	// Close 可能读取剩余协议或完成语句，不能在返回成功之后忽略它的错误。
-	finish := func(primary error) error {
-		closeErr := rows.Close()
-		iterationErr := rows.Err()
-		if primary != nil {
-			return primary
-		}
-		if iterationErr != nil {
-			return iterationErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		return ctx.Err()
-	}
+	finish := func(primary error) error { return finishResultRows(ctx, rows, primary) }
 	columns, err := rows.Columns()
 	if err != nil {
 		return QueryResult{}, finish(err)
@@ -102,16 +89,39 @@ func readQueryRows(ctx context.Context, rows queryRows) (QueryResult, error) {
 		columns = []string{}
 	}
 	result := QueryResult{Columns: columns, Rows: [][]any{}}
+	// 先预留最坏元数据；计时和截断原因不会在最后把响应挤出预算。
+	reservation := result
+	reservation.TruncationReason = "byte_limit"
+	reservation.DurationMs = math.MaxInt64
+	budget, err := newResultBudget(reservation)
+	if err != nil {
+		return QueryResult{}, finish(err)
+	}
+	result.Columns = ownResultColumns(columns)
 	columnTypes, _ := rows.ColumnTypes()
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return QueryResult{}, finish(err)
+		}
 		if len(result.Rows) >= maxQueryRows {
 			result.Truncated = true
+			result.TruncationReason = "row_limit"
 			break
 		}
-		values, scanErr := scanValues(rows, len(columns), columnTypes)
+		rowBudget := *budget
+		scanErr := rowBudget.take(resultNodeCost)
+		var values []any
+		if scanErr == nil {
+			values, scanErr = scanBudgetValues(rows, len(columns), columnTypes, &rowBudget)
+		}
+		if ErrorCodeOf(scanErr) == CodeResultTooLarge {
+			result.Truncated, result.TruncationReason = true, "byte_limit"
+			break
+		}
 		if scanErr != nil {
 			return QueryResult{}, finish(scanErr)
 		}
+		*budget = rowBudget
 		result.Rows = append(result.Rows, values)
 	}
 	if err := finish(nil); err != nil {
@@ -119,6 +129,22 @@ func readQueryRows(ctx context.Context, rows queryRows) (QueryResult, error) {
 	}
 	// Query 路径没有通用影响行数；返回行数不能作为写入计数。
 	return result, nil
+}
+
+// Close 可能消费剩余协议并返回后续错误，必须在宣布成功之前检查。
+func finishResultRows(ctx context.Context, rows queryRows, primary error) error {
+	closeErr := rows.Close()
+	iterationErr := rows.Err()
+	if primary != nil {
+		return primary
+	}
+	if iterationErr != nil {
+		return iterationErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return ctx.Err()
 }
 
 func returnsRows(driver Driver, statement string) bool {
