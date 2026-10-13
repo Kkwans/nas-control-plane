@@ -479,3 +479,11 @@ fe92e45 的 [CI 38435982303](https://github.com/Kkwans/nas-control-plane/actions
 - 独立审查及36项终端 fake/domain 测试通过（28项组件）；主线程完整前端61文件964项测试、lint、类型检查、生产构建和540KiB预算通过。
 - 新增六项浏览器 fixture 已通过 ESLint、严格 TypeScript 与发现检查；全部使用内存 WebSocket，浏览器执行/390与1440实际画面仍待本次CI。无真实PTY、Docker、NAS或生产凭据操作；后端容量仍为1，多标签及应用输出队列预算不在本次范围。
 - 同期既有界面：2fe81d2/run38437299969与ce336c6/run38438068385均938项单元、243项浏览器及Go/Compose通过；ce336c6的48张实际PNG与8JSON已逐项复核，页头/卡片信息及操作命中通过，详见用户移动视觉记录。
+
+## 偏好设置响应契约前置
+
+- GET/PUT完整解码十项偏好字段，合法服务端边界、默认值、未来字符串导航ID及额外字段保持兼容；坏数组、重复/非字符串ID及非法字段在进入store前拒绝。返回导航数组副本，不更改输入。
+- GET沿用CONTROL_RESPONSE_INVALID；成功状态但JSON/shape无效的PUT返回PreferencesWriteUnknownError/PREFERENCES_WRITE_UNKNOWN，明确仅为API层的未知写结果，不追加请求。HTTP错误、网络错误和Abort语义不变。
+- 修正OpenAPI pageSize为实际后端1–200、默认10，不把原文档枚举强加到合法响应。
+- 43项新契约测试与独立220项API复核通过。主任务对本模块精确副本完整65文件1158项单元、全量lint、Vue类型检查、生产构建和540KiB预算通过；CI待验。
+- 当前设置页仍可能显示通用失败并调度更新的草稿；固定会话/加载基线、可见未知结果及只读核对由独立设置归属切片继续，不能把本API补丁描述为已完成全部保存行为修复。未调用真实偏好API或NAS。

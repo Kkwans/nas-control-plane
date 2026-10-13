@@ -2632,7 +2632,9 @@ components:
           maximum: 18
         pageSize:
           type: integer
-          enum: [20, 25, 50, 100]
+          minimum: 1
+          maximum: 200
+          default: 10
         sidebarDefault:
           type: string
           enum: [collapsed, expanded]

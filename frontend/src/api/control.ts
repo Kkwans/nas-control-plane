@@ -1,3 +1,4 @@
+import { parsePreferencesResponse } from './preferenceResponse'
 import { SiteWriteUnknownError } from './siteWriteOutcome'
 import { NcpApiError } from '@/api/system'
 import { parseIgnoredSitesResponse, parseSiteListResponse, parseSiteProfileResponse } from './siteResponse'
@@ -158,11 +159,12 @@ export interface PasswordPolicy {
 }
 
 export function requestPreferences(signal?: AbortSignal): Promise<UserPreferences> {
-  return request('/api/v1/preferences', signal ? { signal } : {})
+  return request('/api/v1/preferences', signal ? { signal } : {}, parsePreferencesResponse)
 }
 
 export function updatePreferences(input: UserPreferences, signal?: AbortSignal): Promise<UserPreferences> {
-  return request('/api/v1/preferences', { method: 'PUT', body: JSON.stringify(input), ...(signal ? { signal } : {}) })
+  return request('/api/v1/preferences', { method: 'PUT', body: JSON.stringify(input), ...(signal ? { signal } : {}) },
+    (value) => parsePreferencesResponse(value, 'write'))
 }
 
 export function requestListPreference(listKey: string, signal?: AbortSignal): Promise<ListPreference> {
