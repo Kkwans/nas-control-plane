@@ -1,11 +1,15 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { installMockApi } from './mockApi'
 
 // 仅测试 HTTP/SSE fixture；所有变更默认拒绝，唯一例外是显式点击 Hub 后的一次模拟拉取。
 const timestamp = '2026-10-13T08:00:00Z'
+const responsiveWidths = [390, 768, 820, 821, 1024, 1200, 1280, 1440]
+const longReference = `registry.example.test/team/${'unbrokendownloadreference'.repeat(6)}:release-2026-10-13`
+const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 const job = (fields: Record<string, unknown> = {}) => ({
   id: 'download-recovery', type: 'docker-image-pull', status: 'running', artifactState: 'unknown',
   reference: 'nginx:latest', message: '正在下载镜像层', progress: 42,
@@ -15,9 +19,9 @@ const job = (fields: Record<string, unknown> = {}) => ({
 type Snapshot = ReturnType<typeof job>
 type StreamHost = { recoveryJobStreams: EventSource[] }
 const workspace = (page: Page) => page.locator('.download-workspace')
-const rowOf = (page: Page) => workspace(page).locator('.download-row').filter({ hasText: 'nginx:latest' })
+const rowOf = (page: Page, reference = 'nginx:latest') => workspace(page).getByRole('article', { name: `${reference} 下载任务`, exact: true })
 const refresh = (page: Page) => page.getByRole('button', { name: '刷新下载任务', exact: true })
-const recover = (page: Page) => rowOf(page).getByRole('button', { name: '重新获取 nginx:latest 的下载进度', exact: true })
+const recover = (page: Page, reference = 'nginx:latest') => rowOf(page, reference).getByRole('button', { name: `重新获取 ${reference} 的下载进度`, exact: true })
 
 async function fixture(page: Page, initial: Snapshot[] = [job()], initialFailure = false) {
   await installMockApi(page)
@@ -95,54 +99,166 @@ async function emit(page: Page, snapshot?: Snapshot) {
     }
   }, snapshot)
 }
-async function expectInterrupted(page: Page) {
-  const row = rowOf(page)
+async function expectInterrupted(page: Page, reference = 'nginx:latest') {
+  const row = rowOf(page, reference)
   await expect(row.locator('.job-state')).toHaveText('下载中')
   await expect(row.locator('.job-observation-warning')).toHaveText('进度连接中断')
   await expect(row).toContainText('任务可能仍在执行')
   await expect(row).not.toContainText('/s')
-  await expect(row.getByRole('progressbar', { name: 'nginx:latest 上次报告进度', exact: true })).toHaveAttribute('aria-valuenow', '42')
+  await expect(row.getByRole('progressbar', { name: `${reference} 上次报告进度`, exact: true })).toHaveAttribute('aria-valuenow', '42')
   await expect.poll(() => streams(page)).toEqual({ created: 1, active: 0 })
+}
+
+// 不通过横向滚动把隐藏的按钮移入视口；同时检查容器与每个语义字段。
+async function downloadLayout(page: Page) {
+  return workspace(page).evaluate((panel) => {
+    const bounds = (element: Element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const style = getComputedStyle(element)
+      return {
+        bounds: element.getBoundingClientRect().toJSON(),
+        scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+        scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
+        text: element.textContent, whiteSpace: style.whiteSpace, overflow: style.overflow,
+        textBounds: [...range.getClientRects()].map((rect) => rect.toJSON()),
+      }
+    }
+    const style = getComputedStyle(panel)
+    const row = panel.querySelector('.download-row')
+    const selectors = {
+      identity: '.job-identity strong', message: '.job-identity small', status: '.job-state',
+      warning: '.job-observation-warning', progress: '.job-progress', progressText: '.job-progress small',
+      speed: '.job-speed', observedTime: '.job-observed-time',
+      caveat: '.job-observation-recovery>span', recover: '.job-observation-recovery button',
+      readRetry: '.download-read-state button',
+    }
+    return {
+      rootFontPixels: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+      root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, scrollLeft: document.documentElement.scrollLeft },
+      panel: { ...bounds(panel), scrollLeft: panel.scrollLeft,
+        contentWidth: panel.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight),
+        containerName: style.containerName, containerType: style.containerType },
+      headDisplay: getComputedStyle(panel.querySelector('.download-head')!).display,
+      rowColumns: row ? getComputedStyle(row).gridTemplateColumns.split(' ') : [],
+      fields: Object.fromEntries(Object.entries(selectors).map(([name, selector]) => {
+        const element = panel.querySelector(selector)
+        return [name, element ? bounds(element) : null]
+      })),
+    }
+  })
+}
+
+async function expectDownloadLayout(page: Page, reference: string, interrupted = true, requireCards = false) {
+  const layout = await downloadLayout(page)
+  // 200% 字号必须明确进入卡片，不能退回桌面省略/弱几何断言。
+  const cards = requireCards || layout.panel.contentWidth <= Math.max(980, 61.25 * layout.rootFontPixels)
+  expect(layout.root.scrollWidth, '页面不得依赖横向滚动').toBeLessThanOrEqual(layout.root.clientWidth + 1)
+  expect(layout.root.scrollLeft).toBe(0)
+  expect(layout.panel.scrollWidth, '下载面板不得保留 960px 宽的隐藏表格').toBeLessThanOrEqual(layout.panel.clientWidth + 1)
+  expect(layout.panel.scrollLeft).toBe(0)
+  expect(layout.panel.containerName).toBe('image-downloads')
+  expect(layout.panel.containerType).toBe('inline-size')
+  expect(layout.headDisplay).toBe(cards ? 'none' : 'grid')
+  expect(layout.rowColumns).toHaveLength(cards ? 1 : 6)
+  expect(layout.fields.identity?.text).toBe(reference)
+  const required = ['identity', 'message', 'status', 'progress', 'progressText', 'speed', 'observedTime',
+    ...(interrupted ? ['warning', 'caveat', 'recover'] : [])]
+  for (const name of required) expect(layout.fields[name], `${name} 必须保留`).not.toBeNull()
+  for (const [name, field] of Object.entries(layout.fields)) {
+    if (!field) continue
+    expect(field.bounds.width, `${name} 有可见宽度`).toBeGreaterThan(0)
+    expect(field.bounds.left, `${name} 不得越过面板左侧`).toBeGreaterThanOrEqual(layout.panel.bounds.left - 1)
+    expect(field.bounds.right, `${name} 不得越过面板右侧`).toBeLessThanOrEqual(layout.panel.bounds.right + 1)
+    if (cards) {
+      expect(field.scrollWidth, `${name} 卡片内容必须完整换行`).toBeLessThanOrEqual(field.clientWidth + 1)
+      expect(field.scrollHeight, `${name} 卡片内容不得纵向截断`).toBeLessThanOrEqual(field.clientHeight + 1)
+      for (const rect of field.textBounds) {
+        expect(rect.left, `${name} 文本不得藏在面板左侧`).toBeGreaterThanOrEqual(layout.panel.bounds.left - 1)
+        expect(rect.right, `${name} 文本不得藏在面板右侧`).toBeLessThanOrEqual(layout.panel.bounds.right + 1)
+      }
+    }
+  }
+  if (cards) {
+    expect(layout.fields.identity?.whiteSpace).toBe('normal')
+    expect(layout.fields.identity?.overflow).toBe('visible')
+    for (const name of ['recover', 'readRetry']) {
+      if (layout.fields[name]) expect(layout.fields[name]!.bounds.height, `${name} 触控高度`).toBeGreaterThanOrEqual(44)
+    }
+  }
+  return layout
+}
+
+async function expectRecoveryInView(page: Page, reference: string, allContext: boolean, requireCards: boolean) {
+  const row = rowOf(page, reference)
+  // 只允许正常滚动；先断言没有横向依赖，避免 scrollIntoView 掩盖表格溢出。
+  await expectDownloadLayout(page, reference, true, requireCards)
+  await row.scrollIntoViewIfNeeded()
+  await recover(page, reference).scrollIntoViewIfNeeded()
+  await expect(recover(page, reference)).toBeInViewport({ ratio: 1 })
+  if (allContext) {
+    for (const selector of ['.job-identity strong', '.job-state', '.job-observation-warning', '.job-progress', '.job-observation-recovery>span']) {
+      await expect(row.locator(selector), `${selector} 与恢复按钮应可同时阅读`).toBeInViewport({ ratio: 1 })
+    }
+  }
+  await expectDownloadLayout(page, reference, true, requireCards)
+  const hit = await recover(page, reference).evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const target = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    return Boolean(target && element.contains(target))
+  })
+  expect(hit, '恢复按钮中心必须真实可点击，不得被遮挡').toBe(true)
 }
 
 async function capture(page: Page, info: TestInfo, name: string, state: Awaited<ReturnType<typeof fixture>>) {
   // 全量 axe 结果和截图描述同一状态；不得过滤 contrast/ARIA 等规则。
   const axe = await new AxeBuilder({ page }).analyze()
   const directory = info.outputPath('ui-captures')
+  let screenshot: Buffer | undefined
   if (process.env.NCP_CAPTURE_UI === '1') {
     await mkdir(directory, { recursive: true })
-    await page.screenshot({ path: `${directory}/${name}.png`, fullPage: false, animations: 'disabled' })
+    screenshot = await page.screenshot({ path: `${directory}/${name}.png`, fullPage: false, animations: 'disabled' })
   }
   // PNG 完成后读取状态；手动 Job 流在截图与状态记录期间不会自己推进。
-  const browserState = await page.evaluate(() => {
-    const panel = document.querySelector('.download-workspace')
-    return {
-      viewport: { width: innerWidth, height: innerHeight },
-      root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
-      panel: panel ? { bounds: panel.getBoundingClientRect().toJSON(), scrollLeft: panel.scrollLeft,
-        scrollWidth: panel.scrollWidth, clientWidth: panel.clientWidth, text: panel.textContent } : null,
-      rows: [...document.querySelectorAll('.download-row')].map((row) => ({
-        text: row.textContent, status: row.querySelector('.job-state')?.textContent,
-        warning: row.querySelector('.job-observation-warning')?.textContent,
-        progress: row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'),
-      })),
-      controls: [...document.querySelectorAll('.download-workspace button, .download-mode-actions button')].map((element) => {
-        const rect = element.getBoundingClientRect()
-        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
-        return { label: element.getAttribute('aria-label') || element.textContent || element.getAttribute('title'),
-          bounds: rect.toJSON(), disabled: element.hasAttribute('disabled'), centerHit: Boolean(hit && element.contains(hit)) }
-      }),
-    }
-  })
-  expect(browserState.root.scrollWidth).toBeLessThanOrEqual(browserState.root.clientWidth + 1)
-  if (process.env.NCP_CAPTURE_UI === '1') {
-    const metadata = { sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+  const browserState = await page.evaluate(() => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    rootFontSize: getComputedStyle(document.documentElement).fontSize,
+    rows: [...document.querySelectorAll('.download-row')].map((row) => ({
+      text: row.textContent, status: row.querySelector('.job-state')?.textContent,
+      warning: row.querySelector('.job-observation-warning')?.textContent,
+      progress: row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'),
+    })),
+    controls: [...document.querySelectorAll('.download-workspace button, .download-mode-actions button')].map((element) => {
+      const rect = element.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+      return { label: element.getAttribute('aria-label') || element.textContent || element.getAttribute('title'),
+        bounds: rect.toJSON(), disabled: element.hasAttribute('disabled'), centerHit: Boolean(hit && element.contains(hit)) }
+    }),
+  }))
+  const layout = await downloadLayout(page)
+  expect(layout.root.scrollWidth).toBeLessThanOrEqual(layout.root.clientWidth + 1)
+  expect(layout.panel.scrollWidth).toBeLessThanOrEqual(layout.panel.clientWidth + 1)
+  expect(layout.panel.scrollLeft).toBe(0)
+  if (screenshot) {
+    const sources = ['src/components/DockerImagePanel.vue', 'e2e/download-recovery.spec.ts', 'e2e/mockApi.ts']
+    const sourceHashes = Object.fromEntries(await Promise.all(sources.map(async (source) => [source, sha256(await readFile(source))])))
+    const metadata = { sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), sourceHashes,
       fixtureOnly: true, fixtureSource: 'frontend/e2e/download-recovery.spec.ts + frontend/e2e/mockApi.ts',
       state: name, reads: state.reads, mutations: state.mutations, blocked: state.blocked,
-      streams: await streams(page), ...browserState }
-    await writeFile(`${directory}/${name}-capture-state.json`, JSON.stringify(metadata, null, 2))
-    await writeFile(`${directory}/${name}-axe-capture-state.json`, JSON.stringify(axe, null, 2))
+      streams: await streams(page), ...browserState, ...layout }
+    const stateJson = JSON.stringify(metadata, null, 2)
+    const axeJson = JSON.stringify(axe, null, 2)
+    const manifest = { algorithm: 'sha256', files: {
+      [`${name}.png`]: sha256(screenshot),
+      [`${name}-capture-state.json`]: sha256(stateJson),
+      [`${name}-axe-capture-state.json`]: sha256(axeJson),
+    } }
+    await writeFile(`${directory}/${name}-capture-state.json`, stateJson)
+    await writeFile(`${directory}/${name}-axe-capture-state.json`, axeJson)
+    await writeFile(`${directory}/${name}-sha256.json`, JSON.stringify(manifest, null, 2))
     await info.attach(`${name}-state`, { path: `${directory}/${name}-capture-state.json`, contentType: 'application/json' })
+    await info.attach(`${name}-axe`, { path: `${directory}/${name}-axe-capture-state.json`, contentType: 'application/json' })
+    await info.attach(`${name}-sha256`, { path: `${directory}/${name}-sha256.json`, contentType: 'application/json' })
     await info.attach(`${name}-screenshot`, { path: `${directory}/${name}.png`, contentType: 'image/png' })
   }
   expect(axe.violations).toEqual([])
@@ -164,38 +280,55 @@ for (const width of [390, 1440]) {
     expect(state.mutations).toEqual([])
     expect(state.blocked).toEqual([])
   })
+}
 
-  test(`${width}px 断流保留执行状态，缓存读取失败保留行，活动快照恢复单一观察`, async ({ page }, info) => {
-    await page.setViewportSize({ width, height: 900 })
-    const state = await fixture(page)
-    await openDownloads(page)
-    await expect.poll(() => streams(page)).toEqual({ created: 1, active: 1 })
-    await emit(page, job())
-    await expect(rowOf(page)).toContainText('/s')
-    await emit(page)
-    await expectInterrupted(page)
-    // 窄屏使用浏览器正常滚动，让恢复按钮真实可见再截图及点击。
-    await recover(page).scrollIntoViewIfNeeded()
-    await expect(recover(page)).toBeInViewport({ ratio: 1 })
-    await capture(page, info, `interrupted-${width}`, state)
-    state.fail()
-    await recover(page).click()
-    await expect(workspace(page).getByRole('alert')).toContainText('下载任务刷新失败')
-    await expect(workspace(page).getByRole('alert')).toContainText('上次成功获取')
-    await expectInterrupted(page)
-    await page.getByRole('button', { name: '重新加载下载任务', exact: true }).scrollIntoViewIfNeeded()
-    await capture(page, info, `cached-read-failure-${width}`, state)
-    state.succeed([job({ progress: 55, downloadedBytes: 55, updatedAt: '2026-10-13T08:01:00Z' })])
-    await page.getByRole('button', { name: '重新加载下载任务', exact: true }).click()
-    await expect(rowOf(page).locator('.job-observation-warning')).toHaveCount(0)
-    await expect(rowOf(page)).toContainText('55%')
-    await expect(rowOf(page)).not.toContainText('/s')
-    await expect.poll(() => streams(page)).toEqual({ created: 2, active: 1 })
-    await emit(page, job({ progress: 60, downloadedBytes: 60, updatedAt: '2026-10-13T08:02:00Z' }))
-    await expect(rowOf(page)).toContainText('/s')
-    expect(state.mutations).toEqual([])
-    expect(state.blocked).toEqual([])
-  })
+for (const width of responsiveWidths) {
+  for (const scale of [1, 2]) {
+    test(`${width}px / ${scale * 100}% 根字号断流恢复保留可读上下文${scale === 2 ? '（长镜像引用）' : ''}`, async ({ page }, info) => {
+      await page.setViewportSize({ width, height: 900 })
+      const reference = scale === 2 ? longReference : 'nginx:latest'
+      const snapshot = (fields: Record<string, unknown> = {}) => job({ reference, ...fields })
+      const state = await fixture(page, [snapshot()])
+      await openDownloads(page)
+      const rootFontSize = await page.locator('html').evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
+      await page.addStyleTag({ content: `html { font-size: ${rootFontSize * scale}px !important; }` })
+      await expect(page.locator('html')).toHaveCSS('font-size', `${rootFontSize * scale}px`)
+      const row = rowOf(page, reference)
+      await expect.poll(() => streams(page)).toEqual({ created: 1, active: 1 })
+      await emit(page, snapshot())
+      await expect(row).toContainText('/s')
+      await emit(page)
+      await expectInterrupted(page, reference)
+      await expectRecoveryInView(page, reference, scale === 1, scale === 2)
+      await capture(page, info, `interrupted-${width}-font-${scale * 100}`, state)
+      const beforeRecovery = state.reads
+      state.fail()
+      await recover(page, reference).click()
+      await expect(workspace(page).getByRole('alert')).toContainText('下载任务刷新失败')
+      await expect(workspace(page).getByRole('alert')).toContainText('上次成功获取')
+      expect(state.reads).toBe(beforeRecovery + 1)
+      await expectInterrupted(page, reference)
+      await expectDownloadLayout(page, reference, true, scale === 2)
+      const reload = page.getByRole('button', { name: '重新加载下载任务', exact: true })
+      await reload.scrollIntoViewIfNeeded()
+      await expect(reload).toBeInViewport({ ratio: 1 })
+      await expectDownloadLayout(page, reference, true, scale === 2)
+      await capture(page, info, `cached-read-failure-${width}-font-${scale * 100}`, state)
+      state.succeed([snapshot({ progress: 55, downloadedBytes: 55, updatedAt: '2026-10-13T08:01:00Z' })])
+      const beforeReload = state.reads
+      await reload.click()
+      await expect(row.locator('.job-observation-warning')).toHaveCount(0)
+      await expect(row).toContainText('55%')
+      await expect(row).not.toContainText('/s')
+      expect(state.reads).toBe(beforeReload + 1)
+      await expectDownloadLayout(page, reference, false, scale === 2)
+      await expect.poll(() => streams(page)).toEqual({ created: 2, active: 1 })
+      await emit(page, snapshot({ progress: 60, downloadedBytes: 60, updatedAt: '2026-10-13T08:02:00Z' }))
+      await expect(row).toContainText('/s')
+      expect(state.mutations).toEqual([])
+      expect(state.blocked).toEqual([])
+    })
+  }
 }
 
 test('断流后只读刷新取得终态，不重开流或重放变更', async ({ page }) => {

@@ -195,3 +195,66 @@ describe('DockerImagePanel 创建后对账归属', () => {
     expect(hooks.warning).toHaveBeenCalledTimes(failures.length ? 1 : 0)
   })
 })
+
+describe('DockerImagePanel 窄屏下载恢复语义', () => {
+  it('同一命名任务保留完整身份、状态、进度、字段名称与只读恢复，不复制观察 owner', async () => {
+    const snapshot = { ...job(), reference: `registry.example.test/${'long-project-'.repeat(12)}:latest`, message: '镜像层仍在下载，观察中断不表示任务停止。' }
+    downloads.downloadJobsLoaded.value = true; downloads.downloadJobs.value = [snapshot]; downloads.interrupted.value = true
+    const host = await mountDownloads()
+    const rows = host.querySelectorAll('.download-row')
+    expect(rows).toHaveLength(1)
+    const row = rows[0]!
+    expect(row.getAttribute('aria-label')).toBe(`${snapshot.reference} 下载任务`)
+    expect(row.querySelector('.job-identity strong')?.textContent).toBe(snapshot.reference)
+    expect(row.querySelector('.job-identity small')?.textContent).toBe(snapshot.message)
+    expect(row.querySelector('.job-state')?.textContent).toBe('下载中')
+    expect(row.querySelectorAll('.job-observation-warning')).toHaveLength(1)
+    expect(row.querySelectorAll('[role="progressbar"]')).toHaveLength(1)
+    expect(row.querySelector('.job-speed .job-mobile-label')?.textContent).toBe('速度：')
+    expect(row.querySelector('.job-observed-time .job-mobile-label')?.textContent).toBe('更新时间：')
+    expect(row.querySelector('.job-observation-recovery')?.textContent).toContain('任务可能仍在执行')
+    const recover = row.querySelector<HTMLButtonElement>('.job-observation-recovery button')!
+    expect(recover.getAttribute('aria-label')).toBe(`重新获取 ${snapshot.reference} 的下载进度`)
+    recover.click()
+    expect(hooks.downloads).toHaveBeenCalledTimes(1)
+    expect(downloads.loadDownloadJobs).toHaveBeenCalledTimes(2)
+    expect(downloads.retryDownload).not.toHaveBeenCalled()
+    expect(downloads.stopDownload).not.toHaveBeenCalled()
+    expect(downloads.confirmDeleteJob).not.toHaveBeenCalled()
+  })
+
+  it('增加可见取消文字后保留原有写入禁用与读取忙碌守卫', async () => {
+    downloads.downloadJobsLoaded.value = true; downloads.downloadJobs.value = [job()]; downloads.interrupted.value = true
+    downloads.canCancelJob = () => false
+    const host = await mountDownloads()
+    const cancel = host.querySelector<HTMLButtonElement>('.job-actions button')!
+    expect(cancel.textContent).toBe('请求取消下载')
+    expect(cancel.getAttribute('aria-label')).toBe('请求取消下载（不保证远端立即停止）')
+    expect(cancel.disabled).toBe(true)
+    cancel.click()
+    expect(downloads.stopDownload).not.toHaveBeenCalled()
+    downloads.downloadJobsLoading.value = true; await nextTick()
+    const recover = host.querySelector<HTMLButtonElement>('.job-observation-recovery button')!
+    expect(recover.textContent).toBe('正在获取…')
+    expect(recover.disabled).toBe(true)
+    recover.click()
+    expect(downloads.loadDownloadJobs).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])('带文字重新下载按钮保留既有重试资格，允许=%s', async (allowed) => {
+    const snapshot = job('failed')
+    downloads.downloadJobsLoaded.value = true; downloads.downloadJobs.value = [snapshot]
+    downloads.canRetryJob = () => allowed
+    const host = await mountDownloads()
+    const retry = host.querySelector<HTMLButtonElement>('.job-actions button')!
+    expect(retry.textContent).toBe('重新下载')
+    expect(retry.getAttribute('aria-label')).toBe('重新下载')
+    expect(retry.disabled).toBe(!allowed)
+    retry.click()
+    expect(downloads.retryDownload).toHaveBeenCalledTimes(allowed ? 1 : 0)
+    if (allowed) expect(downloads.retryDownload).toHaveBeenCalledWith(snapshot)
+    expect(downloads.stopDownload).not.toHaveBeenCalled()
+    expect(downloads.confirmDeleteJob).not.toHaveBeenCalled()
+    expect(host.querySelector('.job-observation-recovery')).toBeNull()
+  })
+})

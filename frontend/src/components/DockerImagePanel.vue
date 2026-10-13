@@ -193,23 +193,23 @@ onMounted(() => {
       </div>
       <div v-else-if="downloadJobsLoading" class="download-read-state download-loading" role="status">{{ downloadJobsLoaded ? '正在刷新下载任务…' : '正在读取下载任务…' }}</div>
       <div class="download-head"><span>镜像</span><span>状态</span><span>进度</span><span>速度</span><span>更新时间</span><span>操作</span></div>
-      <article v-for="job in pagedDownloadJobs" :key="job.id" class="download-row">
-        <div><strong>{{ job.reference }}</strong><small>{{ job.message }}</small><small v-if="job.status === 'completed'">{{ downloadArtifactLabel(job) }}</small></div>
+      <article v-for="job in pagedDownloadJobs" :key="job.id" class="download-row" :aria-label="`${job.reference} 下载任务`">
+        <div class="job-identity"><strong>{{ job.reference }}</strong><small>{{ job.message }}</small><small v-if="job.status === 'completed'">{{ downloadArtifactLabel(job) }}</small></div>
         <div class="job-observation">
           <span :class="['job-state', `job-state--${downloadState(job)}`]">{{ downloadStateLabel(job) }}</span>
           <span v-if="isDownloadObservationInterrupted(job)" class="job-observation-warning">进度连接中断</span>
         </div>
         <div class="job-progress"><span role="progressbar" :aria-label="`${job.reference} ${isLiveJob(job) && !canShowDownloadSpeed(job) ? '上次报告进度' : '下载进度'}`" :aria-valuenow="job.progress" :aria-valuemin="0" :aria-valuemax="100"><i :style="{ width: `${job.progress}%` }"></i></span><small><template v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次报告：</template>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
-        <span>{{ canShowDownloadSpeed(job) && job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
+        <span class="job-speed"><span class="job-mobile-label">速度：</span>{{ canShowDownloadSpeed(job) && job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
         <div class="job-observed-time">
-          <time :datetime="job.updatedAt">{{ dateLabel(job.updatedAt) }}</time>
+          <span><span class="job-mobile-label">更新时间：</span><time :datetime="job.updatedAt">{{ dateLabel(job.updatedAt) }}</time></span>
           <small v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次获取：{{ observationTime(downloadLastObservedAt(job)) }}</small>
         </div>
         <div class="job-actions">
-          <button v-if="isLiveJob(job)" :disabled="!canCancelJob(job)" type="button" title="请求取消下载（不保证远端立即停止）" @click="stopDownload(job)"><Square :size="14" /></button>
-          <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" :disabled="!canRetryJob(job)" title="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /></button>
-          <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /></button>
-          <button v-if="canDeleteJob(job)" class="job-delete" type="button" title="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /></button>
+          <button v-if="isLiveJob(job)" :disabled="!canCancelJob(job)" type="button" title="请求取消下载（不保证远端立即停止）" aria-label="请求取消下载（不保证远端立即停止）" @click="stopDownload(job)"><Square :size="14" /><span class="job-mobile-label">请求取消下载</span></button>
+          <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" :disabled="!canRetryJob(job)" title="重新下载" aria-label="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /><span class="job-mobile-label">重新下载</span></button>
+          <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" aria-label="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /><span class="job-mobile-label">查看本地镜像</span></button>
+          <button v-if="canDeleteJob(job)" class="job-delete" type="button" title="删除下载记录" aria-label="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /><span class="job-mobile-label">删除下载记录</span></button>
         </div>
         <div v-if="isDownloadObservationInterrupted(job)" class="job-observation-recovery">
           <span>显示上次报告的进度，任务可能仍在执行。</span>
@@ -249,10 +249,11 @@ onMounted(() => {
 .job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
 .resource-select-head{display:flex;min-width:0;align-items:center;gap:8px}.resource-name-cell{display:flex;min-width:0;align-items:center;gap:8px}.resource-select-head input,.resource-name-cell>input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--ncp-primary)}.usage-cell{display:grid;justify-items:center;gap:2px;line-height:1.25}.usage-warning{color:var(--ncp-danger-strong);font-size:.72rem;font-weight:720}.bulk-remove-error>div{min-width:0}.bulk-remove-error ul{margin:4px 0 0;padding-left:17px}.selection-count{white-space:nowrap;font-variant-numeric:tabular-nums}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 100px;gap:8px}}
-@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar .section-tabs{width:100%}.image-modebar .section-tabs button{flex:1;justify-content:center}.mode-actions,.download-mode-actions{width:100%;flex-wrap:wrap}.mode-actions :deep(.el-input){min-width:160px;flex:1 1 180px}.resource-table,.download-workspace{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.download-workspace>header{min-width:760px}.download-head,.download-row{min-width:900px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar .section-tabs{width:100%}.image-modebar .section-tabs button{flex:1;justify-content:center}.mode-actions,.download-mode-actions{width:100%;flex-wrap:wrap}.mode-actions :deep(.el-input){min-width:160px;flex:1 1 180px}.resource-table{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
 </style>
 
 <style scoped>
+.download-workspace { container: image-downloads / inline-size; }
 .download-read-state { margin: 12px 16px; gap: 12px; }
 .download-read-state>div { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
 .download-read-state button,.job-observation-recovery button { min-height: 40px; flex: 0 0 auto; padding: 6px 10px; border: 1px solid currentColor; border-radius: 8px; font-weight: 700; }
@@ -263,7 +264,30 @@ onMounted(() => {
 .download-row .job-observed-time small { white-space: normal; overflow-wrap: anywhere; }
 .download-row .job-observation-recovery { grid-column: 1 / -1; justify-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 12px; color: var(--ncp-text-muted); text-align: left; }
 .job-observation-recovery button { color: var(--ncp-primary-strong); }
-@media(max-width:820px) { .download-read-state { align-items: stretch; flex-direction: column; } }
+.job-mobile-label { display: none; }
+/* 同时保护固定列最小宽度与放大文字；按面板实际空间切换，不依赖侧栏状态。 */
+@container image-downloads (max-width:980px) or (max-width:61.25rem) {
+  .download-workspace>header { min-width: 0; align-items: flex-start; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+  .download-workspace>header>div { min-width: 0; }
+  .download-read-state { align-items: stretch; flex-direction: column; }
+  .download-head { display: none; }
+  .download-row { min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 16px; }
+  .download-row>:nth-child(n) { min-width: 0; max-width: 100%; justify-self: stretch; text-align: left; }
+  .download-row strong,.download-row small { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+  .download-row .job-state { justify-self: start; white-space: normal; }
+  .job-observation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .job-observed-time { justify-items: start; overflow-wrap: anywhere; }
+  .job-mobile-label { display: inline; }
+  .job-speed { overflow-wrap: anywhere; }
+  .job-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .job-actions button,.job-actions .job-delete { width: auto; min-width: 44px; min-height: 44px; padding: 8px 12px; white-space: normal; }
+  .job-actions button svg { flex: 0 0 auto; }
+  .download-row .job-observation-recovery { align-items: stretch; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--ncp-radius-md); background: var(--ncp-surface-quiet); overflow-wrap: anywhere; }
+  .download-read-state button,.job-observation-recovery button { min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
+  .download-workspace .resource-pagination,.download-workspace .resource-pagination>div { flex-wrap: wrap; }
+  .download-workspace .resource-pagination button { min-height: 44px; }
+}
+@media(max-width:820px) { .download-mode-actions .icon-button { width: 44px; min-height: 44px; } }
 .resource-select-head button { width: auto; min-width: 0; flex: 1; }
 .resource-head>button:nth-child(5) { justify-content: center; }
 .resource-name-cell .resource-name { flex: 1; }
