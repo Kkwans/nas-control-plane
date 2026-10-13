@@ -154,9 +154,18 @@ for (const width of [390, 768, 1280, 1440]) {
     const bounds = (await hours.boundingBox())!
     expect(bounds.x).toBeGreaterThanOrEqual(0)
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
-    // 先保留交互后的真实滚动态；不改变焦点，确保未聚焦的 skip-link
-    // 没有遮挡视口，sticky header 仍紧贴当前视口顶部。
+    // 390px fixture 明确超过视口高度，主动滚动以覆盖非零 scrollY；
+    // 不能把下拉框交互后偶然停留在顶部的截图当作滚动态证据。
+    if (width === 390) {
+      const maxScroll = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)
+      expect(maxScroll).toBeGreaterThan(0)
+      await page.evaluate((top) => window.scrollTo({ top, left: 0, behavior: 'instant' }), Math.min(120, maxScroll))
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+    }
+    // 不改变焦点，确保未聚焦的 skip-link 没有遮挡视口，
+    // sticky header 仍紧贴当前视口顶部。
     const scrolledState = await expectUnobstructedShell(page)
+    if (width === 390) expect(scrolledState.scrollY).toBeGreaterThan(0)
     if (process.env.NCP_CAPTURE_UI === '1') {
       await page.screenshot({ path: testInfo.outputPath('ui-captures', `fixture-logs-time-range-${width}-scrolled-viewport.png`), fullPage: false, animations: 'disabled' })
     }
