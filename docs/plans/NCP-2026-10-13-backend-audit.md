@@ -184,3 +184,13 @@ B 的实现只修改源代码及测试，未更新部署配置或凭据、未运
 五组回归覆盖重复主键名、跨表外键误授权、同表MySQL外键名称冲突、合法复合键/方言引号/占位符，以及UNIQUE与其他schema反例。主任务以cf62e07为基线的精确两文件快照通过完整database包race、完整OpenAPI、全部命令构建及database vet；实施者新组race三轮、独立复审race通过。没有前端源码或接口变更；远端完整CI及真实引擎集成尚未验证。
 
 依据：[PostgreSQL约束重名说明](https://www.postgresql.org/docs/current/information-schema.html)、[MySQL目录列定义](https://dev.mysql.com/doc/refman/8.4/en/information-schema-table-constraints-table.html)、[MySQL官方目录视图实现](https://raw.githubusercontent.com/mysql/mysql-server/8.4/sql/dd/impl/system_views/key_column_usage.cc)。SQLite关系fixture不覆盖实际引擎的权限可见性、目录版本与大小写行为，不能据此声称NAS实机通过。
+
+## SQLite 主键生成能力修复（2026-10-13 23:42 UTC）
+
+先前按“单列INTEGER主键”推断自动生成值，会误判WITHOUT ROWID和列级INTEGER PRIMARY KEY DESC；前者省略id插入失败，后者可能得到NULL。UI仍允许用户显式填写，实际问题是生成能力标记及必填校验错误，不能夸大为完全无法新增。
+
+修复先关闭table_info结果，再读取直接、正确转义表名的PRAGMA index_list，以origin=pk判断独立主键索引；无该索引的单列INTEGER主键才标为rowid别名。保留表级PRIMARY KEY(id DESC)、ASC及AUTOINCREMENT生成行为，不误受普通/UNIQUE索引影响。元数据读取错误直接传播，不静默猜测。独立审查发现合法用户表pragma_index_list会遮蔽同名表值函数，已以固定版本modernc复现并改成直接PRAGMA，新增相应回归。
+
+16种真实临时SQLite声明与实际INSERT覆盖普通、DESC差异、WITHOUT ROWID、复合/非整数键、引号表名等；另覆盖默认值、缺表、取消、单连接及函数同名表。精确两文件快照通过完整database race、OpenAPI、全部命令构建、database vet；新增组十轮及独立race复审通过。MySQL/PostgreSQL分支与公开API未改变，远端CI待验；没有用户数据库、NAS或生产操作。
+
+依据：[SQLite rowid例外](https://www.sqlite.org/lang_createtable.html#rowids_and_the_integer_primary_key)、[index_list元数据](https://www.sqlite.org/pragma.html#pragma_index_list)。

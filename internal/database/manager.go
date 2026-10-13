@@ -572,19 +572,51 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
 		primaryCount := 0
+		integerPrimary := false
 		for _, column := range result {
 			if column.PrimaryKey {
 				primaryCount++
+				integerPrimary = strings.EqualFold(strings.TrimSpace(column.DataType), "INTEGER")
 			}
+		}
+		rowidAlias := false
+		if primaryCount == 1 && integerPrimary {
+			// WITHOUT ROWID 和列级 PRIMARY KEY DESC 都有独立的主键索引；
+			// 真正的 rowid 别名没有。其他 UNIQUE/普通索引不影响生成能力。
+			// 先释放 table_info 的结果，兼容仅有一个连接的数据库。
+			// 直接使用 PRAGMA，避免同名用户表遮蔽 pragma_index_list 函数。
+			indexes, err := db.QueryContext(ctx, "PRAGMA index_list("+quote(driver, table)+")")
+			if err != nil {
+				return nil, err
+			}
+			defer indexes.Close()
+			var hasPrimaryIndex bool
+			for indexes.Next() {
+				var sequence, unique, partial int
+				var name, origin string
+				if err := indexes.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+					return nil, err
+				}
+				if origin == "pk" {
+					hasPrimaryIndex = true
+				}
+			}
+			if err := indexes.Err(); err != nil {
+				return nil, err
+			}
+			if err := indexes.Close(); err != nil {
+				return nil, err
+			}
+			rowidAlias = !hasPrimaryIndex
 		}
 		for index := range result {
 			column := &result[index]
 			identityGeneration := ""
-			// SQLite's exact INTEGER PRIMARY KEY aliases the rowid only for a
-			// single-column key. Composite integer keys are ordinary required
-			// values and must never be inferred as generated.
-			if primaryCount == 1 && column.PrimaryKey && strings.EqualFold(strings.TrimSpace(column.DataType), "INTEGER") {
+			if rowidAlias && column.PrimaryKey {
 				identityGeneration = "sqlite-rowid"
 			}
 			column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, "")
