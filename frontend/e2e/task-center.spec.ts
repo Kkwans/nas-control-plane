@@ -285,12 +285,26 @@ async function capture(page: Page, info: TestInfo, name: string, topbarBeforeOpe
   const state = await page.evaluate(() => {
     const bounds = (element: Element | null) => element ? element.getBoundingClientRect().toJSON() : null
     const dialog = document.querySelector('.task-center-drawer')
+    const drawerBody = dialog?.querySelector('.task-center-drawer__body')
+    const heading = dialog?.querySelector('.task-heading')
+    const bodyStyle = drawerBody ? getComputedStyle(drawerBody) : null
+    const headingStyle = heading ? getComputedStyle(heading) : null
     return {
       viewport: { width: innerWidth, height: innerHeight }, rootFontSize: getComputedStyle(document.documentElement).fontSize,
       reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
       body: { scrollWidth: document.body.scrollWidth, clientWidth: document.body.clientWidth },
       main: { bounds: bounds(document.querySelector('#app-main')), scrollWidth: document.querySelector('#app-main')?.scrollWidth, clientWidth: document.querySelector('#app-main')?.clientWidth },
       dialog: { bounds: bounds(dialog), scrollWidth: dialog?.scrollWidth, clientWidth: dialog?.clientWidth },
+      drawerBodyLayout: drawerBody && bodyStyle ? {
+        bounds: bounds(drawerBody), display: bodyStyle.display, flexDirection: bodyStyle.flexDirection,
+        padding: bodyStyle.padding, overflow: bodyStyle.overflow, overflowX: bodyStyle.overflowX,
+        overflowY: bodyStyle.overflowY, scrollTop: drawerBody.scrollTop,
+        scrollHeight: drawerBody.scrollHeight, clientHeight: drawerBody.clientHeight,
+      } : null,
+      headingLayout: heading && headingStyle ? {
+        bounds: bounds(heading), position: headingStyle.position, top: headingStyle.top,
+        zIndex: headingStyle.zIndex, backgroundColor: headingStyle.backgroundColor,
+      } : null,
       imageDownloads: { bounds: bounds(document.querySelector('.download-workspace')), rows: [...document.querySelectorAll('.download-row')].map((row) => row.textContent) },
       scrollRegions: [...document.querySelectorAll('.task-center-drawer .el-drawer__body, .task-center, .task-list-region')].map((element) => ({
         className: element.className, scrollTop: element.scrollTop, scrollHeight: element.scrollHeight,
@@ -347,6 +361,13 @@ for (const width of [390, 768, 1280, 1440]) {
       const dialog = dialogOf(page)
       await expect(rowOf(page, longReference)).toBeVisible()
       await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-list`, topbarBeforeOpen)
+      // 验证 Teleport 后专属 body-class 的关键布局契约，避免选择器失效被截图掩盖。
+      const drawerBody = dialog.locator('.task-center-drawer__body')
+      await expect(drawerBody).toHaveCSS('display', width === 390 ? 'block' : 'flex')
+      if (width !== 390) await expect(drawerBody).toHaveCSS('flex-direction', 'column')
+      await expect(drawerBody).toHaveCSS('padding', '0px')
+      await expect(drawerBody).toHaveCSS('overflow-y', width === 390 ? 'auto' : 'hidden')
+      await expect(dialog.locator('.task-heading')).toHaveCSS('position', 'sticky')
       await dialog.getByLabel('搜索已加载记录', { exact: true }).fill('中文媒体归档项目')
       const row = rowOf(page, longReference)
       const details = row.getByRole('button', { name: '查看详情', exact: true })
@@ -386,6 +407,14 @@ for (const width of [390, 768, 1280, 1440]) {
       expect(accessibility.violations).toEqual([])
       await row.locator('dd').filter({ hasText: 'COMPOSE_CONFIG_CONFLICT' }).scrollIntoViewIfNeeded()
       await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-details`, topbarBeforeOpen)
+      // 最后一次长详情滚动后再次验收，不能只证明滚动前的关闭按钮可用。
+      const close = dialog.getByRole('button', { name: '关闭最近任务', exact: true })
+      await expect(close).toBeInViewport({ ratio: 1 })
+      expect(await close.evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+        return Boolean(hit && element.contains(hit))
+      })).toBe(true)
     })
   }
 }

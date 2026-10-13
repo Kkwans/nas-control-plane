@@ -6,7 +6,7 @@ import TaskCenterDrawer from './TaskCenterDrawer.vue'
 import { invalidateSession } from '@/session/sessionLifecycle'
 const mock = vi.hoisted(() => ({ state: {} as Record<string, unknown>, finishClose: () => {} }))
 vi.mock('@/composables/useTaskCenter', () => ({ useTaskCenter: () => mock.state }))
-vi.mock('element-plus', () => ({ ElDrawer: { props: ['modelValue', 'withHeader', 'title'], emits: ['closed'], setup: (props: { modelValue: boolean; withHeader: boolean; title: string }, { slots, emit }: { slots: Record<string, (arg?: unknown) => VNodeChild>; emit: (event: string) => void }) => { mock.finishClose = () => emit('closed'); return () => h('section', { role: 'dialog', 'aria-label': props.title, 'data-with-header': String(props.withHeader), 'data-open': String(props.modelValue) }, [slots.header?.({ titleId: 'task-title' }), slots.default?.()]) } } }))
+vi.mock('element-plus', () => ({ ElDrawer: { props: ['modelValue', 'withHeader', 'title', 'bodyClass'], emits: ['closed'], setup: (props: { modelValue: boolean; withHeader: boolean; title: string; bodyClass: string }, { slots, emit }: { slots: Record<string, (arg?: unknown) => VNodeChild>; emit: (event: string) => void }) => { mock.finishClose = () => emit('closed'); return () => h('section', { role: 'dialog', 'aria-label': props.title, 'data-body-class': props.bodyClass, 'data-with-header': String(props.withHeader), 'data-open': String(props.modelValue) }, [slots.header?.({ titleId: 'task-title' }), slots.default?.()]) } } }))
 let app: App | undefined
 let host: HTMLDivElement
 const refresh = vi.fn(), requestCancel = vi.fn()
@@ -22,7 +22,7 @@ afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
   it('自定义 div 标题不创建重复 banner，dialog 仍关联可见标题', async () => {
     await mount(); const dialog = host.querySelector('[role="dialog"]')!
-    expect(dialog.getAttribute('data-with-header')).toBe('false'); expect(host.querySelector('header')).toBeNull()
+    expect(dialog.getAttribute('data-body-class')).toBe('task-center-drawer__body'); expect(dialog.getAttribute('data-with-header')).toBe('false'); expect(host.querySelector('header')).toBeNull()
     const title = host.querySelector('h2')!; expect(title.textContent).toBe('最近任务'); expect(dialog.getAttribute('aria-labelledby')).toBe(title.id)
   })
   it('筛选器名称由独立标签提供，不混入选项文本', async () => {
