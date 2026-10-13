@@ -454,6 +454,7 @@ docker logs --tail 100 nas-control-plane-console
 
 - OpenAPI：[`api/openapi/`](api/openapi/)
 - RPC 契约：[`api/proto/`](api/proto/)
+- 浏览器写请求来源防护、反向代理 Host 与 CLI 兼容契约：[`docs/plans/NCP-2026-10-13-http-origin.md`](docs/plans/NCP-2026-10-13-http-origin.md)
 - 架构决策：[`docs/adr/`](docs/adr/)
 - 功能规格：[`docs/specs/`](docs/specs/)
 - 阶段进度：[`docs/PROGRESS.md`](docs/PROGRESS.md)

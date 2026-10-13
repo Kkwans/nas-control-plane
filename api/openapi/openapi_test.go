@@ -185,3 +185,29 @@ func TestReadinessDocumentsJobStorageDegradation(t *testing.T) {
 		}
 	}
 }
+
+func TestUnsafeAPIOperationsDeclareOriginRejection(t *testing.T) {
+	document, err := openapi3.NewLoader().LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, item := range document.Paths.Map() {
+		if !strings.HasPrefix(path, "/api/v1/") {
+			continue
+		}
+		for method, operation := range item.Operations() {
+			if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+				continue
+			}
+			response := operation.Responses.Value("403")
+			if response == nil || response.Ref != "#/components/responses/CrossOriginRejected" {
+				t.Errorf("%s %s lacks shared 403 response", method, path)
+				continue
+			}
+			media := response.Value.Content.Get("application/json")
+			if media == nil || media.Schema.Ref != "#/components/schemas/ErrorResponse" {
+				t.Errorf("%s %s has invalid 403 schema", method, path)
+			}
+		}
+	}
+}

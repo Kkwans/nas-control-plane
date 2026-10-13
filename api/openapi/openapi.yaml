@@ -64,6 +64,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: Root account created and session cookie set
           headers:
@@ -97,6 +99,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Session cookie set
           headers:
@@ -124,6 +128,8 @@ paths:
       summary: End the current Root session
       tags: [auth]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: Session cleared
   /api/v1/users:
@@ -153,6 +159,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 账号已创建
           content:
@@ -183,6 +191,8 @@ paths:
               properties:
                 disabled: { type: boolean }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 更新后的账号
           content:
@@ -220,6 +230,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PasswordPolicy'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 已保存的密码规则
           content:
@@ -245,6 +257,8 @@ paths:
                 currentPassword: { type: string, format: password }
                 newPassword: { type: string, format: password, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 密码已更新且目标账号全部会话已撤销
         '401':
@@ -262,6 +276,8 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 账号及其全部会话已删除
         '409':
@@ -295,6 +311,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UserPreferences'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated user preferences
           content:
@@ -336,6 +354,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ListPreference'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 已保存的列表偏好
           content:
@@ -394,6 +414,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseProjectPreference'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated database project preference
           content:
@@ -443,6 +465,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 连接诊断结果；不会返回密码、Token 或 DSN
           content:
@@ -480,6 +504,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 连接诊断结果
           content:
@@ -517,6 +543,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 数据库目录
           content:
@@ -548,6 +576,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseQueryRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: SQL 查询结果
           content:
@@ -579,6 +609,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseRowsRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 数据表行
           content:
@@ -604,6 +636,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 插入完成
           content:
@@ -629,6 +663,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 更新完成
           content:
@@ -654,6 +690,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 删除完成
           content:
@@ -775,6 +813,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSChangeRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 修改预览
           content:
@@ -800,6 +840,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSChangeConfirmation'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 修改结果
           content:
@@ -825,6 +867,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DNSRollbackRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 回滚结果
           content:
@@ -858,6 +902,8 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 公网出口地址及可选地区信息
           content:
@@ -896,6 +942,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MihomoInvokeRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Mihomo 控制器响应
           content:
@@ -928,6 +976,8 @@ paths:
             schema:
               $ref: '#/components/schemas/MihomoInspectionRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Mihomo 路由与出口检查结果
           content:
@@ -1095,6 +1145,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerContainerCreateRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 容器已创建
           content:
@@ -1127,6 +1179,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveBatchRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 每个镜像的删除结果；被引用镜像会以 item errorCode 拒绝
           content:
@@ -1161,6 +1215,8 @@ paths:
             schema:
               $ref: '#/components/schemas/StandaloneProjectActionRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 逐容器生命周期结果
           content:
@@ -1196,6 +1252,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeLifecycleRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Compose 服务状态与命令输出
           content:
@@ -1230,6 +1288,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerProjectDeleteRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 项目容器和精确注册记录已删除
           content:
@@ -1302,6 +1362,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerImagePullRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: Image pull job accepted
           content:
@@ -1333,6 +1395,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeReadRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Compose project configuration
           content:
@@ -1352,6 +1416,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeValidateRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Valid normalized Compose configuration
           content:
@@ -1390,6 +1456,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeDraftInput'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Saved Compose draft
           content:
@@ -1409,6 +1477,8 @@ paths:
             schema:
               $ref: '#/components/schemas/ComposeDeployInput'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: Compose deployment job accepted
           content:
@@ -1451,6 +1521,8 @@ paths:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveRequest'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Image removed
           content:
@@ -1492,6 +1564,8 @@ paths:
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 任务记录已删除
         '404':
@@ -1562,6 +1636,8 @@ paths:
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: 新任务已进入队列
           content:
@@ -1595,6 +1671,8 @@ paths:
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: 取消请求已接收，可能仍在执行。返回当前快照；requested 不是远端停止证明。已取消任务重复请求返回相同快照。
           content:
@@ -1669,6 +1747,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 手工站点已创建
           content:
@@ -1724,6 +1804,8 @@ paths:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated site profile
           content:
@@ -1747,6 +1829,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 站点已删除或隐藏
         '400':
@@ -1800,6 +1884,8 @@ paths:
               properties:
                 icon: { type: string, format: binary }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 图标已保存
           content:
@@ -1827,6 +1913,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 图标已删除
         '404':
@@ -1862,6 +1950,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 站点已恢复
           content:
@@ -1890,6 +1980,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Recorded site visit
           content:
@@ -1920,6 +2012,8 @@ paths:
             type: string
             enum: [start, stop, restart]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Container lifecycle action completed and current state inspected
           content:
@@ -2102,6 +2196,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
+  responses:
+    CrossOriginRejected:
+      description: 浏览器写请求的来源校验失败；命令行可省略 Origin，仍需原有会话认证。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: HTTP_CROSS_ORIGIN_REJECTED
+            message: 请求来源校验失败，请从当前控制台页面重试。
+            requestId: req-origin
   schemas:
     UserPreferences:
       type: object
