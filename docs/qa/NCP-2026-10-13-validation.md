@@ -171,3 +171,11 @@
 - 两路独立审查补齐自定义编码/匿名字段及旧protobuf展开边界，以及翻页、排序、页大小失败后的导航跳行问题；最终均无阻塞。首行超限明确提示不是无匹配或未写入，UI保留完整单元且写入错误先提示核对状态。
 - 完整database与OpenAPI包、agentsocket/httpapi数据库精确选择、三包相关race、四包vet及native/linux-arm64双命令构建通过。完整前端445测试、typecheck、lint、build/bundle预算和E2E源码检查通过；新浏览器用例与截图待分支CI。
 - 最终验证中一次过宽的agentsocket/httpapi测试选择触发既有Unix socket集成，bind被环境拒绝；没有创建listener、没有提权或绕过。该次整包测试明确不算通过，完整集成由授权普通Linux CI另验。测试没有访问用户电脑、NAS或真实生产数据库。
+
+
+## 12:41 UTC SQL结果验收与Docker共享采集
+
+- [41d8ac3 CI 38397786863](https://github.com/Kkwans/nas-control-plane/actions/runs/38397786863)完整通过：445项前端单元、154项Chromium及Go/构建/Compose检查。独立实际复核47张SQL PNG、15份JSON与225个控件命中点；预算/空前缀/写入风险提示可读。发现失败头仍写等待执行，b967c53已独立修复并补状态迁移测试，446项本地单元及类型/构建/lint通过，新CI待验收。
+- [6cb1688 CI 38397142273](https://github.com/Kkwans/nas-control-plane/actions/runs/38397142273)完整通过，闭环容器终端C1隔离验证。保留预握手、主机PTY和后代进程边界。
+- M13-C0十个代码/测试文件冻结，独立复核无阻塞；Docker SSE按需单worker、5秒最小启动间隔及RPC预算、深复制/容量/双年龄状态、最后需求取消和旧代结果拒绝。SSE只读缓存不等待Docker，GET仍新鲜直读且可与SSE并行；事件重连对账尚未交付。
+- 四包精确TestDockerRealtime测试及race三轮、独立race与六项既有纯fake SSE名额/慢读/心跳/写预算回归通过；全仓仅编译、受影响包vet、OpenAPI与diff检查通过。内存RPC检查1MiB JSON/3MiB protobuf完整清单预算，不改变全局gRPC上限；无真实Docker/NAS采集。

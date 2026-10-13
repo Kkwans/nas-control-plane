@@ -141,3 +141,16 @@ B1先完成GET/summary SSE共享A的Latest、15秒接收/数据双年龄判断�
 前端统一store、Overview与AppShell的陈旧/部分源失败状态，onopen/外层时间/重复数据不得保鲜；停止MonitoringView将实时秒级summary灌回持久化分钟历史，避免补造A故意留下的缺口。历史写失败与实时源不可用分别说明。
 
 B2单独完成SQL上下界及limit+1检测、明确响应预算与完整图表gap。旧版超限温度集合不得静默截断或删除，超过响应预算应返回稳定显式错误并提示缩小范围。Docker共享/事件对账、会话撤销传播均不在B1完成声明内。
+
+## 12. C0实施契约：先共享Docker SSE
+
+2026-10-13开始此切片。只共享Docker SSE的采集，不改GET /docker/inventory、services、sites的新鲜unary读取，避免把操作前缓存当作操作后核对成功。GET与SSE源调用仍可重叠；C0不代表全路径单刷新或事件断线对账完成。
+
+- 增加显式服务生命周期owner，source必须注入并经Agent RPC；非特权Server不直接访问Docker。无Docker SSE需求时不采集；首次需求立即采集；真实源调用启动间隔至少5秒，零需求后快速重订阅也遵守该间隔，避免反复打开页面绕过节流。源调用预算5秒。SSE interval只控制发送。
+- 最多一个SSE采集worker和一个latest状态，无无界事件/响应队列。最后订阅释放取消在途采集与周期工作，重新激活不得与未退出的旧调用重叠，旧代迟到结果不得发布。owner退出接入现有共享shutdown预算。
+- Latest深复制containers、ports、labels、time指针、projects/configfiles。接收年龄与原始CollectedAt双重判断，源失败/重复或倒退时间不能重标健康；保持15秒过期约定，心跳不延长数据寿命。
+- SSE只读取快照，不等待Docker RPC；慢Docker不阻塞summary/heartbeat。复用64连接名额、逐帧写预算、会话撤销和request取消；缺provider或冷启动明确不可用，不静默退回每连接RPC。
+- 不静默裁剪容器清单；明确缓存/编码容量和错误。容量限制不等于Docker驱动采集过程峰值内存硬上限，不提高全局gRPC限制掩盖超大结果。
+- 仅用fake/source barrier、内存RPC验证0/1/64需求、共享计数、混合流、取消/重新订阅竞争、旧代结果、深复制、容量与真实时间戳。真实Docker/NAS未授权测试。
+
+后续C1才统一所有读取的强刷新屏障，要求操作后的Refresh不能被操作前已经开始的采集满足；C2才添加Agent失效通知流与每次重连全量对账。现有Docker事件PoC不能冒充生产事件订阅。SDK错误流关闭/EOF与重连由调用方处理，事件通知只表示需要刷新，不能直接作为完整清单或可靠审计日志。

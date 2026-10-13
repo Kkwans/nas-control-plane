@@ -1102,14 +1102,15 @@ paths:
       summary: 订阅控制台实时刷新事件
       description: >-
         保留 retry 行和 snapshot 事件，事件 data 为 RealtimeSnapshot JSON；新连接立即发送当前状态。
-        summary 只读共享缓存，不触发主机 RPC 或历史写入；Docker 暂仍按每连接发送调用有超时的 Agent RPC，
-        mixed scope 可能等待其最多约 5 秒，并在 Docker 完成后检查 summary 新鲜度。
+        summary 与 Docker 只读各自共享缓存，不触发每连接主机/Docker RPC或历史写入。
+        Docker仅在有docker scope订阅时由单worker按5秒节拍采集，源RPC预算5秒；冷启动、失败或双年龄过期时省略docker并返回源不可用状态。
+        最后一个Docker订阅释放会取消在途采集与周期工作；GET inventory/services/sites仍独立新鲜读取，可与SSE源调用重叠。
         外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
-        每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；Docker RPC 或正在写入可延迟该节拍。
-        每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或主机快照 provider 停止会关闭相应流。
+        每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；正在写入可延迟该节拍，Docker采集不阻塞summary或heartbeat。
+        每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或所订阅快照 provider 停止会关闭相应流。
         长连接建立前重新验证数据库会话并申请服务内租约（默认总上限 256，四类流共享）；
         注销仅撤销当前会话，改密、禁用或删除账号撤销该用户全部会话；到期无需等待下个 interval 即触发取消。
-        取消不会停止共享采集器；正在进行的写入最多等待当前 5 秒预算。
+        取消不会停止其他订阅或主机采集器；Docker最后订阅释放例外；正在进行的写入最多等待当前 5 秒预算。
         不保证每个采样均送达，无重放；客户端必须按内层时间去重并独立判断 15 秒新鲜度。
         每个服务 Handler 的全部 scope 共享最多 64 条连接，不宣称共享编码或整个服务的硬内存上限。
       tags: [system]

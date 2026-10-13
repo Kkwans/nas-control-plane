@@ -21,6 +21,8 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/auth"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
+	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/dockerrealtime"
 	"github.com/Kkwans/nas-control-plane/internal/httpapi"
 	"github.com/Kkwans/nas-control-plane/internal/monitoring"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -196,6 +198,10 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	if err != nil {
 		return err
 	}
+	dockerCollector, err := dockerrealtime.NewCollector(socketDockerSource{socketPath: *agentSocketPath})
+	if err != nil {
+		return err
+	}
 	jobEngine, err := httpapi.NewJobEngine(controlStore)
 	if err != nil {
 		return err
@@ -208,7 +214,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 		cancelOwners()
 		shutdownContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 		defer cancel()
-		if err := shutdownOwners(shutdownContext, server, jobEngine, collector, collectorStarted); err != nil {
+		if err := shutdownOwners(shutdownContext, server, jobEngine, collector, collectorStarted, dockerCollector); err != nil {
 			slog.Error("服务关闭未完成", "code", "SERVER_SHUTDOWN_FAILED")
 			resultErr = errors.Join(resultErr, err)
 		}
@@ -226,6 +232,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 			Auth:                authService,
 			ControlStore:        controlStore,
 			SummarySnapshots:    collector,
+			DockerSnapshots:     dockerCollector,
 			DatabaseConnections: databaseConnections,
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),
 			SessionCookieSecure: *secureCookie,
@@ -237,6 +244,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	}
 	collectorStarted = true
 	go func() { _ = collector.Run(ownerContext) }()
+	go func() { _ = dockerCollector.Run(ownerContext) }()
 	serveErrors := make(chan error, 1)
 	go func() {
 		err := server.Serve(listener)
@@ -269,15 +277,35 @@ func (s socketSummarySource) CollectSystemSummary(ctx context.Context) (system.S
 	return agentsocket.CollectSystemSummary(ctx, s.socketPath)
 }
 
+type socketDockerSource struct{ socketPath string }
+
+func (s socketDockerSource) CollectDockerInventory(ctx context.Context) (docker.Inventory, error) {
+	return agentsocket.CollectDockerInventory(ctx, s.socketPath)
+}
+
 type shutdownJobOwner interface {
 	StopAdmission()
 	Close(context.Context) error
 }
 type shutdownCollector interface{ Done() <-chan struct{} }
 
-func shutdownOwners(ctx context.Context, server *http.Server, jobs shutdownJobOwner, collector shutdownCollector, started bool) error {
+func shutdownOwners(ctx context.Context, server *http.Server, jobs shutdownJobOwner, collector shutdownCollector, started bool, additional ...shutdownCollector) error {
 	jobs.StopAdmission()
-	results := make(chan error, 3)
+	results := make(chan error, 3+len(additional))
+	for _, owner := range additional {
+		go func() {
+			if !started {
+				results <- nil
+				return
+			}
+			select {
+			case <-owner.Done():
+				results <- nil
+			case <-ctx.Done():
+				results <- ctx.Err()
+			}
+		}()
+	}
 	go func() { results <- jobs.Close(ctx) }()
 	go func() {
 		if server == nil {
@@ -303,7 +331,7 @@ func shutdownOwners(ctx context.Context, server *http.Server, jobs shutdownJobOw
 		}
 	}()
 	var result error
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 3+len(additional); i++ {
 		result = errors.Join(result, <-results)
 	}
 	return result

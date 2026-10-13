@@ -132,6 +132,7 @@ type Config struct {
 	ControlStore        ControlStore
 	MonitoringHistory   MonitoringHistoryStore
 	SummarySnapshots    SummarySnapshots
+	DockerSnapshots     DockerSnapshots
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
 	Terminal            TerminalClient
@@ -183,6 +184,7 @@ type handler struct {
 	controlStore        ControlStore
 	monitoringHistory   MonitoringHistoryStore
 	summarySnapshots    SummarySnapshots
+	dockerSnapshots     DockerSnapshots
 	realtimeSubscribers atomic.Int32
 	now                 func() time.Time
 	newRealtimeTicker   func(time.Duration) realtimeTicker
@@ -255,6 +257,7 @@ func NewHandler(config Config) http.Handler {
 		controlStore:        config.ControlStore,
 		monitoringHistory:   config.MonitoringHistory,
 		summarySnapshots:    config.SummarySnapshots,
+		dockerSnapshots:     config.DockerSnapshots,
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
 		terminal:            config.Terminal,

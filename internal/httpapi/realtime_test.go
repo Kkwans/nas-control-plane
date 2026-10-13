@@ -297,7 +297,8 @@ func TestMetricsRealtimeScopesAndHistoryErrors(t *testing.T) {
 				provider.state.PersistenceErrorCode = code
 				provider.state.Summary.Warnings = []system.SummaryWarning{{Source: "temperature", Code: "TEMPERATURE_UNAVAILABLE"}}
 				agent := &metricsAgentSpy{}
-				api := &handler{summarySnapshots: provider, agent: agent, agentTimeout: time.Second, now: func() time.Time { return now }}
+				dockerProvider := dockerRealtimeProvider(now)
+				api := &handler{summarySnapshots: provider, dockerSnapshots: dockerProvider, agent: agent, agentTimeout: time.Second, now: func() time.Time { return now }}
 				writer := metricsWriter()
 				cancel, done := metricsStartStream(api, &responseRecorder{ResponseWriter: writer}, scope.query)
 				defer cancel()
@@ -316,7 +317,7 @@ func TestMetricsRealtimeScopesAndHistoryErrors(t *testing.T) {
 				if slices.Contains(snapshot.Errors, code) != (code != "" && scope.summary) {
 					t.Fatalf("errors=%v", snapshot.Errors)
 				}
-				if provider.reads.Load() != boolCount(scope.summary) || agent.dockerCalls.Load() != boolCount(scope.docker) || agent.summaryCalls.Load() != 0 {
+				if provider.reads.Load() != boolCount(scope.summary) || agent.dockerCalls.Load() != 0 || agent.summaryCalls.Load() != 0 {
 					t.Fatal("scope called wrong resource")
 				}
 				if api.realtimeSubscribers.Load() != 0 {
@@ -558,31 +559,6 @@ func TestMetricsRealtimeWriteAndFlushFailures(t *testing.T) {
 	})
 }
 
-func TestMetricsRealtimeSnapshotAfterDockerCompletes(t *testing.T) {
-	now := time.Now()
-	provider := metricsProvider(now)
-	var clock atomic.Int64
-	clock.Store(now.UnixNano())
-	agent := &metricsAgentSpy{docker: func(ctx context.Context) (docker.Inventory, error) {
-		if _, ok := ctx.Deadline(); !ok {
-			return docker.Inventory{}, errors.New("missing Docker RPC deadline")
-		}
-		clock.Store(now.Add(16 * time.Second).UnixNano())
-		return docker.Inventory{CollectedAt: now.Add(16 * time.Second)}, nil
-	}}
-	api := &handler{summarySnapshots: provider, agent: agent, agentTimeout: time.Second, now: func() time.Time { return time.Unix(0, clock.Load()) }}
-	writer := metricsWriter()
-	cancel, done := metricsStartStream(api, writer, "?scope=summary&scope=docker")
-	defer cancel()
-	writer.frame(t)
-	snapshot := writer.snapshot(t)
-	cancel()
-	metricsAwaitDone(t, done)
-	if snapshot.Summary != nil || snapshot.Docker == nil || !snapshot.CollectedAt.Equal(now.Add(16*time.Second)) || !slices.Contains(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE") {
-		t.Fatalf("snapshot=%#v", snapshot)
-	}
-}
-
 func TestMetricsRealtimeIntervalCompatibility(t *testing.T) {
 	for raw, expected := range map[string]time.Duration{"": 5 * time.Second, "garbage": 5 * time.Second, "1": 5 * time.Second, "301": 5 * time.Second, "2": 2 * time.Second, "5": 5 * time.Second, "300": 300 * time.Second} {
 		if got := realtimeInterval(httptest.NewRequest("GET", "/?interval="+raw, nil)); got != expected {
@@ -647,33 +623,6 @@ func TestMetricsRealtimeUnavailableAndIndependentErrors(t *testing.T) {
 				t.Fatal("unavailable cache used RPC fallback")
 			}
 		})
-	}
-}
-
-func TestMetricsRealtimeCancellationReachesDockerRPC(t *testing.T) {
-	entered := make(chan struct{})
-	agent := &metricsAgentSpy{docker: func(ctx context.Context) (docker.Inventory, error) {
-		close(entered)
-		<-ctx.Done()
-		return docker.Inventory{}, ctx.Err()
-	}}
-	api := &handler{summarySnapshots: metricsProvider(time.Now()), agent: agent, agentTimeout: time.Minute}
-	writer := metricsWriter()
-	cancel, done := metricsStartStream(api, writer, "?scope=summary&scope=docker")
-	defer cancel()
-	writer.frame(t)
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Docker RPC did not start")
-	}
-	cancel()
-	metricsAwaitDone(t, done)
-	if api.realtimeSubscribers.Load() != 0 {
-		t.Fatal("cancelled Docker scope leaked subscriber")
-	}
-	if api.summarySnapshots.(*metricsSnapshotProvider).reads.Load() != 0 {
-		t.Fatal("cancelled stream read summary after Docker")
 	}
 }
 

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
+	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/dockerrealtime"
 	"github.com/Kkwans/nas-control-plane/internal/monitoring"
 	"github.com/Kkwans/nas-control-plane/internal/system"
 )
@@ -23,6 +26,32 @@ const (
 type SummarySnapshots interface {
 	Latest() monitoring.State
 	Done() <-chan struct{}
+}
+
+// DockerSnapshots 的需求与服务生命周期分离，Latest 不触发 RPC。
+type DockerSnapshots interface {
+	Acquire(context.Context) (func(), error)
+	Latest() dockerrealtime.State
+	Done() <-chan struct{}
+}
+
+func (api *handler) latestDockerInventory(now time.Time) *docker.Inventory {
+	if api.dockerSnapshots == nil {
+		return nil
+	}
+	state := api.dockerSnapshots.Latest()
+	select {
+	case <-api.dockerSnapshots.Done():
+		return nil
+	default:
+	}
+	if state.Inventory == nil || state.LastErrorCode != "" || state.LastSuccessAt.IsZero() ||
+		now.Sub(state.LastSuccessAt) > dockerrealtime.MaxAge || state.LastSuccessAt.After(now.Add(dockerrealtime.FutureSkew)) ||
+		state.Inventory.CollectedAt.IsZero() || now.Sub(state.Inventory.CollectedAt) > dockerrealtime.MaxAge ||
+		state.Inventory.CollectedAt.After(now.Add(dockerrealtime.FutureSkew)) {
+		return nil
+	}
+	return state.Inventory
 }
 
 type realtimeTicker interface {
@@ -110,6 +139,15 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 		return
 	}
 
+	var dockerDone <-chan struct{}
+	if scope.docker && api.dockerSnapshots != nil {
+		release, err := api.dockerSnapshots.Acquire(request.Context())
+		if err != nil {
+			return
+		}
+		defer release()
+		dockerDone = api.dockerSnapshots.Done()
+	}
 	var providerDone <-chan struct{}
 	if scope.summary && api.summarySnapshots != nil {
 		providerDone = api.summarySnapshots.Done()
@@ -119,21 +157,14 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 			return false
 		}
 		snapshot := RealtimeSnapshot{}
-		var dockerError string
-		// Docker 暂仍为每连接有超时 RPC；完成后再读取 summary，避免发送过期的旧读取。
-		if scope.docker {
-			inventory, err := api.collectDockerInventoryContext(request.Context())
-			if err != nil {
-				dockerError = "DOCKER_INVENTORY_UNAVAILABLE"
-			} else {
-				snapshot.Docker = &inventory
-			}
-		}
-		if request.Context().Err() != nil {
-			return false
-		}
 		now := api.currentTime()
 		snapshot.CollectedAt = now.UTC()
+		if scope.docker {
+			snapshot.Docker = api.latestDockerInventory(now)
+			if snapshot.Docker == nil {
+				snapshot.Errors = append(snapshot.Errors, "DOCKER_INVENTORY_UNAVAILABLE")
+			}
+		}
 		if scope.summary {
 			summary, persistenceError := api.latestSystemSummary(now)
 			if request.Context().Err() != nil {
@@ -148,9 +179,6 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 			case "MONITORING_WRITE_FAILED", "MONITORING_SAMPLE_INCOMPLETE", "MONITORING_SAMPLE_INVALID", "MONITORING_SAMPLE_LIMIT_EXCEEDED":
 				snapshot.Errors = append(snapshot.Errors, persistenceError)
 			}
-		}
-		if dockerError != "" {
-			snapshot.Errors = append(snapshot.Errors, dockerError)
 		}
 		payload, err := json.Marshal(snapshot)
 		if err != nil {
@@ -170,6 +198,8 @@ func (api *handler) systemEvents(response http.ResponseWriter, request *http.Req
 		case <-request.Context().Done():
 			return
 		case <-providerDone:
+			return
+		case <-dockerDone:
 			return
 		case <-ticker.C():
 			if !sendSnapshot() {
