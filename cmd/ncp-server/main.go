@@ -132,6 +132,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	agentSocketPath := flags.String("agent-socket", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径")
 	databasePath := flags.String("database", defaultDatabasePath, "SQLite 数据库路径")
 	databaseKeyPath := flags.String("database-key", os.Getenv("NCP_DATABASE_KEY_PATH"), "数据库凭据密钥环路径；未配置时不启用自动凭据保存")
+	resourceAlerts := flags.Bool("resource-alerts", false, "启用当前运行期 CPU 与内存资源提示")
 	secureCookie := flags.Bool("secure-cookie", false, "仅通过 HTTPS 发送登录 Cookie")
 	terminalEnabled := flags.Bool("terminal", true, "启用主机与容器终端 WebSocket 通道")
 	legacyTerminalPOC := flags.Bool("terminal-poc", true, "兼容旧版本的终端开关（已弃用）")
@@ -194,7 +195,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 		}
 	}
 
-	collector, err := monitoring.NewCollector(socketSummarySource{socketPath: *agentSocketPath}, controlStore, monitoring.Options{Logger: slog.Default()})
+	collector, err := monitoring.NewCollector(socketSummarySource{socketPath: *agentSocketPath}, controlStore, monitoring.Options{Logger: slog.Default(), ResourceAlerts: *resourceAlerts})
 	if err != nil {
 		return err
 	}
@@ -232,6 +233,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 			Auth:                authService,
 			ControlStore:        controlStore,
 			SummarySnapshots:    collector,
+			ResourceAlerts:      collector,
 			DockerSnapshots:     dockerCollector,
 			DatabaseConnections: databaseConnections,
 			SiteAssetsDirectory: filepath.Join(filepath.Dir(*databasePath), "site-icons"),

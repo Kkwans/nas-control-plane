@@ -420,6 +420,41 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListPreference'
+  /api/v1/monitoring/alerts:
+    get:
+      operationId: getResourceAlerts
+      summary: 读取当前运行期 CPU 与内存资源提示
+      description: >-
+        默认关闭，只有 Server --resource-alerts 启用。只读既有采集器的内存状态，
+        不触发采样、历史查询或持久化；GET 与 observedAt 不推进触发或恢复计时。
+        规则按约 5 秒采样判断，采样间变化不可知，不代表 NAS 整体健康。
+        condition 与 availability 独立；unknown/stale 不能视为正常，已触发事件失联不会自动恢复。
+        样本数据时间或接收时间年龄超过 15 秒为 stale；明确失败优先 unknown。
+        仅本次 Server 运行期有效，重启丢失；最近恢复时间保留不足 24 小时。
+        完整 JSON（含末尾换行）最多 8192 字节，超限显式错误，不截断成功响应。
+      tags: [monitoring]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 完整当前状态；包括 enabled=false、无样本 unknown 和数据 stale。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourceAlertsSnapshot'}
+        '401':
+          description: AUTH_UNAUTHORIZED；需要 Root 会话。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '500':
+          description: MONITORING_ALERTS_RESPONSE_INVALID 或 MONITORING_ALERTS_LIMIT_EXCEEDED；没有部分成功响应。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '503':
+          description: MONITORING_ALERTS_UNAVAILABLE 表示 provider 缺失或已停止；AUTH_UNAVAILABLE 表示认证后端暂不可用。配置关闭正常返回 200。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
   /api/v1/monitoring/samples:
     get:
       operationId: listMetricSamples
@@ -2880,6 +2915,53 @@ components:
       required: [rowsAffected]
       properties:
         rowsAffected: { type: integer, format: int64, minimum: 0 }
+    ResourceAlertsSnapshot:
+      type: object
+      required: [enabled, observedAt, startedAt, rules]
+      properties:
+        enabled: {type: boolean}
+        observedAt: {type: string, format: date-time, description: 响应投影时间，不刷新样本年龄。}
+        startedAt: {type: string, format: date-time, description: 本次进程 evaluator 创建时间。}
+        rules:
+          type: object
+          required: [cpu, memory]
+          properties:
+            cpu:
+              allOf:
+                - {$ref: '#/components/schemas/ResourceAlertRule'}
+                - type: object
+                  properties:
+                    id: {type: string, enum: [host.cpu.high]}
+                    recoveryPercent: {type: number, enum: [80]}
+            memory:
+              allOf:
+                - {$ref: '#/components/schemas/ResourceAlertRule'}
+                - type: object
+                  properties:
+                    id: {type: string, enum: [host.memory.high]}
+                    recoveryPercent: {type: number, enum: [85]}
+    ResourceAlertRule:
+      type: object
+      required: [id, severity, triggerPercent, recoveryPercent, triggerSeconds, recoverySeconds, condition, availability, reasonCode, sampleAt, receivedAt, value, pendingSince, firingSince, recoveringSince, lastRecoveredAt]
+      properties:
+        id: {type: string, enum: [host.cpu.high, host.memory.high]}
+        severity: {type: string, enum: [warning]}
+        triggerPercent: {type: number, enum: [90]}
+        recoveryPercent: {type: number, enum: [80, 85], description: CPU 为 80，内存为 85。}
+        triggerSeconds: {type: integer, enum: [120]}
+        recoverySeconds: {type: integer, enum: [60]}
+        condition: {type: string, enum: [normal, pending, firing, recovering]}
+        availability: {type: string, enum: [fresh, unknown, stale]}
+        reasonCode:
+          type: string
+          enum: ['', MONITORING_ALERTS_NO_SAMPLE, MONITORING_ALERTS_CLOCK_INVALID, SYSTEM_SUMMARY_UNAVAILABLE, MONITORING_INVALID_TIMESTAMP, MONITORING_SAMPLE_INVALID, MONITORING_SAMPLE_LIMIT_EXCEEDED, MONITORING_ALERTS_CPU_UNAVAILABLE, MONITORING_ALERTS_MEMORY_UNAVAILABLE, MONITORING_ALERTS_CPU_INVALID, MONITORING_ALERTS_MEMORY_INVALID, MONITORING_ALERTS_STALE]
+        sampleAt: {type: [string, 'null'], format: date-time}
+        receivedAt: {type: [string, 'null'], format: date-time}
+        value: {type: [number, 'null'], minimum: 0, maximum: 100, description: 最近合格百分比，数据不可用时仅代表上次有效值。}
+        pendingSince: {type: [string, 'null'], format: date-time}
+        firingSince: {type: [string, 'null'], format: date-time}
+        recoveringSince: {type: [string, 'null'], format: date-time}
+        lastRecoveredAt: {type: [string, 'null'], format: date-time}
     MetricSample:
       type: object
       required: [collectedAt, cpuPercent, memoryPercent, load1, diskPercent, networkReceiveBytes, networkTransmitBytes, diskReadBytes, diskWriteBytes]

@@ -133,6 +133,7 @@ type Config struct {
 	ControlStore        ControlStore
 	MonitoringHistory   MonitoringHistoryStore
 	SummarySnapshots    SummarySnapshots
+	ResourceAlerts      ResourceAlertSnapshots
 	DockerSnapshots     DockerSnapshots
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
@@ -185,6 +186,7 @@ type handler struct {
 	controlStore        ControlStore
 	monitoringHistory   MonitoringHistoryStore
 	summarySnapshots    SummarySnapshots
+	resourceAlerts      ResourceAlertSnapshots
 	dockerSnapshots     DockerSnapshots
 	realtimeSubscribers atomic.Int32
 	now                 func() time.Time
@@ -258,6 +260,7 @@ func NewHandler(config Config) http.Handler {
 		controlStore:        config.ControlStore,
 		monitoringHistory:   config.MonitoringHistory,
 		summarySnapshots:    config.SummarySnapshots,
+		resourceAlerts:      config.ResourceAlerts,
 		dockerSnapshots:     config.DockerSnapshots,
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
@@ -298,6 +301,7 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/proxy/mihomo/inspect", api.inspectMihomo)
 			protected.With(api.requireLiveSession).Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
+			protected.Get("/monitoring/alerts", api.monitoringAlerts)
 			protected.Get("/logs", api.logs)
 			protected.With(api.requireLiveSession).Get("/logs/events", api.logEvents)
 			protected.Get("/preferences", api.preferences)

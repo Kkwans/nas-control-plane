@@ -43,6 +43,7 @@ type realTicker struct{ *time.Ticker }
 func (t realTicker) C() <-chan time.Time { return t.Ticker.C }
 
 type Options struct {
+	ResourceAlerts                                            bool
 	Interval, SourceTimeout, StoreTimeout, MaxAge, FutureSkew time.Duration
 	Clock                                                     Clock
 	Logger                                                    *slog.Logger
@@ -60,6 +61,7 @@ type Collector struct {
 	mu                                         sync.RWMutex
 	started                                    bool
 	state                                      State
+	alerts                                     AlertProcessor
 	done                                       chan struct{}
 	pending                                    *controlstore.MetricSample
 	persistedBucket, lastSampleAt, lastPruneAt time.Time
@@ -90,9 +92,16 @@ func NewCollector(source Source, store Store, options Options) (*Collector, erro
 	if options.Clock == nil {
 		options.Clock = realClock{}
 	}
-	return &Collector{source: source, store: store, options: options, done: make(chan struct{})}, nil
+	return &Collector{source: source, store: store, options: options, alerts: NewAlertProcessor(options.ResourceAlerts, options.Clock.Now()), done: make(chan struct{})}, nil
 }
 func (c *Collector) Done() <-chan struct{} { return c.done }
+
+// LatestAlerts 只读投影，不采样、不写入也不推进持续时间。
+func (c *Collector) LatestAlerts(now time.Time) AlertsSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.alerts.Snapshot(now)
+}
 func (c *Collector) Latest() State {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -199,11 +208,20 @@ func (c *Collector) step(ctx context.Context) {
 		code = c.validateSummary(summary, received)
 	}
 	if code != "" {
-		c.change(func(s *State) { s.LastErrorCode = code; s.SourceErrors++ })
+		c.change(func(s *State) {
+			c.alerts = c.alerts.Process(received, summary, code)
+			s.LastErrorCode = code
+			s.SourceErrors++
+		})
 	} else {
 		c.lastSampleAt = summary.CollectedAt
 		copy := cloneSummary(summary)
-		c.change(func(s *State) { s.Summary = &copy; s.LastSuccessAt = received; s.LastErrorCode = "" })
+		c.change(func(s *State) {
+			c.alerts = c.alerts.Process(received, summary, "")
+			s.Summary = &copy
+			s.LastSuccessAt = received
+			s.LastErrorCode = ""
+		})
 	}
 	// 待写缓存最多一个桶，过期后即使 RPC 失败也释放。
 	bucket := received.UTC().Truncate(time.Minute)
