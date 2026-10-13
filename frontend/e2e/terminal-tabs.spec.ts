@@ -153,8 +153,38 @@ async function twoConnections(page: Page) {
 
 async function captureAndCheck(page: Page, info: TestInfo, name: string) {
   await page.evaluate(() => document.fonts.ready)
+  // 只观测，不重置滚动或焦点；保留真实关闭确认焦点与截图/axe 的阶段边界。
+  const snapshot = (phase: string) => page.evaluate(phase => {
+    const describe = (element: Element | null) => {
+      if (!element) return null
+      const { x, y, width, height, right, bottom } = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return {
+        tag: element.tagName, id: element.id, className: element.getAttribute('class'),
+        role: element.getAttribute('role'), ariaLabel: element.getAttribute('aria-label'),
+        text: element.textContent?.trim().slice(0, 160), focused: element === document.activeElement,
+        rect: { x, y, width, height, right, bottom },
+        style: { position: style.position, top: style.top, transform: style.transform, visibility: style.visibility, display: style.display },
+      }
+    }
+    const viewport = window.visualViewport
+    return {
+      phase, timestamp: performance.now(), documentHasFocus: document.hasFocus(),
+      activeElement: describe(document.activeElement),
+      scroll: { x: scrollX, y: scrollY, documentTop: document.documentElement.scrollTop, documentLeft: document.documentElement.scrollLeft, bodyTop: document.body.scrollTop, bodyLeft: document.body.scrollLeft },
+      viewport: { width: innerWidth, height: innerHeight, documentWidth: document.documentElement.scrollWidth, documentHeight: document.documentElement.scrollHeight },
+      visualViewport: viewport ? { width: viewport.width, height: viewport.height, offsetLeft: viewport.offsetLeft, offsetTop: viewport.offsetTop, pageLeft: viewport.pageLeft, pageTop: viewport.pageTop, scale: viewport.scale } : null,
+      topbar: describe(document.querySelector('.topbar')),
+      skipLink: describe(document.querySelector('.skip-link')),
+      heading: describe(document.querySelector('.terminal-page h1')),
+      closeCancel: describe(document.querySelector('.terminal-close-actions > button:first-child')),
+      scrollers: Array.from(document.querySelectorAll('.terminal-tablist, .xterm-viewport'), element => ({ id: element.id, className: element.className, left: element.scrollLeft, top: element.scrollTop })),
+    }
+  }, phase)
+  const capturePhases = [await snapshot('before-png')]
   const path = info.outputPath('ui-captures', `${name}.png`)
   await page.screenshot({ path, fullPage: true, animations: 'disabled' })
+  capturePhases.push(await snapshot('after-png'))
   await info.attach(name, { path, contentType: 'image/png' })
   const geometry = await page.locator('.terminal-page').evaluate(root => {
     const rect = (element: Element) => {
@@ -176,11 +206,16 @@ async function captureAndCheck(page: Page, info: TestInfo, name: string) {
   })
   const jsonPath = info.outputPath('ui-captures', `${name}-capture-state.json`)
   // 先落盘 PNG 和 geometry，即使之后 axe 或布局断言失败也保留现场。
-  await writeFile(jsonPath, JSON.stringify(geometry, null, 2))
-  await info.attach(`${name}-geometry`, { path: jsonPath, contentType: 'application/json' })
   const axe = new AxeBuilder({ page }).include('.terminal-tabs-panel')
   if (await page.locator('.terminal-close-confirm').count()) axe.include('.terminal-close-confirm')
-  const accessibility = await axe.analyze()
+  capturePhases.push(await snapshot('before-axe'))
+  const writeGeometry = () => writeFile(jsonPath, JSON.stringify({ ...geometry, capturePhases }, null, 2))
+  await writeGeometry()
+  const accessibility = await axe.analyze().finally(async () => {
+    capturePhases.push(await snapshot('after-axe'))
+    await writeGeometry()
+    await info.attach(`${name}-geometry`, { path: jsonPath, contentType: 'application/json' })
+  })
   const axePath = info.outputPath('ui-captures', `${name}-axe-capture-state.json`)
   await writeFile(axePath, JSON.stringify(accessibility, null, 2))
   await info.attach(`${name}-axe`, { path: axePath, contentType: 'application/json' })
