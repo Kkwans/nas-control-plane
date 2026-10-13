@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, type PropType, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, type PropType, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   ChevronRight,
   LogOut,
+  ListChecks,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -17,6 +18,9 @@ import NcpLogo from '@/components/NcpLogo.vue'
 import { navigationByID, primaryNavigation, type NavigationItem } from '@/router/navigation'
 import type { RealtimeState, SystemConnectionState } from '@/stores/system'
 
+const TaskCenterDrawer = defineAsyncComponent(() => import('@/components/TaskCenterDrawer.vue'))
+const tasksOpen = ref(false)
+const taskButton = ref<HTMLButtonElement | null>(null)
 const route = useRoute()
 const emit = defineEmits<{ refresh: []; logout: [] }>()
 const props = defineProps({
@@ -91,6 +95,7 @@ function focusAfterRender(target: () => HTMLElement | null | undefined) {
 
 function setMobileNavigation(open: boolean, restoreFocus = false) {
   ++focusRevision
+  if (open) tasksOpen.value = false
   mobileNavigationOpen.value = open && isMobile.value
   document.body.classList.toggle('mobile-navigation-open', mobileNavigationOpen.value)
   if (mobileNavigationOpen.value) focusAfterRender(() => {
@@ -98,6 +103,21 @@ function setMobileNavigation(open: boolean, restoreFocus = false) {
     return closeButton.value
   })
   else if (restoreFocus && isMobile.value) focusAfterRender(() => menuButton.value)
+}
+
+function openTasks() {
+  setMobileNavigation(false)
+  tasksOpen.value = true
+}
+
+function closeTasks() {
+  tasksOpen.value = false
+  if (!mobileNavigationOpen.value) focusAfterRender(() => taskButton.value)
+}
+
+function logout() {
+  tasksOpen.value = false
+  emit('logout')
 }
 
 function focusableNavigation() {
@@ -246,7 +266,7 @@ onBeforeUnmount(() => {
           <div><strong>{{ userName }}</strong><span>Root 管理会话</span></div>
         </div>
         <ElTooltip :disabled="isMobile || !sidebarCollapsed" content="退出登录" placement="right">
-          <button class="sidebar-footer__logout" type="button" aria-label="退出登录" @click="emit('logout')">
+          <button class="sidebar-footer__logout" type="button" aria-label="退出登录" @click="logout">
             <LogOut :size="17" aria-hidden="true" /><span>退出登录</span>
           </button>
         </ElTooltip>
@@ -284,6 +304,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="topbar__actions">
+          <button ref="taskButton" class="refresh-button task-center-button" type="button" aria-label="任务" aria-haspopup="dialog" :aria-expanded="tasksOpen" @click="openTasks"><ListChecks :size="18" aria-hidden="true" /><span>任务</span></button>
           <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${connectionState}`" :title="connectionDetail" role="status">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
@@ -297,6 +318,7 @@ onBeforeUnmount(() => {
       <main id="app-main" class="app-main" tabindex="-1"><slot /></main>
     </div>
   </div>
+  <TaskCenterDrawer v-if="tasksOpen" @close="closeTasks" />
 </template>
 
 <style scoped>
@@ -355,7 +377,10 @@ onBeforeUnmount(() => {
 .topbar__location strong { color: var(--ncp-text); font-weight: 750; }
 .topbar__location a { color: var(--ncp-text-muted); font-weight: 680; transition: color var(--ncp-duration-fast); }
 .topbar__location a:hover { color: var(--ncp-primary-strong); }
-.topbar__actions { gap: 12px; }
+.topbar__actions { gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+.topbar__location { min-width: 0; overflow-wrap: anywhere; }
+.topbar__location > svg { flex-shrink: 0; }
+.topbar { flex-wrap: wrap; padding-block: 8px; }
 .connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .8rem; }
 .connection-state > span { width: 7px; height: 7px; border-radius: 50%; background: var(--ncp-primary); box-shadow: 0 0 0 4px var(--ncp-primary-soft); }
 .connection-state--degraded > span, .connection-state--loading > span { background: var(--ncp-warning); box-shadow: 0 0 0 4px var(--ncp-warning-soft); }
@@ -390,7 +415,7 @@ onBeforeUnmount(() => {
   .navigation-scrim { position: fixed; z-index: 45; inset: 0; display: block; width: 100%; height: 100%; background: rgba(12,24,44,.46); backdrop-filter: blur(2px); }
   .topbar { min-height: 58px; padding: 0 14px; }
   .topbar__location > svg:first-child, .topbar__location > span, .topbar__location > svg:nth-of-type(2) { display: none; }
-  .topbar__actions { flex-shrink: 0; gap: 8px; }
+  .topbar__actions { gap: 8px; }
   .connection-state { display: flex; gap: 6px; font-size: .72rem; white-space: nowrap; }
   .connection-state > span, .menu-button, .refresh-button { flex-shrink: 0; }
   .refresh-button { min-width: 44px; width: 44px; padding: 0; }
