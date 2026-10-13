@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
-import type { ShallowRef } from 'vue'
+import { computed, onBeforeUnmount, onMounted, shallowRef, useTemplateRef } from 'vue'
 import { Check, Clock3, X } from '@lucide/vue'
 import { ElDatePicker, ElTooltip } from 'element-plus'
 import type { TooltipInstance } from 'element-plus'
 
 import ActionButton from '@/components/ActionButton.vue'
+import { useActionHelp } from '@/composables/useActionHelp'
 
 const props = defineProps<{
   from: Date | null
@@ -26,48 +26,8 @@ const tooltipTarget = shallowRef<HTMLElement>()
 const nowTooltip = useTemplateRef<TooltipInstance>('nowTooltip')
 const clearTooltip = useTemplateRef<TooltipInstance>('clearTooltip')
 
-// Element Plus 分别处理 hover/focus 的关闭；任一交互仍在进行时保留帮助。
-function useActionHelp(tooltip: Readonly<ShallowRef<TooltipInstance | null>>) {
-  const state = reactive({ visible: false })
-  let focused = false, triggerHovered = false, contentHovered = false, dismissed = false
-  const update = (visible: boolean) => {
-    state.visible = !props.loading && !dismissed && (visible || focused || triggerHovered || contentHovered)
-  }
-  const triggerEvents = {
-    focus: () => { focused = true; dismissed = false },
-    blur: () => { focused = false },
-    mouseenter: () => { triggerHovered = true; dismissed = false },
-    mouseleave: () => { triggerHovered = false },
-  }
-  // 使用公开的 popper DOM ref，覆盖其内边距和箭头，而非仅监听文字 span。
-  watch(() => tooltip.value?.popperRef?.contentRef, (element, _previous, cleanup) => {
-    contentHovered = false
-    if (!element) return
-    const enter = () => { contentHovered = true }
-    const leave = () => { contentHovered = false }
-    element.addEventListener('mouseenter', enter)
-    element.addEventListener('mouseleave', leave)
-    cleanup(() => {
-      element.removeEventListener('mouseenter', enter)
-      element.removeEventListener('mouseleave', leave)
-    })
-  }, { flush: 'post' })
-  const dismiss = (event?: KeyboardEvent) => {
-    dismissed = true
-    state.visible = false
-    // 关闭同时取消待显示计时器；不移动焦点，也不吞掉其他控件的 Escape。
-    tooltip.value?.onClose(event, 0)
-  }
-  watch(() => props.loading, () => {
-    // 禁用原生按钮不保证浏览器派发 blur；恢复后不得复活旧交互。
-    focused = triggerHovered = contentHovered = false
-    dismiss()
-  })
-  return { state, triggerEvents, update, dismiss }
-}
-
-const nowHelp = useActionHelp(nowTooltip)
-const clearHelp = useActionHelp(clearTooltip)
+const nowHelp = useActionHelp(nowTooltip, () => props.loading)
+const clearHelp = useActionHelp(clearTooltip, () => props.loading)
 function dismissHelp(event: KeyboardEvent) {
   if (event.key !== 'Escape') return
   nowHelp.dismiss(event)

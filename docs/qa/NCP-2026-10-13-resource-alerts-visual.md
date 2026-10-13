@@ -65,3 +65,13 @@
 完整axe结果并非全部为空：390已填日期和390/200保留事件两份结果各有一个moderate region，目标分别#el-id-251-13和#el-id-1850-13，均为teleported `div.el-popper.is-dark.el-tooltip[role=tooltip][aria-hidden=false][tabindex=-1]`，提示“将结束时间设为现在”。前者截图实际可见在提示区标题上边缘；200%截图未保留同样可见状态，不能据此推断关闭原因。该fixture只以serious/critical阻断CI，两份均没有这些级别；其余七份违规为空。现有工件未记录触发元素aria-describedby及关闭交互，不能声称tooltip语义/撤销已验证，不将本次日期布局关闭扩展成整页无障碍关闭。
 
 所需九图/JSON在官方分片3工件11848462347：20,951,762字节，SHA256 `84928d4f3f712177c2d074377d3fa88fd448ea6e493ab318a8897bef3a745d81`。大小/摘要、安全路径、类型、展开界限、CRC验证通过，253条目 / 25,065,370展开字节。准确SHA/fixtureOnly和无页面横向溢出已核对；边界仍为隔离fixture。
+
+## 日期帮助焦点与 landmark 的实际复验（2026-10-13 21:59 UTC）
+
+精确提交 `9f7acee8dc88cdf492fb4858ee61306cec2fe98a`，[CI 38472971469](https://github.com/Kkwans/nas-control-plane/actions/runs/38472971469)：86 文件 / 1655 项单元通过，Chromium 356 通过 / 3 失败，Go / Compose 成功，ARM64 发布跳过。十五项资源提示用例全部通过，包括此前失败的 390px、100% / 200% 根字号日期帮助用例。全仓剩余三项失败属于 closed-stream-recovery 的刷新提示 region 与退出登录定位，不属于日期帮助，也不能据此写成全仓通过。
+
+从 [官方分片 3 工件 11853755594](https://github.com/Kkwans/nas-control-plane/actions/runs/38472971469/artifacts/11853755594)（18,371,954 字节，低于 32 MiB）读取并直接查看 `date-help-open-100-percent-390` 与 `date-help-open-200-percent-390` 两幅 PNG，以及对应状态 JSON。两份 JSON 的精确 SHA 均匹配上述提交且标为 fixtureOnly。实际根字号为 15px / 30px，无文档横向溢出；“现在”处于焦点，`aria-describedby` 指向显示中的“将结束时间设为现在” tooltip，记录其 `mainId` 为 `app-main`。两幅图均可看见焦点轮廓和提示文字，原有日期提示 region 违规在这两个打开状态中不再出现。200% 根字号图中提示覆盖“应用”按钮左侧一部分，但没有截断提示本身；该位置仍是后续可优化的视觉细节，不能把零溢出写成零遮挡。
+
+两份原始 axe 的 `violations` 均为空，仍保留 `incomplete`：`aria-prohibited-attr` 指向带 aria-label 但没有有效 role 的顶部位置 div；`aria-valid-attr-value` 无法确认折叠日期选择器的 aria-controls 目标；`color-contrast` 对渐变背景等无法自动确定。未将这些待人工检查项删除或称为通过。该对状态 JSON 未携带截图 SHA256 字段，因此只声称官方同名图与状态的对应关系，不声称像 M29 工件一样有内嵌图片摘要绑定。
+
+结论仅覆盖该精确提交的日期帮助开态像素、语义及通过的键盘/混合交互 fixture，不是整页或全部无障碍合规声明。本轮仅查看 GitHub CI 工件，没有启动本地浏览器、监听端口、Docker 或真实 NAS，也没有部署验证。

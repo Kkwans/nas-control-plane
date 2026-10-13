@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, type PropType, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, type PropType, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   ChevronRight,
@@ -12,9 +12,10 @@ import {
   Server,
   X,
 } from '@lucide/vue'
-import { ElTooltip } from 'element-plus'
+import { ElTooltip, type TooltipInstance } from 'element-plus'
 
 import NcpLogo from '@/components/NcpLogo.vue'
+import { useActionHelp } from '@/composables/useActionHelp'
 import { navigationByID, primaryNavigation, type NavigationItem } from '@/router/navigation'
 import type { RealtimeState, SystemConnectionState } from '@/stores/system'
 
@@ -49,6 +50,10 @@ let lastFocusedElement: Element | null = null
 let focusEntryRevision = 0
 const sidebarCollapsed = ref(props.sidebarDefault === 'collapsed')
 const menuButton = ref<HTMLButtonElement | null>(null)
+const topbar = shallowRef<HTMLElement>()
+const refreshTooltip = useTemplateRef<TooltipInstance>('refreshTooltip')
+const refreshAvailable = computed(() => props.liveDataActive || route.meta.manualRefresh === true)
+const refreshHelp = useActionHelp(refreshTooltip, () => props.isRefreshing || !refreshAvailable.value || mobileNavigationOpen.value)
 
 const orderedNavigation = computed(() => {
   const result: NavigationItem[] = []
@@ -126,6 +131,7 @@ function focusableNavigation() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') refreshHelp.dismiss(event)
   if (!mobileNavigationOpen.value) return
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -281,7 +287,7 @@ onBeforeUnmount(() => {
     </aside>
 
     <div class="app-stage" :inert="mobileNavigationOpen || undefined">
-      <header class="topbar">
+      <header ref="topbar" class="topbar">
         <div class="topbar__leading">
           <button
             ref="menuButton"
@@ -308,8 +314,8 @@ onBeforeUnmount(() => {
           <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${connectionState}`" :title="connectionDetail" role="status">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
-          <ElTooltip v-if="liveDataActive || route.meta.manualRefresh === true" content="立即刷新数据" placement="bottom">
-            <button class="refresh-button" type="button" :disabled="isRefreshing" aria-label="立即刷新数据" @click="emit('refresh')">
+          <ElTooltip v-if="refreshAvailable" ref="refreshTooltip" content="立即刷新数据" placement="bottom" :append-to="topbar" :trigger="['hover', 'focus']" :trigger-keys="[]" :disabled="isRefreshing || mobileNavigationOpen" :visible="refreshHelp.state.visible" @update:visible="refreshHelp.update">
+            <button class="refresh-button" type="button" :disabled="isRefreshing" aria-label="立即刷新数据" v-on="refreshHelp.triggerEvents" @click="emit('refresh')">
               <RefreshCw :class="{ spin: isRefreshing }" :size="18" aria-hidden="true" /><span>刷新</span>
             </button>
           </ElTooltip>
