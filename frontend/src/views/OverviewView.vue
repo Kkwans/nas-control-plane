@@ -240,6 +240,13 @@ onMounted(refreshFavorites)
 .storage-track { height: 7px; overflow: hidden; border-radius: 8px; background: var(--ncp-surface-quiet); }
 .storage-track span { display: block; height: 100%; border-radius: inherit; background: var(--ncp-primary); }
 .empty-state { margin: 18px 0 0; color: var(--ncp-text-subtle); font-size: .66rem; }
+@media(max-width: 1040px) {
+  /* 摘要随根字号换行，保留完整时间；普通字号仍沿用等宽列。 */
+  .overview-page :deep(.workspace-stats) { flex-wrap: wrap; row-gap: var(--ncp-space-3); }
+  .overview-page :deep(.workspace-stat) { min-width: min(100%, 7rem); }
+  .overview-page :deep(.workspace-stat dt),
+  .overview-page :deep(.workspace-stat dd) { overflow: visible; overflow-wrap: anywhere; white-space: normal; }
+}
 @media(max-width: 1200px) {
   .favorite-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .metric-grid { grid-template-columns: repeat(2,1fr); }
