@@ -175,7 +175,7 @@ async function checkClosingLayout(page: Page, info: TestInfo, width: number) {
   // 先持久化像素、行盒和无障碍证据，再断言；失败也能直接审阅截断原因。
   const name = `fixture-terminal-closing-${width}`
   await capture(page, info, name)
-  const path = info.outputPath('ui-captures', `${name}.json`)
+  const path = info.outputPath('ui-captures', `${name}-capture-state.json`)
   await writeFile(path, JSON.stringify({ geometry, accessibility }, null, 2))
   await info.attach(`${name}-geometry-axe`, { path, contentType: 'application/json' })
   expect(accessibility.violations).toEqual([])
