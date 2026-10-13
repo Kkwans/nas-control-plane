@@ -204,7 +204,7 @@ it('创建未完成时不接收第二份图标，避免已创建后的暂存文�
   await view.uploadIcon({ target: { files: [file] } } as unknown as Event)
   expect(upload).not.toHaveBeenCalled()
   expect(create).toHaveBeenCalledWith(profile, null)
-  expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
+  expect(document.querySelector<HTMLInputElement>('.site-editor input[type=file]')?.disabled).toBe(true)
   created.resolve({ ...profile, projectId: site.id }); await operation
   expect(view.editOpen).toBe(false)
 })
@@ -223,9 +223,9 @@ describe('站点写入未知结果的只读核对', () => {
     expect(view.savedSiteId).toBe(operation === 'create' ? null : site.id)
     expect(messages.error).not.toHaveBeenCalled()
     expect(messages.success).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('结果未确认')
-    expect(host.textContent).toContain('只读核对结果')
-    expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
+    expect(document.querySelector('.site-editor')?.textContent).toContain('结果未确认')
+    expect(document.querySelector('.site-editor')?.textContent).toContain('只读核对结果')
+    expect(document.querySelector<HTMLInputElement>('.site-editor input[type=file]')?.disabled).toBe(true)
     view.draft.name = 'New draft'
     await view.saveSite()
     await view.uploadIcon({ target: { files: [new File(['icon'], 'icon.png', { type: 'image/png' })] } } as unknown as Event)
@@ -377,9 +377,9 @@ describe('已创建站点的图标部分结果保留', () => {
     await nextTick(); await view.saveSite(); await nextTick()
     expect(view.savedSiteId).toBe(site.id)
     expect(view.pendingIcon).toBe(file)
-    expect(host.textContent).toContain('站点已创建')
-    expect(host.textContent).toContain(outcome === 'rejected' ? '上传未完成' : '上传结果未确认')
-    expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
+    expect(document.querySelector('.site-editor')?.textContent).toContain('站点已创建')
+    expect(document.querySelector('.site-editor')?.textContent).toContain(outcome === 'rejected' ? '上传未完成' : '上传结果未确认')
+    expect(document.querySelector<HTMLInputElement>('.site-editor input[type=file]')?.disabled).toBe(true)
     view.draft.name = '保留新草稿'
     await view.saveSite()
     await view.uploadIcon({ target: { files: [file] } } as unknown as Event)
@@ -411,6 +411,31 @@ describe('已创建站点的图标部分结果保留', () => {
   })
 })
 
+
+it('图标未知结果按警告、真实预览、完整资料顺序呈现，保留上传锁和草稿', async () => {
+  const error = new SiteIconUploadError(site.id, 'unknown')
+  vi.spyOn(store, 'uploadIcon').mockRejectedValue(error)
+  view.openEditor(site)
+  const icon = new File(['icon'], 'icon.svg', { type: 'image/svg+xml' })
+  await view.uploadIcon({ target: { files: [icon] } } as unknown as Event)
+  await nextTick()
+  const editor = document.querySelector('.site-editor')!
+  const notice = editor.querySelector('.editor-sync-notice')!
+  const preview = editor.querySelector<HTMLImageElement>('.icon-upload__preview img')!
+  const fields = editor.querySelector('.editor-grid')!
+  expect(notice.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(preview.compareDocumentPosition(fields) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(preview.getAttribute('src')).toBe('blob:fixture-icon')
+  expect(editor.querySelector<HTMLButtonElement>('.icon-upload__preview')?.disabled).toBe(true)
+  expect(editor.querySelectorAll('.editor-grid')).toHaveLength(2)
+  expect(editor.querySelector('.switch-grid')).not.toBeNull()
+  expect(editor.querySelector('.editor-context')?.textContent).toContain('编辑手动站点资料')
+  expect(editor.querySelector('.editor-context')?.textContent).not.toContain('Docker')
+  expect(editor.textContent).toContain('关闭并查看目录')
+  expect(editor.textContent).toContain('只读核对结果')
+  expect(view.pendingIcon).toBe(icon)
+  expect(view.draft).toEqual(profile)
+})
 
 describe('现有站点图标上传归属', () => {
   const file = () => new File(['icon'], 'icon.svg', { type: 'image/svg+xml' })

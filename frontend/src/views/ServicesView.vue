@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SectionDrawer from '@/components/SectionDrawer.vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   CircleAlert,
@@ -20,7 +21,6 @@ import {
 } from '@lucide/vue'
 import {
   ElButton,
-  ElDrawer,
   ElForm,
   ElFormItem,
   ElInput,
@@ -626,13 +626,13 @@ function sitesForCategory(category: string) {
       </div>
     </section>
 
-    <ElDrawer v-model="editOpen" class="site-editor" :title="unknownWrite ? '站点结果待核对' : savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
+    <SectionDrawer v-model="editOpen" class="site-editor" :title="unknownWrite ? '站点结果待核对' : savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)">
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :class="{ 'site-logo--image': draft.iconUrl && !failedIcons.has(selectedSite.id) }" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
           <span v-else>{{ draft.name.slice(0, 1).toUpperCase() }}</span>
         </div>
-        <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
+        <div><strong>{{ selectedSite.projectId }}</strong><span>{{ selectedSite.source === 'manual' ? '编辑手动站点资料' : '继续关联当前 Docker 项目' }}</span></div>
       </div>
       <div v-if="unknownWrite" class="editor-sync-notice" role="status">
         <CircleAlert :size="18" aria-hidden="true" />
@@ -646,20 +646,6 @@ function sitesForCategory(category: string) {
       </div>
       <p v-if="syncPending" class="editor-sync-notice" role="status"><CircleAlert :size="18" aria-hidden="true" /><span>站点资料已保存，但列表尚未同步。当前草稿已保留，请重新同步，无需重复提交。</span></p>
       <ElForm ref="siteForm" :model="draft" :rules="formRules" label-position="top">
-        <div class="editor-grid">
-          <ElFormItem label="站点名称" prop="name" required><ElInput v-model="draft.name" maxlength="120" placeholder="例如 NAS 文件浏览器" /></ElFormItem>
-          <ElFormItem label="站点分类">
-            <ElSelect v-model="draft.category" filterable allow-create default-first-option>
-              <ElOption v-for="category in categoryOptions.filter((item) => item !== '全部分类')" :key="category" :label="category" :value="category" />
-            </ElSelect>
-          </ElFormItem>
-        </div>
-        <ElFormItem label="简介"><ElInput v-model="draft.description" type="textarea" :rows="3" maxlength="500" show-word-limit /></ElFormItem>
-        <ElFormItem>
-          <template #label><span class="required-group-label">完整入口 URL <small>与端口二选一</small></span></template>
-          <ElInput v-model="draft.launchUrl" placeholder="例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成" />
-          <span class="field-help">入口 URL 与主入口端口至少填写一项</span>
-        </ElFormItem>
         <ElFormItem>
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
@@ -676,6 +662,20 @@ function sitesForCategory(category: string) {
               <span v-else>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
             </div>
           </div>
+        </ElFormItem>
+        <div class="editor-grid">
+          <ElFormItem label="站点名称" prop="name" required><ElInput v-model="draft.name" maxlength="120" placeholder="例如 NAS 文件浏览器" /></ElFormItem>
+          <ElFormItem label="站点分类">
+            <ElSelect v-model="draft.category" filterable allow-create default-first-option>
+              <ElOption v-for="category in categoryOptions.filter((item) => item !== '全部分类')" :key="category" :label="category" :value="category" />
+            </ElSelect>
+          </ElFormItem>
+        </div>
+        <ElFormItem label="简介"><ElInput v-model="draft.description" type="textarea" :rows="3" maxlength="500" show-word-limit /></ElFormItem>
+        <ElFormItem>
+          <template #label><span class="required-group-label">完整入口 URL <small>与端口二选一</small></span></template>
+          <ElInput v-model="draft.launchUrl" placeholder="例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成" />
+          <span class="field-help">入口 URL 与主入口端口至少填写一项</span>
         </ElFormItem>
         <div class="editor-grid">
           <ElFormItem v-if="selectedSite?.ports.length" label="主入口端口">
@@ -702,7 +702,7 @@ function sitesForCategory(category: string) {
         <ElButton v-else-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
         <ElButton v-else type="primary" :loading="saving" :disabled="iconBusy" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
-    </ElDrawer>
+    </SectionDrawer>
   </div>
 </template>
 
