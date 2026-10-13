@@ -44,6 +44,10 @@ func (api *handler) updatePasswordPolicy(response http.ResponseWriter, request *
 	}
 	var input auth.PasswordPolicy
 	if err := decodeUserRequest(request, &input); err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "密码规则参数无效。")
 		return
 	}
@@ -91,6 +95,10 @@ func (api *handler) createUser(response http.ResponseWriter, request *http.Reque
 	}
 	var input createUserRequest
 	if err := decodeUserRequest(request, &input); err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
@@ -109,6 +117,10 @@ func (api *handler) updateUserStatus(response http.ResponseWriter, request *http
 	}
 	var input userStatusRequest
 	if err := decodeUserRequest(request, &input); err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "账号状态参数无效。")
 		return
 	}
@@ -127,6 +139,10 @@ func (api *handler) updateUserPassword(response http.ResponseWriter, request *ht
 	}
 	var input userPasswordRequest
 	if err := decodeUserRequest(request, &input); err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "密码参数无效。")
 		return
 	}
@@ -191,6 +207,9 @@ func (api *handler) writeUserError(response http.ResponseWriter, request *http.R
 }
 
 func decodeUserRequest(request *http.Request, target any) error {
+	if err := validateJSONContentType(request); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxCredentialsBodySize))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

@@ -39,7 +39,7 @@
 | M07 | P1 Compose后端恢复 | 目标串行化、基线hash、唯一备份；独立有界回滚context；分开配置/运行恢复结果 | 同秒/并发部署、超时回滚、外部修改、部分失败 | 32c1780首切片及540e532外部修改回滚保护已推送；后者完整CI通过，[编辑基线与成功后核对](NCP-2026-10-13-compose-baselines.md)47c078c已完成且完整CI通过 |
 | M08 | P1 流式资源回收 | terminal通道send感知context；会话撤销/过期传播至PTY/SSE | fake双向流退出、泄漏、改密/禁用/退出后的输入拒绝 | 8d75639取消感知输入通道首片已推送且CI通过；[活动流撤销传播](NCP-2026-10-13-stream-revocation.md)7dc9d21已推送且完整CI通过；[容器连接有界关闭](NCP-2026-10-13-terminal-cleanup.md)C1代码6cb1688已推送且完整CI通过，预会话握手与主机PTY另片 |
 | M09 | P1 Agent重启恢复 | 安全识别stale socket；不删除活跃端点/普通文件/symlink | 隔离socket异常退出后恢复及反例 | 08b1b96已推送且CI通过，Linux隔离异常退出/恢复已验证 |
-| M10 | P1 安全边界提案 | HTTP不安全方法Origin/CSRF与代理外部origin契约；socket专用身份设计 | 同源/跨端口/CLI回归；真实部署权限变更需单独授权 | ca3aa18来源防护及代理契约已推送，9bf1de9后代完整CI通过；JSON MIME与socket身份后续独立实施 |
+| M10 | P1 安全边界提案 | HTTP不安全方法Origin/CSRF与代理外部origin契约；socket专用身份设计 | 同源/跨端口/CLI回归；真实部署权限变更需单独授权 | ca3aa18来源防护及代理契约已推送，9bf1de9后代完整CI通过；JSON MIME四decoder/35路由校验与独立验证完成，CI待验收；socket身份仍仅部署提案 |
 | M11 | P2 导航与可达性 | 移动导航关闭inert，打开焦点与背景隔离，Escape/路由焦点；模块活跃态 | 390/768/1280/1440键盘/读屏/窄高屏 | 00c5f8f及9bf1de9断点焦点竞态修复已推送，完整CI通过；非完整读屏验收 |
 | M12 | P2 状态与排版 | 总览收藏四态、数据库深链、监控空态；字号/间距/图标/断点归并 | 各页慢/空/错/刷新，200%字体、reduced-motion，无裁切 | b208e40布局与db959e4总览四态CI通过；41c9d5c辅助字号已推送，完整CI及30项新增浏览器/截图复核通过；80cb4bc实时reduced-motion与终端光标偏好完整CI通过；既有[截图复核](../qa/NCP-2026-10-13-visual-verification.md) |
 | M13 | P2 独立采集与事件 | 服务侧单采集器+有界历史；SSE共享订阅；Docker断线对账 | 无页面采集、多标签不重复、断线恢复、资源预算 | [方案](NCP-2026-10-13-metrics-sampling.md)完成；A独立采集e776c17已推送且CI通过；B1共享实时后端6ca7d3b及CI通过，前端11d04d3及测试时钟修复f03775f完整CI通过；B2后端e213199完整CI通过，图表52a7d85完整CI与缺口像素验证通过；[截图复核](../qa/NCP-2026-10-13-history-visual.md)发现既有图例/单位重叠，7ad9ae8排版修复像素通过，f9c3fc3时钟修正后移动长名交互完整CI及截图通过；C0共享Docker SSE88f36ef完整CI通过，C1强刷新屏障7855d23完整CI通过；C2事件恢复代码与独立审查完成，CI待验收 |

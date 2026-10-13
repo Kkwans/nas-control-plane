@@ -58,12 +58,15 @@ paths:
       summary: Create the first Root account and start a session
       tags: [auth]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '201':
@@ -93,12 +96,15 @@ paths:
       summary: Start a Root session
       tags: [auth]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -153,12 +159,15 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '201':
@@ -182,6 +191,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
@@ -191,6 +201,8 @@ paths:
               properties:
                 disabled: { type: boolean }
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -224,12 +236,15 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PasswordPolicy'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -247,6 +262,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
@@ -257,6 +273,8 @@ paths:
                 currentPassword: { type: string, format: password }
                 newPassword: { type: string, format: password, minLength: 1, maxLength: 256 }
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '204':
@@ -305,12 +323,15 @@ paths:
       tags: [settings]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/UserPreferences'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -348,12 +369,15 @@ paths:
       parameters:
         - { name: listKey, in: path, required: true, schema: { type: string } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ListPreference'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -453,12 +477,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseProjectPreference'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -506,12 +533,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -547,12 +577,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -588,12 +621,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -631,12 +667,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseQueryRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -676,12 +715,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseRowsRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -705,12 +747,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -734,12 +779,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -763,12 +811,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '422':
           $ref: '#/components/responses/DatabaseResultTooLarge'
         '403':
@@ -892,12 +943,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -919,12 +973,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeConfirmation'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -946,12 +1003,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSRollbackRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1021,12 +1081,15 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInvokeRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1055,12 +1118,15 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
+        description: 实际空请求体可省略；非空请求体必须使用单一 application/json Content-Type，允许有效 MIME 参数，不接受重复或其他媒体类型。
         required: false
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInspectionRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1105,6 +1171,8 @@ paths:
         summary 与 Docker 只读各自共享缓存，不触发每连接主机/Docker RPC或历史写入。
         Docker仅在有docker scope订阅时由单worker按5秒节拍采集，源RPC预算5秒；冷启动、失败或双年龄过期时省略docker并返回源不可用状态。
         最后一个Docker订阅释放会取消在途采集与周期工作；GET inventory/services/sites通过同一采集器的强刷新屏障读取，要求采集开始不早于该刷新请求；最多64个unary等待者，HTTP等待预算12秒，源RPC预算5秒。
+        Docker事件订阅首次建立和每次重连均要求全量对账；恢复中不以旧清单或回退轮询冒充健康，返回既有DOCKER_INVENTORY_UNAVAILABLE。
+        Server与Agent须同时支持事件RPC，旧Agent缺失能力时明确不可用，不静默降级宣称事件恢复。
         外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
         每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；正在写入可延迟该节拍，Docker采集不阻塞summary或heartbeat。
         每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或所订阅快照 provider 停止会关闭相应流。
@@ -1262,12 +1330,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerContainerCreateRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '201':
@@ -1296,12 +1367,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveBatchRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1332,12 +1406,15 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
-        required: false
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/StandaloneProjectActionRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1369,12 +1446,15 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeLifecycleRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1405,12 +1485,15 @@ paths:
       parameters:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerProjectDeleteRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1479,12 +1562,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImagePullRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '202':
@@ -1512,12 +1598,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeReadRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1533,12 +1622,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeValidateRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1573,12 +1665,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDraftInput'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1606,12 +1701,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDeployInput'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '400':
           description: 请求无效或缺少有效的磁盘编辑基线（COMPOSE_BASELINE_INVALID）；未创建 Job，未调用 Agent。
           content:
@@ -1656,12 +1754,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveRequest'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -1900,12 +2001,15 @@ paths:
       tags: [sites]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '201':
@@ -1957,12 +2061,15 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
         '403':
           $ref: '#/components/responses/CrossOriginRejected'
         '200':
@@ -2381,6 +2488,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   responses:
+    UnsupportedMediaType:
+      description: JSON 请求必须使用单一 application/json Content-Type（允许有效 MIME 参数）；错误码 HTTP_UNSUPPORTED_MEDIA_TYPE，包含 requestId。可选请求体仅在实际非空时要求该类型。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     DatabaseResultTooLarge:
       description: >-
         数据库结果超过 1 MiB（1048576 字节）的保守结果保留预算，或最终 JSON/protobuf 编码响应超过该上限；稳定错误码 result_too_large。

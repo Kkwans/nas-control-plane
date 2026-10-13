@@ -209,3 +209,11 @@
 - C2共11个代码/测试文件冻结，两层独立审查无阻塞。首订阅与重连全量对账、epoch/需求代次保护、事件dirty合并、1/2/4/8/16/30秒退避及5秒周期真实采集已实现；旧Agent不支持新RPC明确不可用，需要配套升级。
 - 根审查发现Agent同步Send可能挡住provider EOF，已改为唯一sender与主生命周期分离；实际fake负对照证明在释放阻塞transport前handler可返回并释放Watch名额。reader协作取消后join，transport sender不能在RPC返回前强制join。
 - 核心fake race三轮、Agent独立fake/bufconn race二十轮、五包TestDockerRealtime组合race及编译/vet检查通过。1KiB帧限额、旧Agent协议不匹配、无ready超时、SDK Err/EOF、64需求、重连删除、storm合并和取消代次均覆盖；完整CI待验收。无真实Docker/NAS操作。
+
+
+## 13:15 UTC JSON请求类型契约
+
+- M10-B二十个代码/测试/规格文件冻结并独立审查；35个JSON路由在四个decoder校验单一application/json，六个auth/user错误出口统一415及requestId。保留Origin/认证/依赖预检、UseNumber、11个无body动作和multipart上传。可选inspect按实际空体判断并保留首字节及原Close。
+- 根独立TestJSON race通过（3.422s），审查独立全矩阵与OpenAPI通过；35路由缺失/plain/重复头拒绝与正确MIME错误JSON回归，no-side-effect计数、敏感信息不回显、真实临时SQLite CLI生命周期均覆盖。四处decoder去掉guard及恢复旧ContentLength判断的五个overlay负对照全部按预期失败，未改工作树产品文件。
+- 现有37项审计筛选Go回归、六个前端API文件121项测试、新文件lint及Vue类型检查通过；前端契约实际调用35个API函数、11个无body动作与FormData，415无自动重试或清除会话。完整分支CI待验收。
+- CLI仍无需Origin，但JSON必须显式Content-Type；原无头或curl默认表单JSON有意变为415。LimitReader隐藏限额后尾部的问题另片，不混称已修复。没有更改真实安全设置、凭据或生产环境。

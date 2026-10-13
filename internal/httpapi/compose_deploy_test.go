@@ -102,6 +102,7 @@ func runComposeDeployJob(t *testing.T, client ComposeAgentClient, wantRevisions 
 	t.Cleanup(closeFixture)
 	api := &handler{compose: client, controlStore: store, jobs: jobs}
 	request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"0000000000000000000000000000000000000000000000000000000000000000"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.deployComposeConfig(response, request)
 	if response.Code != http.StatusAccepted {
@@ -303,7 +304,9 @@ func TestComposeDeployRejectsInvalidBaselineBeforeJobAdmission(t *testing.T) {
 				return ncpcompose.DeployResult{}, nil
 			}}}
 			response := httptest.NewRecorder()
-			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(string(body))))
+			request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(string(body)))
+			request.Header.Set("Content-Type", "application/json")
+			api.deployComposeConfig(response, request)
 			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "COMPOSE_BASELINE_INVALID") {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
@@ -362,7 +365,9 @@ func TestComposeDeploySuccessMessageMatchesRevisionOutcome(t *testing.T) {
 				api.controlStore = composeRevisionFailureStore{store}
 			}
 			response := httptest.NewRecorder()
-			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`)))
+			request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			api.deployComposeConfig(response, request)
 			if response.Code != http.StatusAccepted {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
@@ -440,7 +445,9 @@ func TestComposeDeployCancellationDuringRevisionStorageDoesNotComplete(t *testin
 				return ncpcompose.DeployResult{ProjectID: request.ProjectID, TargetPath: request.TargetPath, BackupPath: "backup", Completed: true}, nil
 			}}}
 			response := httptest.NewRecorder()
-			api.deployComposeConfig(response, httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`)))
+			request := httptest.NewRequest(http.MethodPost, "/api/compose/deploy", strings.NewReader(`{"projectId":"fixture","workingDirectory":"/srv/fixture","configFiles":["/srv/fixture/compose.yaml"],"targetPath":"/srv/fixture/compose.yaml","content":"services: {}","baseContentHash":"`+strings.Repeat("0", 64)+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			api.deployComposeConfig(response, request)
 			if response.Code != http.StatusAccepted {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}

@@ -72,6 +72,10 @@ func (api *handler) bootstrap(response http.ResponseWriter, request *http.Reques
 	}
 	credentials, err := decodeCredentials(request)
 	if err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
@@ -95,6 +99,10 @@ func (api *handler) login(response http.ResponseWriter, request *http.Request) {
 	}
 	credentials, err := decodeCredentials(request)
 	if err != nil {
+		if errors.Is(err, errUnsupportedMediaType) {
+			api.writeUnsupportedMediaType(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
@@ -205,6 +213,9 @@ func (api *handler) writeAuthError(response http.ResponseWriter, request *http.R
 }
 
 func decodeCredentials(request *http.Request) (credentialsRequest, error) {
+	if err := validateJSONContentType(request); err != nil {
+		return credentialsRequest{}, err
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxCredentialsBodySize))
 	decoder.DisallowUnknownFields()
 	var credentials credentialsRequest

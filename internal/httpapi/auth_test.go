@@ -175,7 +175,9 @@ func credentialsRequestFor(t *testing.T, method, target string) *http.Request {
 	if err != nil {
 		t.Fatalf("marshal credentials: %v", err)
 	}
-	return httptest.NewRequest(method, target, bytes.NewReader(body))
+	request := httptest.NewRequest(method, target, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	return request
 }
 
 func testLoginPassword(t *testing.T) string {

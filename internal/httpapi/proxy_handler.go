@@ -61,7 +61,12 @@ func (api *handler) inspectMihomo(response http.ResponseWriter, request *http.Re
 		return
 	}
 	input := system.MihomoInspectionRequest{}
-	if request.ContentLength != 0 && !api.decodeControlBody(response, request, &input) {
+	hasBody, err := requestHasBody(request)
+	if err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "CONTROL_INPUT_INVALID", "请求参数无效。")
+		return
+	}
+	if hasBody && !api.decodeControlBody(response, request, &input) {
 		return
 	}
 	requestContext, cancel := context.WithTimeout(request.Context(), defaultProxyInspectionTimeout)

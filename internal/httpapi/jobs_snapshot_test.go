@@ -448,9 +448,11 @@ func TestJobHTTPAllCreationPathsRejectFailedInsert(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/fixture", nil)
 			switch kind {
 			case "pull":
+				request.Header.Set("Content-Type", "application/json")
 				serve = api.pullDockerImage
 				body = `{"reference":"fixture:latest"}`
 			case "compose":
+				request.Header.Set("Content-Type", "application/json")
 				serve = api.deployComposeConfig
 				body = `{"projectId":"fixture","baseContentHash":"0000000000000000000000000000000000000000000000000000000000000000"}`
 			case "retry":

@@ -59,6 +59,7 @@ func TestDecodeDatabaseMutationBodyPreservesNumberLexemes(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/"+testCase.name, strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
 			for _, fields := range testCase.read(t, &handler{}, response, request) {
 				if !reflect.DeepEqual(fields, want) {
 					t.Fatalf("decoded fields = %#v, want %#v", fields, want)
@@ -78,6 +79,7 @@ func TestDecodeDatabaseBodyPreservesNumberRange(t *testing.T) {
 		t.Run(literal, func(t *testing.T) {
 			body := `{"table":"items","values":{"value":` + literal + `},"keys":{"id":` + literal + `}}`
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/update", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
 			var input ncpdatabase.UpdateRequest
 			if !(&handler{}).decodeDatabaseBody(httptest.NewRecorder(), request, &input) {
 				t.Fatal("valid number rejected")
@@ -107,6 +109,7 @@ func TestDecodeDatabaseBodyKeepsProtocolIntegersAndValidation(t *testing.T) {
 			var input ncpdatabase.RowsRequest
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/rows", strings.NewReader(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
 			if ok := (&handler{}).decodeDatabaseBody(response, request, &input); ok != testCase.ok {
 				t.Fatalf("decode = %v, want %v; response = %s", ok, testCase.ok, response.Body.String())
 			}

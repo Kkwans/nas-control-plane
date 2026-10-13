@@ -13,7 +13,7 @@
 - 没有 Fetch-Metadata 时严格比较 Origin 的 authority 与请求 Host，包含端口。普通局域网 HTTP 常走此分支；同 hostname 的其他端口不能触发写操作。
 - 此回退不比较 scheme，不承诺大小写或显式默认端口的规范化。不是完整 scheme/host/port 校验，也不是 Host allowlist、DNS rebinding 或 TLS 防护。
 - 同时缺少 Origin 和 Fetch-Metadata 时允许继续，保持 CLI 兼容，但依然要求原有会话认证。代理不得同时移除这些头；缺头旧浏览器也会走这一兼容路径。
-- 无 body 动作与 multipart 图标上传保持原有行为。M10-B JSON Content-Type/415 校验尚未实施。
+- 无 body 动作与 multipart 图标上传保持原有行为。M10-B在具体JSON decoder实施Content-Type/415校验，详见末节；无body与multipart不套用JSON要求。
 - WebSocket 保留 coder/websocket 默认 Origin 检查；HTTP GET 放行不豁免 WS 校验，也不把本次 JSON 错误契约套用于 WS handshake。
 
 ## 代理和开发环境
@@ -42,3 +42,17 @@ curl -b session.cookies -X POST http://nas.example:8760/api/v1/auth/logout
 确定性测试使用 recorder、临时认证数据库、fake Agent 和无真实监听端口的 ReverseProxy transport：来源矩阵（含 IPv6、异常头、端口与 scheme 限制）、动态遍历全部非安全 API 路由、403 JSON/日志关联、拒绝前不读 body/不访问认证或业务、拒绝 bootstrap 不建账号、拒绝 logout 不销毁会话、同源及无来源的登录/写入/退出、匿名/已退出 401、健康与就绪路径、multipart/body 原样传递。OpenAPI 全量 Validate 和路由/403 覆盖测试防止新入口遗漏。前端测试检查稳定码及不重试。
 
 代理 fixture 与配置断言不能代替真实 nginx/浏览器端到端验证。真实浏览器双端口攻击、局域网 HTTP 和额外 HTTPS 代理验收待 CI/独立测试环境执行；不访问 NAS 或真实 root PTY。
+
+## M10-B JSON MIME 契约（2026-10-13 代码及独立审查完成）
+
+既有Origin防护保持有效，本片补充四个JSON decoder的内容类型契约，不替代来源检查。仅在具体JSON入口校验，不将所有POST/DELETE全局改成JSON。
+
+- 35个JSON路由接受单个application/json Content-Type，使用标准mime.ParseMediaType，允许有效参数与大小写；拒绝缺失、空白、多个字段值、逗号列表、畸形参数和未声明的+json类型。同名同值参数按Go标准库处理，不等同于重复头。
+- MIME失败返回415/HTTP_UNSUPPORTED_MEDIA_TYPE及requestId，不回显原始头/body/凭据。认证、Origin及依赖预检顺序不变；401/403/503不会被全局415覆盖。正确MIME的无效JSON仍使用原模块400，数据库UseNumber精度不变。
+- 普通JSON入口在读取body前检查；可选mihomo inspect例外，最多探测一个字节确认实际空体，再保留前缀和原Close。真正空体不要求JSON头；未知长度非空、错误ContentLength或空白体不能绕过校验。读取错误不调用Agent。
+- 11个无body动作、GET/HEAD、SSE/WS和multipart图标上传保持原行为。Standalone项目动作原实现要求JSON，OpenAPI原optional改为required以匹配真实契约。
+- 前端现有JSON请求已设置application/json，不需修改产品请求。无Origin的CLI仍允许，但curl -d默认表单类型或裸无头JSON有意变为415，必须显式添加Content-Type；不能声称所有旧CLI零破坏。
+
+验收采用recorder、fake和请求读取计数：四decoder/35路由类型矩阵、六个auth/user错误出口、MIME拒绝无业务副作用、Origin/认证优先级、multipart与无body兼容、inspect实际空体及错误读取、前端请求头契约与OpenAPI同步。真实代理/浏览器攻击及NAS部署未在本片执行。
+
+原LimitReader可能隐藏限额之后的尾部数据，属于独立body-size边界问题，本片不通过修改读取策略顺带宣称已修复。socket专用身份仍为部署方案，不更改真实系统权限或凭据。

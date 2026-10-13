@@ -59,6 +59,7 @@ func TestDatabaseQueryHTTPModes(t *testing.T) {
 				resolver := &queryHTTPResolver{}
 				api := &handler{databaseAgent: agent, databaseConnections: resolver}
 				request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/query", strings.NewReader(`{"sourceId":"fixture","sql":"  /* prefix */ UPDATE items SET value=value+1;\n"`+testCase.field+`}`))
+				request.Header.Set("Content-Type", "application/json")
 				response := httptest.NewRecorder()
 				api.databaseQuery(response, request)
 				if response.Code != http.StatusOK || agent.queryCalls != 1 || agent.discoverCalls != 1 || resolver.calls != 1 {
@@ -96,6 +97,7 @@ func TestDatabaseQueryHTTPRejectsInvalidBeforeConnectionPreparation(t *testing.T
 			resolver := &queryHTTPResolver{}
 			api := &handler{databaseAgent: agent, databaseConnections: resolver}
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/query", strings.NewReader(`{"sourceId":"fixture","sql":"UPDATE items SET value=value+1"`+testCase.field+`}`))
+			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			api.databaseQuery(response, request)
 			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"`+testCase.code+`"`) {
@@ -112,6 +114,7 @@ func TestDatabaseQueryHTTPUnsupportedDoesNotReplay(t *testing.T) {
 	agent := &queryHTTPAgent{err: &ncpdatabase.DatabaseError{Code: ncpdatabase.CodeResultModeUnsupported, Cause: errors.New("private SQL details")}}
 	api := &handler{databaseAgent: agent}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/query", strings.NewReader(`{"sourceId":"fixture","sql":"UPDATE items SET value=value+1","resultMode":"rows"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.databaseQuery(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"result_mode_unsupported"`) || !strings.Contains(response.Body.String(), "请先升级 Agent") || strings.Contains(response.Body.String(), "private") {

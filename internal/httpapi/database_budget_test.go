@@ -33,6 +33,7 @@ func TestDatabaseBudgetHTTPQueryDoesNotReplay(t *testing.T) {
 	agent := &queryHTTPAgent{err: &ncpdatabase.DatabaseError{Code: ncpdatabase.CodeResultTooLarge, Cause: errors.New("private SQL details")}}
 	api := &handler{databaseAgent: agent}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/query", strings.NewReader(`{"sourceId":"fixture","sql":"UPDATE items SET value=value+1 RETURNING value","resultMode":"rows"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.databaseQuery(response, request)
 	if response.Code != http.StatusUnprocessableEntity || agent.queryCalls != 1 || agent.request.ResultMode != ncpdatabase.QueryResultModeRows {
@@ -50,6 +51,7 @@ func TestDatabaseBudgetHTTPPreservesExactPrefixAndReason(t *testing.T) {
 			agent := &queryHTTPAgent{result: want}
 			api := &handler{databaseAgent: agent}
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/databases/query", strings.NewReader(`{"sourceId":"fixture","sql":"SELECT id, decimal FROM items"}`))
+			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			api.databaseQuery(response, request)
 			var got ncpdatabase.QueryResult

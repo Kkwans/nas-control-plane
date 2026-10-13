@@ -165,6 +165,10 @@ func (api *handler) databaseDelete(response http.ResponseWriter, request *http.R
 }
 
 func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *http.Request, destination any) bool {
+	if err := validateJSONContentType(request); err != nil {
+		api.writeUnsupportedMediaType(response, request)
+		return false
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxDatabaseBodySize))
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()

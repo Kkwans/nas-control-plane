@@ -118,6 +118,10 @@ func currentPrincipal(request *http.Request) auth.Principal {
 }
 
 func (api *handler) decodeControlBody(response http.ResponseWriter, request *http.Request, destination any) bool {
+	if err := validateJSONContentType(request); err != nil {
+		api.writeUnsupportedMediaType(response, request)
+		return false
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, maxControlBodySize))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
