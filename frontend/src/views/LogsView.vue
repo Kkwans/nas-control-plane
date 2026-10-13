@@ -580,6 +580,7 @@ function followStateDescription(value: FollowState) {
 
 @media (min-width: 1181px) {
   .log-toolbar {
+    flex-wrap: wrap;
     gap: 10px;
     padding: 10px 12px;
   }
@@ -593,9 +594,20 @@ function followStateDescription(value: FollowState) {
   .log-filter-field--container {
     max-width: 136px;
   }
-  .log-filter-field--level,
-  .log-filter-field--hours {
+  .log-filter-field--level {
     max-width: 104px;
+  }
+  .log-filter-field--hours {
+    min-width: 136px;
+    max-width: 136px;
+    flex: 0 0 136px;
+  }
+  .log-tools {
+    flex: 1 1 440px;
+  }
+  .log-tools :deep(.el-input) {
+    min-width: 120px;
+    flex: 1 1 150px;
   }
   .log-toolbar :deep(.el-select__wrapper),
   .log-toolbar :deep(.el-input__wrapper),

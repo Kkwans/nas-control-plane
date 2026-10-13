@@ -495,13 +495,13 @@ function clearError() {
 }
 
 .source-summary dd {
-  overflow: hidden;
+  min-width: 0;
   margin: 0;
   color: var(--ncp-text);
   font-size: .8rem;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .source-summary__status dd {
@@ -511,11 +511,11 @@ function clearError() {
 }
 
 .source-summary small {
-  overflow: hidden;
+  min-width: 0;
   color: var(--ncp-text-subtle);
   font-size: .68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .connection-pill,
@@ -995,7 +995,11 @@ function clearError() {
 
 @media (max-width: 600px) {
   .source-summary {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .source-summary > div:last-child {
+    grid-column: 1 / -1;
   }
 
   .source-summary > div:nth-child(3n) {

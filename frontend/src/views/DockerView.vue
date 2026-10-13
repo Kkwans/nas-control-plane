@@ -573,7 +573,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .resource-state--error { border-color: var(--ncp-danger-border); color: var(--ncp-danger-strong); }
 .resource-state--error strong { color: var(--ncp-danger-strong); }
 .docker-table { overflow: hidden; border-color:rgba(203,214,228,.9); }
-.docker-table__head, .project-row { display: grid; grid-template-columns: minmax(210px,1.3fr) 108px 74px 180px minmax(170px,1fr) minmax(180px,auto); align-items: center; gap: 12px; }
+.docker-table__head, .project-row { display: grid; grid-template-columns: minmax(0,1.3fr) 108px 74px minmax(80px,180px) minmax(0,1fr) 188px; align-items: center; gap: 12px; }
 .docker-table__head { min-height: 46px; padding: 0 18px; background: var(--ncp-surface-quiet); color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; }
 .project-row { width: 100%; min-height: 70px; padding: 10px 18px; border-top: 1px solid var(--ncp-line); background: #fff; color: var(--ncp-text-muted); font-size: .86rem; text-align: left; transition: background-color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast), transform var(--ncp-duration-fast); }
 .project-row:hover { position: relative; z-index: 1; background: var(--ncp-surface-hover); }
@@ -598,11 +598,10 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .project-row-feedback strong, .project-action-errors strong { font-weight: 760; }
 .project-row-feedback ul, .project-action-errors ul { display: grid; gap: 3px; margin: 4px 0 0; padding-left: 17px; }
 .table-empty { padding: 36px; color: var(--ncp-text-subtle); font-size: .82rem; text-align: center; }
-.resource-pagination { display:flex; min-height:52px; align-items:center; justify-content:space-between; gap:16px; padding:8px 18px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-subtle); font-size:.82rem; }
-.resource-pagination div { display:flex; align-items:center; gap:8px; }
-.resource-pagination button { min-height:34px; padding:0 11px; border:1px solid var(--ncp-line); border-radius:8px; background:#fff; color:var(--ncp-text-muted); font-weight:680; }
-.resource-pagination button:disabled { cursor:not-allowed; opacity:.42; }
-.resource-pagination strong { min-width:62px; color:var(--ncp-text); text-align:center; }
+footer.resource-pagination { display:flex; flex-wrap:wrap; min-height:52px; align-items:center; justify-content:space-between; gap:12px 16px; padding:8px 18px; border-top:1px solid var(--ncp-line); color:var(--ncp-text-subtle); font-size:.82rem; }
+footer.resource-pagination > .page-size-control { flex-shrink:0; white-space:nowrap; }
+footer.resource-pagination > .resource-pagination { margin-left:auto; }
+footer.resource-pagination :deep(.el-select__wrapper) { min-height:44px; }
 .docker-mobile-list { display: none; }
 .mobile-project-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .mobile-project-actions :deep(.action-button) { width: 100%; }
@@ -610,7 +609,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media(max-width: 1120px) {
-  .docker-table__head, .project-row { grid-template-columns: minmax(190px,1.2fr) 100px 65px 150px minmax(140px,1fr) minmax(180px,auto); gap: 8px; }
+  .docker-table__head, .project-row { grid-template-columns: minmax(0,1.2fr) 100px 65px minmax(60px,150px) minmax(0,1fr) 188px; gap: 8px; }
 }
 @media(max-width: 900px) { .docker-search { min-width: 0; width: 100%; } }
 @media(max-width: 820px) {
