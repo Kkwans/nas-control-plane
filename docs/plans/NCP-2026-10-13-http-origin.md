@@ -55,4 +55,14 @@ curl -b session.cookies -X POST http://nas.example:8760/api/v1/auth/logout
 
 验收采用recorder、fake和请求读取计数：四decoder/35路由类型矩阵、六个auth/user错误出口、MIME拒绝无业务副作用、Origin/认证优先级、multipart与无body兼容、inspect实际空体及错误读取、前端请求头契约与OpenAPI同步。真实代理/浏览器攻击及NAS部署未在本片执行。
 
-原LimitReader可能隐藏限额之后的尾部数据，属于独立body-size边界问题，本片不通过修改读取策略顺带宣称已修复。socket专用身份仍为部署方案，不更改真实系统权限或凭据。
+MIME切片本身不修复原LimitReader隐藏尾部的问题；该缺口已由下述独立M10-C完整读取切片处理。socket专用身份仍为部署方案，不更改真实系统权限或凭据。
+
+## M10-C 完整JSON body字节限额（2026-10-13 代码与独立审查完成）
+
+已用纯Reader隔离复现：有效JSON与空白填满原LimitReader上限后，额外空格、第二个JSON或垃圾尾部被人为EOF隐藏。保持原8KiB认证/用户、16KiB control、1MiB database容量，但将定义明确为完整body的字节数，含前后空白和尾部；恰好限额允许，多一字节拒绝。
+
+四个decoder在MIME通过后先有界读取完整body，再沿用原DisallowUnknownFields、单值检查与数据库UseNumber。使用MaxBytesReader的类型化超限结果，最多读取原body的limit+1字节；不按ContentLength信任接受/拒绝、不根据它预分配、不无限drain。超限统一413/HTTP_REQUEST_BODY_TOO_LARGE，未超限语法/读取/取消错误维持原模块400；MIME/认证/Origin/依赖优先级不变。
+
+读取包装每轮检查context和有限连续空读，完整读取及解码返回成功前再次检查取消；不创建后台goroutine包装任意阻塞Reader，不更改HTTP timeout。原HTTP body仍由server关闭，可选inspect前缀与Close链保留，探测时取消不执行Agent请求。内存分配随上限有界但可能因ReadAll容量增长超过payload长度，不能宣称整个进程内存不超过1MiB。
+
+验收须覆盖三类容量和分块大小、limit-1/limit/limit+1、隐藏尾部、畸形超大体、bytes+EOF/bytes+读取错误、空读与取消、伪造/未知长度、inspect探测计入同一总预算、35路由无业务副作用、11无body/multipart不受影响，以及旧LimitReader负对照。413通过既有错误结构传递并同步OpenAPI，不自动重试或清除会话。真实网络慢请求与NAS仍不在本片验收范围。

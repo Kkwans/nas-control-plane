@@ -217,3 +217,11 @@
 - 根独立TestJSON race通过（3.422s），审查独立全矩阵与OpenAPI通过；35路由缺失/plain/重复头拒绝与正确MIME错误JSON回归，no-side-effect计数、敏感信息不回显、真实临时SQLite CLI生命周期均覆盖。四处decoder去掉guard及恢复旧ContentLength判断的五个overlay负对照全部按预期失败，未改工作树产品文件。
 - 现有37项审计筛选Go回归、六个前端API文件121项测试、新文件lint及Vue类型检查通过；前端契约实际调用35个API函数、11个无body动作与FormData，415无自动重试或清除会话。完整分支CI待验收。
 - CLI仍无需Origin，但JSON必须显式Content-Type；原无头或curl默认表单JSON有意变为415。LimitReader隐藏限额后尾部的问题另片，不混称已修复。没有更改真实安全设置、凭据或生产环境。
+
+
+## 13:26 UTC 完整请求体限额
+
+- [f2580b7 CI 38403123167](https://github.com/Kkwans/nas-control-plane/actions/runs/38403123167)完整通过，469项单元与157项Chromium；[4ddda99 CI 38403759891](https://github.com/Kkwans/nas-control-plane/actions/runs/38403759891)完整通过，521项单元与157项Chromium，Go/构建/Compose均通过。
+- M10-C九个文件冻结且独立审查无发现：四decoder先读取完整有界body，再严格解码；保持8KiB/16KiB/1MiB容量，完整空白与尾部计入，35路由超限统一413，保留原400/415及认证来源优先级和数字精度。
+- 新增测试覆盖读取边界/分块、读取错误、取消/空读、35路由无副作用、inspect前缀与Close及保护顺序。旧四decoder的overlay负对照产生432项预期失败，证明隐藏尾部等缺陷可被捕捉。冻结后race通过20.041s，安全HTTP回归2.095s、go build ./...、OpenAPI、87项前端契约测试与vue-tsc、diff检查通过。完整CI待验收。
+- 不启动本地网络服务、不无限drain、不修改HTTP timeout；取消依赖底层Reader配合。限额是payload完整字节预算，不是进程总内存硬上限。无NAS、真实Docker或生产操作。

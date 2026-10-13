@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -169,7 +170,16 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 		api.writeUnsupportedMediaType(response, request)
 		return false
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxDatabaseBodySize))
+	data, err := readBoundedJSONBody(request, maxDatabaseBodySize)
+	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
+		} else {
+			api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
+		}
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
@@ -178,6 +188,10 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求只能包含一个 JSON 对象。")
+		return false
+	}
+	if err := request.Context().Err(); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
 		return false
 	}
 	return true

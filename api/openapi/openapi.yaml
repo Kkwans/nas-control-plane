@@ -58,13 +58,15 @@ paths:
       summary: Create the first Root account and start a session
       tags: [auth]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -96,13 +98,15 @@ paths:
       summary: Start a Root session
       tags: [auth]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -159,13 +163,15 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -191,7 +197,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
@@ -201,6 +207,8 @@ paths:
               properties:
                 disabled: { type: boolean }
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -236,13 +244,15 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PasswordPolicy'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -262,7 +272,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
@@ -273,6 +283,8 @@ paths:
                 currentPassword: { type: string, format: password }
                 newPassword: { type: string, format: password, minLength: 1, maxLength: 256 }
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -323,13 +335,15 @@ paths:
       tags: [settings]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/UserPreferences'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -369,13 +383,15 @@ paths:
       parameters:
         - { name: listKey, in: path, required: true, schema: { type: string } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ListPreference'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -477,13 +493,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseProjectPreference'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -533,13 +551,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -577,13 +597,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -621,13 +643,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -667,13 +691,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseQueryRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -715,13 +741,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseRowsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -747,13 +775,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -779,13 +809,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -811,13 +843,15 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '422':
@@ -943,13 +977,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -973,13 +1009,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeConfirmation'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1003,13 +1041,15 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSRollbackRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1081,13 +1121,15 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInvokeRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1118,13 +1160,15 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
-        description: 实际空请求体可省略；非空请求体必须使用单一 application/json Content-Type，允许有效 MIME 参数，不接受重复或其他媒体类型。
+        description: 实际空请求体可省略；非空请求体必须使用单一 application/json Content-Type，允许有效 MIME 参数，不接受重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: false
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInspectionRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1330,13 +1374,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerContainerCreateRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1367,13 +1413,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveBatchRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1406,13 +1454,15 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/StandaloneProjectActionRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1446,13 +1496,15 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeLifecycleRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1485,13 +1537,15 @@ paths:
       parameters:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerProjectDeleteRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1562,13 +1616,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImagePullRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1598,13 +1654,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeReadRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1622,13 +1680,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeValidateRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1665,13 +1725,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDraftInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -1701,13 +1763,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDeployInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '400':
@@ -1754,13 +1818,15 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -2001,13 +2067,15 @@ paths:
       tags: [sites]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -2061,13 +2129,15 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
         '403':
@@ -2488,6 +2558,16 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   responses:
+    RequestBodyTooLarge:
+      description: 完整 JSON 请求体超过该操作的字节上限；稳定错误码 HTTP_REQUEST_BODY_TOO_LARGE，包含 requestId。仅在通过原有来源、认证、依赖、参数及 MIME 前置校验后检查实际请求体，不依赖 Content-Length；不会执行后续业务操作。不返回请求体或底层读取错误。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: HTTP_REQUEST_BODY_TOO_LARGE
+            message: 请求体超过大小限制。
+            requestId: req-body-limit
     UnsupportedMediaType:
       description: JSON 请求必须使用单一 application/json Content-Type（允许有效 MIME 参数）；错误码 HTTP_UNSUPPORTED_MEDIA_TYPE，包含 requestId。可选请求体仅在实际非空时要求该类型。
       content:

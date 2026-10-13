@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -76,6 +77,10 @@ func (api *handler) bootstrap(response http.ResponseWriter, request *http.Reques
 			api.writeUnsupportedMediaType(response, request)
 			return
 		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
@@ -101,6 +106,10 @@ func (api *handler) login(response http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		if errors.Is(err, errUnsupportedMediaType) {
 			api.writeUnsupportedMediaType(response, request)
+			return
+		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
 			return
 		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
@@ -216,7 +225,11 @@ func decodeCredentials(request *http.Request) (credentialsRequest, error) {
 	if err := validateJSONContentType(request); err != nil {
 		return credentialsRequest{}, err
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxCredentialsBodySize))
+	data, err := readBoundedJSONBody(request, maxCredentialsBodySize)
+	if err != nil {
+		return credentialsRequest{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var credentials credentialsRequest
 	if err := decoder.Decode(&credentials); err != nil {
@@ -224,6 +237,9 @@ func decodeCredentials(request *http.Request) (credentialsRequest, error) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return credentialsRequest{}, errors.New("credentials payload contains multiple values")
+	}
+	if err := request.Context().Err(); err != nil {
+		return credentialsRequest{}, err
 	}
 	return credentials, nil
 }

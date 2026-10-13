@@ -83,9 +83,9 @@ const noBodyRequests: RequestCase[] = [
   { family: 'database', path: '/databases/discovery', method: 'GET', run: () => database.discoverDatabases() },
 ]
 
-function rejectWithMediaType() {
-  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(mediaError), {
-    status: 415,
+function rejectWithJSONError(status = 415, error = mediaError) {
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(error), {
+    status,
     headers: { 'Content-Type': 'application/json' },
   }))
   vi.stubGlobal('fetch', fetcher)
@@ -94,9 +94,9 @@ function rejectWithMediaType() {
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe('JSON 请求 MIME 契约', () => {
+describe('JSON 请求 MIME 与大小错误契约', () => {
   it.each(jsonRequests)('$family $method $path 发送 JSON，并保留 415，不重试或跳转登录', async ({ run, path, method }) => {
-    const fetcher = rejectWithMediaType()
+    const fetcher = rejectWithJSONError()
     const session = beginSession()
     const location = { href: 'http://fixture.test/current', assign: vi.fn(), replace: vi.fn() }
     vi.stubGlobal('location', location)
@@ -122,8 +122,32 @@ describe('JSON 请求 MIME 契约', () => {
     expect(location.replace).not.toHaveBeenCalled()
   })
 
+  it.each(jsonRequests)('$family $method $path 保留完整请求体 413，不重试或跳转登录', async ({ run }) => {
+    const bodyError = {
+      code: 'HTTP_REQUEST_BODY_TOO_LARGE',
+      message: '请求体超过大小限制。',
+      requestId: 'req-body-limit-fixture',
+    }
+    const fetcher = rejectWithJSONError(413, bodyError)
+    const session = beginSession()
+    const location = { href: 'http://fixture.test/current', assign: vi.fn(), replace: vi.fn() }
+    vi.stubGlobal('location', location)
+    vi.stubGlobal('window', { location })
+
+    const error = await run().catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(NcpApiError)
+    expect(error).toMatchObject(bodyError)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(captureSession()).toEqual(session)
+    expect(session.signal.aborted).toBe(false)
+    expect(location.href).toBe('http://fixture.test/current')
+    expect(window.location).toBe(location)
+    expect(location.assign).not.toHaveBeenCalled()
+    expect(location.replace).not.toHaveBeenCalled()
+  })
+
   it.each(noBodyRequests)('$family $method $path 无 body 时不添加 Content-Type', async ({ run, path, method }) => {
-    const fetcher = rejectWithMediaType()
+    const fetcher = rejectWithJSONError()
     await expect(run()).rejects.toMatchObject(mediaError)
     expect(fetcher).toHaveBeenCalledTimes(1)
     const [url, init] = fetcher.mock.calls[0]!

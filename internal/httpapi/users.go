@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,10 @@ func (api *handler) updatePasswordPolicy(response http.ResponseWriter, request *
 	if err := decodeUserRequest(request, &input); err != nil {
 		if errors.Is(err, errUnsupportedMediaType) {
 			api.writeUnsupportedMediaType(response, request)
+			return
+		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
 			return
 		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "密码规则参数无效。")
@@ -99,6 +104,10 @@ func (api *handler) createUser(response http.ResponseWriter, request *http.Reque
 			api.writeUnsupportedMediaType(response, request)
 			return
 		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
@@ -121,6 +130,10 @@ func (api *handler) updateUserStatus(response http.ResponseWriter, request *http
 			api.writeUnsupportedMediaType(response, request)
 			return
 		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
+			return
+		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "账号状态参数无效。")
 		return
 	}
@@ -141,6 +154,10 @@ func (api *handler) updateUserPassword(response http.ResponseWriter, request *ht
 	if err := decodeUserRequest(request, &input); err != nil {
 		if errors.Is(err, errUnsupportedMediaType) {
 			api.writeUnsupportedMediaType(response, request)
+			return
+		}
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
 			return
 		}
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "密码参数无效。")
@@ -210,7 +227,11 @@ func decodeUserRequest(request *http.Request, target any) error {
 	if err := validateJSONContentType(request); err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxCredentialsBodySize))
+	data, err := readBoundedJSONBody(request, maxCredentialsBodySize)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -218,5 +239,5 @@ func decodeUserRequest(request *http.Request, target any) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("payload contains multiple values")
 	}
-	return nil
+	return request.Context().Err()
 }
