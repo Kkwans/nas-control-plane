@@ -495,3 +495,10 @@ fe92e45 的 [CI 38435982303](https://github.com/Kkwans/nas-control-plane/actions
 - 主任务独立运行全量66文件1175项单元、全量lint、Vue类型检查、生产构建与540KiB预算通过；17项新组件回归包含未知结果回改旧值和旧页面重试归属。
 - 六项新增纯mock浏览器fixture通过ESLint、严格TypeScript与发现检查；实际浏览器、390/1440截图与新CI仍待执行。未访问真实设置API、NAS、Docker或生产环境。
 - 前置aa02293完整CI38446484647通过1158单元、263浏览器及Go/Compose；DNS全部十项行为与地标修复通过。原单制品34,020,460字节超出读取上限，2a4a58e以24MiB载荷/1MiB元数据预算分片，11项临时文件测试通过，实际分包及最新DNS像素待复核。
+
+## 终端 M0 可选容量接线
+
+- 新增 Agent CLI 容量参数默认1、显式范围1–4，经 SocketConfig 接入生产Manager；内部零值保持兼容，注入Manager与非零配置冲突明确拒绝。POC仍固定1，部署参数和权限不变。
+- Serve在任何listener和live provider初始化前验证配置；纯解析测试保留旧旗标行为，真实组查询仍在启动前执行。
+- 四份独立fake host/container Session验证输出、输入、resize、唯一Close、退役ID、第五会话拒绝以及opening/live/closing混合计数。独立复核race五次及主任务race三次、扩大既有fake回归通过；主任务Agent/Server编译和三包vet通过。新CI仍待验。
+- 仅源码与纯fake测试，不证明真实四路终端、进程/内存硬上限、全部后代退出或多标签可用；没有启动真实终端、Docker或NAS。

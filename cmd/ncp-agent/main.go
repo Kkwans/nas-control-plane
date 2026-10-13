@@ -107,36 +107,53 @@ func dockerPOCErrorCode(err error) string {
 }
 
 func runAgentServer(ctx context.Context, args []string) error {
+	config, err := parseAgentServerConfig(args)
+	if err != nil {
+		return err
+	}
+	if err := agentsocket.ValidateServerSocketGroup(config.SocketGroup); err != nil {
+		return err
+	}
+	return agentsocket.Serve(ctx, config)
+}
+
+// parseAgentServerConfig 仅解析与校验，不创建 listener 或终端资源。
+func parseAgentServerConfig(args []string) (agentsocket.SocketConfig, error) {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	socketGroup := flags.String("socket-group", "", "允许连接 Agent Socket 的 Server 组")
 	socketPath := flags.String("socket-path", agentsocket.DefaultSocketPath, "Agent Unix Socket 路径；仅 P0 终端实测可覆写")
+	terminalMaxSessions := flags.Int("terminal-max-sessions", terminal.DefaultMaxSessions, "Agent 全局主机与容器终端合计容量（1–4，默认 1）")
 	terminalPOC := flags.Bool("terminal-poc", true, "启用主机与容器终端 Agent 服务")
 	outboundProxy := flags.String("outbound-proxy", "", "Docker Hub 标签查询使用的宿主机 HTTP 代理")
 	composeRegistryPath := flags.String("compose-registry-path", docker.DefaultUGREENComposeRegistryPath, "UGREEN Docker Compose 注册表数据库路径")
 	if err := flags.Parse(args); err != nil {
-		return err
+		return agentsocket.SocketConfig{}, err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected serve arguments")
+		return agentsocket.SocketConfig{}, fmt.Errorf("unexpected serve arguments")
+	}
+	if err := terminal.ValidateMaxSessions(*terminalMaxSessions); err != nil {
+		return agentsocket.SocketConfig{}, err
 	}
 	if err := agentsocket.ValidateServerSocketPath(*socketPath, *terminalPOC); err != nil {
-		return err
+		return agentsocket.SocketConfig{}, err
 	}
-	if err := agentsocket.ValidateServerSocketGroup(*socketGroup); err != nil {
-		return err
-	}
-	return agentsocket.Serve(ctx, agentsocket.SocketConfig{
+	return agentsocket.SocketConfig{
 		SocketPath:          *socketPath,
 		SocketGroup:         *socketGroup,
 		EnableTerminalPOC:   *terminalPOC,
+		TerminalMaxSessions: *terminalMaxSessions,
 		OutboundProxy:       *outboundProxy,
 		ComposeRegistryPath: *composeRegistryPath,
-	})
+	}, nil
 }
 
 func agentSocketErrorCode(err error) string {
 	if code := agentsocket.ErrorCode(err); code != "" {
+		return code
+	}
+	if code := terminal.ErrorCode(err); code != "" {
 		return code
 	}
 	return "AGENT_SOCKET_FAILED"

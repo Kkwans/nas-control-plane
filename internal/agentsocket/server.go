@@ -42,6 +42,7 @@ type SocketConfig struct {
 	SocketMode            os.FileMode
 	EnableTerminalPOC     bool
 	TerminalManager       *terminal.Manager
+	TerminalMaxSessions   int
 	DashboardProvider     DashboardProvider
 	DockerControl         DockerControlProvider
 	DockerLogs            DockerLogsProvider
@@ -59,6 +60,9 @@ type SocketConfig struct {
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
+	if _, err := validateTerminalCapacity(config); err != nil {
+		return err
+	}
 	listener, cleanup, err := listenUnixSocket(config)
 	if err != nil {
 		return err
@@ -201,13 +205,9 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentSystemServiceServer(grpcServer, NewSystemService(systemProvider))
 	RegisterAgentProxyServiceServer(grpcServer, NewProxyService(proxyProvider))
 	if config.EnableTerminalPOC {
-		manager := config.TerminalManager
-		if manager == nil {
-			manager, err = terminal.NewPOCManager()
-			if err != nil {
-				cleanup()
-				return coded("TERMINAL_INITIALIZATION_FAILED", err)
-			}
+		manager, err := configuredTerminalManager(config, terminal.NewProductionManager)
+		if err != nil {
+			return coded("TERMINAL_INITIALIZATION_FAILED", err)
 		}
 		RegisterAgentTerminalPOCServiceServer(grpcServer, newTerminalPOCService(manager))
 	}

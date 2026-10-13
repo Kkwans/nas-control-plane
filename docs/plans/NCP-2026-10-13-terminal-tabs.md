@@ -1,18 +1,18 @@
 # M15-C 候选：终端标签页与多会话边界
 
-日期：2026-10-13。审查基线：fe92e4506c4b23119c63daaf89b236fcd22f2ee7。状态：单终端生命周期 P 片已实现并完成源码复审，28 项纯 fake 单元回归、前端类型检查及定向 ESLint 通过；6 项浏览器 fixture 仅完成静态检查，运行验证待隔离 CI。主任务独立全量61文件964项单元、lint、类型检查、生产构建及540KiB预算通过；浏览器CI待验。多会话 M 片仍暂缓；未连接真实终端，未执行终端命令或真实 WebSocket/PTY/Docker/NAS 验证。
+日期：2026-10-13。最初审查基线：fe92e4506c4b23119c63daaf89b236fcd22f2ee7。状态：P 片单终端生命周期、隔离浏览器行为、关闭说明像素及原始几何验收已闭环；最终证据为 `9b023888a84ce9c33849ab81addeeb888c078426` 的 [CI 38442888117](https://github.com/Kkwans/nas-control-plane/actions/runs/38442888117)，1059 项单元、253 项浏览器通过，详见[终端视觉记录](../qa/NCP-2026-10-13-terminal-attempt-visual.md)。本轮按主任务授权实现 M0 可选容量源码接线及纯 fake 隔离回归，默认仍为 1，部署参数未改变；前端标签页尚未实施。未连接真实终端、Docker 或 NAS，未执行终端命令或真实 PTY 验收。
 
 ## 结论与决策门
 
-**现有生产后端不支持两个并发终端，不能把纯前端标签页作为“多会话已完成”交付。** `internal/agentsocket/server.go` 默认创建 `NewPOCManager()`，后者在 `internal/terminal/poc.go` 使用 `defaultMaxSessions=1`。`Manager` 虽接受可注入容量，但未发现生产容量配置入口。此上限为该 Agent Manager 的全局主机/容器合计，不是每标签页、每浏览器或每用户。
+**默认生产容量仍为一个全局终端；M0 只提供显式选择 1–4 的源码配置入口，不能把它当成多标签或真实四路终端已验收。** `SocketConfig.TerminalMaxSessions` 经生产工厂接入 Manager；此上限为该 Agent 的主机/容器 opening + live + closing 合计，不是每标签页、每浏览器或每用户。独立 `NewPOCManager()` 继续固定单会话。
 
-主任务已决定：暂缓标签页，不交付单连接标签页替代品，也不扩充后端容量。本次已实施独立的 **P 片：单终端连接生命周期修复**，验证进度见文末。以下多会话设计仅供未来 **M 片**使用，必须另行决定 Agent 全局容量配置、部署预算与协议需求，不能通过 P 片顺手把默认容量从 1 改成 4。
+P 片原先决定不扩充容量，已经完成单终端连接生命周期修复与隔离 CI/像素验收。随后主任务明确授权本轮 **M0：可选容量接线与跨会话逻辑隔离**，源码工作不再等待另一次批准。没有修改 systemd、Compose 或现有运行容量；真实部署/资源预算及未来前端标签仍为独立阶段。
 
-P 片不改变 Root 身份、Shell、执行参数、RPC/WebSocket 协议或宿主权限。未来 M 片保留权限与执行边界，容量配置及是否需要新增观测协议须先决定。均不增加任意命令接口、启动命令、广播输入、会话恢复、后台常驻、跨窗口同步或输出持久化。
+P 片不改变 Root 身份、Shell、执行参数、RPC/WebSocket 协议或宿主权限。M0 与未来 M 片保留权限与执行边界，容量发现/关闭确认等新增观测协议须独立设计。均不增加任意命令接口、启动命令、广播输入、会话恢复、后台常驻、跨窗口同步或输出持久化。
 
 ## 基线审查事实与持续风险
 
-以下前端缺陷描述对应上述审查基线，P 片已修复的范围见文末；后端容量、远端退出与浏览器内存边界未改变。
+以下前端缺陷描述对应上述审查基线，P 片已修复的范围见文末；M0 仅增加可选容量接线，远端退出与浏览器内存边界未改变。
 
 - `frontend/src/views/TerminalView.vue` 基线版本以单实例闭包持有 socket/xterm/FitAddon/监听器；10 秒握手等待，5000 行 scrollback，80ms resize debounce。目标选择在 connected 时禁用，但 connecting 时仍能改，可能让标签描述偏离已发请求。没有连接中取消按钮。
 - 旧回调直接读写共享变量；`await nextTick()` 后没有生命周期复核。连接取消/重连/卸载后，晚到 started、close、error、resize 或粘贴焦点回调可能修改新连接。不得把现有组件原样复制四份后宣布安全。
@@ -61,15 +61,15 @@ P 片不改变 Root 身份、Shell、执行参数、RPC/WebSocket 协议或宿�
 - 收尾：route unmount、pagehide/BFCache、认证失效/beginSession 同步禁输入；所有资源与监听恰好清理一次；浏览器 onclose 后服务器仍拒绝容量时准确提示；不开重试风暴。
 - 交互：tab ARIA 关联、键盘方向/Home/End/关闭焦点、paste dialog 唯一 ID、后台不抢焦点、不广播输出；动态 reduced-motion；窄屏溢出、长容器名、错误/关闭中状态。
 - 现有后端纯 fake 证据继续覆盖 opening/live/closing 全局限额、晚到 Start 唯一 owner、撤销阻断输入与输出。M 片另外验证容量接线和四路不同 host/container starter 并发隔离、关闭一个不影响其他；不以多标签 mock 成功代替生产容量验收。
-- M 片仍只有方案，未实施或运行其多会话验收。P 片本地仅运行纯 fake/静态检查；任何真实 PTY、terminal 命令、WebSocket、listener、Docker/NAS 连接需依照主任务当次授权单独安排。生产构建与既有隔离 CI 的通过不等同 NAS 实机验收。
+- 前端 M 片仍只有方案，未实施或运行其多标签验收；M0 的后端纯 fake 验证见文末。P 片隔离浏览器 CI 已通过；任何真实 PTY、terminal 命令、WebSocket、listener、Docker/NAS 连接需依照主任务当次授权单独安排。生产构建与既有隔离 CI 的通过不等同 NAS 实机验收。
 
 ## 建议阶段与改动范围
 
-1. 主任务已批准并实施下述 P 片；源码复审与定向 fake 回归已通过，浏览器运行及最终集成验收仍待主任务验证。
+1. 主任务已批准并实施下述 P 片；源码复审、定向 fake 回归及隔离浏览器/像素验收已通过。
 2. P 片只改 TerminalView、必要的局部 attempt owner 与 mock 测试；不做标签、队列容量策略、后端容量或协议变化。
-3. 未来 M 片须明确 Agent 全局容量、部署资源预算、并发 Starter 验证；决定是否新增容量/关闭确认协议。仅沿用现有协议也能做有限多路连接，但无法报告准确可用名额、确认启动中取消已回收、确认全部进程退出。若产品要求这些保证，需独立协议方案与 OpenAPI 同步；不能仅修改 UI 文案伪造保证。
+3. M0 已明确 Agent 全局可选 1–4，默认 1；后续仍须明确部署资源预算、真实并发 Starter 验证；决定是否新增容量/关闭确认协议。仅沿用现有协议也能做有限多路连接，但无法报告准确可用名额、确认启动中取消已回收、确认全部进程退出。若产品要求这些保证，需独立协议方案与 OpenAPI 同步；不能仅修改 UI 文案伪造保证。
 
-## P 片：单终端连接与认证生命周期（已实施，待最终集成验收）
+## P 片：单终端连接与认证生命周期（已实施并完成隔离验收）
 
 ### 基线精确证据及需保留的保护
 
@@ -112,5 +112,56 @@ P 片完成标准：上述源码缺陷与 mock 回归闭环、前端类型检查
 - 连接中提供“取消连接”，connecting/connected/closing 均锁定目标。先同步撤销输入、粘贴与 resize，再逐项安全清理；认证失效、pagehide 和卸载同样处理。退役时解绑 message/error，保留准确 onclose 完成本地关闭；浏览器不报告 close 时继续显示关闭中，不自动重连或推断服务端容量已释放。
 - 保留 10 秒握手、5000 行 scrollback、80ms resize debounce、能力处理、正常输出、显式键盘/粘贴交互和动态减少动效。初始化、send/close、write/dispose 等异常有终止与清理路径；聚焦为尽力操作，失败不重放输入。没有标签页、后端容量或协议修改，也没有新增输出水位策略。
 - `TerminalView.test.ts` 的 R1–R7 共 **28 项纯 fake 测试通过**，使用 fake WebSocket/Terminal/ResizeObserver/timers；覆盖晚到事件隔离、取消及目标锁定、异常清理、认证/页面同步撤销、握手边界、正常输入/输出/resize、显式多行确认、减少动效与 DOM 焦点。前端 `vue-tsc --noEmit -p tsconfig.app.json`、两个实现/测试文件的定向 ESLint、diff 空白检查通过；独立源码复审已完成。
-- `frontend/e2e/terminal-attempt-ownership.spec.ts` 新增 **6 项浏览器 fixture**，使用注入的 fake WebSocket，覆盖交互及窄屏场景；当前仅完成静态检查，尚未在本地启动浏览器/服务运行，运行结论待既有隔离 CI。不得把 fixture 存在或静态通过写成浏览器验收已通过。
-- 主任务独立全量61文件964项单元、lint、类型检查、生产构建及540KiB预算通过，最终浏览器 CI 待验。不代表部署或 NAS 实机验收；远端命令退出、服务端资源立即回收、多会话容量和未来 M 片输出预算均不在本次完成范围。
+- `frontend/e2e/terminal-attempt-ownership.spec.ts` 新增 **6 项浏览器 fixture**，使用注入的 fake WebSocket，覆盖交互及窄屏场景；首次实现时仅完成静态检查；后续隔离 CI 已实际运行通过，最终像素与原始几何证据见终端视觉记录。本地仍未启动浏览器/服务。
+- 主任务独立全量61文件964项单元、lint、类型检查、生产构建及540KiB预算通过，此为首轮本地结果；后续最终隔离 CI 为 1059 单元、253 浏览器通过，关闭说明像素与几何闭环。不代表部署或 NAS 实机验收；远端命令退出、服务端资源立即回收、多会话容量和未来 M 片输出预算均不在本次完成范围。
+
+
+## M0：可选容量接线与跨会话隔离（已实施，纯 fake 回归通过）
+
+补充审查日期：2026-10-13；源码基线 `2a4a58e6df9b37e18ee59d07b66c2baee5d219f8`。以下先保留实施前的审查依据与最小契约，实施记录见本节末。M0 源码接线已获主任务授权，不改变已部署容量或 P 片的隔离验收事实。
+
+### 为什么先做这一片
+
+- 实施前准确接线为 `cmd/ncp-agent/main.go:runAgentServer` → `agentsocket.SocketConfig.EnableTerminalPOC` → `internal/agentsocket/server.go` → `terminal.NewPOCManager()` → `NewManager(..., defaultMaxSessions)`。常量实际声明在 `internal/terminal/manager.go`，值为 1；`poc.go` 是调用方。CLI 只有终端服务启停，没有容量参数，Server 也没有容量发现接口。
+- Manager 已具备每次 Start 独立所有权、opening/live/closing 计数和锁外启动，无需为多标签重写 Manager。现有 `TestTerminalStartReservationParallelAdmissionNeverExceedsLimit` 已以容量 3 验证并行准入；缺口是生产配置接线，以及混合 host/container 四份不同 Session 的输入、输出、尺寸、取消和关闭互不串线证据。
+- 每个 WebSocket 已对应独占 Agent RPC stream，服务端通过该 stream 的 `opened.ID` 路由操作；无需将 tab ID 加到现有输入帧，也无需广播、恢复或多路复用协议。
+
+### M0 最小改动与完成边界
+
+1. 添加 Agent 启动参数 `--terminal-max-sessions`，**默认仍为 1，显式允许 1–4**；范围是本 Agent 全局主机与容器合计。4 是首版受控产品上限，不是已测得的 NAS 安全负载。非法显式值（含 0、负数、超过 4、非数字）失败，不能静默回退或截断。
+2. 将参数经 `SocketConfig` 传给新的生产 Manager 工厂；保留 `NewPOCManager()` 的单会话 PoC 语义和现有低层 `NewManager` 注入能力。纯配置解析/校验应可直接测试；`Serve` 实施前先 `listenUnixSocket`，因此新增配置校验必须先于 listener、目录/权限变更及 Docker client 初始化，不能用启动真实服务测试非法参数。内部零值兼容默认 1，与 CLI 显式 0 拒绝须有区分；测试注入 `TerminalManager` 时的容量优先级须明文约定并回归，不能让配置看似生效而实际被忽略。
+3. 只修改 Agent CLI、SocketConfig/工厂、小范围终端测试、现有部署说明与 OpenAPI 说明。**不修改 systemd ExecStart 或 Compose 来启用大于 1，不增加环境变量第二套入口，不增加热更新，不做前端标签或配额查询 API。** `/ws/terminal` 文档补充全局容量语义、默认 1、显式上限以及升级后的 `TERMINAL_SESSION_LIMIT_REACHED` 手动重试语义，不变更帧格式。
+4. 纯 fake 测试覆盖默认和边界解析、非法参数零副作用、容量值传递到生产工厂。不要调用会创建 Docker client/真实 Starter 的路径来冒充隔离验证；通过窄工厂/解析接缝注入 fake。
+5. 四份唯一 fake Session（两 host、两 container；至少两会话指向同一容器目标）并发启动，逐份追踪 Read/Write/Resize/Close 和不同能力元数据。第五份拒绝且 Starter 未调用；关闭/取消/启动失败一份不改变其余三份，独立 ID 不复用、不串流。沿用 barrier，而非 sleep；fake Starter 必须每次返回不同 Session，不能复用当前简单 `fakeStarter.session` 充当多路隔离证据。
+6. 扩展 opening+live+closing 混合计数：阻塞 Start/Metadata/Close、晚到成功、Session+error、Close error、取消与发布竞态、重复关闭。保留主错误码、唯一 Close owner 和锁外清理。纯 fake `-race` 通过后才称容量接线与逻辑隔离完成；不称真实四路终端已验收。
+
+### 容量不是内存或进程硬限
+
+- Agent 每路输出块 16KiB；浏览器每路 5000 行 scrollback、xterm 内部异步 write 水位与网络接收缓存分别存在。四路不能仅用 4×16KiB 推断总内存。现有 systemd unit 未配置 MemoryMax/TasksMax，console Compose 未提供对应终端资源预算；Root 命令本身也没有每终端 CPU、内存或进程数隔离。
+- `Manager.Close` 和 `closeRejectedOpening` 在 Close **返回后**释放 closing，包括返回退出未确认或本地收尾未确认错误的情况。这是 Manager 所有权预算，不是仍存活的 shell/后代进程数量保证；连续失败可能累积未确认资源。M0 保留现有错误分类和安全日志，不顺手增加永久隔离名额、kill-tree 或重试清理器；若产品要求硬限制残留进程，必须另做生命周期/隔离设计。
+- 主机 Starter 每次创建独立 command/PTY/ready pipe；容器 Starter 每次创建独立 exec/attachment/session，共享 Docker client 的版本协商已有 `versionGate`。这只是源码依据，仍需隔离环境的真实并发启动验证，不能以 fake 代替。主机各 Shell 还共用 `/root/.ncp_bash_history`（配置启用 histappend）；“独立会话”不表示文件系统、命令历史或同一容器内副作用隔离。
+- Server 默认 30 分钟终端超时与认证流总限额独立存在。浏览器取消 connecting 时，Server 在收到 started 前未启动 read pump，故本地关闭不证明启动立即取消。M0 不改此协议或声称解决它。
+
+### 紧接 M0 的前端片应保持局部模型
+
+后续先将当前 `Attempt` 提取为每会话 owner，并在仍只有一个可见面板时回归 P 片全部 28 项；再添加标签容器，避免同时重写传输与 UI。每页只存可响应的目标、快照、状态、能力及粘贴引用；socket/xterm/FitAddon、timers、releases 使用局部非深响应 owner。tabId 与 attemptGeneration 分离；关闭/删除页保留 retired owner，准确 onclose 才释放本地连接计数。认证或 pagehide 一次撤销全部 owner，隐藏页仍处理有界输出，仅选中页 fit/focus/input。
+
+在启用多个 xterm 前落实本计划的每路 256KiB pending-write 字节预算、16KiB 单输出帧上限、32KiB 单输入帧上限和 socket bufferedAmount 预算（建议 64KiB，作为显式待批准常量）；四页 pending-write 原始字节合计最多 1MiB，但不宣称 xterm/浏览器总内存上限。write 回调须绑定准确 owner，关闭后的回调不得扣减新会话计数。超限只终止对应 owner，不截断 ANSI 后继续，不拆分或重放输入。
+
+首版可以使用页面最多四个本地 owner 的上限，由 Agent 裁决跨页面竞争；不能展示“剩余服务器名额”或把本地上限称为 Agent 配额。若要求前端自动适配配置值，另加只读容量发现的 RPC/HTTP/OpenAPI 方案再实施，不应把 guessed capacity 塞进前端配置。
+
+### 实施前审查验证记录（保留历史）
+
+该轮只读取源码、运行指定纯 fake 回归及更新本计划，未修改实现、未 commit/push、未启动 listener/WebSocket/PTY/终端命令、未连接 Docker 或 NAS。默认 `/usr/bin/go` 不是真正 Go 工具链；随后使用主任务确认的 `../ncp-tools/env.sh`（Go 1.26.4、`GOPROXY=off`），`go test -race ./internal/terminal -run '^(TestManager|TestTerminalStartReservation|TestTerminalCleanupManager)' -count=1 -timeout=60s` **通过**。筛选用例均为已审查的纯 fake Manager 测试，不运行包内真实 PTY/进程/网络用例；这只是既有逻辑基线验证，新增 M0 配置与四路混合隔离测试尚未实现。文档 diff 空白检查通过。
+
+
+### M0 实施与验证记录（2026-10-13）
+
+- `serve --terminal-max-sessions` 默认 1，允许 1–4；显式 0、负数、超过 4、非整数和溢出均失败，即使关闭终端也不忽略非法配置。`parseAgentServerConfig` 只做旗标解析、容量与路径校验；原有需要系统组查询的 `ValidateServerSocketGroup` 留在 `runAgentServer`，仍在 `Serve` 前执行，正常启动组限制不变。范围错误保留 `TERMINAL_MAX_SESSIONS_INVALID`；非数字保留旗标解析失败路径。
+- `SocketConfig.TerminalMaxSessions` 内部零值兼容默认 1，CLI 显式零不接受。注入 `TerminalManager` 时必须让容量字段为零，由注入对象负责容量；显式合法 1–4 以 `TERMINAL_CAPACITY_CONFIG_CONFLICT` 拒绝，越界值仍优先以 `TERMINAL_MAX_SESSIONS_INVALID` 拒绝，不静默忽略或覆盖注入对象。所有既有注入调用保持零字段。
+- `Serve` 入口在 listener、目录/权限改动和 live provider 初始化之前校验容量；生产路径使用 `NewProductionManager`，先严格校验再创建 Starter。`NewPOCManager` 固定传入默认 1；低层 `NewManager` 继续保留原注入语义。没有热更新、环境变量第二入口、帧格式或配额查询 API 改动。
+- 新增纯 fake 工厂接缝覆盖默认/1–4 传递、无效值零构造、工厂错误、注入冲突；非法 `Serve` 调用只验证入口立即返回，临时路径下目标目录始终不存在。没有进入 listener 或真实 Starter 路径。
+- 四份唯一 Session 并行启动，两 host、两 container 且共用同一容器目标；逐份核对 ID、能力元数据、输出、输入、resize 及唯一 Close owner。四个 opening 或 live 均拒绝第五个且不调用 Starter；关闭一份后其他三份仍可操作，退役 ID 拒绝读写和尺寸修改。
+- 混合容量 4 以 barrier 控制 Start、Metadata、Close，覆盖 1 opening + 2 live + 1 closing 与 2 live + 2 closing；晚到成功取消、Metadata 取消、Session+error、成功发布后取消、Close error、重复关闭、替补 ID 不复用与兄弟会话持续可用。沿用 Manager 的锁外清理、主错误码、唯一 Close owner 和 Close 返回后释放容量，不更改进程退出保证。
+- 使用 `source ../ncp-tools/env.sh`（Go 1.26.4）、`GOPROXY=off`，运行 `go test -race ./cmd/ncp-agent ./internal/agentsocket ./internal/terminal -run '^(TestTerminal(Capacity|ProductionCapacity|StartReservation|CleanupManager)|TestManager|TestRunAgentServer|TestWriteBuildVersion)' -count=1 -timeout=60s`，三包均通过；`git diff --check` 通过。筛选仅覆盖已审查的纯 fake/配置测试，未运行包内真实 PTY、helper、进程或网络测试。未启动真实 listener/WebSocket/终端命令，未连接 Docker/NAS。
+- 本轮只完成容量接线与逻辑隔离，不表示真实四路终端、Root 命令资源隔离、全部后代退出或前端多标签已验收。没有修改部署设置或当前运行环境，后续部署仍按当次授权办理。
