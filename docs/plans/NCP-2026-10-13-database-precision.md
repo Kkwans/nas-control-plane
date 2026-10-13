@@ -147,3 +147,9 @@ git diff --check
 ```
 
 测试仅执行选定的纯函数与 fake runner；未运行 Manager、sql.Open/sql.OpenDB 夹具、集成监听器，也未连接实际 SQLite/MySQL/PostgreSQL、NAS 或部署环境。编译检查包含包内全部测试源码，但不执行其他测试。独立审查复核实现及上述纯测试，无阻塞发现；这不是全套数据库集成验证。
+
+## 自动分类范围复核结论（2026-10-13）
+
+继续保留显式rows/exec与既有auto契约，不引入通用RETURNING token分类器。PostgreSQL官方[grammar](https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/parser/gram.y)允许AS ColLabel及attr_name→ColLabel，[关键词规则](https://www.postgresql.org/docs/18/sql-keywords-appendix.html)也允许保留字作为列标签；例如SELECT项别名returning或t.returning属性引用不等于返回子句。不能仅靠顶层token出现就改变执行路径。
+
+当前UI与OpenAPI已说明RETURNING/CTE应显式选择结果模式；本次未确认新的实现缺陷，不增加未实现的窄语法待办。独立在53962e4源码上复跑九项既有纯函数/fake-runner query测试通过，未连接真实数据库或NAS。完整自动分类仍为保留范围，不能标记为已完成。
