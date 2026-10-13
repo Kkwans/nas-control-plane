@@ -31,6 +31,7 @@ export type {
 export {
   cancelJob,
   createDockerContainer,
+  CreateContainerOutcomeUnknownError,
   deleteJob,
   deleteDockerProject,
   deployComposeConfig,

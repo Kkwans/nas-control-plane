@@ -4016,15 +4016,20 @@ components:
         runContainer: { type: boolean }
     DockerContainerCreateResult:
       type: object
+      description: 完整创建确认；客户端还须核对 runContainer 与本次提交意图一致，且 started 与该意图一致。无法核实的成功响应不得作为可重复提交的失败。
       required: [containerId, name, image, state, created, started, runContainer]
       properties:
-        containerId: { type: string }
+        containerId: { type: string, minLength: 1, pattern: '\S' }
         name: { type: string }
-        image: { type: string }
+        image: { type: string, minLength: 1, pattern: '\S' }
         state: { type: string, enum: [running, stopped] }
-        created: { type: boolean }
-        started: { type: boolean }
-        runContainer: { type: boolean }
+        created: { type: boolean, const: true }
+        started:
+          type: boolean
+          description: 是否成功调用启动；启动后的进程仍可能退出，因此不等同于当前 state 为 running。
+        runContainer:
+          type: boolean
+          description: 回显本次创建请求的启动意图；成功时与 started 相同。
     DockerProjectDeleteRequest:
       type: object
       required: [projectId, kind, registryName]

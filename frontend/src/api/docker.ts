@@ -364,17 +364,33 @@ export async function requestContainerLogs(
   )
 }
 
+export class CreateContainerOutcomeUnknownError extends NcpApiError {
+  constructor() {
+    super('DOCKER_CONTAINER_CREATE_OUTCOME_UNKNOWN', '无法核实容器创建结果，请先检查容器列表，勿重复提交。')
+    this.name = 'CreateContainerOutcomeUnknownError'
+  }
+}
+
 export async function createDockerContainer(
   input: DockerContainerCreateInput,
   fetcher: typeof fetch = fetch,
 ): Promise<DockerContainerCreateResult> {
-  return requestJson(
-    '/api/v1/docker/containers',
-    jsonRequest(input),
-    isDockerContainerCreateResult,
-    fetcher,
-    'DOCKER_CONTAINER_CREATE_RESPONSE_INVALID',
-  )
+  // 固定本次提交意图，避免等待响应时表单变化影响核验。
+  const runContainer = input.runContainer
+  // 仅已收到的成功响应进入结果未知分支；网络拒绝和非 2xx 保持原有边界。
+  const response = await fetcher('/api/v1/docker/containers', requestOptions(jsonRequest(input)))
+  if (!response.ok) throw await responseError(response)
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  if (!isDockerContainerCreateResult(payload, runContainer)) {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  return payload
 }
 
 export async function deleteDockerProject(
@@ -703,16 +719,16 @@ function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
   )
 }
 
-function isDockerContainerCreateResult(value: unknown): value is DockerContainerCreateResult {
+function isDockerContainerCreateResult(value: unknown, runContainer: boolean): value is DockerContainerCreateResult {
   return (
     isRecord(value) &&
-    typeof value.containerId === 'string' &&
+    typeof value.containerId === 'string' && value.containerId.trim().length > 0 &&
     typeof value.name === 'string' &&
-    typeof value.image === 'string' &&
-    typeof value.state === 'string' &&
+    typeof value.image === 'string' && value.image.trim().length > 0 &&
+    (value.state === 'running' || value.state === 'stopped') &&
     value.created === true &&
-    typeof value.started === 'boolean' &&
-    typeof value.runContainer === 'boolean'
+    typeof value.started === 'boolean' && value.started === runContainer &&
+    typeof value.runContainer === 'boolean' && value.runContainer === runContainer
   )
 }
 

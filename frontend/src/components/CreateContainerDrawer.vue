@@ -5,6 +5,7 @@ import { ElAlert, ElDialog, ElDrawer, ElEmpty, ElInput, ElInputNumber, ElMessage
 
 import {
   NcpApiError,
+  CreateContainerOutcomeUnknownError,
   createDockerContainer,
   requestDockerInventory,
   requestDockerResources,
@@ -33,6 +34,15 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   created: [containerId: string]
 }>()
+
+type UnresolvedAttempt = Readonly<{ name: string; image: string; runContainer: boolean; time: string }>
+const unresolvedAttempt = shallowRef<UnresolvedAttempt | null>(null)
+type VerificationContainer = Pick<DockerInventory['containers'][number], 'id' | 'name' | 'image' | 'state' | 'status'>
+const verificationInventory = shallowRef<{ containers: VerificationContainer[] } | null>(null)
+const verificationLoading = ref(false)
+const verificationError = ref('')
+const verificationRead = createScopedReadRequest()
+let releaseAttemptSession: (() => void) | undefined
 
 const submitting = ref<'create' | 'start' | null>(null)
 const advancedOpen = ref(false)
@@ -156,6 +166,10 @@ function invalidatePreview() {
 }
 
 function invalidateReads() {
+  verificationRead.invalidate()
+  verificationLoading.value = false
+  verificationInventory.value = null
+  verificationError.value = ''
   resourceRead.invalidate()
   pathRead.invalidate()
   resourcesLoading.value = false
@@ -204,6 +218,8 @@ watch(pathBrowserOpen, (open) => {
 watch(previewOpen, (open) => { if (!open) { previewOwner = null; pendingInput.value = null } }, { flush: 'sync' })
 
 onBeforeUnmount(() => {
+  releaseAttemptSession?.()
+  unresolvedAttempt.value = null
   alive = false
   opening += 1
   releaseSession?.()
@@ -345,7 +361,7 @@ function previewLabel(value: string | undefined, fallback: string) {
 }
 
 function openSubmitPreview(runContainer: boolean) {
-  if (submitting.value || !alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
+  if (unresolvedAttempt.value || submitting.value || !alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
   const input = buildInput(runContainer)
   const message = validationMessage(input)
   if (message) {
@@ -432,7 +448,7 @@ function validationMessage(input: DockerContainerCreateInput) {
 }
 
 async function executeSubmit() {
-  if (submitting.value) return
+  if (submitting.value || unresolvedAttempt.value) return
   const input = pendingInput.value
   const owner = previewOwner
   if (!input || !owner || !alive || !props.modelValue || owner.opening !== opening || owner.revision !== revision || !isCurrentSession(owner.session)) {
@@ -440,6 +456,8 @@ async function executeSubmit() {
     return
   }
   const runContainer = pendingRunContainer.value
+  // 不保留环境变量、挂载等完整配置；结果未知属于已提交尝试，不属于可编辑草稿。
+  const attempt: UnresolvedAttempt = Object.freeze({ name: input.name || '自动生成', image: input.image, runContainer, time: new Date().toISOString() })
   const currentPage = () => alive && isCurrentSession(owner.session)
   const currentDraft = () => currentPage() && props.modelValue && owner.opening === opening && owner.revision === revision
   // 提交消费预览快照；关闭界面不会取消或重放真实 POST。
@@ -452,9 +470,54 @@ async function executeSubmit() {
     emit('created', result.containerId)
     if (currentDraft()) emit('update:modelValue', false)
   } catch (caught) {
-    if (currentDraft()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '容器创建失败，请检查配置后重试。')
+    if (currentPage() && caught instanceof CreateContainerOutcomeUnknownError) {
+      unresolvedAttempt.value = attempt
+      invalidatePreview()
+      const session = captureSession()
+      const clearAttempt = () => {
+        unresolvedAttempt.value = null
+        verificationRead.invalidate()
+        verificationLoading.value = false
+        verificationInventory.value = null
+        verificationError.value = ''
+      }
+      session.signal.addEventListener('abort', clearAttempt, { once: true })
+      releaseAttemptSession = () => session.signal.removeEventListener('abort', clearAttempt)
+    } else if (currentDraft()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '容器创建失败，请检查配置后重试。')
   } finally {
     submitting.value = null
+  }
+}
+// 共享清单接口未逐行验证；此处只接收展示所需字段，不保留原始响应或附加配置。
+function projectVerificationInventory(value: unknown): { containers: VerificationContainer[] } {
+  const invalid = () => new Error('容器列表格式无效')
+  if (!value || typeof value !== 'object' || !('containers' in value) || !Array.isArray(value.containers)) throw invalid()
+  const containers = value.containers.map((row: unknown): VerificationContainer => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw invalid()
+    const item = row as Record<string, unknown>
+    if (typeof item.id !== 'string' || typeof item.name !== 'string' || typeof item.image !== 'string' || typeof item.state !== 'string' || typeof item.status !== 'string') throw invalid()
+    return { id: item.id, name: item.name, image: item.image, state: item.state, status: item.status }
+  })
+  return { containers }
+}
+
+// 只读观察不证明这次 POST 的结果；空清单、同名对象和读取失败均不解锁创建。
+async function refreshUnresolvedInventory() {
+  const attempt = unresolvedAttempt.value
+  if (!attempt || !alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
+  const request = verificationRead.begin()
+  const current = () => request.isCurrent() && alive && props.modelValue && unresolvedAttempt.value === attempt
+  verificationLoading.value = true
+  verificationError.value = ''
+  verificationInventory.value = null
+  try {
+    const inventory = await requestDockerInventory(undefined, request.signal)
+    if (current()) verificationInventory.value = projectVerificationInventory(inventory)
+  } catch {
+    if (current()) verificationError.value = '容器列表读取失败，创建结果仍未知。可以再次只读查看。'
+  } finally {
+    if (current()) verificationLoading.value = false
+    request.finish()
   }
 }
 </script>
@@ -470,6 +533,28 @@ async function executeSubmit() {
     <template #header>
       <div class="drawer-heading"><span><Box :size="21" /></span><div><h2>{{ drawerTitle }}</h2><small>确认前可取消；提交后关闭不会取消容器创建</small></div></div>
     </template>
+
+    <section v-if="unresolvedAttempt" class="unresolved-attempt" aria-label="创建结果未知" role="status">
+      <strong>容器可能已经创建，结果尚未确认</strong>
+      <p>服务器返回了无法确认的成功响应。为避免重复创建，本页已暂停新的创建提交。</p>
+      <dl>
+        <dt>提交名称</dt><dd>{{ unresolvedAttempt.name }}</dd>
+        <dt>提交镜像</dt><dd>{{ unresolvedAttempt.image }}</dd>
+        <dt>提交操作</dt><dd>{{ unresolvedAttempt.runContainer ? '创建并启动' : '仅创建' }}</dd>
+        <dt>提交时间</dt><dd><time :datetime="unresolvedAttempt.time">{{ unresolvedAttempt.time }}</time></dd>
+      </dl>
+      <p>只能只读查看列表，不能自动确认本次创建结果；空列表或同名容器都不能证明成功或失败。请人工核查，勿重复提交。</p>
+      <p>此提示仅保留在当前页面和登录会话中。关闭抽屉后仍会保留；离开页面不会取消已提交的请求。</p>
+      <ActionButton variant="secondary" @click="refreshUnresolvedInventory">只读查看容器列表</ActionButton>
+      <p v-if="verificationLoading">正在只读获取容器列表…</p>
+      <p v-else-if="verificationError" role="alert">{{ verificationError }}</p>
+      <template v-else-if="verificationInventory">
+        <p>本次读取 {{ verificationInventory.containers.length }} 个容器；创建结果仍未知。</p>
+        <ul class="unresolved-inventory">
+          <li v-for="container in verificationInventory.containers" :key="container.id">{{ container.name }} · {{ container.image }} · {{ container.state }} · {{ container.status }}</li>
+        </ul>
+      </template>
+    </section>
 
     <form class="container-form" @submit.prevent="openSubmitPreview(true)">
       <section class="form-section">
@@ -575,8 +660,8 @@ async function executeSubmit() {
     <template #footer>
       <div class="drawer-actions">
         <ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="emit('update:modelValue', false)">取消</ActionButton>
-        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting)" @click="openSubmitPreview(false)">仅创建</ActionButton>
-        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting)" @click="openSubmitPreview(true)">创建并启动</ActionButton>
+        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting) || Boolean(unresolvedAttempt)" @click="openSubmitPreview(false)">仅创建</ActionButton>
+        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting) || Boolean(unresolvedAttempt)" @click="openSubmitPreview(true)">创建并启动</ActionButton>
       </div>
     </template>
   </ElDrawer>
@@ -615,12 +700,14 @@ async function executeSubmit() {
       </dl>
     </div>
     <template #footer>
-      <div class="dialog-actions"><ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="previewOpen = false">返回修改</ActionButton><ActionButton variant="primary" :loading="Boolean(submitting)" @click="executeSubmit">确认{{ pendingRunContainer ? '创建并启动' : '创建' }}</ActionButton></div>
+      <div class="dialog-actions"><ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="previewOpen = false">返回修改</ActionButton><ActionButton variant="primary" :loading="Boolean(submitting)" :disabled="Boolean(unresolvedAttempt)" @click="executeSubmit">确认{{ pendingRunContainer ? '创建并启动' : '创建' }}</ActionButton></div>
     </template>
   </ElDialog>
 </template>
 
 <style scoped>
+.unresolved-attempt{display:grid;gap:10px;padding:16px;margin-bottom:14px;border:1px solid var(--ncp-line-strong);border-radius:12px;background:var(--ncp-surface-quiet);overflow-wrap:anywhere}.unresolved-attempt p{margin:0;font-size:.8rem;line-height:1.6}.unresolved-attempt dl{display:grid;grid-template-columns:80px minmax(0,1fr);gap:6px;margin:0;font-size:.78rem}.unresolved-attempt dd{margin:0}.unresolved-attempt .action-button{justify-self:start}.unresolved-inventory{max-height:240px;overflow:auto;margin:0;padding-left:20px;font-size:.78rem;line-height:1.7}
+
 .drawer-heading{display:flex;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;gap:2px}.drawer-heading h2{margin:0;font-size:.96rem}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
 .container-form{display:grid;gap:12px}.form-section{display:grid;gap:15px;padding:17px 18px;border:1px solid var(--ncp-line);border-radius:14px;background:#fff}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}.section-heading__main{display:flex;min-width:0;align-items:center;gap:11px;color:var(--ncp-primary-strong)}.section-heading__icon{display:grid;width:34px;height:34px;flex:0 0 auto;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.section-heading__copy{display:grid;min-width:0;gap:4px}.section-heading strong,.advanced-toggle strong{color:var(--ncp-text);font-size:.86rem;line-height:1.25}.section-heading small,.advanced-toggle small{color:var(--ncp-text-subtle);font-size:.7rem;font-weight:500;line-height:1.4}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field{display:grid;min-width:0;gap:7px}.field--wide{grid-column:1/-1}.field>span{color:var(--ncp-text-muted);font-size:.72rem;font-weight:700}.field :deep(.ncp-select),.repeat-row :deep(.ncp-select){width:100%;min-width:0}
