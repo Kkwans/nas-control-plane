@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { ArrowDown, ArrowUp, ArrowUpRight, Boxes, Cpu, Gauge, Globe2, HardDrive, MemoryStick, Server } from '@lucide/vue'
 
 import RealtimeTrendChart, { type TrendSeries } from '@/components/RealtimeTrendChart.vue'
+import ResourceState from '@/components/ResourceState.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { deriveOverviewState, formatBytes, formatOneDecimal, formatUptime, totalStorage, usagePercent } from '@/domain/overview'
@@ -24,6 +25,13 @@ const favoriteSites = computed(() => sitesStore.visibleSites
   .filter((site) => site.favorite)
   .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
   .slice(0, 6))
+const hasSitesSnapshot = computed(() => Boolean(sitesStore.collectedAt))
+const favoritesPending = computed(() => !hasSitesSnapshot.value && !sitesStore.error)
+const favoritesStale = computed(() => hasSitesSnapshot.value && (sitesStore.loading || Boolean(sitesStore.error)))
+const sitesSnapshotTime = computed(() => {
+  const timestamp = new Date(sitesStore.collectedAt)
+  return Number.isNaN(timestamp.valueOf()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium' }).format(timestamp)
+})
 const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 const headerStats = computed<WorkspaceStat[]>(() => [
   { label: '运行项目', value: `${runningProjects.value}/${projects.value.length}`, tone: 'success' },
@@ -73,9 +81,11 @@ function markIconFailed(siteId: string) {
   failedIcons.value = new Set(failedIcons.value).add(siteId)
 }
 
-onMounted(() => {
-  void sitesStore.refresh()
-})
+function refreshFavorites() {
+  if (!sitesStore.loading) void sitesStore.refresh()
+}
+
+onMounted(refreshFavorites)
 </script>
 
 <template>
@@ -97,7 +107,25 @@ onMounted(() => {
         </div>
         <RouterLink to="/sites">管理站点<ArrowUpRight :size="16" /></RouterLink>
       </header>
-      <div v-if="favoriteSites.length" class="favorite-grid">
+      <ResourceState
+        v-if="sitesStore.error"
+        state="error"
+        :title="hasSitesSnapshot ? '收藏站点刷新失败' : '收藏站点加载失败'"
+        :message="sitesStore.error"
+        :next-step="hasSitesSnapshot ? '可继续使用上次同步的入口；站点状态可能已变化，请重试更新。' : '重试读取站点目录。'"
+        @retry="refreshFavorites"
+      />
+      <div v-if="favoritesPending" class="favorite-loading" role="status" aria-busy="true" aria-label="正在加载收藏站点">
+        <span>正在加载收藏站点…</span>
+        <div class="favorite-grid" aria-hidden="true">
+          <div v-for="index in 3" :key="index" class="favorite-skeleton"></div>
+        </div>
+      </div>
+      <p v-else-if="favoritesStale" class="favorite-sync-note" role="status">
+        {{ sitesStore.loading ? '正在更新收藏站点，暂时显示上次同步的结果。' : '当前显示上次同步的结果。' }}
+        <span>上次同步：{{ sitesSnapshotTime }}</span>
+      </p>
+      <div v-if="hasSitesSnapshot && favoriteSites.length" class="favorite-grid" :aria-busy="sitesStore.loading">
         <a v-for="site in favoriteSites" :key="site.id" class="favorite-site" :href="siteURL(site)" :target="linkTarget" rel="noreferrer" @click="sitesStore.visit(site.id)">
           <span class="favorite-site__logo">
             <img v-if="site.iconUrl && !failedIcons.has(site.id)" :src="site.iconUrl" alt="" @error="markIconFailed(site.id)" />
@@ -107,11 +135,11 @@ onMounted(() => {
             <strong>{{ site.name }}</strong>
             <small>{{ site.description }}</small>
           </span>
-          <span :class="['favorite-site__state', { 'favorite-site__state--offline': site.state !== 'running' }]">{{ site.state === 'running' ? '运行中' : '未运行' }}</span>
+          <span :class="['favorite-site__state', { 'favorite-site__state--offline': site.state !== 'running' }]">{{ favoritesStale ? '上次' : '' }}{{ site.state === 'running' ? '运行中' : '未运行' }}</span>
           <ArrowUpRight class="favorite-site__arrow" :size="17" />
         </a>
       </div>
-      <div v-else class="favorite-empty">
+      <div v-else-if="hasSitesSnapshot && !sitesStore.loading && !sitesStore.error" class="favorite-empty">
         <Globe2 :size="26" />
         <div><strong>还没有收藏站点</strong><span>在站点管理中点击星标，入口会固定显示在这里。</span></div>
         <RouterLink to="/sites">前往站点管理</RouterLink>
@@ -161,6 +189,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.favorite-loading { display: grid; gap: 12px; color: var(--ncp-text-muted); font-size: .84rem; }
+.favorite-skeleton { min-height: 92px; border: 1px solid var(--ncp-line); border-radius: 13px; background: var(--ncp-surface-quiet); }
+.favorite-sync-note { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--ncp-text-muted); font-size: .8rem; overflow-wrap: anywhere; }
+
 .favorite-launcher.favorite-launcher{gap:14px;padding:17px 20px 20px}.favorite-launcher__header.favorite-launcher__header{min-height:42px;align-items:center}.favorite-launcher__title{display:flex;align-items:center;gap:10px}.favorite-launcher__title>span{display:grid;width:36px;height:36px;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.favorite-launcher__header .favorite-launcher__title h2{margin:0;font-size:1.04rem}.favorite-launcher__header .favorite-launcher__title p{margin:2px 0 0;font-size:.78rem}.detail-grid.detail-grid{grid-template-columns:1fr}
 .favorite-launcher{display:grid;gap:17px;padding:20px;overflow:hidden;background:radial-gradient(circle at 88% -30%,rgba(52,116,212,.1),transparent 32%),#fff}.favorite-launcher__header{display:flex;align-items:flex-end;justify-content:space-between;gap:18px}.favorite-launcher__header h2{margin:4px 0 0;font-size:1.25rem;letter-spacing:-.025em}.favorite-launcher__header p{margin:3px 0 0;color:var(--ncp-text-muted);font-size:.86rem}.favorite-launcher__eyebrow{display:flex;align-items:center;gap:6px;color:var(--ncp-primary-strong);font-size:.8rem;font-weight:730}.favorite-launcher__header>a{display:flex;min-height:38px;align-items:center;gap:5px;padding:0 11px;border-radius:9px;color:var(--ncp-primary-strong);font-size:.84rem;font-weight:700}.favorite-launcher__header>a:hover{background:var(--ncp-primary-soft)}.favorite-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.favorite-site{position:relative;display:grid;min-height:92px;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;border:1px solid var(--ncp-line);border-radius:13px;background:rgba(255,255,255,.88);transition:border-color var(--ncp-duration-fast),box-shadow var(--ncp-duration-base),transform var(--ncp-duration-fast)}.favorite-site:hover{border-color:rgba(52,116,212,.28);box-shadow:var(--ncp-shadow-hover);transform:translateY(-2px)}.favorite-site__logo{display:grid;width:48px;height:48px;place-items:center;overflow:hidden;border-radius:13px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-family:var(--ncp-font-latin);font-size:1.05rem}.favorite-site__logo img{width:100%;height:100%;object-fit:cover}.favorite-site__copy{display:grid;min-width:0;gap:4px}.favorite-site__copy strong{font-size:.94rem}.favorite-site__copy small{overflow:hidden;color:var(--ncp-text-muted);font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.favorite-site__state{align-self:start;padding:3px 7px;border-radius:7px;background:var(--ncp-success-soft);color:var(--ncp-success-strong);font-size:.72rem;font-weight:700}.favorite-site__state--offline{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}.favorite-site__arrow{position:absolute;right:12px;bottom:11px;color:var(--ncp-text-subtle);opacity:0;transform:translate(-3px,3px);transition:opacity var(--ncp-duration-fast),transform var(--ncp-duration-fast)}.favorite-site:hover .favorite-site__arrow{opacity:1;transform:none}.favorite-empty{display:flex;min-height:96px;align-items:center;gap:12px;padding:15px;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.favorite-empty>div{display:grid;gap:2px}.favorite-empty strong{color:var(--ncp-text)}.favorite-empty span{font-size:.82rem}.favorite-empty>a{margin-left:auto;padding:9px 12px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.82rem;font-weight:700}
 .metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
