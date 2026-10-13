@@ -389,3 +389,8 @@
 - 有效session晚取消交给Manager唯一Close owner，收尾期间仍占closing名额；保留主取消码以及连接/退出未确认因果。只对握手写请求后的取消标记远端退出未确认，普通未取消SDK错误和Attach后探测超时仍保留既有边界。
 - 实际SDK加内存Conn验证阻塞Write/Read/非101收尾取消、预读、幂等Close、join、并发隔离、共享预算与真实Engine式缺shell后备；没有真实Docker/监听器/PTY。独立审查发现的截止瞬间测试竞态改为等待取消完成，断言不降低。
 - 独立相关race×25/cleanup×10及最终合并race×20、全包仅编译、vet/build通过；发布后完整CI待验，不宣称整个Open硬两秒或远端进程均被杀死。
+
+
+## 16:01 UTC 初始化恢复完整CI与像素
+
+ab7c102的[CI 38425178060](https://github.com/Kkwans/nas-control-plane/actions/runs/38425178060)通过696项单元、196项浏览器及Go/Compose；六张实际恢复PNG确认503/409后登录表单与未确认重查，密码清理及窄屏长错误码可读。详细证据和根字号/fullPage/模拟边界见[视觉报告](NCP-2026-10-13-bootstrap-visual.md)。复核成功的说明仍偏红，另用稳定状态码区分中性提示与真正错误，不更改认证流程。

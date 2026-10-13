@@ -51,6 +51,8 @@ describe('LoginView 初始化结果恢复', () => {
     api.requestAuthStatus.mockResolvedValue({ initialized: true, authenticated: false })
     fill(); submit(); await settle()
     expect(host.textContent).toContain('控制台已初始化，请登录。')
+    expect(host.querySelector('[role=status]')?.classList.contains('access-form__notice')).toBe(true)
+    expect(host.querySelector('.access-form__error')).toBeNull()
     expect(host.querySelectorAll('input')).toHaveLength(2)
     expect(host.querySelectorAll('input')[0]!.value).toBe('root')
     expect(host.querySelectorAll('input')[1]!.value).toBe('')
@@ -65,6 +67,8 @@ describe('LoginView 初始化结果恢复', () => {
     api.requestAuthStatus.mockResolvedValue({ initialized: false, authenticated: false })
     fill(); submit(); await settle()
     expect(host.textContent).toContain('尚未初始化')
+    expect(host.querySelector('[role=status]')?.classList.contains('access-form__notice')).toBe(true)
+    expect(host.querySelector('.access-form__error')).toBeNull()
     expect([...host.querySelectorAll('input[type=password]')].map((element) => (element as HTMLInputElement).value)).toEqual(['', ''])
     expect(authenticated).not.toHaveBeenCalled()
   })
@@ -99,6 +103,8 @@ describe('LoginView 初始化结果恢复', () => {
     api.bootstrapRoot.mockRejectedValue(new NcpApiError('AUTH_INPUT_INVALID', '请检查账号'))
     fill(); submit(); await settle()
     expect(host.textContent).toContain('请检查账号')
+    expect(host.querySelector('[role=alert]')?.classList.contains('access-form__error')).toBe(true)
+    expect(host.querySelector('.access-form__notice')).toBeNull()
     expect(host.querySelectorAll('input')[1]!.value).toBe('secret-one')
     expect(host.querySelectorAll('input')[2]!.value).toBe('secret-one')
     expect(api.requestAuthStatus).not.toHaveBeenCalled()
@@ -122,12 +128,25 @@ describe('LoginView 初始化结果恢复', () => {
     api.loginRoot.mockRejectedValue(new NcpApiError('AUTH_INVALID_CREDENTIALS', '账号或密码不正确。'))
     input(0, 'root'); input(1, 'incorrect-test-secret'); submit(); await settle()
     expect(host.textContent).toContain('账号或密码不正确。')
+    expect(host.querySelector('[role=alert]')?.classList.contains('access-form__error')).toBe(true)
+    expect(host.querySelector('.access-form__notice')).toBeNull()
     expect(host.querySelectorAll('input')[1]!.value).toBe('incorrect-test-secret')
     expect(host.querySelector('button')!.disabled).toBe(false)
     expect(api.bootstrapRoot).not.toHaveBeenCalled()
     expect(api.requestAuthStatus).not.toHaveBeenCalled()
     expect(authenticated).not.toHaveBeenCalled()
     expect(store.state).toBe('anonymous')
+  })
+
+  it('服务端退出未确认仍显示错误样式，保留状态播报语义', async () => {
+    store.state = 'anonymous'
+    store.errorCode = 'LOGOUT_UNCONFIRMED'
+    store.errorMessage = '本地已退出，但服务端会话尚未确认。'
+    await nextTick()
+    const message = host.querySelector('[role=status]')
+    expect(message?.textContent).toBe('本地已退出，但服务端会话尚未确认。')
+    expect(message?.classList.contains('access-form__error')).toBe(true)
+    expect(host.querySelector('.access-form__notice')).toBeNull()
   })
 
   it('请求及复核期间阻止重复提交', async () => {

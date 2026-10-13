@@ -130,7 +130,11 @@ async function submit() {
             />
           </label>
 
-          <p v-if="authStore.errorMessage" class="access-form__error" role="status">{{ authStore.errorMessage }}</p>
+          <p
+            v-if="authStore.errorMessage"
+            :class="authStore.errorCode === 'BOOTSTRAP_RECONCILED' ? 'access-form__notice' : 'access-form__error'"
+            role="status"
+          >{{ authStore.errorMessage }}</p>
           <p v-if="formError" class="access-form__error" role="alert">{{ formError }}</p>
           <button class="primary-action" type="submit" :disabled="isSubmitting || authStore.state === 'checking'">
             <LoaderCircle v-if="isSubmitting" class="spin" :size="16" aria-hidden="true" />
@@ -310,10 +314,18 @@ async function submit() {
   box-shadow: 0 0 0 4px rgba(38, 102, 220, 0.11);
 }
 
-.access-form__error {
+.access-form__error,
+.access-form__notice {
   margin: -2px 0 0;
-  color: var(--ncp-danger-strong);
   font-size: 0.76rem;
+}
+
+.access-form__error {
+  color: var(--ncp-danger-strong);
+}
+
+.access-form__notice {
+  color: var(--ncp-text-muted);
 }
 
 .primary-action {

@@ -122,7 +122,7 @@ async function recoveryEvidence(page: Page, testInfo: TestInfo, state: string) {
       await testInfo.attach(name, { path, contentType: 'image/png' })
     }
     // 检查恢复说明、状态码和操作的真实行框，不让 overflow:hidden 掩盖裁切。
-    for (const locator of await page.locator('.access-description, .access-form__error, .access-error-code, .primary-action').all()) await expectReadable(locator)
+    for (const locator of await page.locator('.access-description, .access-form__error, .access-form__notice, .access-error-code, .primary-action').all()) await expectReadable(locator)
     expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width)
     const results = await new AxeBuilder({ page }).analyze()
     const blocking = results.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
