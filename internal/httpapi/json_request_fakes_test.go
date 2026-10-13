@@ -397,3 +397,8 @@ func (f *jsonMIMERouteStore) UpdateListPreference(context.Context, int64, contro
 	var value1 error
 	return value0, value1
 }
+
+func (f *jsonMIMERouteStore) CompareAndSwapSiteIcon(context.Context, string, string, string) (bool, error) {
+	f.calls.Add(1)
+	return false, nil
+}

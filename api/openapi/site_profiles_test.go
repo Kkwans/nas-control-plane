@@ -173,3 +173,20 @@ func siteProfileJSON(t *testing.T, profile controlstore.SiteProfile) map[string]
 	}
 	return value
 }
+
+func TestSiteIconOwnershipContract(t *testing.T) {
+	document := loadSiteProfileSpecification(t)
+	path := document.Paths.Value("/api/v1/sites/{siteID}/icon")
+	for _, method := range []string{"POST", "DELETE"} {
+		operation := path.GetOperation(method)
+		for _, status := range []string{"404", "409"} {
+			response := operation.Responses.Value(status)
+			if response == nil || response.Value.Content.Get("application/json").Schema.Ref != "#/components/schemas/ErrorResponse" {
+				t.Fatalf("%s must document %s ErrorResponse", method, status)
+			}
+		}
+	}
+	if !document.Components.Schemas["SiteProfileResponse"].Value.Properties["localIconName"].Value.ReadOnly {
+		t.Fatal("localIconName must remain server-owned")
+	}
+}

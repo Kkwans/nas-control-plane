@@ -269,6 +269,7 @@ func (api *handler) updateSite(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	input.ProjectID = siteProjectID(request)
+	input.LocalIconName = ""
 	if existing, ok := api.siteProfile(request.Context(), input.ProjectID); ok {
 		if existing.Source == "manual" {
 			input.Source = "manual"
@@ -278,7 +279,6 @@ func (api *handler) updateSite(response http.ResponseWriter, request *http.Reque
 		input.Ignored = existing.Ignored
 		input.DetectedTitle = existing.DetectedTitle
 		input.AutoIconURL = existing.AutoIconURL
-		input.LocalIconName = existing.LocalIconName
 	}
 	profile, err := api.controlStore.UpsertSiteProfile(request.Context(), input)
 	if err != nil {
@@ -297,6 +297,7 @@ func (api *handler) createSite(response http.ResponseWriter, request *http.Reque
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
+	input.LocalIconName = ""
 	input.ProjectID = "manual:" + uuid.NewString()
 	input.Source = "manual"
 	input.Ignored = false

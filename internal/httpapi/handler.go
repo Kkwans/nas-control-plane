@@ -110,6 +110,7 @@ type ControlStore interface {
 	SetDatabaseProjectPreference(context.Context, controlstore.DatabaseProjectPreference) (controlstore.DatabaseProjectPreference, error)
 	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
 	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
+	CompareAndSwapSiteIcon(context.Context, string, string, string) (bool, error)
 	RecordSiteVisit(context.Context, string) (time.Time, error)
 	ComposeDraft(context.Context, string, string) (controlstore.ComposeDraft, error)
 	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)

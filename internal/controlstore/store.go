@@ -493,11 +493,12 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	profile.Source = strings.ToLower(strings.TrimSpace(profile.Source))
 	profile.DetectedTitle = strings.TrimSpace(profile.DetectedTitle)
 	profile.AutoIconURL = strings.TrimSpace(profile.AutoIconURL)
-	profile.LocalIconName = strings.TrimSpace(profile.LocalIconName)
+	// 本地图标只能通过独立的条件写入取得归属，资料输入不能指定文件。
+	profile.LocalIconName = ""
 	if profile.ProjectID == "" || len(profile.ProjectID) > 256 || profile.Name == "" || len(profile.Name) > 120 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
-	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || len(profile.DetectedTitle) > 200 || len(profile.AutoIconURL) > 2048 || len(profile.LocalIconName) > 160 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
+	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || len(profile.DetectedTitle) > 200 || len(profile.AutoIconURL) > 2048 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
 	if profile.Source == "" {
@@ -522,7 +523,7 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	if profile.LastVisitedAt != nil {
 		lastVisitedAtUnix = profile.LastVisitedAt.UTC().Unix()
 	}
-	_, err := s.database.ExecContext(ctx, `
+	err := s.database.QueryRowContext(ctx, `
 		INSERT INTO site_profiles (
 			project_id, name, description, icon_url, category, primary_port,
 			launch_url, favorite, sort_order, last_visited_at_unix, hidden,
@@ -543,15 +544,38 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 			ignored = excluded.ignored,
 			detected_title = excluded.detected_title,
 			auto_icon_url = excluded.auto_icon_url,
-			local_icon_name = excluded.local_icon_name,
 			updated_at_unix = excluded.updated_at_unix
+		RETURNING local_icon_name
 	`, profile.ProjectID, profile.Name, profile.Description, profile.IconURL, profile.Category, profile.PrimaryPort,
 		profile.LaunchURL, profile.Favorite, profile.SortOrder, lastVisitedAtUnix, profile.Hidden,
-		profile.Source, profile.Ignored, profile.DetectedTitle, profile.AutoIconURL, profile.LocalIconName, s.now().UTC().Unix())
+		profile.Source, profile.Ignored, profile.DetectedTitle, profile.AutoIconURL, profile.LocalIconName, s.now().UTC().Unix()).Scan(&profile.LocalIconName)
 	if err != nil {
 		return SiteProfile{}, err
 	}
 	return profile, nil
+}
+
+// CompareAndSwapSiteIcon 只更新仍持有预期图标的现有资料，不补建已删除的站点。
+// 返回 false 表示资料消失或图标已变化；调用方不能据此删除预期的旧文件。
+func (s *Store) CompareAndSwapSiteIcon(ctx context.Context, siteID, expectedName, replacementName string) (bool, error) {
+	siteID = strings.TrimSpace(siteID)
+	if siteID == "" || len(siteID) > 256 {
+		return false, errors.New("site id is invalid")
+	}
+	for _, name := range []string{expectedName, replacementName} {
+		if len(name) > 160 || (name != "" && filepath.Base(name) != name) || name == "." || name == ".." || strings.ContainsRune(name, '\x00') {
+			return false, errors.New("site icon filename is invalid")
+		}
+	}
+	result, err := s.database.ExecContext(ctx, `
+		UPDATE site_profiles SET local_icon_name = ?, updated_at_unix = ?
+		WHERE project_id = ? AND local_icon_name = ?
+	`, replacementName, s.now().UTC().Unix(), siteID, expectedName)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return changed == 1, err
 }
 
 func (s *Store) DeleteSiteProfile(ctx context.Context, siteID string) error {

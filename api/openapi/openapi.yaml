@@ -2291,6 +2291,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 站点不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 读取后站点已删除或图标已变更（SITE_ICON_CONFLICT），请刷新后重试
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: deleteSiteIcon
       summary: 删除站点图标
@@ -2308,6 +2320,12 @@ paths:
           description: 图标已删除
         '404':
           description: 站点不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 读取后站点已删除或图标已变更（SITE_ICON_CONFLICT），请刷新后重试
           content:
             application/json:
               schema:
@@ -3041,7 +3059,7 @@ components:
         ignored: { type: boolean }
         detectedTitle: { type: string }
         autoIconUrl: { type: string }
-        localIconName: { type: string }
+        localIconName: { type: string, readOnly: true, description: 由图标上传与删除接口维护的服务端文件名 }
         lastVisitedAt:
           oneOf:
             - type: string

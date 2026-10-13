@@ -78,10 +78,15 @@ func (api *handler) uploadSiteIcon(response http.ResponseWriter, request *http.R
 		return
 	}
 	previous := profile.LocalIconName
-	profile.LocalIconName = fileName
-	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
-		_ = os.Remove(target)
+	swapped, err := api.controlStore.CompareAndSwapSiteIcon(request.Context(), siteID, previous, fileName)
+	if err != nil {
+		// 提交结果可能不确定，保留候选文件，避免删除数据库已引用的图标。
 		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_SAVE_FAILED", "图标资料保存失败。")
+		return
+	}
+	if !swapped {
+		_ = os.Remove(target)
+		api.writeError(response, request, http.StatusConflict, "SITE_ICON_CONFLICT", "站点或图标已变更，请刷新后重试。")
 		return
 	}
 	if previous != "" {
@@ -215,9 +220,13 @@ func (api *handler) deleteSiteIcon(response http.ResponseWriter, request *http.R
 		return
 	}
 	previous := profile.LocalIconName
-	profile.LocalIconName = ""
-	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
+	swapped, err := api.controlStore.CompareAndSwapSiteIcon(request.Context(), profile.ProjectID, previous, "")
+	if err != nil {
 		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_DELETE_FAILED", "图标删除失败。")
+		return
+	}
+	if !swapped {
+		api.writeError(response, request, http.StatusConflict, "SITE_ICON_CONFLICT", "站点或图标已变更，请刷新后重试。")
 		return
 	}
 	if previous != "" && api.siteAssetsDirectory != "" {

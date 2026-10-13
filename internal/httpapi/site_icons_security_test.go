@@ -205,3 +205,11 @@ func TestUploadedSiteIconMatchesBrowserSecurityContract(t *testing.T) {
 		})
 	}
 }
+
+func (s *iconSecurityStore) CompareAndSwapSiteIcon(_ context.Context, id, expected, replacement string) (bool, error) {
+	if s.profile.ProjectID != id || s.profile.LocalIconName != expected {
+		return false, nil
+	}
+	s.profile.LocalIconName = replacement
+	return true, nil
+}
