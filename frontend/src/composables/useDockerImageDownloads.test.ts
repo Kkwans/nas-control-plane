@@ -11,9 +11,9 @@ vi.mock('element-plus', () => ({ ElMessage: { success: api.success, info: api.in
 vi.mock('@/composables/useListPreference', () => ({ useListPreference: () => ({ pageSize: ref(10) }) }))
 const apps: ReturnType<typeof createApp>[] = []
 const job = (fields: Partial<JobSnapshot> = {}): JobSnapshot => ({ id: 'job-1', type: 'docker-image-pull', status: 'running', artifactState: 'unknown', message: '下载中', progress: 50, createdAt: '', updatedAt: '', downloadedBytes: 50, totalBytes: 100, speedBytes: 10, layers: {}, ...fields })
-function setup(images = ref<DockerImageSummary[]>([])) {
+function setup(images = ref<DockerImageSummary[]>([]), options: Parameters<typeof useDockerImageDownloads>[1] = {}) {
   let state!: ReturnType<typeof useDockerImageDownloads>
-  const app = createApp({ setup() { state = useDockerImageDownloads(images); return () => null } })
+  const app = createApp({ setup() { state = useDockerImageDownloads(images, options); return () => null } })
   apps.push(app)
   app.mount(document.createElement('div'))
   return state
@@ -198,14 +198,15 @@ describe('异步下载状态隔离', () => {
     const older = state.loadDownloadJobs()
     state.upsertDownloadJob(job({ id: 'new', progress: 99 }))
     api.list.mockResolvedValue({ jobs: [job({ id: 'new', progress: 99 })], invalidCount: 0 })
-    await state.loadDownloadJobs()
-    old.reject(new Error('503')); await older
+    const coalesced = state.loadDownloadJobs()
+    expect(coalesced).toBe(older)
+    old.reject(new Error('503')); await Promise.all([older, coalesced])
     expect(state.downloadJobs.value[0]?.progress).toBe(99)
   })
 })
 
 
-it('列表响应不覆盖请求期间到达的进度或较新的列表', async () => {
+it('列表响应不覆盖请求期间到达的进度；并发刷新合并后可再读取终态', async () => {
   const state = setup()
   state.upsertDownloadJob(job())
   const old = deferred<{ jobs: JobSnapshot[]; invalidCount: number }>()
@@ -219,8 +220,206 @@ it('列表响应不覆盖请求期间到达的进度或较新的列表', async (
   api.list.mockReturnValueOnce(earlier.promise)
   const first = state.loadDownloadJobs()
   api.list.mockResolvedValueOnce({ jobs: [job({ status: 'completed' })], invalidCount: 0 })
-  await state.loadDownloadJobs()
+  const concurrent = state.loadDownloadJobs()
+  expect(concurrent).toBe(first)
   earlier.resolve({ jobs: [job()], invalidCount: 3 }); await first
+  await state.loadDownloadJobs()
   expect(state.downloadJobs.value[0]?.status).toBe('completed')
   expect(state.invalidDownloadJobCount.value).toBe(0)
+})
+
+const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() }
+
+describe('下载读取与观察恢复', () => {
+  it('首次失败不是空清单；成功空清单才标记已加载', async () => {
+    const state = setup()
+    const list = deferred<{ jobs: JobSnapshot[]; invalidCount: number }>()
+    api.list.mockReturnValueOnce(list.promise)
+    const loading = state.loadDownloadJobs()
+    expect(state.downloadJobsLoading.value).toBe(true)
+    expect(state.downloadJobsLoaded.value).toBe(false)
+    list.reject(new Error('private failure')); await loading
+    expect(state.downloadJobsError.value).toBe('下载记录读取失败，请重试。')
+    expect(state.downloadJobsLoading.value).toBe(false)
+    expect(state.downloadJobsLoaded.value).toBe(false)
+    expect(state.downloadJobsLastSuccessAt.value).toBeNull()
+    api.list.mockResolvedValue({ jobs: [], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    expect(state.downloadJobsLoaded.value).toBe(true)
+    expect(state.downloadJobsError.value).toBe('')
+    expect(state.downloadJobsLastSuccessAt.value).not.toBeNull()
+  })
+
+  it('缓存刷新失败保留快照、无效数量、最后成功时间与有效进度流', async () => {
+    const state = setup(); const close = vi.fn()
+    api.subscribe.mockReturnValue({ close, done: new Promise(() => {}) })
+    api.list.mockResolvedValueOnce({ jobs: [job()], invalidCount: 2 })
+    await state.loadDownloadJobs()
+    const timestamp = state.downloadJobsLastSuccessAt.value
+    api.list.mockRejectedValueOnce(new Error('offline'))
+    await state.loadDownloadJobs()
+    expect(state.downloadJobs.value).toEqual([job()])
+    expect(state.invalidDownloadJobCount.value).toBe(2)
+    expect(state.downloadJobsLastSuccessAt.value).toBe(timestamp)
+    expect(state.downloadJobsLoaded.value).toBe(true)
+    expect(state.downloadJobsError.value).not.toBe('')
+    expect(close).not.toHaveBeenCalled()
+    expect(state.isDownloadObservationInterrupted(job())).toBe(false)
+    expect(api.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it.each(['running', 'completed'] as const)('断流仅丢失观察；GET 恢复 %s 不重放写操作', async (status) => {
+    const state = setup(); const stream = deferred<JobSnapshot>()
+    api.subscribe.mockReturnValueOnce({ close: vi.fn(), done: stream.promise })
+    api.list.mockResolvedValueOnce({ jobs: [job()], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    expect(state.canShowDownloadSpeed(job())).toBe(false)
+    const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+    event(job({ progress: 75 }))
+    expect(state.canShowDownloadSpeed(job())).toBe(true)
+    const observedAt = state.downloadLastObservedAt(job())
+    stream.reject(new Error('stream failed')); await settle()
+    expect(state.downloadJobs.value[0]?.status).toBe('running')
+    expect(state.downloadJobs.value[0]?.progress).toBe(75)
+    expect(state.isDownloadObservationInterrupted(job())).toBe(true)
+    expect(state.downloadLastObservedAt(job())).toBe(observedAt)
+    expect(state.canShowDownloadSpeed(job())).toBe(false)
+    expect(state.downloadStateLabel(job())).toBe('下载中')
+    expect(api.subscribe).toHaveBeenCalledOnce()
+    api.list.mockResolvedValueOnce({ jobs: [job({ status, progress: 80 })], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    expect(state.downloadJobs.value[0]?.status).toBe(status)
+    expect(state.isDownloadObservationInterrupted(state.downloadJobs.value[0]!)).toBe(false)
+    expect(state.canShowDownloadSpeed(state.downloadJobs.value[0]!)).toBe(false)
+    expect(api.subscribe).toHaveBeenCalledTimes(status === 'running' ? 2 : 1)
+    event(job({ progress: 1 }))
+    expect(state.downloadJobs.value[0]?.progress).toBe(80)
+    expect(api.cancel).not.toHaveBeenCalled()
+    expect(api.retry).not.toHaveBeenCalled()
+    expect(api.remove).not.toHaveBeenCalled()
+  })
+
+  it('重复刷新只发一次 GET，更新的 SSE 与取消确认优先于在途列表', async () => {
+    const state = setup()
+    api.list.mockResolvedValueOnce({ jobs: [job()], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    const list = deferred<{ jobs: JobSnapshot[]; invalidCount: number }>()
+    api.list.mockReturnValueOnce(list.promise)
+    const first = state.loadDownloadJobs(); const second = state.loadDownloadJobs()
+    expect(first).toBe(second)
+    const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+    event(job({ progress: 90 }))
+    api.cancel.mockResolvedValueOnce(job({ progress: 90, cancellationStatus: 'requested' }))
+    await state.stopDownload(state.downloadJobs.value[0]!)
+    list.resolve({ jobs: [job({ progress: 1 })], invalidCount: 0 }); await first
+    expect(state.downloadJobs.value[0]?.progress).toBe(90)
+    expect(state.downloadJobs.value[0]?.cancellationStatus).toBe('requested')
+    expect(api.list).toHaveBeenCalledTimes(2)
+    expect(api.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unmount', 'logout'])('%s 后迟到错误与流事件不改变读取状态或重新订阅', async (action) => {
+    const state = setup(); const stream = deferred<JobSnapshot>(); const close = vi.fn()
+    api.subscribe.mockReturnValueOnce({ close, done: stream.promise })
+    api.list.mockResolvedValueOnce({ jobs: [job()], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+    const list = deferred<{ jobs: JobSnapshot[]; invalidCount: number }>()
+    api.list.mockReturnValueOnce(list.promise)
+    const loading = state.loadDownloadJobs()
+    if (action === 'unmount') apps.pop()!.unmount(); else invalidateSession()
+    const timestamp = state.downloadJobsLastSuccessAt.value
+    event(job({ progress: 99 })); stream.reject(new Error('late')); list.reject(new Error('late'))
+    await loading; await settle(); await state.loadDownloadJobs()
+    expect(state.downloadJobs.value[0]?.progress).toBe(50)
+    expect(state.downloadJobsLoading.value).toBe(false)
+    expect(state.downloadJobsError.value).toBe('')
+    expect(state.downloadJobsLastSuccessAt.value).toBe(timestamp)
+    expect(state.isDownloadObservationInterrupted(job())).toBe(false)
+    expect(close).toHaveBeenCalledOnce()
+    expect(api.subscribe).toHaveBeenCalledOnce()
+    expect(api.list).toHaveBeenCalledTimes(2)
+    expect(api.error).not.toHaveBeenCalled()
+  })
+
+  it('SSE 终态立即关闭观察且随后流错误不标为中断', async () => {
+    const state = setup(); const stream = deferred<JobSnapshot>(); const close = vi.fn()
+    api.subscribe.mockReturnValueOnce({ close, done: stream.promise })
+    api.list.mockResolvedValueOnce({ jobs: [job()], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+    event(job({ status: 'completed' }))
+    stream.reject(new Error('closed')); await settle()
+    expect(close).toHaveBeenCalledOnce()
+    expect(state.downloadJobs.value[0]?.status).toBe('completed')
+    expect(state.isDownloadObservationInterrupted(state.downloadJobs.value[0]!)).toBe(false)
+    expect(state.canShowDownloadSpeed(state.downloadJobs.value[0]!)).toBe(false)
+  })
+})
+
+it('订阅建立失败可手动只读恢复；重复读取不重复有效订阅', async () => {
+  const state = setup()
+  api.subscribe.mockImplementationOnce(() => { throw new Error('stream unavailable') })
+  api.list.mockResolvedValue({ jobs: [job()], invalidCount: 0 })
+  await state.loadDownloadJobs()
+  expect(state.downloadJobsLoaded.value).toBe(true)
+  expect(state.downloadJobsError.value).toBe('')
+  expect(state.isDownloadObservationInterrupted(job())).toBe(true)
+  await state.loadDownloadJobs()
+  expect(state.isDownloadObservationInterrupted(job())).toBe(false)
+  await state.loadDownloadJobs()
+  expect(api.subscribe).toHaveBeenCalledTimes(2)
+  expect(api.cancel).not.toHaveBeenCalled()
+  expect(api.retry).not.toHaveBeenCalled()
+  expect(api.remove).not.toHaveBeenCalled()
+})
+
+
+it('新建任务持久化确认前不通知；终态回调失败不影响关闭和去重', async () => {
+  const refresh = vi.fn().mockRejectedValue(new Error('refresh failed'))
+  const state = setup(ref([]), { onCreatedDownloadCompleted: refresh })
+  const close = vi.fn()
+  api.subscribe.mockReturnValue({ close, done: new Promise(() => {}) })
+  state.observeCreatedDownload(job({ reference: 'alpine:latest' }))
+  state.observeCreatedDownload(job({ reference: 'alpine:latest' }))
+  expect(api.subscribe).toHaveBeenCalledOnce()
+  const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+  event(job({ status: 'completed', persistenceStatus: 'pending' }))
+  expect(api.success).not.toHaveBeenCalled()
+  expect(refresh).not.toHaveBeenCalled()
+  expect(close).not.toHaveBeenCalled()
+  event(job({ status: 'completed' })); await settle()
+  expect(api.success).toHaveBeenCalledExactlyOnceWith('镜像 alpine:latest 已拉取')
+  expect(refresh).toHaveBeenCalledOnce()
+  expect(api.error).toHaveBeenCalledExactlyOnceWith('镜像已拉取，但本地镜像刷新失败，请手动刷新。')
+  expect(close).toHaveBeenCalledOnce()
+  state.observeCreatedDownload(job()); await settle()
+  expect(api.subscribe).toHaveBeenCalledOnce()
+  expect(api.success).toHaveBeenCalledOnce()
+})
+
+it.each(['unmount', 'logout'])('新建任务观察 %s 后不再提示完成或刷新本地镜像', async (action) => {
+  const refresh = vi.fn()
+  const state = setup(ref([]), { onCreatedDownloadCompleted: refresh })
+  const stream = deferred<JobSnapshot>(); const close = vi.fn()
+  api.subscribe.mockReturnValue({ close, done: stream.promise })
+  state.observeCreatedDownload(job())
+  const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+  if (action === 'unmount') apps.pop()!.unmount(); else invalidateSession()
+  event(job({ status: 'completed' })); stream.resolve(job({ status: 'completed' })); await settle()
+  expect(close).toHaveBeenCalledOnce()
+  expect(api.success).not.toHaveBeenCalled()
+  expect(refresh).not.toHaveBeenCalled()
+})
+
+it('历史读取和历史任务终态始终不触发新建任务通知', async () => {
+  const refresh = vi.fn()
+  const state = setup(ref([]), { onCreatedDownloadCompleted: refresh })
+  api.list.mockResolvedValue({ jobs: [job()], invalidCount: 0 })
+  await state.loadDownloadJobs()
+  const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+  event(job({ status: 'completed' })); await settle()
+  expect(api.success).not.toHaveBeenCalled()
+  expect(api.error).not.toHaveBeenCalled()
+  expect(refresh).not.toHaveBeenCalled()
 })

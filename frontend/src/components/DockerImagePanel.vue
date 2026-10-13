@@ -29,7 +29,7 @@ const mode = ref<ImageMode>('local')
 const createImage = ref<DockerImageSummary | null>(null)
 const createDrawerOpen = ref(false)
 const localImages = useDockerLocalImages({ query: computed(() => props.query), containers: computed(() => props.containers), pageSize: computed(() => props.pageSize) })
-const downloads = useDockerImageDownloads(localImages.images)
+const downloads = useDockerImageDownloads(localImages.images, { onCreatedDownloadCompleted: () => localImages.refresh() })
 const {
   images, loading, error, removeFailures, selectedImageIds, localPage, localPreference,
   filteredImages, localPageCount, pagedImages, allVisibleSelected,
@@ -38,9 +38,11 @@ const {
   confirmRemoveSelected, containerReferenceCount, displayName, shortId, dateLabel,
 } = localImages
 const {
+  downloadJobs, downloadJobsLoading, downloadJobsLoaded, downloadJobsError, downloadJobsLastSuccessAt,
+  isDownloadObservationInterrupted, downloadLastObservedAt, canShowDownloadSpeed,
   invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage,
   downloadStatusOptions, activePullCount, filteredDownloadJobs, downloadPageCount,
-  pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
+  pagedDownloadJobs, observeCreatedDownload, loadDownloadJobs, retryDownload, stopDownload,
   confirmDeleteJob, isLiveJob, canCancelJob, canDeleteJob, canRetryJob, downloadState, downloadStateLabel, downloadArtifactLabel, effectiveTotal,
 } = downloads
 const imageModeTabs = computed<SectionTab[]>(() => [
@@ -62,21 +64,19 @@ async function handleContainerCreated() {
   await refresh()
 }
 
-function handleHubJobCreated(job: Parameters<typeof upsertDownloadJob>[0]) {
-  upsertDownloadJob(job)
-}
-
-function handleHubJobProgress(job: Parameters<typeof upsertDownloadJob>[0]) {
-  upsertDownloadJob(job)
-}
-
-async function handleHubLocalRefresh() {
-  await refresh()
+function handleHubJobCreated(job: JobSnapshot) {
+  observeCreatedDownload(job)
 }
 
 function showDownloadedImage(job: JobSnapshot) {
   mode.value = 'local'
   emit('update:query', (job.reference ?? '').split('@')[0] ?? '')
+}
+
+function observationTime(value: string | null) {
+  if (!value) return '尚未获取'
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 function sortIcon(key: 'name' | 'size' | 'created' | 'containers') {
@@ -107,7 +107,7 @@ onMounted(() => {
           <template #prefix><Search :size="17" /></template>
         </ElInput>
         <NcpSelect v-model="downloadStatus" :options="downloadStatusOptions" accessible-label="下载任务状态" />
-        <ElTooltip content="刷新下载任务"><button class="icon-button" type="button" @click="loadDownloadJobs"><RefreshCw :size="17" /></button></ElTooltip>
+        <ElTooltip content="刷新下载任务"><button class="icon-button" type="button" :disabled="downloadJobsLoading" :aria-busy="downloadJobsLoading" aria-label="刷新下载任务" @click="loadDownloadJobs"><RefreshCw :class="{ spin: downloadJobsLoading }" :size="17" /></button></ElTooltip>
       </div>
     </header>
 
@@ -163,8 +163,6 @@ onMounted(() => {
     <DockerHubBrowser
       v-show="mode === 'hub'"
       @job-created="handleHubJobCreated"
-      @job-progress="handleHubJobProgress"
-      @local-refresh="handleHubLocalRefresh"
     />
 
     <section v-if="mode === 'downloads'" class="download-workspace panel">
@@ -177,22 +175,46 @@ onMounted(() => {
           已忽略 {{ invalidDownloadJobCount }} 条格式异常的历史记录
         </span>
       </header>
+      <div v-if="downloadJobsError" class="inline-error download-read-state" role="alert">
+        <div>
+          <strong>{{ downloadJobsLoaded ? '下载任务刷新失败' : '下载任务读取失败' }}</strong>
+          <span>{{ downloadJobsError }}</span>
+          <span v-if="downloadJobs.length">已保留上次获取的任务；当前状态可能已变化。</span>
+          <span v-if="downloadJobsLastSuccessAt">上次成功获取：<time :datetime="downloadJobsLastSuccessAt">{{ observationTime(downloadJobsLastSuccessAt) }}</time></span>
+        </div>
+        <button type="button" :disabled="downloadJobsLoading" @click="loadDownloadJobs">{{ downloadJobsLoading ? '正在重试…' : '重新加载下载任务' }}</button>
+      </div>
+      <div v-else-if="downloadJobsLoading" class="download-read-state download-loading" role="status">{{ downloadJobsLoaded ? '正在刷新下载任务…' : '正在读取下载任务…' }}</div>
       <div class="download-head"><span>镜像</span><span>状态</span><span>进度</span><span>速度</span><span>更新时间</span><span>操作</span></div>
       <article v-for="job in pagedDownloadJobs" :key="job.id" class="download-row">
         <div><strong>{{ job.reference }}</strong><small>{{ job.message }}</small><small v-if="job.status === 'completed'">{{ downloadArtifactLabel(job) }}</small></div>
-        <span :class="['job-state', `job-state--${downloadState(job)}`]">{{ downloadStateLabel(job) }}</span>
-        <div class="job-progress"><span><i :style="{ width: `${job.progress}%` }"></i></span><small>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
-        <span>{{ job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
-        <time>{{ dateLabel(job.updatedAt) }}</time>
+        <div class="job-observation">
+          <span :class="['job-state', `job-state--${downloadState(job)}`]">{{ downloadStateLabel(job) }}</span>
+          <span v-if="isDownloadObservationInterrupted(job)" class="job-observation-warning">进度连接中断</span>
+        </div>
+        <div class="job-progress"><span role="progressbar" :aria-label="`${job.reference} ${isLiveJob(job) && !canShowDownloadSpeed(job) ? '上次报告进度' : '下载进度'}`" :aria-valuenow="job.progress" :aria-valuemin="0" :aria-valuemax="100"><i :style="{ width: `${job.progress}%` }"></i></span><small><template v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次报告：</template>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
+        <span>{{ canShowDownloadSpeed(job) && job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
+        <div class="job-observed-time">
+          <time :datetime="job.updatedAt">{{ dateLabel(job.updatedAt) }}</time>
+          <small v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次获取：{{ observationTime(downloadLastObservedAt(job)) }}</small>
+        </div>
         <div class="job-actions">
           <button v-if="isLiveJob(job)" :disabled="!canCancelJob(job)" type="button" title="请求取消下载（不保证远端立即停止）" @click="stopDownload(job)"><Square :size="14" /></button>
           <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" :disabled="!canRetryJob(job)" title="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /></button>
           <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /></button>
           <button v-if="canDeleteJob(job)" class="job-delete" type="button" title="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /></button>
         </div>
+        <div v-if="isDownloadObservationInterrupted(job)" class="job-observation-recovery">
+          <span>显示上次报告的进度，任务可能仍在执行。</span>
+          <button type="button" :disabled="downloadJobsLoading" :aria-label="`重新获取 ${job.reference} 的下载进度`" @click="loadDownloadJobs">{{ downloadJobsLoading ? '正在获取…' : '重新获取进度' }}</button>
+        </div>
       </article>
-      <div v-if="!filteredDownloadJobs.length" class="empty-state">没有匹配的镜像下载任务</div>
-      <footer v-else class="resource-pagination">
+      <div v-if="downloadJobsLoaded && !downloadJobsLoading && !downloadJobsError && !filteredDownloadJobs.length" class="empty-state">
+        <template v-if="!downloadJobs.length && invalidDownloadJobCount">下载记录无法读取，请刷新后重试。</template>
+        <template v-else-if="!downloadJobs.length">暂无镜像下载任务</template>
+        <template v-else>没有匹配的镜像下载任务</template>
+      </div>
+      <footer v-if="filteredDownloadJobs.length" class="resource-pagination">
         <ListPageSizeControl list-key="docker.image-downloads" />
         <div><button type="button" :disabled="downloadPage <= 1" @click="downloadPage -= 1">上一页</button><strong>{{ downloadPage }} / {{ downloadPageCount }}</strong><button type="button" :disabled="downloadPage >= downloadPageCount" @click="downloadPage += 1">下一页</button></div>
       </footer>
@@ -224,6 +246,17 @@ onMounted(() => {
 </style>
 
 <style scoped>
+.download-read-state { margin: 12px 16px; gap: 12px; }
+.download-read-state>div { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
+.download-read-state button,.job-observation-recovery button { min-height: 40px; flex: 0 0 auto; padding: 6px 10px; border: 1px solid currentColor; border-radius: 8px; font-weight: 700; }
+.download-loading { color: var(--ncp-text-muted); font-size: .82rem; }
+.download-mode-actions button:disabled,.download-read-state button:disabled,.job-observation-recovery button:disabled { cursor: not-allowed; opacity: .5; }
+.job-observation,.job-observed-time { display: grid; gap: 4px; justify-items: center; }
+.job-observation-warning { color: var(--ncp-danger-strong); font-size: .75rem; }
+.download-row .job-observed-time small { white-space: normal; overflow-wrap: anywhere; }
+.download-row .job-observation-recovery { grid-column: 1 / -1; justify-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 12px; color: var(--ncp-text-muted); text-align: left; }
+.job-observation-recovery button { color: var(--ncp-primary-strong); }
+@media(max-width:820px) { .download-read-state { align-items: stretch; flex-direction: column; } }
 .resource-select-head button { width: auto; min-width: 0; flex: 1; }
 .resource-head>button:nth-child(5) { justify-content: center; }
 .resource-name-cell .resource-name { flex: 1; }

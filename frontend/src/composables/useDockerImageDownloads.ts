@@ -17,9 +17,19 @@ import {
 import { captureSession } from '@/session/sessionLifecycle'
 import { useListPreference } from '@/composables/useListPreference'
 
-export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
+export function useDockerImageDownloads(
+  images: Ref<DockerImageSummary[]>,
+  options: { onCreatedDownloadCompleted?: () => void | Promise<void> } = {},
+) {
   const downloadJobs = ref<JobSnapshot[]>([])
   const invalidDownloadJobCount = ref(0)
+  const downloadJobsLoading = ref(false)
+  const downloadJobsLoaded = ref(false)
+  const downloadJobsError = ref('')
+  const downloadJobsLastSuccessAt = ref<string | null>(null)
+  const observations = ref(new Map<string, { interrupted: boolean; lastObservedAt: string }>())
+  const streamingJobs = ref(new Set<string>())
+  let listRequest: Promise<void> | undefined
   const downloadStatus = ref('all')
   const downloadQuery = ref('')
   const downloadPage = ref(1)
@@ -37,6 +47,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
   ]
   const { pageSize: downloadPageSize } = useListPreference('docker.image-downloads')
   const subscriptions = new Map<string, JobSubscription>()
+  const createdJobReferences = new Map<string, string>()
 
   const session = captureSession()
   let disposed = false
@@ -87,8 +98,35 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     if (index >= 0) downloadJobs.value[index] = job
     else downloadJobs.value.unshift(job)
     versions.set(job.id, ++mutation)
+    observations.value.set(job.id, { interrupted: false, lastObservedAt: new Date().toISOString() })
+    if (!isLiveJob(job)) closeSubscription(job.id)
     downloadJobs.value = [...downloadJobs.value]
+    const createdReference = createdJobReferences.get(job.id)
+    if (!isLiveJob(job) && createdReference !== undefined) {
+      createdJobReferences.delete(job.id)
+      if (job.status === 'completed') {
+        ElMessage.success(`镜像 ${createdReference} 已拉取`)
+        void Promise.resolve().then(() => {
+          if (alive()) return options.onCreatedDownloadCompleted?.()
+        }).catch(() => {
+          if (alive()) ElMessage.error('镜像已拉取，但本地镜像刷新失败，请手动刷新。')
+        })
+      } else if (job.status === 'failed') {
+        ElMessage.error(job.error || job.message || `镜像 ${createdReference} 拉取失败`)
+      }
+    }
     return job
+  }
+
+  // 新建任务也交给同一个观察者，避免 Hub 与下载页各自创建进度流。
+  function observeCreatedDownload(job: JobSnapshot) {
+    if (!alive() || deletedJobs.has(job.id)) return
+    const previous = downloadJobs.value.find((item) => item.id === job.id)
+    if ((!previous || isLiveJob(previous)) && !createdJobReferences.has(job.id)) {
+      createdJobReferences.set(job.id, job.reference || '未命名镜像')
+    }
+    const current = upsertDownloadJob(job)
+    if (current) followDownloadJob(current)
   }
 
   function localImageForJob(job: JobSnapshot) {
@@ -121,7 +159,18 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     return Number.isNaN(date.valueOf()) ? '—' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
   }
 
+  function isDownloadObservationInterrupted(job: JobSnapshot) {
+    return isLiveJob(job) && observations.value.get(job.id)?.interrupted === true
+  }
+  function downloadLastObservedAt(job: JobSnapshot) {
+    return observations.value.get(job.id)?.lastObservedAt ?? null
+  }
+  function canShowDownloadSpeed(job: JobSnapshot) {
+    return alive() && isLiveJob(job) && streamingJobs.value.has(job.id) && !isDownloadObservationInterrupted(job)
+  }
+
   function closeSubscription(jobId: string) {
+    streamingJobs.value.delete(jobId)
     const subscription = subscriptions.get(jobId)
     if (!subscription) return
     subscriptions.delete(jobId)
@@ -135,32 +184,73 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
       return
     }
     if (subscriptions.has(job.id)) return
-    const subscription = subscribeJob(job.id, upsertDownloadJob)
+    const interrupted = () => {
+      const current = downloadJobs.value.find((item) => item.id === job.id)
+      const observation = observations.value.get(job.id)
+      if (alive() && current && isLiveJob(current) && observation) {
+        observations.value.set(job.id, { ...observation, interrupted: true })
+      }
+    }
+    let subscription: JobSubscription
+    try {
+      subscription = subscribeJob(job.id, (next) => {
+        if (!alive() || subscriptions.get(job.id) !== subscription || next.id !== job.id) return
+        const accepted = upsertDownloadJob(next)
+        if (accepted === next && isLiveJob(next)) streamingJobs.value.add(job.id)
+      })
+    } catch {
+      interrupted()
+      return
+    }
     subscriptions.set(job.id, subscription)
-    void subscription.done.catch(() => undefined).finally(() => {
-      if (subscriptions.get(job.id) === subscription) subscriptions.delete(job.id)
+    void subscription.done.then((next) => {
+      if (!alive() || subscriptions.get(job.id) !== subscription) return
+      if (next.id === job.id) upsertDownloadJob(next)
+    }, () => {
+      if (subscriptions.get(job.id) === subscription) interrupted()
+    }).finally(() => {
+      if (subscriptions.get(job.id) !== subscription) return
+      subscriptions.delete(job.id)
+      if (!alive()) return
+      streamingJobs.value.delete(job.id)
+      // 正常终态由快照确认；任何未取得终态的流结束都只是观察中断。
+      interrupted()
     })
   }
 
-  async function loadDownloadJobs() {
-    if (!alive()) return
+  function loadDownloadJobs(): Promise<void> {
+    if (!alive()) return Promise.resolve()
+    if (listRequest) return listRequest
     const sequence = ++listSequence
     const startedAt = mutation
-    try {
-      const result = await requestJobs('docker-image-pull')
-      if (!alive() || sequence !== listSequence) return
-      const listedIds = new Set(result.jobs.map((job) => job.id))
-      downloadJobs.value = downloadJobs.value.filter((job) => listedIds.has(job.id) || isLiveJob(job) || (versions.get(job.id) ?? 0) > startedAt)
-      for (const job of result.jobs) {
-        if ((versions.get(job.id) ?? 0) <= startedAt) upsertDownloadJob(job)
+    downloadJobsLoading.value = true
+    downloadJobsError.value = ''
+    listRequest = (async () => {
+      try {
+        const result = await requestJobs('docker-image-pull')
+        if (!alive() || sequence !== listSequence) return
+        const listedIds = new Set(result.jobs.map((job) => job.id))
+        downloadJobs.value = downloadJobs.value.filter((job) => listedIds.has(job.id) || isLiveJob(job) || (versions.get(job.id) ?? 0) > startedAt)
+        for (const job of result.jobs) {
+          if ((versions.get(job.id) ?? 0) <= startedAt) upsertDownloadJob(job)
+        }
+        invalidDownloadJobCount.value = result.invalidCount
+        downloadJobsLoaded.value = true
+        downloadJobsLastSuccessAt.value = new Date().toISOString()
+        const retainedIds = new Set(downloadJobs.value.map((item) => item.id))
+        for (const id of observations.value.keys()) if (!retainedIds.has(id)) observations.value.delete(id)
+        const activeIds = new Set(downloadJobs.value.filter(isLiveJob).map((item) => item.id))
+        for (const jobId of subscriptions.keys()) if (!activeIds.has(jobId)) closeSubscription(jobId)
+        for (const job of downloadJobs.value) followDownloadJob(job)
+      } catch {
+        if (!alive() || sequence !== listSequence) return
+        // 保留已确认快照及仍有效的流；读取失败不代表任务失败或不存在。
+        downloadJobsError.value = '下载记录读取失败，请重试。'
+      } finally {
+        if (alive() && sequence === listSequence) downloadJobsLoading.value = false
       }
-      invalidDownloadJobCount.value = result.invalidCount
-      const activeIds = new Set(downloadJobs.value.filter(isLiveJob).map((item) => item.id))
-      for (const jobId of subscriptions.keys()) if (!activeIds.has(jobId)) closeSubscription(jobId)
-      for (const job of downloadJobs.value) followDownloadJob(job)
-    } catch {
-      // 历史刷新失败不清除已确认的快照，也不关闭仍有效的进度流。
-    }
+    })().finally(() => { listRequest = undefined })
+    return listRequest
   }
 
   async function retryDownload(job: JobSnapshot) {
@@ -179,7 +269,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     } catch (caught) {
       if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '任务重试失败。')
     } finally {
-      retryingJobs.value.delete(job.id)
+      if (alive()) retryingJobs.value.delete(job.id)
     }
   }
 
@@ -196,7 +286,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     } catch (caught) {
       if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '停止下载失败。')
     } finally {
-      cancellingJobs.value.delete(job.id)
+      if (alive()) cancellingJobs.value.delete(job.id)
     }
   }
 
@@ -213,6 +303,8 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
       await deleteJob(job.id)
       if (!alive()) return
       deletedJobs.add(job.id)
+      observations.value.delete(job.id)
+      createdJobReferences.delete(job.id)
       versions.set(job.id, ++mutation)
       closeSubscription(job.id)
       downloadJobs.value = downloadJobs.value.filter((item) => item.id !== job.id)
@@ -220,14 +312,21 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     } catch (caught) {
       if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '下载记录删除失败。')
     } finally {
-      deletingJobs.value.delete(job.id)
+      if (alive()) deletingJobs.value.delete(job.id)
     }
   }
 
   function dispose() {
     disposed = true
+    ++listSequence
+    downloadJobsLoading.value = false
+    streamingJobs.value.clear()
+    retryingJobs.value.clear()
+    deletingJobs.value.clear()
+    cancellingJobs.value.clear()
     for (const subscription of subscriptions.values()) subscription.close()
     subscriptions.clear()
+    createdJobReferences.clear()
     session.signal.removeEventListener('abort', dispose)
   }
   session.signal.addEventListener('abort', dispose, { once: true })
@@ -236,6 +335,13 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
   return {
     downloadJobs,
     invalidDownloadJobCount,
+    downloadJobsLoading,
+    downloadJobsLoaded,
+    downloadJobsError,
+    downloadJobsLastSuccessAt,
+    isDownloadObservationInterrupted,
+    downloadLastObservedAt,
+    canShowDownloadSpeed,
     downloadStatus,
     downloadQuery,
     downloadPage,
@@ -247,6 +353,7 @@ export function useDockerImageDownloads(images: Ref<DockerImageSummary[]>) {
     pagedDownloadJobs,
     resetPage,
     upsertDownloadJob,
+    observeCreatedDownload,
     loadDownloadJobs,
     retryDownload,
     stopDownload,

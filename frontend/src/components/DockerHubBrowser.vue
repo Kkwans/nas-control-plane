@@ -9,7 +9,7 @@ import {
   type DockerHubTag,
   type JobSnapshot,
 } from '@/api/system'
-import { pullDockerImage, requestDockerHubTags, searchDockerHub, subscribeJob, type JobSubscription } from '@/api/docker'
+import { pullDockerImage, requestDockerHubTags, searchDockerHub } from '@/api/docker'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { formatBytes } from '@/domain/overview'
 import { captureSession } from '@/session/sessionLifecycle'
@@ -17,8 +17,6 @@ import { useSystemStore } from '@/stores/system'
 
 const emit = defineEmits<{
   'job-created': [job: JobSnapshot]
-  'job-progress': [job: JobSnapshot]
-  'local-refresh': []
 }>()
 
 const systemStore = useSystemStore()
@@ -39,7 +37,6 @@ let tagRequestSequence = 0
 const session = captureSession()
 let disposed = false
 const alive = () => !disposed && !session.signal.aborted
-const jobSubscriptions = new Map<string, JobSubscription>()
 
 const hubSortOptions: NcpSelectOption[] = [
   { label: '最佳匹配', value: 'relevance' },
@@ -121,21 +118,7 @@ async function submitPull() {
   try {
     const job = await pullDockerImage(reference, selectedTagDetails.value?.fullSize ?? 0)
     if (!alive()) return
-    emit('job-created', job)
-    const subscription = subscribeJob(job.id, (progress) => { if (alive()) emit('job-progress', progress) })
-    jobSubscriptions.set(job.id, subscription)
-    void subscription.done.then((completed) => {
-      if (!alive()) return
-      emit('job-progress', completed)
-      if (completed.status === 'completed') {
-        ElMessage.success(`镜像 ${reference} 已拉取`)
-        emit('local-refresh')
-      } else if (completed.status === 'failed') {
-        ElMessage.error(completed.error || completed.message || `镜像 ${reference} 拉取失败`)
-      }
-    }).catch(() => undefined).finally(() => {
-      if (jobSubscriptions.get(job.id) === subscription) jobSubscriptions.delete(job.id)
-    })
+    emit('job-created', { ...job, reference: job.reference || reference })
   } catch (caught) {
     if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像拉取失败。')
   } finally {
@@ -145,8 +128,6 @@ async function submitPull() {
 
 function dispose() {
   disposed = true
-  for (const subscription of jobSubscriptions.values()) subscription.close()
-  jobSubscriptions.clear()
   session.signal.removeEventListener('abort', dispose)
 }
 session.signal.addEventListener('abort', dispose, { once: true })
