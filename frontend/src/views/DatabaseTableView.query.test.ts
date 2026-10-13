@@ -265,6 +265,36 @@ describe('SQL 结果字节预算', () => {
     expect(host.querySelector('.query-table [data-empty-text]')?.getAttribute('data-empty-text')).toBe('无返回行')
   })
 
+  it('结果头状态跟随等待、执行、超预算失败和下一次成功', async () => {
+    const first = deferred<QueryResult>()
+    const second = deferred<QueryResult>()
+    mocks.execute.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    await mount()
+    const headerStatus = () => host.querySelector('.query-result header > span')?.textContent
+    expect(headerStatus()).toBe('等待执行')
+
+    executeButton().click()
+    await settle()
+    expect(headerStatus()).toBe('正在执行')
+    first.reject(new NcpApiError('result_too_large', '超预算'))
+    await settle()
+    expect(headerStatus()).toBe('执行失败')
+    expect(host.querySelector('.query-message--error')?.textContent).toContain('result_too_large')
+    expect(host.querySelector('.query-table')).toBeNull()
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+
+    executeButton().click()
+    await settle()
+    expect(headerStatus()).toBe('正在执行')
+    expect(host.querySelector('.query-message--error')).toBeNull()
+    second.resolve(result({ columns: ['id'], rows: [['9007199254740993']], durationMs: 7 }))
+    await settle()
+    expect(headerStatus()).toBe('7 ms')
+    expect(host.querySelector('.query-result header')?.textContent).toContain('返回 1 行')
+    expect(host.querySelector('.query-message--error')).toBeNull()
+    expect(mocks.execute).toHaveBeenCalledTimes(2)
+  })
+
   it('结果超预算错误不会冒充 Agent 断连、未执行或自动重试', async () => {
     mocks.execute.mockRejectedValue(new NcpApiError('result_too_large', '超预算'))
     await mount()
@@ -667,6 +697,7 @@ describe('SQL 失败没有自动重放', () => {
     expect(mocks.rows).toHaveBeenCalledTimes(1)
     expect(host.querySelector('.query-message--error')?.textContent).toContain('写操作可能已生效；请先核对数据库状态，再决定是否重试')
     expect(host.querySelector('.query-message--error')?.textContent).not.toContain('稍后重试')
+    expect(host.querySelector('.query-result header > span')?.textContent).toBe('执行失败')
     expect(host.querySelector('.query-table')).toBeNull()
   })
 })

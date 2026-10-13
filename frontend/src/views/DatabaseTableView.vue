@@ -690,7 +690,7 @@ onBeforeUnmount(() => {
       <div class="sql-mode-note" role="note">自动模式仅按开头语句类型选择结果方式，不能完整识别 RETURNING 或 CTE 写入。RETURNING 请选“返回行”；无返回行的 CTE 写入请选“执行”以获取驱动影响行数。返回行模式也会执行写操作；500 行与 1 MiB 仅限制展示结果，不限制写入范围。</div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
-        <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryPending ? '正在执行' : '等待执行' }}</span></header>
+        <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryError ? '执行失败' : queryPending ? '正在执行' : '等待执行' }}</span></header>
         <div v-if="queryRefreshError" class="query-refresh-warning" role="alert"><strong>SQL 已执行，表数据刷新失败。</strong><span>{{ queryRefreshError.message }} 请在“表数据”中重新读取，勿为刷新而重跑 SQL。</span><small>代码 {{ queryRefreshError.code }}</small></div>
         <div v-if="queryTruncationSummary" class="query-truncation-warning" role="status">{{ queryTruncationSummary }}</div>
         <div v-if="queryResult?.columns.length" class="query-affected-summary">{{ affectedSummary }}</div>
