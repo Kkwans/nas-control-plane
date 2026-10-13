@@ -59,6 +59,7 @@ async function measure(locator: Locator) {
       scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
       scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
       display: style.display, overflowX: style.overflowX, overflowY: style.overflowY, textOverflow: style.textOverflow,
+      lineClamp: style.webkitLineClamp, whiteSpace: style.whiteSpace,
       visible, scrollX, scrollY, disabled: element instanceof HTMLButtonElement ? element.disabled : null,
       boxContained: clips.every((clip) => (!clip.x || (bounds.left >= clip.bounds.left - 1 && bounds.right <= clip.bounds.right + 1)) &&
         (!clip.y || (bounds.top >= clip.bounds.top - 1 && bounds.bottom <= clip.bounds.bottom + 1))),
@@ -99,6 +100,17 @@ for (const width of [320, 390, 768, 1440]) {
       await mkdir(info.outputPath('ui-captures'), { recursive: true })
       await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
       await screenshot(page, info, `${name}-fullpage`, true)
+      await screenshot(page, info, `${name}-header-viewport`, false)
+      const workspaceHeader = []
+      for (const selector of ['.workspace-header__copy h1', '.workspace-header__copy p', '.workspace-stat dt', '.workspace-stat dd']) {
+        for (const item of await page.locator(`.users-page ${selector}`).all()) workspaceHeader.push({ selector, ...await measure(item) })
+      }
+      const pageControls = []
+      for (const button of await page.locator('.password-policy > header button, .users-panel__toolbar button').all()) {
+        await button.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }))
+        pageControls.push(await measure(button))
+        await screenshot(page, info, `${name}-page-control-${pageControls.length}-viewport`, false)
+      }
       const rows = page.locator('.user-row')
       const observations = []
       for (let index = 0; index < accounts.length; index += 1) {
@@ -124,10 +136,12 @@ for (const width of [320, 390, 768, 1440]) {
       const state = {
         sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
         fixtureOnly: true, fixtureSource: 'frontend/e2e/user-mobile-layout.spec.ts + frontend/e2e/mockApi.ts',
-        magnification: 'root-font-size (not browser zoom)', width, scale, base, formatted, observations, headerLabels,
+        magnification: 'root-font-size (not browser zoom)', width, scale, base, formatted, observations, headerLabels, workspaceHeader, pageControls,
         layout: await page.evaluate(() => ({
           rootFontSize: getComputedStyle(document.documentElement).fontSize, innerWidth,
           documentScrollWidth: document.documentElement.scrollWidth,
+          workspaceScrollWidth: document.querySelector('.workspace-header')!.scrollWidth,
+          workspaceClientWidth: document.querySelector('.workspace-header')!.clientWidth,
           panelScrollWidth: document.querySelector('.users-panel')!.scrollWidth,
           panelClientWidth: document.querySelector('.users-panel')!.clientWidth,
           tableScrollWidth: document.querySelector('.user-table')!.scrollWidth,
@@ -142,8 +156,32 @@ for (const width of [320, 390, 768, 1440]) {
       expect(state.layout.rootFontSize).toBe(`${base * scale}px`)
       expect(state.layout.innerWidth).toBe(width)
       expect(state.layout.documentScrollWidth).toBeLessThanOrEqual(width + 1)
+      expect(state.layout.workspaceScrollWidth).toBeLessThanOrEqual(state.layout.workspaceClientWidth + 1)
       expect(state.layout.panelScrollWidth).toBeLessThanOrEqual(state.layout.panelClientWidth + 1)
       expect(state.layout.tableScrollWidth).toBeLessThanOrEqual(state.layout.tableClientWidth + 1)
+      expect(workspaceHeader.filter(({ selector }) => selector === '.workspace-header__copy h1').map(({ text }) => text)).toEqual(['用户管理'])
+      expect(workspaceHeader.filter(({ selector }) => selector === '.workspace-header__copy p').map(({ text }) => text)).toEqual(['管理可登录 NCP 的等权 Root 账号与会话安全'])
+      expect(workspaceHeader.filter(({ selector }) => selector === '.workspace-stat dt').map(({ text }) => text)).toEqual(['全部账号', '可用账号', '权限模型'])
+      expect(workspaceHeader.filter(({ selector }) => selector === '.workspace-stat dd').map(({ text }) => text)).toEqual(['2', '2', '等权 Root'])
+      for (const item of workspaceHeader) {
+        expect(item.visible, JSON.stringify(item)).toBe(true)
+        expect(item.contained, JSON.stringify(item)).toBe(true)
+        expect(item.textOverflow, JSON.stringify(item)).not.toBe('ellipsis')
+        expect(item.lineClamp, JSON.stringify(item)).toBe('none')
+        expect(item.scrollWidth, JSON.stringify(item)).toBeLessThanOrEqual(item.clientWidth + 1)
+        expect(item.scrollHeight, JSON.stringify(item)).toBeLessThanOrEqual(item.clientHeight + 1)
+      }
+      expect(pageControls).toHaveLength(2)
+      for (const control of pageControls) {
+        expect(control.visible, JSON.stringify(control)).toBe(true)
+        expect(control.contained, JSON.stringify(control)).toBe(true)
+        expect(control.disabled, JSON.stringify(control)).toBe(false)
+        expect(control.boxContained, JSON.stringify(control)).toBe(true)
+        expect(control.inViewport, JSON.stringify(control)).toBe(true)
+        expect(control.centerHit, JSON.stringify(control)).toBe(true)
+        expect(control.scrollWidth, JSON.stringify(control)).toBeLessThanOrEqual(control.clientWidth + 1)
+        expect(control.scrollHeight, JSON.stringify(control)).toBeLessThanOrEqual(control.clientHeight + 1)
+      }
       for (const [index, observed] of observations.entries()) {
         expect(accounts[index]!.username).toHaveLength(64)
         expect(observed.text.find(({ selector }) => selector === '.user-identity strong')?.text).toBe(accounts[index]!.username)
