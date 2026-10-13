@@ -56,6 +56,7 @@ import {
   type TailscaleCapability,
 } from '@/api/system'
 import { useSystemStore } from '@/stores/system'
+import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 type DetailTab = 'overview' | 'network' | 'storage' | 'services'
 
@@ -78,6 +79,32 @@ const detailsRequestGate = createRequestSequenceGate()
 const mihomoRequestGate = createRequestSequenceGate()
 const manualRefreshRegistry = useManualRefreshRegistry()
 let unregisterManualRefresh: (() => void) | undefined
+const pageSession = captureSession()
+let active = true
+let detailsController: AbortController | undefined
+let mihomoController: AbortController | undefined
+const ownsPage = () => active && !pageSession.signal.aborted && isCurrentSession(pageSession.generation)
+
+function dispose() {
+  if (!active) return
+  active = false
+  detailsRequestGate.invalidate()
+  mihomoRequestGate.invalidate()
+  detailsController?.abort()
+  mihomoController?.abort()
+  unregisterManualRefresh?.()
+  unregisterManualRefresh = undefined
+  details.value = null
+  dnsCapability.value = null
+  mihomoInspection.value = null
+  loading.value = publicEgressLoading.value = dnsPending.value = false
+  dnsDraft.value = dnsChangeId.value = dnsMessage.value = ''
+  errorMessage.value = publicEgressMessage.value = ''
+  dnsPreview.value = null
+  dnsDialogOpen.value = false
+  pageSession.signal.removeEventListener('abort', dispose)
+}
+pageSession.signal.addEventListener('abort', dispose, { once: true })
 
 const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.value?.dns ?? {
   backend: 'unknown', detected: false, state: 'unknown', readOnly: true, canRead: false,
@@ -178,18 +205,24 @@ const capabilityItems = computed(() => [
 ])
 
 async function loadDetails() {
+  if (!ownsPage()) return
   const requestSequence = detailsRequestGate.begin()
+  detailsController?.abort()
+  detailsController = new AbortController()
+  const signal = AbortSignal.any([pageSession.signal, detailsController.signal])
+  const ownsRead = () => ownsPage() && detailsRequestGate.isLatest(requestSequence) && !signal.aborted
   mihomoRequestGate.invalidate()
+  mihomoController?.abort()
   publicEgressLoading.value = false
   mihomoInspection.value = null
   loading.value = true
   errorMessage.value = ''
   try {
     const [systemDetails, liveDNSCapability] = await Promise.all([
-      requestSystemDetails(),
-      requestDNSCapability().catch(() => null),
+      requestSystemDetails(undefined, signal),
+      requestDNSCapability(undefined, signal).catch(() => null),
     ])
-    if (!detailsRequestGate.isLatest(requestSequence)) return
+    if (!ownsRead()) return
     details.value = systemDetails
     dnsCapability.value = liveDNSCapability
     dnsDraft.value = editableDNS.value.join(', ')
@@ -199,11 +232,11 @@ async function loadDetails() {
     mihomoRequestGate.invalidate()
     void checkMihomo(false)
   } catch (error) {
-    if (detailsRequestGate.isLatest(requestSequence)) {
+    if (ownsRead()) {
       errorMessage.value = error instanceof Error ? error.message : '系统详情暂不可用'
     }
   } finally {
-    if (detailsRequestGate.isLatest(requestSequence)) loading.value = false
+    if (ownsRead()) loading.value = false
   }
 }
 
@@ -212,7 +245,7 @@ function dnsServersFromDraft() {
 }
 
 async function previewDNS() {
-  if (!dnsDetails.value.canPreview || dnsDetails.value.readOnly || dnsPending.value) return
+  if (!ownsPage() || !dnsDetails.value.canPreview || dnsDetails.value.readOnly || dnsPending.value) return
   const nameservers = dnsServersFromDraft()
   if (!nameservers.length) {
     dnsMessage.value = '至少填写一个 DNS 地址。'
@@ -225,48 +258,58 @@ async function previewDNS() {
   dnsMessage.value = ''
   dnsPending.value = true
   try {
-    dnsPreview.value = await previewDNSChange({ nameservers })
+    const preview = await previewDNSChange({ nameservers })
+    if (!ownsPage()) return
+    dnsPreview.value = preview
     dnsMessage.value = dnsPreview.value.requiresConfirm ? '预览已生成，确认后才会应用。' : '当前后端不要求二次确认。'
   } catch (error) {
+    if (!ownsPage()) return
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 预览失败。'
   } finally {
-    dnsPending.value = false
+    if (ownsPage()) dnsPending.value = false
   }
 }
 
 async function confirmDNS() {
-  if (!dnsPreview.value || dnsPending.value) return
+  if (!ownsPage() || !dnsPreview.value || dnsPending.value) return
   const previewId = dnsPreview.value.previewId
   dnsPending.value = true
   try {
     const result = await confirmDNSChange({ previewId, confirmed: true })
+    if (!ownsPage()) return
     const rollbackId = result.applied && result.rollbackAvailable ? result.changeId : ''
     await loadDetails()
+    if (!ownsPage()) return
     dnsChangeId.value = rollbackId
     dnsMessage.value = result.applied ? 'DNS 已应用。' : `DNS 未应用（${result.errorCode || '未知原因'}）。`
   } catch (error) {
+    if (!ownsPage()) return
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 应用失败。'
   } finally {
-    dnsPending.value = false
+    if (ownsPage()) dnsPending.value = false
   }
 }
 
 async function rollbackDNS() {
-  if (!dnsChangeId.value || dnsPending.value) return
+  if (!ownsPage() || !dnsChangeId.value || dnsPending.value) return
   dnsPending.value = true
   try {
     const result = await rollbackDNSChange(dnsChangeId.value)
+    if (!ownsPage()) return
     await loadDetails()
+    if (!ownsPage()) return
     dnsChangeId.value = ''
     dnsMessage.value = !result.applied && !result.rollbackAvailable ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
   } catch (error) {
+    if (!ownsPage()) return
     dnsMessage.value = error instanceof Error ? error.message : 'DNS 回滚失败。'
   } finally {
-    dnsPending.value = false
+    if (ownsPage()) dnsPending.value = false
   }
 }
 
 function openDNSEditor() {
+  if (!ownsPage()) return
   dnsDraft.value = editableDNS.value.join(', ')
   dnsPreview.value = null
   dnsMessage.value = ''
@@ -274,32 +317,38 @@ function openDNSEditor() {
 }
 
 function invalidateDNSPreview() {
+  if (!ownsPage()) return
   dnsPreview.value = null
   dnsMessage.value = ''
 }
 
 async function checkMihomo(force: boolean) {
-  if (publicEgressLoading.value) return
+  if (!ownsPage() || publicEgressLoading.value) return
   const requestSequence = mihomoRequestGate.begin()
+  mihomoController?.abort()
+  mihomoController = new AbortController()
+  const signal = AbortSignal.any([pageSession.signal, mihomoController.signal])
+  const ownsRead = () => ownsPage() && mihomoRequestGate.isLatest(requestSequence) && !signal.aborted
   publicEgressMessage.value = ''
   publicEgressLoading.value = true
   try {
-    const inspection = await inspectMihomo(force)
-    if (!mihomoRequestGate.isLatest(requestSequence)) return
+    const inspection = await inspectMihomo(force, undefined, signal)
+    if (!ownsRead()) return
     mihomoInspection.value = inspection
     if (inspection.errorCode) publicEgressMessage.value = mihomoInspectionErrorMessage(inspection.errorCode)
   } catch (error) {
-    if (!mihomoRequestGate.isLatest(requestSequence)) return
+    if (!ownsRead()) return
     const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
     publicEgressMessage.value = code ? mihomoInspectionErrorMessage(code) : error instanceof Error ? error.message : '代理链路检查失败。'
   } finally {
-    if (mihomoRequestGate.isLatest(requestSequence)) publicEgressLoading.value = false
+    if (ownsRead()) publicEgressLoading.value = false
   }
 }
 
 function handleManualRefresh() {
+  if (!ownsPage()) return
   return loadDetails().then(() => {
-    if (errorMessage.value) throw new Error(errorMessage.value)
+    if (ownsPage() && errorMessage.value) throw new Error(errorMessage.value)
   })
 }
 
@@ -345,11 +394,12 @@ function mihomoInspectionErrorMessage(code: string) {
 }
 
 onMounted(() => {
+  if (!ownsPage()) return
   unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
   void loadDetails()
 })
 
-onBeforeUnmount(() => unregisterManualRefresh?.())
+onBeforeUnmount(dispose)
 </script>
 
 <template>

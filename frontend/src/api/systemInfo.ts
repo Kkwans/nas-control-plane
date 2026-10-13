@@ -70,8 +70,8 @@ export async function requestSystemDetails(fetcher: typeof fetch = fetch, signal
   return requestJson('/api/v1/system/details', signal ? { signal } : {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
 }
 
-export async function requestDNSCapability(fetcher: typeof fetch = fetch): Promise<DNSCapability> {
-  return requestJson('/api/v1/system/dns/capability', {}, isDNSCapability, fetcher, 'SYSTEM_DNS_RESPONSE_INVALID')
+export async function requestDNSCapability(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DNSCapability> {
+  return requestJson('/api/v1/system/dns/capability', signal ? { signal } : {}, isDNSCapability, fetcher, 'SYSTEM_DNS_RESPONSE_INVALID')
 }
 
 export async function previewDNSChange(input: DNSChangeRequest, fetcher: typeof fetch = fetch): Promise<DNSChangePreview> {
@@ -121,10 +121,10 @@ export async function invokeMihomo(
   )
 }
 
-export async function inspectMihomo(force = false, fetcher: typeof fetch = fetch): Promise<MihomoInspection> {
+export async function inspectMihomo(force = false, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<MihomoInspection> {
   return requestJson(
     '/api/v1/proxy/mihomo/inspect',
-    jsonRequest({ force }),
+    { ...jsonRequest({ force }), ...(signal ? { signal } : {}) },
     isMihomoInspection,
     fetcher,
     'PROXY_MIHOMO_INSPECTION_RESPONSE_INVALID',
