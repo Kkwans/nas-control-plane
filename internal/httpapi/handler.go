@@ -130,6 +130,7 @@ type Config struct {
 	AgentTimeout        time.Duration
 	Auth                Authenticator
 	ControlStore        ControlStore
+	MonitoringHistory   MonitoringHistoryStore
 	SummarySnapshots    SummarySnapshots
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
@@ -180,6 +181,7 @@ type handler struct {
 	agentTimeout        time.Duration
 	auth                Authenticator
 	controlStore        ControlStore
+	monitoringHistory   MonitoringHistoryStore
 	summarySnapshots    SummarySnapshots
 	realtimeSubscribers atomic.Int32
 	now                 func() time.Time
@@ -234,6 +236,11 @@ func NewHandler(config Config) http.Handler {
 		config.Logger = slog.Default()
 	}
 
+	if config.MonitoringHistory == nil {
+		// 兼容现有组合存储注入，但绝不回退到 MetricSamples 单下界接口。
+		config.MonitoringHistory, _ = config.ControlStore.(MonitoringHistoryStore)
+	}
+
 	api := &handler{
 		agent:               config.Agent,
 		databaseAgent:       config.DatabaseAgent,
@@ -246,6 +253,7 @@ func NewHandler(config Config) http.Handler {
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
 		controlStore:        config.ControlStore,
+		monitoringHistory:   config.MonitoringHistory,
 		summarySnapshots:    config.SummarySnapshots,
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
@@ -440,24 +448,40 @@ func (api *handler) systemDetails(response http.ResponseWriter, request *http.Re
 }
 
 func (api *handler) monitoringSamples(response http.ResponseWriter, request *http.Request) {
-	if api.controlStore == nil {
+	if api.monitoringHistory == nil {
 		api.writeError(response, request, http.StatusServiceUnavailable, "MONITORING_STORE_UNAVAILABLE", "监控历史暂不可用。")
 		return
 	}
 	historyRange, err := ParseMonitoringRange(request.URL.Query(), time.Now().UTC())
 	if err != nil {
-		api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间不能晚于当前时间。")
+		api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间最多晚于当前时间 1 分钟。")
 		return
 	}
-	samples, err := QueryMonitoringSamples(request.Context(), api.controlStore, historyRange)
+	queryContext, cancel := context.WithTimeout(request.Context(), MonitoringHistoryTimeout)
+	defer cancel()
+	samples, err := QueryMonitoringSamples(queryContext, api.monitoringHistory, historyRange)
+	var encoded []byte
+	if err == nil {
+		encoded, err = controlstore.MarshalMetricHistory(queryContext, samples)
+	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		switch {
+		case request.Context().Err() != nil, errors.Is(err, context.Canceled):
 			return
+		case errors.Is(err, context.DeadlineExceeded):
+			api.writeError(response, request, http.StatusGatewayTimeout, "MONITORING_READ_TIMEOUT", "监控历史读取超时，请缩小时间范围后重试。")
+		case errors.Is(err, controlstore.ErrMetricHistoryLimitExceeded):
+			api.writeError(response, request, http.StatusUnprocessableEntity, "MONITORING_HISTORY_LIMIT_EXCEEDED", "监控历史超过单次查询上限，请缩小时间范围后重试。")
+		case errors.Is(err, controlstore.ErrInvalidMetricHistory):
+			api.writeError(response, request, http.StatusInternalServerError, "MONITORING_HISTORY_INVALID", "监控历史包含无效数据，无法完整读取。")
+		default:
+			api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
 		}
-		api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
 		return
 	}
-	writeJSON(response, http.StatusOK, samples)
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(encoded)
 }
 
 func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, error) {

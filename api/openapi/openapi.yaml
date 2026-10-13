@@ -369,29 +369,69 @@ paths:
       description: >-
         历史由服务端后台独立采集，无需浏览器保持连接，HTTP 概览和实时流请求不写入历史。
         每个 UTC 分钟仅保存首个合格且成功持久化的完整样本及其温度子样本，保留 7 天。
-        必需指标源不可用、样本无效或持久化失败可能形成间断，不补零或插值；
-        缺失温度保持为空。实时概览和实时流的共享采集不属于此历史接口的保证。
+        必需指标源不可用、样本无效或持久化失败可能形成间断，不补零或插值；缺失温度不生成子样本。
+        查询为精确闭区间（含小数秒），父样本及其温度来自同一数据库快照，按时间升序。
+        单次完整响应最多 10,081 个父样本、65,536 个温度子样本及 8 MiB JSON（含末尾换行）。
+        七天每分钟六个普通短名称传感器通常在预算内；更多传感器、较长名称或较大数字可能需缩短查询范围。
+        超限返回 MONITORING_HISTORY_LIMIT_EXCEEDED，请缩短范围重试；绝不返回截断的成功数组，
+        也不因响应预算删除仍在保留期内的旧版数据。单个旧样本本身超限时，需排除该时间点。
+        SQL 查询与编码共享 5 秒协作式超时，超时返回 MONITORING_READ_TIMEOUT；客户端取消会取消查询。
+        此预算约束应用层结果与编码体积，不保证 SQLite 驱动、查询工作区峰值内存或数据库文件大小。
       tags: [monitoring]
       security: [{RootSession: []}]
       parameters:
-        - { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 6h } }
+        - name: range
+          in: query
+          description: 预设 1h、6h、24h 或 7d；缺省及未知值均回退 6h。成对 from/to 优先。
+          schema: { type: string, default: 6h }
         - name: from
           in: query
-          description: 精确范围起点；必须与 to 成对提供，优先于 range。
+          description: 精确范围起点（包含边界、支持小数秒）；必须与 to 成对提供，优先于 range。
           schema: { type: string, format: date-time }
         - name: to
           in: query
-          description: 精确范围终点；不得晚于当前时间，最长跨度 7 天。
+          description: 精确范围终点（包含边界、支持小数秒）；最多晚于服务当前时间 1 分钟，必须晚于 from，最长跨度 7 天。
           schema: { type: string, format: date-time }
       responses:
         '200':
-          description: Metric samples ordered by collection time
+          description: 完整范围内的历史样本，按采集时间升序；空结果返回 []。
           content:
             application/json:
               schema:
                 type: array
+                maxItems: 10081
                 items:
                   $ref: '#/components/schemas/MetricSample'
+        '400':
+          description: MONITORING_RANGE_INVALID；起止未成对、时间无效、跨度超过 7 天或终点超过允许的 1 分钟未来容差。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: MONITORING_HISTORY_LIMIT_EXCEEDED；完整响应超过父样本、温度行数或编码字节预算，请缩短范围。没有部分成功结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: MONITORING_HISTORY_INVALID 表示保留的旧历史包含无法完整编码的无效数据；MONITORING_READ_FAILED 表示其他存储读取失败。原始数据不被修改，不返回存储错误细节。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: MONITORING_STORE_UNAVAILABLE；未提供有上下界的历史存储接口，不回退到无界查询。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '504':
+          description: MONITORING_READ_TIMEOUT；查询或编码超过 5 秒协作式预算，请缩短范围重试。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/databases/project-preferences:
     get:
       operationId: listDatabaseProjectPreferences

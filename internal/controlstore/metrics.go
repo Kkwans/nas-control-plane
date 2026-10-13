@@ -130,6 +130,7 @@ func (s *Store) PruneMetricSamples(ctx context.Context, now time.Time) error {
 	return tx.Commit()
 }
 
+// MetricSamples 保留旧调用者的单下界语义；HTTP 历史必须使用 MetricSamplesInRange。
 func (s *Store) MetricSamples(ctx context.Context, since time.Time) ([]MetricSample, error) {
 	rows, err := s.database.QueryContext(ctx, `
 		SELECT collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
