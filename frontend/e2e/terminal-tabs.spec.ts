@@ -173,7 +173,7 @@ async function captureAndCheck(page: Page, info: TestInfo, name: string) {
   const axe = new AxeBuilder({ page }).include('.terminal-tabs-panel')
   if (await page.locator('.terminal-close-confirm').count()) axe.include('.terminal-close-confirm')
   const accessibility = await axe.analyze()
-  const axePath = info.outputPath('ui-captures', `${name}-axe.json`)
+  const axePath = info.outputPath('ui-captures', `${name}-axe-capture-state.json`)
   await writeFile(axePath, JSON.stringify(accessibility, null, 2))
   await info.attach(`${name}-axe`, { path: axePath, contentType: 'application/json' })
   expect(accessibility.violations).toEqual([])
