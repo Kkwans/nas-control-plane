@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { CircleHelp, Container, Plug, Server, SquareTerminal, Trash2, Unplug } from '@lucide/vue'
 import { ElDialog } from 'element-plus'
 import { Terminal } from '@xterm/xterm'
@@ -28,10 +28,12 @@ import {
 import { getTerminalTheme } from '@/domain/terminalTheme'
 import { useReducedMotion } from '@/composables/useReducedMotion'
 import { useSystemStore } from '@/stores/system'
+import { captureSession, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 type Target = 'host' | 'container'
-type PendingPaste = { text: string; lineCount: number; safe: boolean }
+type PendingPaste = { owner: Attempt; text: string; lineCount: number; safe: boolean }
 const terminalErrorMessages: Record<string, string> = {
+  TERMINAL_SESSION_LIMIT_REACHED: '终端会话名额暂不可用，服务端可能仍在收尾，请稍后手动重试。',
   TERMINAL_UNAVAILABLE: '终端服务暂不可用，请确认 Root Agent 正常运行。',
   TERMINAL_INITIALIZATION_FAILED: '终端会话初始化失败，请检查 Agent 终端能力。',
   TERMINAL_INITIALIZATION_TIMEOUT: '终端初始化超时，请稍后重试。',
@@ -43,33 +45,65 @@ const systemStore = useSystemStore()
 const reducedMotion = useReducedMotion()
 const target = ref<Target>('host')
 const containerId = ref('')
-const state = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle')
+const state = ref<'idle' | 'connecting' | 'connected' | 'closing' | 'closed' | 'error'>('idle')
 const shellName = ref('')
 const shellEnhancement = ref('')
 const shellReason = ref('')
 const capabilities = ref<TerminalCapabilities | null>(null)
 const statusMessage = ref('')
 const shortcutDialogOpen = ref(false)
-const pendingPaste = ref<PendingPaste | null>(null)
+const pendingPaste = shallowRef<PendingPaste | null>(null)
 const pasteConfirmRef = ref<HTMLButtonElement | null>(null)
 const terminalElement = ref<HTMLElement | null>(null)
-let socket: WebSocket | null = null
-let terminal: Terminal | null = null
-let fitAddon: FitAddon | null = null
-let resizeObserver: ResizeObserver | null = null
-let resizeTimer: number | undefined
-let handshakeTimer: number | undefined
-let pasteTarget: HTMLElement | null = null
-let terminalReady = false
+// 每次尝试独占资源；退役后仅其 close 事件能完成本地收尾。
+type Attempt = {
+  generation: number
+  session: SessionContext
+  target: Target
+  containerId: string
+  title: string
+  active: boolean
+  ready: boolean
+  cleaned: boolean
+  socket: WebSocket | null
+  terminal: Terminal | null
+  fit: FitAddon | null
+  timers: { handshake?: number; resize?: number }
+  releases: (() => void)[]
+  outcome: 'closed' | 'error'
+}
+const pageSession = captureSession()
+let pageAlive = true
+let pageShown = true
+let current: Attempt | null = null
+let attemptGeneration = 0
+const targetLocked = computed(() => ['connecting', 'connected', 'closing'].includes(state.value))
+const terminalTitle = ref('')
+const toolbarActions = ref<HTMLElement | null>(null)
+
+function pageCurrent() {
+  return pageAlive && pageShown && !pageSession.signal.aborted && isCurrentSession(pageSession.generation)
+}
+function owns(owner: Attempt, socket = owner.socket) {
+  return pageCurrent() && current === owner && owner.active && owner.socket === socket &&
+    !owner.session.signal.aborted && isCurrentSession(owner.session.generation)
+}
+function ready(owner: Attempt) {
+  return owns(owner) && owner.ready && owner.socket?.readyState === WebSocket.OPEN
+}
+function safely(action: () => void) {
+  try { action() } catch { /* 单项清理失败不能阻断其余资源收尾。 */ }
+}
 
 const containers = computed(() => (systemStore.inventory?.containers ?? []).filter((item) => item.state === 'running'))
 const containerOptions = computed(() => containers.value.map((item) => ({ label: `${item.name} · ${item.image}`, value: item.id })))
-const canConnect = computed(() => target.value === 'host' || Boolean(containerId.value))
+const canConnect = computed(() => !targetLocked.value && (target.value === 'host' || Boolean(containerId.value)))
 const canClearTerminal = computed(() => state.value === 'connecting' || state.value === 'connected' || state.value === 'error')
 const stateLabel = computed(() => ({
   idle: '未连接',
   connecting: '连接中',
   connected: '已连接',
+  closing: '关闭中',
   closed: '已断开',
   error: '连接失败',
 }[state.value]))
@@ -112,261 +146,279 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 
 watch(reducedMotion, (reduce) => {
-  if (terminal) terminal.options.cursorBlink = !reduce
+  const owner = current
+  if (owner && owns(owner) && owner.terminal) owner.terminal.options.cursorBlink = !reduce
 })
 
-onMounted(() => void systemStore.refresh({ inventory: true }))
+onMounted(() => {
+  void systemStore.refresh({ inventory: true })
+  window.addEventListener('pagehide', hidePage)
+  window.addEventListener('pageshow', showPage)
+})
+pageSession.signal.addEventListener('abort', abortPage, { once: true })
 
-async function connect() {
-  if (!canConnect.value || state.value === 'connecting' || state.value === 'connected') return
-  close()
-  state.value = 'connecting'
-  statusMessage.value = ''
+function clearSessionDetails() {
+  pendingPaste.value = null
   shellName.value = ''
   shellEnhancement.value = ''
   shellReason.value = ''
   capabilities.value = null
-  pendingPaste.value = null
-  await nextTick()
-  const element = terminalElement.value
-  if (!element) {
-    failTerminal('终端输入区域尚未准备好，请稍后重试。')
-    return
-  }
-  terminal = new Terminal({
-    cursorBlink: !reducedMotion.value,
-    cursorStyle: 'bar',
-    cursorWidth: 2,
-    convertEol: true,
-    fontFamily: "'JetBrains Mono Variable', 'Cascadia Mono', monospace",
-    fontSize: 14,
-    lineHeight: 1.32,
-    scrollback: 5000,
-    theme: getTerminalTheme(),
-  })
-  fitAddon = new FitAddon()
-  terminal.loadAddon(fitAddon)
-  terminal.open(element)
-  fitAddon.fit()
-  terminalReady = false
-  terminal.attachCustomKeyEventHandler((event) => {
-    if (isTerminalPasteShortcut(event)) return false
-    if (isTerminalLiteralNextShortcut(event)) {
-      if (event.type === 'keydown') {
-        event.preventDefault()
-        sendTerminalInput('\u0016')
-      }
-      return false
-    }
-    return true
-  })
-  terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
-  pasteTarget = element
-  pasteTarget.addEventListener('paste', handlePaste, true)
-
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const params = new URLSearchParams({
-    target: target.value,
-    rows: String(terminal.rows),
-    cols: String(terminal.cols),
-  })
-  if (target.value === 'container') params.set('containerId', containerId.value)
-  socket = new WebSocket(`${protocol}//${location.host}/ws/terminal?${params}`)
-  socket.binaryType = 'arraybuffer'
-  handshakeTimer = window.setTimeout(() => {
-    if (state.value !== 'connecting' || terminalReady) return
-    failTerminal('终端握手超时，请检查 Agent 终端服务状态。')
-    socket?.close()
-  }, 10_000)
-  socket.onmessage = (event) => {
-    if (typeof event.data === 'string') {
-      let control: {
-        type: string
-        shell?: string
-        enhancement?: string
-        reason?: string
-        message?: string
-        code?: string
-        capabilities?: unknown
-        rows?: number
-        cols?: number
-      }
-      try {
-        control = JSON.parse(event.data) as typeof control
-      } catch {
-        failTerminal('收到无法识别的终端控制帧。')
-        socket?.close()
-        return
-      }
-      if (control.type === 'started') {
-        window.clearTimeout(handshakeTimer)
-        handshakeTimer = undefined
-        terminalReady = true
-        state.value = 'connected'
-        shellName.value = control.shell ?? ''
-        shellEnhancement.value = control.enhancement ?? ''
-        shellReason.value = control.reason ?? ''
-        capabilities.value = normalizeTerminalCapabilities(control.capabilities)
-        statusMessage.value = capabilityWarning.value
-        terminal?.clear()
-        scheduleResize()
-        terminal?.focus()
-      } else if (control.type === 'error') {
-        failTerminal(terminalErrorMessages[control.code ?? ''] ?? control.message ?? '终端会话建立失败。')
-        socket?.close()
-      } else if (control.type === 'closed') {
-        window.clearTimeout(handshakeTimer)
-        handshakeTimer = undefined
-        terminalReady = false
-        state.value = 'closed'
-        statusMessage.value = '终端会话已由服务端关闭，可重新连接。'
-        terminal?.writeln('\r\n\x1b[38;5;214m会话已关闭\x1b[0m')
-      }
-      return
-    }
-    terminal?.write(new Uint8Array(event.data as ArrayBuffer))
-  }
-  socket.onerror = () => {
-    failTerminal('终端连接失败，请确认 Agent 终端服务已启用。')
-  }
-  socket.onclose = () => {
-    terminalReady = false
-    window.clearTimeout(handshakeTimer)
-    handshakeTimer = undefined
-    if (state.value === 'connecting') failTerminal('终端在握手完成前断开。')
-    else if (state.value === 'connected') {
-      state.value = 'closed'
-      statusMessage.value = '终端连接已断开，可重新连接。'
-    }
-  }
-  terminal.onData((data) => {
-    sendTerminalInput(data)
-  })
-  terminal.onResize(({ rows, cols }) => {
-    if (capabilities.value?.resize === false) return
-    if (terminalReady && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'resize', rows, cols }))
-  })
-  resizeObserver = new ResizeObserver(scheduleResize)
-  resizeObserver.observe(element)
-  window.addEventListener('resize', scheduleResize)
-  window.visualViewport?.addEventListener('resize', scheduleResize)
 }
 
-function handlePaste(event: ClipboardEvent) {
+function cleanup(owner: Attempt) {
+  if (owner.cleaned) return
+  owner.cleaned = true
+  // 仅保留 close 回调以核实本地关闭；不让退役 socket 持有输出对象。
+  if (owner.socket) { owner.socket.onmessage = null; owner.socket.onerror = null }
+  owner.containerId = ''
+  owner.title = ''
+  window.clearTimeout(owner.timers.handshake)
+  window.clearTimeout(owner.timers.resize)
+  owner.timers = {}
+  for (const release of owner.releases.splice(0)) safely(release)
+  const terminal = owner.terminal
+  owner.terminal = null
+  owner.fit = null
+  if (terminal) safely(() => terminal.dispose())
+}
+
+function retire(owner: Attempt, message: string, outcome: 'closed' | 'error' = 'closed') {
+  if (current !== owner || !owner.active) return
+  // 先撤销输入及所有回调资格，再调用可能同步回调或抛错的第三方方法。
+  owner.active = false
+  owner.ready = false
+  owner.outcome = outcome
+  clearSessionDetails()
+  statusMessage.value = message
+  const socket = owner.socket
+  state.value = socket ? 'closing' : outcome
+  cleanup(owner)
+  if (!socket) {
+    current = null
+    terminalTitle.value = ''
+    return
+  }
+  if (socket.readyState === WebSocket.OPEN) safely(() => socket.send(JSON.stringify({ type: 'close' })))
+  safely(() => socket.close())
+}
+
+function finishClose(owner: Attempt, socket: WebSocket) {
+  if (current !== owner || owner.socket !== socket) return
+  if (owner.active) {
+    const connecting = !owner.ready
+    owner.active = false
+    owner.ready = false
+    owner.outcome = connecting ? 'error' : 'closed'
+    clearSessionDetails()
+    statusMessage.value = connecting ? '终端在握手完成前断开。服务端资源回收可能仍在进行。' : '本地连接已关闭，服务端资源回收可能仍在进行。'
+    cleanup(owner)
+  } else if (pageAlive && owner.outcome === 'closed') {
+    statusMessage.value = '本地连接已关闭，服务端资源回收可能仍在进行。'
+  }
+  owner.socket = null
+  socket.onmessage = null
+  socket.onerror = null
+  socket.onclose = null
+  current = null
+  if (pageAlive) { terminalTitle.value = ''; state.value = owner.outcome }
+}
+
+async function connect() {
+  if (!pageCurrent() || !canConnect.value || current) return
+  const owner: Attempt = {
+    generation: ++attemptGeneration, session: captureSession(), target: target.value, containerId: containerId.value,
+    title: target.value === 'host' ? 'root@DH4300Plus' : containers.value.find(item => item.id === containerId.value)?.name || 'container',
+    active: true, ready: false, cleaned: false, socket: null, terminal: null, fit: null,
+    timers: {}, releases: [], outcome: 'closed',
+  }
+  current = owner
+  terminalTitle.value = owner.title
+  state.value = 'connecting'
+  statusMessage.value = '正在建立终端连接，可取消本次连接。'
+  clearSessionDetails()
+  await nextTick()
+  if (!owns(owner)) return
+  try {
+    const element = terminalElement.value
+    if (!element) throw new Error('terminal element missing')
+    const terminal = new Terminal({
+      cursorBlink: !reducedMotion.value, cursorStyle: 'bar', cursorWidth: 2, convertEol: true,
+      fontFamily: "'JetBrains Mono Variable', 'Cascadia Mono', monospace",
+      fontSize: 14, lineHeight: 1.32, scrollback: 5000, theme: getTerminalTheme(),
+    })
+    owner.terminal = terminal
+    const fit = new FitAddon()
+    owner.fit = fit
+    terminal.loadAddon(fit)
+    terminal.open(element)
+    fit.fit()
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (!owns(owner)) return false
+      if (isTerminalPasteShortcut(event)) return false
+      if (isTerminalLiteralNextShortcut(event)) {
+        if (event.type === 'keydown') { event.preventDefault(); sendTerminalInput(owner, '\u0016') }
+        return false
+      }
+      return true
+    })
+    terminal.writeln('\x1b[38;5;25mNCP 终端\x1b[0m  正在建立会话…')
+    const paste = (event: ClipboardEvent) => handlePaste(owner, event)
+    element.addEventListener('paste', paste, true)
+    owner.releases.push(() => element.removeEventListener('paste', paste, true))
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const params = new URLSearchParams({ target: owner.target, rows: String(terminal.rows), cols: String(terminal.cols) })
+    if (owner.target === 'container') params.set('containerId', owner.containerId)
+    const socket = new WebSocket(`${protocol}//${location.host}/ws/terminal?${params}`)
+    owner.socket = socket
+    socket.binaryType = 'arraybuffer'
+    socket.onclose = () => finishClose(owner, socket)
+    socket.onerror = () => {
+      if (owns(owner, socket)) retire(owner, '终端连接失败，请确认 Agent 终端服务已启用。正在关闭本地连接。', 'error')
+    }
+    socket.onmessage = (event) => {
+      if (!owns(owner, socket)) return
+      try {
+        if (typeof event.data !== 'string') {
+          if (owner.ready) terminal.write(new Uint8Array(event.data as ArrayBuffer))
+          return
+        }
+        const control = JSON.parse(event.data) as { type?: string; shell?: string; enhancement?: string; reason?: string; code?: string; capabilities?: unknown }
+        if (control.type === 'started') {
+          if (owner.ready || state.value !== 'connecting') return
+          window.clearTimeout(owner.timers.handshake)
+          owner.timers.handshake = undefined
+          owner.ready = true
+          state.value = 'connected'
+          shellName.value = control.shell ?? ''
+          shellEnhancement.value = control.enhancement ?? ''
+          shellReason.value = control.reason ?? ''
+          capabilities.value = normalizeTerminalCapabilities(control.capabilities)
+          statusMessage.value = capabilityWarning.value
+          terminal.clear()
+          scheduleResize(owner)
+          safely(() => terminal.focus())
+        } else if (control.type === 'error') {
+          retire(owner, terminalErrorMessages[control.code ?? ''] ?? '终端会话建立失败，请稍后手动重试。', 'error')
+        } else if (control.type === 'closed') {
+          retire(owner, '服务端已通知会话关闭，正在关闭本地连接；服务端资源回收可能仍在进行。')
+        }
+      } catch {
+        retire(owner, '终端数据处理失败，正在关闭本地连接，后续输出未保留。', 'error')
+      }
+    }
+    owner.timers.handshake = window.setTimeout(() => {
+      if (owns(owner, socket) && !owner.ready) retire(owner, '终端握手超时，正在关闭本地连接；服务端资源回收可能仍在进行。', 'error')
+    }, 10_000)
+    const input = terminal.onData(data => sendTerminalInput(owner, data))
+    owner.releases.push(() => input.dispose())
+    const dimensions = terminal.onResize(({ rows, cols }) => {
+      if (!ready(owner) || capabilities.value?.resize === false) return
+      try { socket.send(JSON.stringify({ type: 'resize', rows, cols })) }
+      catch { retire(owner, '终端窗口调整发送失败，正在关闭本地连接。', 'error') }
+    })
+    owner.releases.push(() => dimensions.dispose())
+    const resize = () => scheduleResize(owner)
+    const observer = new ResizeObserver(resize)
+    owner.releases.push(() => observer.disconnect())
+    observer.observe(element)
+    window.addEventListener('resize', resize)
+    owner.releases.push(() => window.removeEventListener('resize', resize))
+    const viewport = window.visualViewport
+    viewport?.addEventListener('resize', resize)
+    owner.releases.push(() => viewport?.removeEventListener('resize', resize))
+  } catch {
+    if (owns(owner)) retire(owner, '终端初始化失败，已停止本次连接；请稍后手动重试。', 'error')
+  }
+}
+
+function handlePaste(owner: Attempt, event: ClipboardEvent) {
+  if (!owns(owner)) return
   const text = event.clipboardData?.getData('text/plain') ?? ''
   if (!text) return
   event.preventDefault()
   event.stopImmediatePropagation()
-  if (!terminalReady || state.value !== 'connected') {
-    statusMessage.value = '终端尚未就绪，未写入剪贴板内容。'
-    return
-  }
+  if (!ready(owner)) { statusMessage.value = '终端尚未就绪，未写入剪贴板内容。'; return }
   if (isMultilineTerminalPaste(text)) {
-    const lineCount = normalizeTerminalPaste(text).split('\n').length
-    pendingPaste.value = { text, lineCount, safe: supportsSafeMultilinePaste(capabilities.value) }
+    const paste = { owner, text, lineCount: normalizeTerminalPaste(text).split('\n').length, safe: supportsSafeMultilinePaste(capabilities.value) }
+    pendingPaste.value = paste
     statusMessage.value = pendingPasteDescription.value
-    void nextTick(() => pasteConfirmRef.value?.focus())
+    void nextTick(() => { if (ready(owner) && pendingPaste.value === paste) safely(() => pasteConfirmRef.value?.focus()) })
     return
   }
-  sendPastedText(text)
+  sendPastedText(owner, text)
 }
 
-function sendPastedText(text: string, bracketedPaste = supportsSafeMultilinePaste(capabilities.value)) {
-  const sent = sendTerminalInput(createTerminalPastePayload(text, bracketedPaste))
-  if (sent) {
+function sendPastedText(owner: Attempt, text: string, bracketedPaste = supportsSafeMultilinePaste(capabilities.value)) {
+  if (sendTerminalInput(owner, createTerminalPastePayload(text, bracketedPaste))) {
     statusMessage.value = bracketedPaste ? '已将内容交给当前 Shell 的 bracketed paste 处理。' : '已将内容写入终端。'
-    terminal?.focus()
+    safely(() => owner.terminal?.focus())
   }
 }
-
 function confirmPaste() {
+  const paste = pendingPaste.value
+  pendingPaste.value = null
+  if (paste && ready(paste.owner)) sendPastedText(paste.owner, paste.text, paste.safe)
+}
+function cancelPaste() {
   const paste = pendingPaste.value
   if (!paste) return
   pendingPaste.value = null
-  sendPastedText(paste.text, paste.safe)
+  if (ready(paste.owner)) { statusMessage.value = '已取消多行粘贴。'; safely(() => paste.owner.terminal?.focus()) }
 }
-
-function cancelPaste() {
-  if (!pendingPaste.value) return
-  pendingPaste.value = null
-  statusMessage.value = '已取消多行粘贴。'
-  terminal?.focus()
-}
-
-function sendTerminalInput(data: string | Uint8Array): boolean {
-  if (!terminalReady || socket?.readyState !== WebSocket.OPEN) return false
+function sendTerminalInput(owner: Attempt, data: string | Uint8Array): boolean {
+  if (!ready(owner)) return false
   const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-  if (payload.byteLength === 0) return false
-  try {
-    socket.send(payload)
-    return true
-  } catch {
-    failTerminal('终端输入发送失败，连接可能已经断开。')
-    return false
-  }
+  if (!payload.byteLength) return false
+  try { owner.socket!.send(payload); return true }
+  catch { retire(owner, '终端输入发送失败，正在关闭本地连接。', 'error'); return false }
 }
-
 function describeTerminalCapabilityState(state: TerminalCapabilityState): string {
-  if (state === 'supported') return '支持'
-  if (state === 'unsupported') return '不支持'
-  return '未报告'
+  return state === 'supported' ? '支持' : state === 'unsupported' ? '不支持' : '未报告'
 }
-
-function failTerminal(message: string) {
-  terminalReady = false
-  state.value = 'error'
-  pendingPaste.value = null
-  statusMessage.value = message
-  terminal?.writeln(`\r\n\x1b[31m${message}\x1b[0m`)
-}
-
 function clearTerminal() {
-  terminal?.clear()
-  terminal?.scrollToBottom()
-  terminal?.focus()
-  statusMessage.value = '终端内容已清空。'
+  const owner = current
+  if (!owner || !owns(owner)) return
+  try { owner.terminal?.clear(); owner.terminal?.scrollToBottom(); owner.terminal?.focus(); statusMessage.value = '终端内容已清空。' }
+  catch { retire(owner, '终端显示处理失败，正在关闭本地连接。', 'error') }
 }
-
-function resize() {
-  try { fitAddon?.fit() } catch { /* 容器尚未完成布局时等待下一次观察。 */ }
+function scheduleResize(owner: Attempt) {
+  if (!owns(owner)) return
+  window.clearTimeout(owner.timers.resize)
+  owner.timers.resize = window.setTimeout(() => {
+    if (!owns(owner)) return
+    try { owner.fit?.fit() }
+    catch { retire(owner, '终端窗口调整失败，正在关闭本地连接。', 'error') }
+  }, 80)
 }
-
-function scheduleResize() {
-  window.clearTimeout(resizeTimer)
-  resizeTimer = window.setTimeout(resize, 80)
-}
-
 function close() {
-  const wasActive = state.value === 'connecting' || state.value === 'connected'
-  terminalReady = false
-  pendingPaste.value = null
-  shellName.value = ''
-  shellEnhancement.value = ''
-  shellReason.value = ''
-  capabilities.value = null
-  window.clearTimeout(resizeTimer)
-  resizeTimer = undefined
-  window.clearTimeout(handshakeTimer)
-  handshakeTimer = undefined
-  window.removeEventListener('resize', scheduleResize)
-  window.visualViewport?.removeEventListener('resize', scheduleResize)
-  resizeObserver?.disconnect()
-  resizeObserver = null
-  pasteTarget?.removeEventListener('paste', handlePaste, true)
-  pasteTarget = null
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'close' }))
-  socket?.close()
-  socket = null
-  terminal?.dispose()
-  terminal = null
-  fitAddon = null
-  if (state.value !== 'idle') {
-    state.value = 'closed'
-    if (wasActive) statusMessage.value = '终端连接已断开，可重新连接。'
-  }
+  const owner = current
+  if (!owner) return
+  retire(owner, '已请求断开，正在关闭本地连接；服务端可能仍在收尾，不能保证远端任务已结束。')
+  void nextTick(() => {
+    if (pageCurrent() && attemptGeneration === owner.generation && !owner.active) safely(() => toolbarActions.value?.querySelector<HTMLButtonElement>('button')?.focus())
+  })
 }
-
-onBeforeUnmount(close)
+function abortPage() {
+  if (current) retire(current, '认证已失效，已停止终端交互；服务端资源回收可能仍在进行。')
+  clearSessionDetails()
+  terminalTitle.value = ''
+  containerId.value = ''
+}
+function hidePage() {
+  pageShown = false
+  if (current) retire(current, '已离开页面并请求断开；服务端资源回收可能仍在进行。')
+  clearSessionDetails()
+  terminalTitle.value = ''
+}
+function showPage() { pageShown = true }
+onBeforeUnmount(() => {
+  pageAlive = false
+  if (current) retire(current, '已离开终端页面。')
+  clearSessionDetails()
+  pageSession.signal.removeEventListener('abort', abortPage)
+  window.removeEventListener('pagehide', hidePage)
+  window.removeEventListener('pageshow', showPage)
+})
 </script>
 
 <template>
@@ -376,15 +428,17 @@ onBeforeUnmount(close)
 
     <section class="terminal-toolbar panel">
       <div class="target-tabs">
-        <button type="button" :class="{ active: target === 'host' }" :disabled="state === 'connected'" @click="target = 'host'"><Server :size="17" /><span><strong>NAS 主机</strong><small>Root Shell</small></span></button>
-        <button type="button" :class="{ active: target === 'container' }" :disabled="state === 'connected'" @click="target = 'container'"><Container :size="17" /><span><strong>Docker 容器</strong><small>容器 Shell</small></span></button>
+        <button type="button" :class="{ active: target === 'host' }" :disabled="targetLocked" @click="target = 'host'"><Server :size="17" /><span><strong>NAS 主机</strong><small>Root Shell</small></span></button>
+        <button type="button" :class="{ active: target === 'container' }" :disabled="targetLocked" @click="target = 'container'"><Container :size="17" /><span><strong>Docker 容器</strong><small>容器 Shell</small></span></button>
       </div>
-      <NcpSelect v-if="target === 'container'" v-model="containerId" :options="containerOptions" accessible-label="选择运行中的 Docker 容器" filterable :disabled="state === 'connected'" placeholder="搜索并选择运行中的容器" />
+      <NcpSelect v-if="target === 'container'" v-model="containerId" :options="containerOptions" accessible-label="选择运行中的 Docker 容器" filterable :disabled="targetLocked" placeholder="搜索并选择运行中的容器" />
       <p v-if="statusMessage" class="terminal-live-status" role="status" aria-live="polite">{{ statusMessage }}</p>
-      <div class="terminal-toolbar-actions">
+      <div ref="toolbarActions" class="terminal-toolbar-actions">
         <ActionButton :icon="CircleHelp" @click="shortcutDialogOpen = true">快捷键</ActionButton>
-        <ActionButton v-if="state !== 'connected'" variant="primary" :icon="Plug" :disabled="!canConnect" :loading="state === 'connecting'" @click="connect">连接终端</ActionButton>
-        <ActionButton v-else variant="danger" :icon="Unplug" @click="close">断开连接</ActionButton>
+        <ActionButton v-if="state === 'connecting'" variant="danger" :icon="Unplug" @click="close">取消连接</ActionButton>
+        <ActionButton v-else-if="state === 'connected'" variant="danger" :icon="Unplug" @click="close">断开连接</ActionButton>
+        <ActionButton v-else-if="state === 'closing'" :disabled="true" :icon="Unplug">关闭中</ActionButton>
+        <ActionButton v-else variant="primary" :icon="Plug" :disabled="!canConnect" @click="connect">连接终端</ActionButton>
       </div>
     </section>
 
@@ -407,7 +461,7 @@ onBeforeUnmount(close)
     </ElDialog>
 
     <section :class="['terminal-frame', 'panel', { 'terminal-frame--idle': state === 'idle' || state === 'closed' }]" role="region" aria-label="终端会话" :aria-busy="state === 'connecting'">
-      <header><span :class="['connection-dot', `connection-dot--${state}`]" aria-hidden="true"></span><strong>{{ target === 'host' ? 'root@DH4300Plus' : containers.find(item => item.id === containerId)?.name || 'container' }}</strong><ActionButton v-if="canClearTerminal" class="terminal-clear-button" variant="ghost" size="sm" :icon="Trash2" aria-label="清空终端内容" @click="clearTerminal">清空内容</ActionButton><small role="status" aria-live="polite">{{ stateLabel }}</small></header>
+      <header><span :class="['connection-dot', `connection-dot--${state}`]" aria-hidden="true"></span><strong>{{ terminalTitle || (target === 'host' ? 'root@DH4300Plus' : containers.find(item => item.id === containerId)?.name || 'container') }}</strong><ActionButton v-if="canClearTerminal" class="terminal-clear-button" variant="ghost" size="sm" :icon="Trash2" aria-label="清空终端内容" @click="clearTerminal">清空内容</ActionButton><small role="status" aria-live="polite">{{ stateLabel }}</small></header>
       <div v-if="pendingPaste" class="paste-confirmation" role="dialog" aria-modal="false" aria-labelledby="terminal-paste-title" aria-describedby="terminal-paste-description" @keydown.esc.stop.prevent="cancelPaste">
         <div class="paste-confirmation-copy"><strong id="terminal-paste-title">确认多行粘贴</strong><p id="terminal-paste-description">{{ pendingPasteDescription }}</p></div>
         <div class="paste-confirmation-actions"><button ref="pasteConfirmRef" class="paste-confirmation-primary" type="button" @click="confirmPaste">{{ pendingPasteActionLabel }}</button><button class="paste-confirmation-secondary" type="button" @click="cancelPaste">取消</button></div>
