@@ -36,6 +36,9 @@ async function installSiteFixture(page: Page) {
   let failCatalog = false
   let present = false
   let ignored = false
+  let transportFailure: 'disconnect' | 'gateway' | undefined
+  const committed: Array<{ method: string; id: string }> = []
+  const committedSites = new Map<string, ReturnType<typeof site>>()
   let gate: { received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; method: string } | undefined
   await page.route('**/api/v1/sites**', async (route) => {
     const request = route.request()
@@ -55,18 +58,27 @@ async function installSiteFixture(page: Page) {
         await route.fulfill({ status: 503, json: { code: 'AGENT_UNAVAILABLE', message: '目录暂不可读', requestId: 'fixture-catalog' } })
       } else {
         await route.fulfill({ json: {
-          collectedAt: '2026-10-13T12:00:00Z', sites: [existingSite, otherSite, ...(present ? [site(createdId, '新建站点')] : [])],
+          collectedAt: '2026-10-13T12:00:00Z', sites: [existingSite, otherSite, ...(present ? [site(createdId, '新建站点')] : [])].map((item) => committedSites.get(item.id) ?? item),
           discovery: { status: 'complete', probeAvailable: true, candidateCount: 2, verifiedCount: 2, failedCount: 0, issues: [] },
         } })
       }
     } else if (path.endsWith('/icon') || method === 'DELETE') {
       await route.fulfill({ status: 503, json: { code: 'AGENT_UNAVAILABLE', message: '确认不可用', requestId: 'fixture-write' } })
+    } else if (transportFailure && (method === 'POST' && path === '/api/v1/sites' || method === 'PUT' && path === pathFor(existingId))) {
+      // 只在内存中提交，再丢弃确认；GET 可见不等于浏览器持有可信创建 ID。
+      const id = method === 'POST' ? createdId : existingId
+      committed.push({ method, id })
+      committedSites.set(id, { ...site(id, method === 'POST' ? '新建站点' : '原有站点'), ...request.postDataJSON(), id, projectId: id })
+      if (method === 'POST') present = true
+      if (transportFailure === 'disconnect') await route.abort('connectionfailed')
+      else await route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad Gateway' })
     } else if (method === 'POST') {
       await route.fulfill(malformedCreate
         ? { status: 201, contentType: 'application/json', body: '{' }
         : { status: 201, json: { ...request.postDataJSON(), projectId: createdId } })
     } else if (method === 'PUT') {
       const id = decodeURIComponent(path.split('/').at(-1)!)
+      if (transportFailure) committedSites.set(id, { ...site(id, id === otherId ? '其他站点' : '原有站点'), ...request.postDataJSON(), id, projectId: id })
       await route.fulfill(malformedUpdate && id === existingId
         ? { json: { ...request.postDataJSON(), projectId: otherId } }
         : { json: { ...request.postDataJSON(), projectId: id } })
@@ -74,7 +86,9 @@ async function installSiteFixture(page: Page) {
   })
   return {
     requests,
+    committed,
     writes: () => requests.filter(({ method }) => method !== 'GET'),
+    failAfterCommit(value: 'disconnect' | 'gateway') { transportFailure = value },
     setCreateValid() { malformedCreate = false },
     setUpdateValid() { malformedUpdate = false },
     failCatalog(value: boolean) { failCatalog = value },
@@ -341,3 +355,120 @@ test('迟到只读核对不污染关闭后新开的草稿或复用未知 ID', as
   await expect(editor(page)).toHaveCount(0)
   expect(fixture.writes()).toEqual([{ method: 'PUT', path: pathFor(existingId) }, { method: 'POST', path: '/api/v1/sites' }])
 })
+
+for (const failure of ['disconnect', 'gateway'] as const) {
+  test(`创建内存提交后 ${failure}：保留图标草稿，反复只读核对不上传、不补偿、不重放`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failAfterCommit(failure)
+    await page.goto('/sites')
+    await openCreator(page)
+    await editor(page).getByLabel('简介', { exact: true }).fill('传输未确认的创建草稿')
+    await editor(page).locator('input[type="file"]').setInputFiles({
+      name: 'pending.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+    })
+    await expect(editor(page).locator('.icon-upload__preview img')).toBeVisible()
+    await create(page).click()
+    await expect(warning(page)).toContainText('创建请求可能已经执行，创建结果未确认。')
+    await expectHeldEditor(page, '传输未确认的创建草稿')
+    await expect(warning(page)).not.toContainText('记录 ID：')
+    await expect(editor(page).locator('.icon-upload__preview img')).toBeVisible()
+    expect(fixture.committed).toEqual([{ method: 'POST', id: createdId }])
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = fixture.requests.length
+      await retry(page).click()
+      await expect(retry(page)).toBeEnabled()
+      await expect(warning(page)).toContainText('创建响应没有可信 ID，无法确认本次创建结果')
+      await expectHeldEditor(page, '传输未确认的创建草稿')
+      expect(fixture.requests.slice(before)).toHaveLength(2)
+      expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
+      expect(fixture.writes()).toEqual([{ method: 'POST', path: '/api/v1/sites' }])
+    }
+    await expect(page.getByText('站点已添加', { exact: true })).toHaveCount(0)
+  })
+
+  test(`更新内存提交后 ${failure}：保留在途编辑和目标，目录可见仍不解锁`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failAfterCommit(failure)
+    await page.goto('/sites')
+    await page.getByRole('button', { name: '编辑 原有站点', exact: true }).click()
+    await editor(page).getByLabel('简介', { exact: true }).fill('已提交的资料')
+    const held = fixture.hold('PUT')
+    await save(page).click()
+    await held.received.promise
+    await editor(page).getByLabel('简介', { exact: true }).fill('请求期间继续修改')
+    held.release.resolve()
+    await expect(warning(page)).toContainText('保存请求可能已经执行，保存结果未确认。')
+    await expect(warning(page)).toContainText(`记录 ID：${existingId}`)
+    await expectHeldEditor(page, '请求期间继续修改')
+    expect(fixture.committed).toEqual([{ method: 'PUT', id: existingId }])
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = fixture.requests.length
+      await retry(page).click()
+      await expect(retry(page)).toBeEnabled()
+      await expect(warning(page)).toContainText('本次在站点目录中发现该 ID')
+      await expectHeldEditor(page, '请求期间继续修改')
+      expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
+      expect(fixture.writes()).toEqual([{ method: 'PUT', path: pathFor(existingId) }])
+    }
+    await expect(page.getByText('站点资料已保存', { exact: true })).toHaveCount(0)
+  })
+
+  test(`收藏内存提交后 ${failure}：只锁定该资源，读取已提交状态仍不重放`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failAfterCommit(failure)
+    await page.goto('/sites')
+    const favorite = page.getByRole('button', { name: /^(取消收藏|收藏) 原有站点$/ })
+    await favorite.click()
+    await expect(favorite).toBeDisabled()
+    await expect(page.locator('.site-error[role="status"]')).toContainText('收藏保存请求可能已经执行，结果未确认')
+    expect(fixture.committed).toEqual([{ method: 'PUT', id: existingId }])
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = fixture.requests.length
+      const reads = ['/api/v1/sites', '/api/v1/sites/ignored'].map((path) =>
+        page.waitForResponse((response) => response.request().method() === 'GET' && new URL(response.url()).pathname === path).then((response) => response.finished()))
+      await page.getByRole('button', { name: '只读核对目录', exact: true }).click()
+      await Promise.all(reads)
+      await expect.poll(() => fixture.requests.length).toBe(before + 2)
+      await expect(favorite).toHaveAccessibleName('取消收藏 原有站点')
+      await expect(favorite).toBeDisabled()
+      expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
+      expect(fixture.writes()).toEqual([{ method: 'PUT', path: pathFor(existingId) }])
+    }
+    await expect(page.getByText('收藏状态保存失败', { exact: true })).toHaveCount(0)
+    const other = page.getByRole('button', { name: /^(取消收藏|收藏) 其他站点$/ })
+    await expect(other).toBeEnabled()
+    await other.click()
+    await expect.poll(() => fixture.writes().length).toBe(2)
+    await expect(other).toHaveAccessibleName('取消收藏 其他站点')
+    await expect(other).toBeEnabled()
+    expect(fixture.writes()).toEqual([{ method: 'PUT', path: pathFor(existingId) }, { method: 'PUT', path: pathFor(otherId) }])
+    await expect(favorite).toBeDisabled()
+  })
+
+  test(`迟到创建 ${failure} 不污染关闭后打开的编辑器`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failAfterCommit(failure)
+    await page.goto('/sites')
+    await openCreator(page)
+    const held = fixture.hold('POST')
+    await create(page).click()
+    await held.received.promise
+    await editor(page).getByRole('button', { name: '取消', exact: true }).click()
+    await expect(editor(page)).toHaveCount(0)
+    await page.getByRole('button', { name: '编辑 其他站点', exact: true }).click()
+    const settled = failure === 'disconnect'
+      ? page.waitForEvent('requestfailed', (request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/sites')
+      : page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/sites').then((response) => response.finished())
+    held.release.resolve()
+    await settled
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(warning(page)).toHaveCount(0)
+    await expect(editor(page).getByLabel('站点名称', { exact: true })).toHaveValue('其他站点')
+    await expect(save(page)).toBeEnabled()
+    await save(page).click()
+    await expect(editor(page)).toHaveCount(0)
+    expect(fixture.committed).toEqual([{ method: 'POST', id: createdId }])
+    expect(fixture.writes()).toEqual([{ method: 'POST', path: '/api/v1/sites' }, { method: 'PUT', path: pathFor(otherId) }])
+    await expect(page.getByText('站点资料保存失败，请检查 URL 和输入内容', { exact: true })).toHaveCount(0)
+  })
+}
