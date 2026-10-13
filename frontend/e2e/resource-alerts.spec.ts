@@ -124,12 +124,37 @@ async function historyControlGeometry(page: Page) {
       const range = header.querySelector('.date-time-range')!
       const picker = header.querySelector('.date-time-range__picker')!
       const actions = header.querySelector('.date-time-range__actions')!
+      const pickerStyle = getComputedStyle(picker)
+      const inputs = [...picker.querySelectorAll<HTMLInputElement>('input')]
+      const stacked = Math.abs(inputs[0]!.getBoundingClientRect().top - inputs[1]!.getBoundingClientRect().top) > 1
+      const lineHeight = (element: Element) => Number.parseFloat(getComputedStyle(element).lineHeight)
+      const inputHeights = inputs.map(lineHeight)
+      const pickerHeightBudget = Math.max(40, (stacked
+        ? inputHeights.reduce((sum, height) => sum + height, 0) + lineHeight(picker.querySelector('.el-range-separator')!) + 2 * Number.parseFloat(pickerStyle.rowGap)
+        : Math.max(...inputHeights)) + Number.parseFloat(pickerStyle.paddingTop) + Number.parseFloat(pickerStyle.paddingBottom) +
+        Number.parseFloat(pickerStyle.borderTopWidth) + Number.parseFloat(pickerStyle.borderBottomWidth))
       return {
         tools: tools.getBoundingClientRect().toJSON(), range: range.getBoundingClientRect().toJSON(),
         picker: picker.getBoundingClientRect().toJSON(), actions: actions.getBoundingClientRect().toJSON(),
         gap: Number.parseFloat(getComputedStyle(range).rowGap),
         actionGap: Number.parseFloat(getComputedStyle(actions).rowGap),
-        rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        pickerHeightBudget, stacked,
+        containers: [header, tools, range, header.querySelector('.date-time-range__picker-frame')!].map((element) => element.getBoundingClientRect().toJSON()),
+        children: [...picker.querySelectorAll('input, .el-range__icon, .el-range-separator')].map((element) => ({
+          name: element.getAttribute('placeholder') ?? element.className, bounds: element.getBoundingClientRect().toJSON(),
+        })),
+        inputs: inputs.map((input) => {
+          const style = getComputedStyle(input)
+          const textStyle = input.value ? style : getComputedStyle(input, '::placeholder')
+          const text = input.value || input.placeholder
+          const canvas = document.createElement('canvas')
+          const context = canvas.getContext('2d')!
+          context.font = `${textStyle.fontWeight} ${textStyle.fontSize} ${textStyle.fontFamily}`
+          return {
+            text, populated: Boolean(input.value), textWidth: context.measureText(text).width,
+            availableWidth: input.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight),
+          }
+        }),
       }
     })(),
   }))
@@ -137,8 +162,21 @@ async function historyControlGeometry(page: Page) {
 function expectReadableHistoryControls(geometry: Awaited<ReturnType<typeof historyControlGeometry>>) {
   expect(geometry.fields).toHaveLength(14)
   const { control, actionBounds } = geometry
-  // 单行日期编辑器允许随文字增高，但不能因纵向 flex-basis 拉成空白大面板。
-  const pickerHeightBudget = Math.max(44, control.rootFontSize * 2)
+  // 预算仅来自实际行高、内边距和行间距，不容许 flex-basis 产生无内容的大块空白。
+  const pickerHeightBudget = control.pickerHeightBudget + 1
+  for (const container of control.containers) {
+    expect(control.picker.left).toBeGreaterThanOrEqual(container.left - 1)
+    expect(control.picker.right).toBeLessThanOrEqual(container.right + 1)
+  }
+  for (const child of control.children) {
+    expect(child.bounds.left, child.name).toBeGreaterThanOrEqual(control.picker.left - 1)
+    expect(child.bounds.right, child.name).toBeLessThanOrEqual(control.picker.right + 1)
+    expect(child.bounds.top, child.name).toBeGreaterThanOrEqual(control.picker.top - 1)
+    expect(child.bounds.bottom, child.name).toBeLessThanOrEqual(control.picker.bottom + 1)
+    expect(child.bounds.width, child.name).toBeGreaterThan(0)
+  }
+  expect(control.inputs).toHaveLength(2)
+  for (const input of control.inputs) expect(input.textWidth, input.text).toBeLessThanOrEqual(input.availableWidth + 1)
   expect(control.picker.height).toBeGreaterThanOrEqual(40)
   expect(control.picker.height).toBeLessThanOrEqual(pickerHeightBudget)
   // 最保守的内容预算：日期编辑器 + 每个按钮独占一行 + 实际行间距。
@@ -250,12 +288,29 @@ test('触发、恢复观察、unknown 与 stale 保留未确认事件，合法�
 test('1440px 默认字号的历史操作保持紧凑且文字完整', async ({ page }) => {
   const api = await fixture(page)
   await open(page)
+  await page.getByRole('button', { name: '将结束时间设为现在', exact: true }).click()
   const geometry = await historyControlGeometry(page)
   expectReadableHistoryControls(geometry)
+  expect(geometry.control.inputs.every((input) => input.populated)).toBe(true)
+  expect(geometry.control.stacked).toBe(false)
+  expect(geometry.control.picker.height).toBeLessThanOrEqual(44)
   const [first, ...rest] = geometry.actionBounds
   expect(first).toBeDefined()
   for (const button of rest) expect(Math.abs(button.top - first!.top)).toBeLessThanOrEqual(1)
   expect(geometry.actionBounds.every((button) => button.height <= 44)).toBe(true)
+  expect(api.writes).toEqual([])
+})
+
+test('390px 默认字号完整展示已填写的日期时间和日历图标', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 1000 })
+  const api = await fixture(page)
+  await open(page)
+  await page.getByRole('button', { name: '将结束时间设为现在', exact: true }).click()
+  const inputs = page.locator('.date-time-range__picker input')
+  await expect(inputs.nth(0)).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+  await expect(inputs.nth(1)).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+  await expect(page.locator('.date-time-range__picker .el-range__icon')).toBeVisible()
+  await evidence(page, info, 'populated-dates')
   expect(api.writes).toEqual([])
 })
 
@@ -265,9 +320,12 @@ for (const width of [320, 390, 768, 1440]) {
     const api = await fixture(page, snapshot(rule('cpu', 'firing', { availability: 'unknown', reasonCode: 'CPU_UNAVAILABLE_'.repeat(8) }), rule('memory', 'recovering')))
     await open(page)
     await expect(card(page, 'cpu')).toContainText('恢复尚未确认')
+    await page.getByRole('button', { name: '将结束时间设为现在', exact: true }).click()
     const base = await page.locator('html').evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
     await page.evaluate((size) => document.documentElement.style.setProperty('font-size', `${size * 2}px`, 'important'), base)
     await expect(page.locator('html')).toHaveCSS('font-size', `${base * 2}px`)
+    await expect(page.locator('.date-time-range__picker input').first()).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+    await expect(page.locator('.date-time-range__picker input').last()).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
     // 390/1440 保留代表截图，其余尺寸执行同样布局和完整 axe 检查。
     if (width === 390 || width === 1440) await evidence(page, info, 'retained-event-200-percent')
     else {

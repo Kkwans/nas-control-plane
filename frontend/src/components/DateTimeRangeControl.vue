@@ -30,21 +30,23 @@ const rangeValue = computed<[Date, Date] | null>({
 
 <template>
   <div class="date-time-range" role="group" aria-label="精确时间范围" :aria-busy="loading ? 'true' : 'false'">
-    <ElDatePicker
-      v-model="rangeValue"
-      class="date-time-range__picker"
-      type="datetimerange"
-      format="YYYY/MM/DD HH:mm"
-      range-separator="至"
-      start-placeholder="开始时间"
-      end-placeholder="结束时间"
-      aria-label="选择开始和结束时间"
-      :disabled="loading"
-      :editable="false"
-      :clearable="false"
-      :teleported="true"
-      unlink-panels
-    />
+    <div class="date-time-range__picker-frame">
+      <ElDatePicker
+        v-model="rangeValue"
+        class="date-time-range__picker"
+        type="datetimerange"
+        format="YYYY/MM/DD HH:mm"
+        range-separator="至"
+        start-placeholder="开始时间"
+        end-placeholder="结束时间"
+        aria-label="选择开始和结束时间"
+        :disabled="loading"
+        :editable="false"
+        :clearable="false"
+        :teleported="true"
+        unlink-panels
+      />
+    </div>
     <div class="date-time-range__actions" role="group" aria-label="时间范围操作">
       <ElTooltip content="将结束时间设为现在" placement="bottom">
         <ActionButton :icon="Clock3" :disabled="loading" aria-label="将结束时间设为现在" @click="emit('now')">现在</ActionButton>
@@ -66,8 +68,19 @@ const rangeValue = computed<[Date, Date] | null>({
   gap: var(--ncp-space-2);
 }
 
-.date-time-range__picker {
-  width: clamp(340px, 28vw, 430px) !important;
+.date-time-range__picker-frame {
+  width: clamp(340px, 28vw, 430px);
+  min-width: 0;
+  max-width: 100%;
+  container: monitoring-date-picker / inline-size;
+}
+
+/* ElDatePicker 转发 class，不转发当前组件的 scope 属性；从原生容器穿透。 */
+.date-time-range__picker-frame :deep(.date-time-range__picker) {
+  box-sizing: border-box;
+  width: 100% !important;
+  min-width: 0;
+  max-width: 100%;
   height: 40px;
   min-height: 40px;
   padding: 0 var(--ncp-space-3) !important;
@@ -81,44 +94,55 @@ const rangeValue = computed<[Date, Date] | null>({
     box-shadow var(--ncp-duration-fast) var(--ncp-ease-out);
 }
 
-.date-time-range__picker:hover {
+.date-time-range__picker-frame :deep(.date-time-range__picker:hover) {
   border-color: var(--ncp-control-border-hover);
   background: var(--ncp-control-hover);
 }
 
-.date-time-range__picker:focus-within {
+.date-time-range__picker-frame :deep(.date-time-range__picker:focus-within) {
   border-color: var(--ncp-control-border-focus);
   background: var(--ncp-control-surface);
   box-shadow: 0 0 0 3px var(--ncp-focus-ring) !important;
 }
 
-.date-time-range__picker :deep(.el-range__icon) {
+.date-time-range__picker-frame :deep(.el-range__icon),
+.date-time-range__picker-frame :deep(.el-range__close-icon) {
+  width: 1em;
+  height: 1em;
+  margin-left: 0;
+  font-size: max(14px, .72rem);
+  line-height: 1;
+}
+
+.date-time-range__picker-frame :deep(.el-range__icon) {
   margin-right: var(--ncp-space-2);
   color: var(--ncp-primary-strong);
 }
 
-.date-time-range__picker :deep(.el-range-input) {
+.date-time-range__picker-frame :deep(.el-range-input) {
   min-width: 0;
   color: var(--ncp-text);
   font-family: var(--ncp-font-mono);
   font-size: .76rem;
-  line-height: 1;
+  line-height: 1.5;
   text-align: center;
 }
 
-.date-time-range__picker :deep(.el-range-input::placeholder) {
+.date-time-range__picker-frame :deep(.el-range-input::placeholder) {
   color: var(--ncp-text-subtle);
   font-family: var(--ncp-font-ui);
   text-align: center;
 }
 
-.date-time-range__picker :deep(.el-range-separator) {
+.date-time-range__picker-frame :deep(.el-range-separator) {
   width: 24px;
+  height: auto;
+  padding: 0;
   flex: 0 0 24px;
   color: var(--ncp-text-subtle);
   font-size: .72rem;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.5;
   text-align: center;
 }
 
@@ -145,8 +169,8 @@ const rangeValue = computed<[Date, Date] | null>({
     width: 100%;
   }
 
-  .date-time-range__picker {
-    width: auto !important;
+  .date-time-range__picker-frame {
+    width: auto;
     flex: 1 1 360px;
   }
 }
@@ -157,8 +181,8 @@ const rangeValue = computed<[Date, Date] | null>({
     flex-direction: column;
   }
 
-  .date-time-range__picker {
-    width: 100% !important;
+  .date-time-range__picker-frame {
+    width: 100%;
     flex: 0 0 auto;
   }
 
@@ -172,13 +196,26 @@ const rangeValue = computed<[Date, Date] | null>({
   }
 }
 
-@media (max-width: 420px) {
-  .date-time-range__picker {
-    padding-inline: var(--ncp-space-2) !important;
+/* 完整日期值随字号变宽；空间不足时逐行展示，不缩小字体或隐藏图标。 */
+@container monitoring-date-picker (max-width: 26rem) {
+  .date-time-range__picker-frame :deep(.date-time-range__picker) {
+    display: grid;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    row-gap: 2px;
+    padding-block: var(--ncp-space-2) !important;
   }
 
-  .date-time-range__picker :deep(.el-range__icon) {
-    display: none;
+  .date-time-range__picker-frame :deep(.el-range-input) {
+    width: 100%;
+    height: 1.5em;
+    grid-column: 1 / -1;
   }
+
+  .date-time-range__picker-frame :deep(.el-range-input:first-of-type) { grid-row: 1; }
+  .date-time-range__picker-frame :deep(.el-range-input:last-of-type) { grid-row: 3; }
+  .date-time-range__picker-frame :deep(.el-range__icon) { grid-column: 1; grid-row: 2; justify-self: end; }
+  .date-time-range__picker-frame :deep(.el-range-separator) { grid-column: 2; grid-row: 2; }
+  .date-time-range__picker-frame :deep(.el-range__close-icon) { grid-column: 3; grid-row: 2; }
 }
 </style>

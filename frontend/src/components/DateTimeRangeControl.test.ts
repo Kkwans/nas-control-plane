@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { createApp, h } from 'vue'
+import { compileStyle, parse } from 'vue/compiler-sfc'
 import { describe, expect, it, vi } from 'vitest'
 
 import DateTimeRangeControl from './DateTimeRangeControl.vue'
@@ -34,6 +35,28 @@ describe('DateTimeRangeControl', () => {
 
     app.unmount()
   })
+  it('anchors deep editor styles on a native wrapper and keeps both date fields and the icon', () => {
+    const host = document.createElement('div')
+    const app = createApp({ render: () => h(DateTimeRangeControl, {
+      from: new Date('2026-10-13T00:00:00Z'), to: new Date('2026-10-13T01:00:00Z'),
+    }) })
+    app.mount(host)
+    const frame = host.querySelector('.date-time-range__picker-frame')!
+    frame.setAttribute('data-v-layout', '')
+    const { descriptor } = parse(source)
+    const css = compileStyle({ source: descriptor.styles[0]!.content, filename: 'DateTimeRangeControl.vue', id: 'data-v-layout', scoped: true })
+    expect(css.errors).toEqual([])
+    const selector = '.date-time-range__picker-frame[data-v-layout] .date-time-range__picker'
+    expect(css.code).toContain(selector)
+    expect(host.querySelector(selector)).not.toBeNull()
+    expect(frame.querySelectorAll('input')).toHaveLength(2)
+    expect([...frame.querySelectorAll('input')].every((input) => /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/.test(input.value))).toBe(true)
+    expect(frame.querySelector('.el-range__icon')).not.toBeNull()
+    expect(css.code).toContain('@container monitoring-date-picker (max-width: 26rem)')
+    expect(css.code).not.toContain('display: none')
+    app.unmount()
+  })
+
   it('allows intrinsic-width actions to wrap rather than clipping enlarged labels', () => {
     const actions = source.match(/\.date-time-range__actions > \.action-button \{([^}]+)\}/)?.[1]
     expect(actions).toContain('min-width: max-content')
