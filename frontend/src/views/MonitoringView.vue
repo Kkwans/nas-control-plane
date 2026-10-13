@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Activity, Cpu, Gauge, HardDrive, LoaderCircle, MemoryStick, Thermometer } from '@lucide/vue'
 
 import { requestMetricSamples, type MetricSample } from '@/api/control'
@@ -10,8 +10,6 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
-import { mergeMetricSampleWindow } from '@/domain/monitoring/series'
-import { useSystemStore } from '@/stores/system'
 import { isAbortError } from '@/session/sessionLifecycle'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
@@ -32,7 +30,6 @@ const range = ref<TimeRange>('6h')
 const customFrom = ref<Date | null>(null)
 const customTo = ref<Date | null>(null)
 const customFollowsNow = ref(false)
-const systemStore = useSystemStore()
 const samples = ref<MetricSample[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -40,7 +37,6 @@ const manualRefreshRegistry = useManualRefreshRegistry()
 let unregisterManualRefresh: (() => void) | undefined
 let loadSequence = 0
 let loadController: AbortController | null = null
-const loadedRangeKey = ref('')
 const customDuration = ref<number | null>(null)
 const latest = computed(() => samples.value.at(-1))
 const timestamps = computed(() => samples.value.map((item) => item.collectedAt))
@@ -118,6 +114,10 @@ const temperatureTrendMessage = computed(() => {
 })
 
 async function load() {
+  if (customFollowsNow.value && customDuration.value !== null) {
+    customTo.value = new Date()
+    customFrom.value = new Date(customTo.value.valueOf() - customDuration.value)
+  }
   const sequence = ++loadSequence
   loadController?.abort()
   const controller = new AbortController()
@@ -125,8 +125,6 @@ async function load() {
   const preciseRange = customFrom.value && customTo.value
     ? { from: customFrom.value.toISOString(), to: customTo.value.toISOString() }
     : range.value
-  const rangeKey = typeof preciseRange === 'string' ? preciseRange : `${preciseRange.from}|${preciseRange.to}`
-  loadedRangeKey.value = ''
   samples.value = []
   loading.value = true
   error.value = ''
@@ -134,7 +132,6 @@ async function load() {
     const result = await requestMetricSamples(preciseRange, controller.signal)
     if (sequence !== loadSequence || controller.signal.aborted) return
     samples.value = result
-    loadedRangeKey.value = rangeKey
   } catch (caught) {
     if (sequence !== loadSequence || isAbortError(caught)) return
     error.value = '监控历史加载失败，请稍后重试。'
@@ -183,51 +180,6 @@ function useNow() {
   customDuration.value = customTo.value.valueOf() - customFrom.value.valueOf()
 }
 
-function summaryToSample(): MetricSample | null {
-  const summary = systemStore.summary
-  if (!summary) return null
-  const storageTotal = summary.storage.reduce((total, item) => total + item.totalBytes, 0)
-  const storageUsed = summary.storage.reduce((total, item) => total + item.usedBytes, 0)
-  const sample: MetricSample = {
-    collectedAt: summary.collectedAt,
-    cpuPercent: summary.cpu.usagePercent,
-    memoryPercent: summary.memory.totalBytes > 0 ? summary.memory.usedBytes / summary.memory.totalBytes * 100 : 0,
-    load1: summary.cpu.load1,
-    diskPercent: storageTotal > 0 ? storageUsed / storageTotal * 100 : 0,
-    networkReceiveBytes: summary.network.reduce((total, item) => total + item.receiveBytes, 0),
-    networkTransmitBytes: summary.network.reduce((total, item) => total + item.transmitBytes, 0),
-    temperatures: (summary.sensors ?? []).map((sensor) => ({
-      name: sensor.name,
-      temperatureCelsius: sensor.temperatureCelsius,
-    })),
-  }
-  const diskIO = summary.diskIO
-  if (diskIO && finiteNumber(diskIO.readBytes)) sample.diskReadBytes = diskIO.readBytes
-  if (diskIO && finiteNumber(diskIO.writeBytes)) sample.diskWriteBytes = diskIO.writeBytes
-  return sample
-}
-
-function mergeRealtimeSample() {
-  if (!loadedRangeKey.value) return
-  const sample = summaryToSample()
-  if (!sample) return
-  const timestamp = new Date(sample.collectedAt).valueOf()
-  if (!Number.isFinite(timestamp)) return
-
-  let lowerBound: number
-  if (customFrom.value && customTo.value) {
-    if (!customFollowsNow.value) return
-    const duration = customDuration.value ?? (customTo.value.valueOf() - customFrom.value.valueOf())
-    customTo.value = new Date(timestamp)
-    customFrom.value = new Date(timestamp - duration)
-    lowerBound = customFrom.value.valueOf()
-  }
-  else {
-    lowerBound = timestamp - rangeMilliseconds[range.value]
-  }
-  samples.value = mergeMetricSampleWindow(samples.value, sample, lowerBound, timestamp)
-}
-
 function handleManualRefresh() {
   return load().then(() => {
     if (error.value) throw new Error(error.value)
@@ -261,9 +213,6 @@ function temperatureLabel(name: string, index: number) {
   return `温度传感器 ${index + 1}`
 }
 
-watch(() => systemStore.summary?.collectedAt, (next, previous) => {
-  if (next && next !== previous) mergeRealtimeSample()
-})
 onMounted(() => {
   unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
   void load()
@@ -276,7 +225,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page workspace-page">
-    <WorkspaceHeader title="系统监控" description="查看 CPU、内存、负载、磁盘、网络与温度的历史运行趋势" :icon="Gauge" :stats="stats">
+    <WorkspaceHeader title="系统监控" description="服务端每分钟记录首个有效样本；此处仅展示已保存的历史，点击刷新读取最新记录" :icon="Gauge" :stats="stats">
       <template #filters>
         <div class="monitor-range-filter" role="group" aria-label="快速时间范围">
           <CompactSegmentedFilter :model-value="customFrom && customTo ? '' : range" :options="quickRanges" accessible-label="快速时间范围" @update:model-value="selectQuickRange($event as TimeRange)" />

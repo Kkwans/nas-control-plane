@@ -22,6 +22,8 @@ const emit = defineEmits<{ refresh: []; logout: [] }>()
 const props = defineProps({
   deviceName: { type: String, required: true },
   connectionState: { type: String as PropType<SystemConnectionState>, required: true },
+  connectionLabel: { type: String, default: '' },
+  connectionDetail: { type: String, default: '' },
   realtimeState: { type: String as PropType<RealtimeState>, required: true },
   refreshIntervalSeconds: { type: Number, required: true },
   sidebarDefault: { type: String as PropType<'collapsed' | 'expanded'>, default: 'collapsed' },
@@ -70,8 +72,8 @@ const breadcrumbs = computed(() => {
   return items
 })
 const realtimeLabel = computed(() => {
-  if (props.connectionState === 'unavailable') return '数据暂不可用'
-  if (props.realtimeState === 'streaming') return `实时更新 · ${props.refreshIntervalSeconds} 秒`
+  if (props.connectionState !== 'connected') return props.connectionLabel || (props.connectionState === 'degraded' ? '数据同步受限' : props.connectionState === 'unavailable' ? '数据暂不可用' : '等待实时数据')
+  if (props.realtimeState === 'streaming') return isMobile.value ? '实时更新' : `实时更新 · ${props.refreshIntervalSeconds} 秒`
   if (props.realtimeState === 'connecting') return '正在连接'
   return props.connectionState === 'connected' ? '数据已同步' : '等待数据'
 })
@@ -282,7 +284,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="topbar__actions">
-          <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${realtimeState}`">
+          <span v-if="liveDataActive" class="connection-state" :class="`connection-state--${connectionState}`" :title="connectionDetail" role="status">
             <span aria-hidden="true"></span>{{ realtimeLabel }}
           </span>
           <ElTooltip v-if="liveDataActive || route.meta.manualRefresh === true" content="立即刷新数据" placement="bottom">
@@ -356,8 +358,8 @@ onBeforeUnmount(() => {
 .topbar__actions { gap: 12px; }
 .connection-state { gap: 7px; color: var(--ncp-text-muted); font-size: .8rem; }
 .connection-state > span { width: 7px; height: 7px; border-radius: 50%; background: var(--ncp-primary); box-shadow: 0 0 0 4px var(--ncp-primary-soft); }
-.connection-state--polling > span, .connection-state--connecting > span { background: var(--ncp-warning); box-shadow: 0 0 0 4px var(--ncp-warning-soft); }
-.connection-state--streaming > span { background: var(--ncp-success); box-shadow: 0 0 0 4px var(--ncp-success-soft); }
+.connection-state--degraded > span, .connection-state--loading > span { background: var(--ncp-warning); box-shadow: 0 0 0 4px var(--ncp-warning-soft); }
+.connection-state--connected > span { background: var(--ncp-success); box-shadow: 0 0 0 4px var(--ncp-success-soft); }
 .refresh-button { min-width: 80px; min-height: 44px; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid var(--ncp-line); border-radius: 10px; background: #fff; color: var(--ncp-text-muted); font-size: .72rem; font-weight: 720; transition: border-color var(--ncp-duration-fast), color var(--ncp-duration-fast), box-shadow var(--ncp-duration-fast); }
 .refresh-button:hover:not(:disabled) { border-color: rgba(36,104,216,.32); box-shadow: 0 5px 16px rgba(36,104,216,.08); color: var(--ncp-primary-strong); }
 .refresh-button:disabled { cursor: wait; opacity: .6; }
@@ -388,7 +390,9 @@ onBeforeUnmount(() => {
   .navigation-scrim { position: fixed; z-index: 45; inset: 0; display: block; width: 100%; height: 100%; background: rgba(12,24,44,.46); backdrop-filter: blur(2px); }
   .topbar { min-height: 58px; padding: 0 14px; }
   .topbar__location > svg:first-child, .topbar__location > span, .topbar__location > svg:nth-of-type(2) { display: none; }
-  .connection-state { display: none; }
+  .topbar__actions { flex-shrink: 0; gap: 8px; }
+  .connection-state { display: flex; gap: 6px; font-size: .72rem; white-space: nowrap; }
+  .connection-state > span, .menu-button, .refresh-button { flex-shrink: 0; }
   .refresh-button { min-width: 44px; width: 44px; padding: 0; }
   .refresh-button span { display: none; }
 }

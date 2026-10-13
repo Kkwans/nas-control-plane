@@ -10,12 +10,14 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import { deriveOverviewState, formatBytes, formatOneDecimal, formatUptime, totalStorage, usagePercent } from '@/domain/overview'
 import { useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
+import { summarySourceAvailable } from '@/domain/systemHealth'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 
 const systemStore = useSystemStore()
 const sitesStore = useSitesStore()
 const hostName = window.location.hostname
-const overviewState = computed(() => deriveOverviewState(systemStore.summary, systemStore.inventory))
+const overviewState = computed(() => deriveOverviewState(systemStore.summary, systemStore.inventory, { state: systemStore.connectionState, label: systemStore.connectionLabel, detail: systemStore.connectionDetail }))
+const storageAvailable = computed(() => summarySourceAvailable(systemStore.summary, 'storage'))
 const storage = computed(() => totalStorage(systemStore.summary))
 const projects = computed(() => systemStore.services)
 const runningProjects = computed(() => projects.value.filter((project) => project.state === 'running').length)
@@ -35,21 +37,23 @@ const sitesSnapshotTime = computed(() => {
 const linkTarget = computed(() => systemStore.preferences.linkOpenMode === 'new-tab' ? '_blank' : '_self')
 const headerStats = computed<WorkspaceStat[]>(() => [
   { label: '运行项目', value: `${runningProjects.value}/${projects.value.length}`, tone: 'success' },
-  { label: '运行时间', value: systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' },
-  { label: '最近更新', value: formatTimestamp(systemStore.lastUpdated) },
+  { label: '运行时间', value: summarySourceAvailable(systemStore.summary, 'host') && systemStore.summary ? formatUptime(systemStore.summary.host.uptimeSeconds) : '—' },
+  { label: '上次更新', value: formatTimestamp(systemStore.lastUpdated) },
 ])
 
 const metrics = computed(() => {
   const summary = systemStore.summary
   const inventory = systemStore.inventory
+  const cpuAvailable = summarySourceAvailable(summary, 'cpu')
+  const memoryAvailable = summarySourceAvailable(summary, 'memory')
   const cpuValue = summary?.cpu.usagePercent ?? 0
   const memoryValue = summary ? usagePercent(summary.memory.usedBytes, summary.memory.totalBytes) : 0
   const storageValue = storage.value.capacity ? usagePercent(storage.value.used, storage.value.capacity) : 0
   const dockerValue = inventory?.engine.containers ? (inventory.engine.containersRunning / inventory.engine.containers) * 100 : 0
   return [
-    { label: 'CPU 使用率', value: summary ? `${formatOneDecimal(cpuValue)}%` : '—', detail: summary ? `${summary.cpu.logicalCores} 核 · 负载 ${formatOneDecimal(summary.cpu.load1)}` : '等待数据', icon: Cpu, progress: cpuValue, tone: 'blue' },
-    { label: '内存使用', value: summary ? `${formatOneDecimal(memoryValue)}%` : '—', detail: summary ? `${formatBytes(summary.memory.usedBytes)} / ${formatBytes(summary.memory.totalBytes)}` : '等待数据', icon: MemoryStick, progress: memoryValue, tone: 'violet' },
-    { label: '存储使用', value: storage.value.capacity ? `${formatOneDecimal(storageValue)}%` : '—', detail: storage.value.capacity ? `${formatBytes(storage.value.used)} / ${formatBytes(storage.value.capacity)}` : '等待数据', icon: HardDrive, progress: storageValue, tone: 'amber' },
+    { label: 'CPU 使用率', value: cpuAvailable ? `${formatOneDecimal(cpuValue)}%` : '—', detail: cpuAvailable && summary ? `${summary.cpu.logicalCores} 核 · 负载 ${formatOneDecimal(summary.cpu.load1)}` : summary ? 'CPU 数据不可用' : '等待数据', icon: Cpu, progress: cpuAvailable ? cpuValue : 0, tone: 'blue' },
+    { label: '内存使用', value: memoryAvailable ? `${formatOneDecimal(memoryValue)}%` : '—', detail: memoryAvailable && summary ? `${formatBytes(summary.memory.usedBytes)} / ${formatBytes(summary.memory.totalBytes)}` : summary ? '内存数据不可用' : '等待数据', icon: MemoryStick, progress: memoryAvailable ? memoryValue : 0, tone: 'violet' },
+    { label: '存储使用', value: storageAvailable.value ? `${formatOneDecimal(storageValue)}%` : '—', detail: storageAvailable.value ? `${formatBytes(storage.value.used)} / ${formatBytes(storage.value.capacity)}` : summary ? '存储数据不可用' : '等待数据', icon: HardDrive, progress: storageAvailable.value ? storageValue : 0, tone: 'amber' },
     { label: 'Docker 容器', value: inventory ? `${inventory.engine.containersRunning}/${inventory.engine.containers}` : '—', detail: inventory ? `${runningProjects.value}/${projects.value.length} 个项目运行` : '等待数据', icon: Boxes, progress: dockerValue, tone: 'green' },
   ]
 })
@@ -69,7 +73,7 @@ const networkSeries = computed<TrendSeries[]>(() => [
 function formatTimestamp(value: string | null) {
   if (!value) return '等待首次同步'
   const date = new Date(value)
-  return Number.isNaN(date.valueOf()) ? '刚刚' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
+  return Number.isNaN(date.valueOf()) ? '时间未知' : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
 }
 
 function siteURL(site: (typeof favoriteSites.value)[number]) {
@@ -95,6 +99,8 @@ onMounted(refreshFavorites)
         <StatusPill :label="overviewState.label" :tone="overviewState.status" />
       </template>
     </WorkspaceHeader>
+
+    <p v-if="systemStore.connectionState !== 'connected'" class="snapshot-health-note" role="status">{{ overviewState.detail }} <span v-if="systemStore.lastUpdated">上次更新：{{ formatTimestamp(systemStore.lastUpdated) }}</span></p>
 
     <section class="favorite-launcher panel" aria-labelledby="favorite-launcher-title">
       <header class="favorite-launcher__header">
@@ -177,11 +183,11 @@ onMounted(refreshFavorites)
       <article class="panel info-panel">
         <header><div><h2>存储空间</h2><p>数据卷与挂载点</p></div><HardDrive :size="19" /></header>
         <div class="storage-list">
-          <div v-for="disk in systemStore.summary?.storage ?? []" :key="disk.mountpoint" class="storage-row">
+          <div v-for="disk in storageAvailable ? systemStore.summary?.storage ?? [] : []" :key="disk.mountpoint" class="storage-row">
             <div><strong>{{ disk.mountpoint }}</strong><span>{{ formatBytes(disk.usedBytes) }} / {{ formatBytes(disk.totalBytes) }}</span></div>
             <div class="storage-track"><span :style="{ width: `${usagePercent(disk.usedBytes, disk.totalBytes)}%` }"></span></div>
           </div>
-          <p v-if="!systemStore.summary?.storage.length" class="empty-state">等待存储数据。</p>
+          <p v-if="!storageAvailable" class="empty-state">等待存储数据。</p>
         </div>
       </article>
     </section>
@@ -189,6 +195,7 @@ onMounted(refreshFavorites)
 </template>
 
 <style scoped>
+.snapshot-health-note { margin: 0; color: var(--ncp-text-muted); font-size: .8rem; }
 .favorite-loading { display: grid; gap: 12px; color: var(--ncp-text-muted); font-size: .84rem; }
 .favorite-skeleton { min-height: 92px; border: 1px solid var(--ncp-line); border-radius: 13px; background: var(--ncp-surface-quiet); }
 .favorite-sync-note { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; color: var(--ncp-text-muted); font-size: .8rem; overflow-wrap: anywhere; }

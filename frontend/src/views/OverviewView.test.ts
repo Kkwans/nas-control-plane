@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({ requestSites: vi.fn(), requestIgnoredSites: vi
 vi.mock('@/api/control', async (original) => ({ ...await original<object>(), ...mocks }))
 vi.mock('vue-router', () => ({ RouterLink: { render: () => null } }))
 vi.mock('@/components/RealtimeTrendChart.vue', () => ({ default: { render: () => null } }))
-vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ summary: null, inventory: null, services: [], resourceHistory: [], lastUpdated: null, preferences: { linkOpenMode: 'new-tab', siteDefaultProtocol: 'http' } }) }))
+vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ summary: null, inventory: null, connectionState: 'loading', connectionLabel: '等待实时数据', connectionDetail: '正在等待实时数据。', services: [], resourceHistory: [], lastUpdated: null, preferences: { linkOpenMode: 'new-tab', siteDefaultProtocol: 'http' } }) }))
 
 const collectedAt = '2026-10-13T08:00:00Z'
 const site: Site = {

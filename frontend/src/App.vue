@@ -145,6 +145,8 @@ async function syncRouteData(session = captureSession()) {
       v-else
       :device-name="systemStore.deviceName"
       :connection-state="systemStore.connectionState"
+      :connection-label="systemStore.connectionLabel"
+      :connection-detail="systemStore.connectionDetail"
       :realtime-state="systemStore.realtimeState"
       :refresh-interval-seconds="systemStore.refreshIntervalSeconds"
       :sidebar-default="systemStore.preferences.sidebarDefault"

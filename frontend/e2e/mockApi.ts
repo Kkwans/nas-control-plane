@@ -15,7 +15,7 @@ const preferences = {
   navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'],
 }
 
-const summary = {
+export const summary = {
   collectedAt,
   host: {
     hostname: 'ncp-fixture',
@@ -83,7 +83,7 @@ const docker = {
   }],
 }
 
-const overviewDocker = {
+export const overviewDocker = {
   ...docker,
   engine: { ...docker.engine, containers: 2, containersRunning: 2, containersStopped: 0 },
   containers: docker.containers.slice(0, 2).map((container) => ({ ...container, state: 'running', status: 'Up 2 hours' })),
@@ -355,8 +355,12 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
-export async function installMockApi(page: Page) {
-  await page.addInitScript((snapshot) => {
+export async function installMockApi(page: Page, options: { clock?: boolean; manualRealtime?: boolean } = {}) {
+  // 普通 fixture 的日期与单调时钟一起前进，定期发出真实的新采集时间。
+  // 过期测试自行安装时钟并选择静默流，生产过期逻辑不作任何例外。
+  if (options.clock !== false) await page.clock.install({ time: new Date(collectedAt) })
+  await page.addInitScript(({ snapshot, autoUpdate }) => {
+    const sources = new Set<MockEventSource>()
     class MockEventSource extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -367,28 +371,49 @@ export async function installMockApi(page: Page) {
       onopen: ((event: Event) => void) | null = null
       onmessage: ((event: MessageEvent<string>) => void) | null = null
       onerror: ((event: Event) => void) | null = null
+      private snapshotTimer: number | undefined
 
       constructor(url: string) {
         super()
         this.url = url
+        sources.add(this)
         setTimeout(() => {
           if (this.readyState === MockEventSource.CLOSED) return
           this.readyState = MockEventSource.OPEN
           const openEvent = new Event('open')
           this.onopen?.(openEvent)
           this.dispatchEvent(openEvent)
-          const currentDocker = location.pathname === '/docker' ? snapshot.docker : snapshot.overviewDocker
-          this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify({ ...snapshot, docker: currentDocker }) }))
+          this.sendSnapshot()
+          const requestedInterval = Number(new URL(this.url, location.href).searchParams.get('interval'))
+          const interval = Number.isInteger(requestedInterval) && requestedInterval >= 2 && requestedInterval <= 300 ? requestedInterval : 5
+          if (autoUpdate) this.snapshotTimer = window.setInterval(() => this.sendSnapshot(), interval * 1000)
         }, 0)
       }
 
+      sendSnapshot() {
+        if (this.readyState !== MockEventSource.OPEN) return
+        const collectedAt = new Date().toISOString()
+        const currentDocker = location.pathname === '/docker' ? snapshot.docker : snapshot.overviewDocker
+        this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify({ collectedAt, summary: { ...snapshot.summary, collectedAt }, docker: { ...currentDocker, collectedAt } }) }))
+      }
+
       close() {
+        if (this.snapshotTimer !== undefined) clearInterval(this.snapshotTimer)
+        sources.delete(this)
         this.readyState = MockEventSource.CLOSED
       }
     }
 
+    window.addEventListener('ncp:realtime-fixture', (event) => {
+      const detail = (event as CustomEvent<{ action?: 'open' | 'error'; snapshot?: unknown }>).detail
+      for (const source of sources) {
+        if (detail.action === 'open') source.onopen?.(new Event('open'))
+        else if (detail.action === 'error') source.onerror?.(new Event('error'))
+        else source.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify(detail.snapshot) }))
+      }
+    })
     window.EventSource = MockEventSource as unknown as typeof EventSource
-  }, { collectedAt, summary, docker, overviewDocker })
+  }, { snapshot: { collectedAt, summary, docker, overviewDocker }, autoUpdate: options.manualRealtime !== true })
 
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
@@ -401,8 +426,8 @@ export async function installMockApi(page: Page) {
     }
     if (path === '/api/v1/sites') return json(route, sites)
     if (path === '/api/v1/sites/ignored') return json(route, [])
-    if (path === '/api/v1/system/summary') return json(route, summary)
-    if (path === '/api/v1/docker/inventory') return json(route, page.url().includes('/docker') ? docker : overviewDocker)
+    if (path === '/api/v1/system/summary') return json(route, { ...summary, collectedAt: await page.evaluate(() => new Date().toISOString()) })
+    if (path === '/api/v1/docker/inventory') return json(route, { ...(page.url().includes('/docker') ? docker : overviewDocker), collectedAt: await page.evaluate(() => new Date().toISOString()) })
     if (path === '/api/v1/docker/resources') return json(route, dockerResources)
     if (path === '/api/v1/docker/images') return json(route, dockerImages)
     if (path === '/api/v1/files/entries') {

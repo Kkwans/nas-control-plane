@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import {
@@ -20,6 +20,7 @@ import {
   type SystemCapabilities,
   type SystemSummary,
 } from '@/api/system'
+import { SNAPSHOT_FRESHNESS_MS, snapshotErrorMessage, snapshotTimestamp, summaryHasUnavailableSources, summarySourceAvailable } from '@/domain/systemHealth'
 import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 
 export type SystemConnectionState = 'loading' | 'connected' | 'degraded' | 'unavailable'
@@ -87,6 +88,7 @@ export const useSystemStore = defineStore('system', () => {
   const summary = ref<SystemSummary | null>(null)
   const inventory = ref<DockerInventory | null>(null)
   const errorCode = ref<string | null>(null)
+  const errorCodes = ref<string[]>([])
   const isRefreshing = ref(false)
   const resourceHistory = ref<ResourceSample[]>([])
   const refreshIntervalSeconds = ref(DEFAULT_REFRESH_INTERVAL_SECONDS)
@@ -100,12 +102,24 @@ export const useSystemStore = defineStore('system', () => {
   const refreshPromises = new Map<RefreshResource, Promise<RefreshOutcome>>()
   const pendingRefreshes = new Map<RefreshResource, number>()
   const refreshErrors = new Map<RefreshResource, string>()
+  const realtimeErrors = new Map<RefreshResource, string>()
+  const observedResources = new Set<RefreshResource>()
   const realtimeErrorCode = ref<string | null>(null)
+  const snapshotDiagnostics = ref<string[]>([])
+  const summaryStale = ref(false)
+  type Freshness = { timestamp: number; receivedAt: number; ageAtReceipt: number }
+  const freshness = new Map<RefreshResource, Freshness>()
+  let freshnessTimer: ReturnType<typeof setInterval> | null = null
+  let stopSessionListener: (() => void) | null = null
   let realtimeSequence = 0
+  let storeSequence = 0
   let previousNetwork: { timestamp: number; receiveBytes: number; transmitBytes: number } | null = null
 
   const deviceName = computed(() => summary.value?.host.hostname || capabilities.value?.hostname || 'NAS 管理面板')
   const lastUpdated = computed(() => summary.value?.collectedAt || inventory.value?.collectedAt || null)
+  const connectionMessage = computed(() => snapshotErrorMessage(errorCode.value))
+  const connectionLabel = computed(() => connectionState.value === 'unavailable' ? '数据暂不可用' : connectionMessage.value?.label ?? (connectionState.value === 'connected' ? '数据已同步' : '等待实时数据'))
+  const connectionDetail = computed(() => errorCodes.value.length ? [...new Set(errorCodes.value.map((code) => snapshotErrorMessage(code)?.detail))].join(' ') : (connectionState.value === 'connected' ? '系统快照与所需资源均已同步。' : '正在等待本页面所需的实时快照。'))
   const services = computed(() => inventory.value?.projects ?? [])
 
   async function refresh(options: RefreshOptions = {}): Promise<RefreshResult> {
@@ -227,62 +241,109 @@ export const useSystemStore = defineStore('system', () => {
 
   async function runRefreshResource(resource: RefreshResource) {
     const session = captureSession()
+    const sequence = storeSequence
+    const current = () => isCurrentSession(session.generation) && sequence === storeSequence
+    const initialSample = freshness.get(resource)
+    observedResources.add(resource)
     pendingRefreshes.set(resource, session.generation)
     updateRefreshState()
     try {
       if (resource === 'summary') {
         const next = await requestSystemSummary(fetch, session.signal)
-        if (isCurrentSession(session.generation)) applySummary(next)
+        if (current()) acceptResource('summary', next)
       }
       if (resource === 'inventory') {
         const next = await requestDockerInventory(fetch, session.signal)
-        if (isCurrentSession(session.generation)) inventory.value = next
+        if (current()) acceptResource('inventory', next)
       }
       if (resource === 'capabilities') {
         const next = await requestCapabilities(fetch, session.signal)
-        if (isCurrentSession(session.generation)) capabilities.value = next
+        if (current()) capabilities.value = next
       }
-      if (!isCurrentSession(session.generation)) return { resource, stale: true }
-      refreshErrors.delete(resource)
+      if (!current()) return { resource, stale: true }
+      if (resource === 'capabilities') refreshErrors.delete(resource)
       return { resource }
     } catch (error) {
-      if (!isCurrentSession(session.generation) || isAbortError(error)) return { resource, stale: true }
+      if (!current() || isAbortError(error)) return { resource, stale: true }
+      if (freshness.get(resource) !== initialSample && isFresh(resource)) return { resource, stale: true }
       refreshErrors.set(resource, errorCodeFor(error))
       return { resource, error, failed: true }
     } finally {
-      if (pendingRefreshes.get(resource) === session.generation) {
+      if (current() && pendingRefreshes.get(resource) === session.generation) {
         pendingRefreshes.delete(resource)
-        if (isCurrentSession(session.generation)) updateRefreshState()
+        if (current()) updateRefreshState()
       }
     }
   }
 
+  function resourceData(resource: RefreshResource) {
+    return resource === 'summary' ? summary.value : resource === 'inventory' ? inventory.value : capabilities.value
+  }
+
+  function isFresh(resource: RefreshResource) {
+    if (resource === 'capabilities') return Boolean(capabilities.value)
+    const sample = freshness.get(resource)
+    if (!sample) return false
+    // 同一采集时间不会重置接收基准；本地时钟回拨也不能延长缓存寿命。
+    const age = Math.max(Date.now() - sample.timestamp, sample.ageAtReceipt + performance.now() - sample.receivedAt)
+    return age <= SNAPSHOT_FRESHNESS_MS
+  }
+
   function updateRefreshState() {
     isRefreshing.value = pendingRefreshes.size > 0
-    const dataAvailable = Boolean(summary.value || inventory.value || capabilities.value)
-    const firstError = refreshErrors.values().next().value as string | undefined
-    errorCode.value = firstError ?? realtimeErrorCode.value
-    if (pendingRefreshes.size > 0) {
-      connectionState.value = dataAvailable ? 'degraded' : 'loading'
-    } else if (firstError) {
-      connectionState.value = dataAvailable ? 'degraded' : 'unavailable'
-    } else if (dataAvailable) {
-      connectionState.value = 'connected'
+    summaryStale.value = Boolean(summary.value) && !isFresh('summary')
+    const expected: RefreshResource[] = realtimeScopes.value.length
+      ? realtimeScopes.value.map((scope) => scope === 'docker' ? 'inventory' : scope)
+      : [...observedResources]
+    const dataAvailable = expected.some((resource) => Boolean(resourceData(resource)))
+    const complete = expected.length > 0 && expected.every((resource) => Boolean(resourceData(resource)))
+    const resourceErrors = expected.flatMap((resource) => [refreshErrors.get(resource), realtimeErrors.get(resource)]).filter((code): code is string => Boolean(code))
+    const staleResource = expected.find((resource) => resourceData(resource) && !isFresh(resource))
+    const staleCode = staleResource === 'summary' ? 'SYSTEM_SUMMARY_STALE' : staleResource === 'inventory' ? 'DOCKER_INVENTORY_STALE' : null
+    const partialSummary = expected.includes('summary') && summary.value && summaryHasUnavailableSources(summary.value)
+    errorCodes.value = [...new Set([...resourceErrors, staleCode, realtimeErrorCode.value, ...(expected.includes('summary') ? snapshotDiagnostics.value : []), partialSummary ? 'SYSTEM_SUMMARY_PARTIAL' : null].filter((code): code is string => Boolean(code)))]
+    errorCode.value = errorCodes.value[0] ?? null
+    if (errorCode.value) connectionState.value = dataAvailable ? 'degraded' : 'unavailable'
+    else if (complete) connectionState.value = 'connected'
+    else if (dataAvailable) connectionState.value = 'degraded'
+    else connectionState.value = pendingRefreshes.size > 0 || realtimeState.value === 'connecting' ? 'loading' : 'unavailable'
+  }
+
+  function startFreshnessTimer(session: ReturnType<typeof captureSession>) {
+    const update = () => {
+      if (!isCurrentSession(session.generation)) return
+      updateRefreshState()
     }
+    freshnessTimer = setInterval(update, 1000)
+    const visible = () => { if (document.visibilityState === 'visible') update() }
+    document.addEventListener('visibilitychange', visible)
+    const abort = () => stopRealtime()
+    session.signal.addEventListener('abort', abort, { once: true })
+    stopSessionListener = () => {
+      document.removeEventListener('visibilitychange', visible)
+      session.signal.removeEventListener('abort', abort)
+    }
+    update()
   }
 
   function startRealtime(scopes: RealtimeScope[]) {
     const normalized = [...new Set(scopes)].sort()
     const unchanged = normalized.length === realtimeScopes.value.length &&
       normalized.every((scope, index) => scope === realtimeScopes.value[index])
-    if (unchanged && eventSource) return
+    if (unchanged && eventSource) {
+      updateRefreshState()
+      return
+    }
     stopRealtime()
-    realtimeErrorCode.value = null
     realtimeScopes.value = normalized
-    if (!normalized.length) return
+    if (!normalized.length) {
+      updateRefreshState()
+      return
+    }
     const session = captureSession()
     const streamSequence = ++realtimeSequence
     realtimeState.value = 'connecting'
+    startFreshnessTimer(session)
     eventSource = subscribeSystemEvents(normalized, refreshIntervalSeconds.value, {
       open: () => {
         if (isCurrentSession(session.generation) && realtimeSequence === streamSequence) realtimeState.value = 'streaming'
@@ -300,6 +361,10 @@ export const useSystemStore = defineStore('system', () => {
   }
 
   function stopRealtime() {
+    if (freshnessTimer !== null) clearInterval(freshnessTimer)
+    freshnessTimer = null
+    stopSessionListener?.()
+    stopSessionListener = null
     realtimeSequence += 1
     eventSource?.close()
     eventSource = null
@@ -307,30 +372,59 @@ export const useSystemStore = defineStore('system', () => {
   }
 
   function applyRealtimeSnapshot(snapshot: RealtimeSnapshot) {
-    if (snapshot.summary) applySummary(snapshot.summary)
-    if (snapshot.docker) inventory.value = snapshot.docker
-    realtimeErrorCode.value = snapshot.errors?.[0] ?? null
-    const expected = realtimeScopes.value.length
-    const received = Number(Boolean(snapshot.summary)) + Number(Boolean(snapshot.docker))
-    updateRefreshState()
-    if (!refreshErrors.size && !realtimeErrorCode.value) {
-      connectionState.value = received === expected ? 'connected' : received > 0 ? 'degraded' : 'unavailable'
+    const errors = snapshot.errors ?? []
+    let receivedFreshData = false
+    for (const scope of realtimeScopes.value) {
+      const resource = scope === 'docker' ? 'inventory' : 'summary'
+      const data = scope === 'summary' ? snapshot.summary : snapshot.docker
+      const failure = errors.find((code) => scope === 'summary' ? code.startsWith('SYSTEM_SUMMARY_') : code.startsWith('DOCKER_'))
+      if (failure || !data) {
+        realtimeErrors.set(resource, failure ?? (scope === 'summary' ? 'SYSTEM_SUMMARY_UNAVAILABLE' : 'DOCKER_INVENTORY_UNAVAILABLE'))
+        if (resource === 'summary') previousNetwork = null
+      } else {
+        try {
+          receivedFreshData = acceptResource(resource, data) || receivedFreshData
+        } catch {
+          realtimeErrors.set(resource, scope === 'summary' ? 'SYSTEM_SUMMARY_RESPONSE_INVALID' : 'DOCKER_INVENTORY_RESPONSE_INVALID')
+        }
+      }
     }
+    if (realtimeScopes.value.includes('summary')) snapshotDiagnostics.value = errors.filter((code) => !code.startsWith('SYSTEM_SUMMARY_') && !code.startsWith('DOCKER_'))
+    // open、心跳、外层时间或重复数据都不能清除断流错误。
+    if (receivedFreshData) realtimeErrorCode.value = null
     realtimeState.value = 'streaming'
+    updateRefreshState()
   }
 
-  function applySummary(nextSummary: SystemSummary) {
-    summary.value = nextSummary
-    appendResourceSample(nextSummary)
+  function acceptResource(resource: 'summary' | 'inventory', data: SystemSummary | DockerInventory): boolean {
+    const timestamp = snapshotTimestamp(data.collectedAt)
+    if (timestamp === null) throw new NcpApiError(resource === 'summary' ? 'SYSTEM_SUMMARY_RESPONSE_INVALID' : 'DOCKER_INVENTORY_RESPONSE_INVALID', '快照采集时间无效。')
+    const previous = freshness.get(resource)
+    if (previous && timestamp <= previous.timestamp) return false
+    freshness.set(resource, { timestamp, receivedAt: performance.now(), ageAtReceipt: Math.max(Date.now() - timestamp, 0) })
+    if (resource === 'summary') summary.value = data as SystemSummary
+    else inventory.value = data as DockerInventory
+    if (!isFresh(resource)) return false
+    refreshErrors.delete(resource)
+    realtimeErrors.delete(resource)
+    if (resource === 'summary') appendResourceSample(data as SystemSummary)
+    return true
   }
 
   function clear() {
+    storeSequence += 1
     stopRealtime()
     capabilities.value = null
     summary.value = null
     inventory.value = null
     errorCode.value = null
+    errorCodes.value = []
     realtimeErrorCode.value = null
+    snapshotDiagnostics.value = []
+    summaryStale.value = false
+    freshness.clear()
+    observedResources.clear()
+    realtimeErrors.clear()
     isRefreshing.value = false
     connectionState.value = 'loading'
     resourceHistory.value = []
@@ -349,34 +443,43 @@ export const useSystemStore = defineStore('system', () => {
   function appendResourceSample(nextSummary: SystemSummary) {
     if (resourceHistory.value.at(-1)?.timestamp === nextSummary.collectedAt) return
 
-    const timestamp = new Date(nextSummary.collectedAt).valueOf()
-    const validTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now()
+    const timestamp = snapshotTimestamp(nextSummary.collectedAt)
+    if (timestamp === null) return
+    const networkAvailable = summarySourceAvailable(nextSummary, 'network')
     const receiveBytes = nextSummary.network.reduce((total, item) => total + item.receiveBytes, 0)
     const transmitBytes = nextSummary.network.reduce((total, item) => total + item.transmitBytes, 0)
-    const elapsedSeconds = previousNetwork ? Math.max((validTimestamp - previousNetwork.timestamp) / 1000, 0) : 0
-    const receiveRate = previousNetwork && elapsedSeconds > 0 ? Math.max((receiveBytes - previousNetwork.receiveBytes) / elapsedSeconds, 0) : 0
-    const transmitRate = previousNetwork && elapsedSeconds > 0 ? Math.max((transmitBytes - previousNetwork.transmitBytes) / elapsedSeconds, 0) : 0
-
+    const elapsed = previousNetwork ? timestamp - previousNetwork.timestamp : 0
+    const continuous = networkAvailable && elapsed > 0 && elapsed <= SNAPSHOT_FRESHNESS_MS
+    const receiveRate = continuous && previousNetwork && receiveBytes >= previousNetwork.receiveBytes ? (receiveBytes - previousNetwork.receiveBytes) / (elapsed / 1000) : Number.NaN
+    const transmitRate = continuous && previousNetwork && transmitBytes >= previousNetwork.transmitBytes ? (transmitBytes - previousNetwork.transmitBytes) / (elapsed / 1000) : Number.NaN
+    const cpuAvailable = summarySourceAvailable(nextSummary, 'cpu')
+    const memoryAvailable = summarySourceAvailable(nextSummary, 'memory')
     const sample: ResourceSample = {
-      timestamp: new Date(validTimestamp).toISOString(),
-      cpuPercent: nextSummary.cpu.usagePercent,
-      memoryPercent: nextSummary.memory.totalBytes > 0 ? (nextSummary.memory.usedBytes / nextSummary.memory.totalBytes) * 100 : 0,
-      load1: nextSummary.cpu.load1,
+      timestamp: nextSummary.collectedAt,
+      cpuPercent: cpuAvailable ? nextSummary.cpu.usagePercent : Number.NaN,
+      memoryPercent: memoryAvailable ? (nextSummary.memory.usedBytes / nextSummary.memory.totalBytes) * 100 : Number.NaN,
+      load1: cpuAvailable ? nextSummary.cpu.load1 : Number.NaN,
       networkReceiveBps: receiveRate,
       networkTransmitBps: transmitRate,
     }
     resourceHistory.value = [...resourceHistory.value, sample].slice(-MAX_HISTORY_POINTS)
-    previousNetwork = { timestamp: validTimestamp, receiveBytes, transmitBytes }
+    previousNetwork = networkAvailable ? { timestamp, receiveBytes, transmitBytes } : null
   }
+
+  onScopeDispose(stopRealtime)
 
   return {
     connectionState,
     realtimeState,
+    connectionLabel,
+    connectionDetail,
+    summaryStale,
     capabilities,
     summary,
     inventory,
     services,
     errorCode,
+    errorCodes,
     isRefreshing,
     resourceHistory,
     refreshIntervalSeconds,

@@ -106,14 +106,6 @@ function formatSeriesValue(value: number, series?: TrendSeries) {
   return unit ? `${formatted} ${unit}` : formatted
 }
 
-function latestFiniteValue(values: number[]) {
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    const value = values[index]
-    if (value !== undefined && Number.isFinite(value)) return value
-  }
-  return Number.NaN
-}
-
 type TooltipEntry = {
   dataIndex?: number
   marker?: string
@@ -127,8 +119,8 @@ function tooltipEntries(value: unknown): TooltipEntry[] {
 }
 
 function tooltipNumber(value: unknown) {
-  if (Array.isArray(value)) return Number(value[1])
-  return Number(value)
+  const reading: unknown = Array.isArray(value) ? value[1] : value
+  return typeof reading === 'number' ? reading : Number.NaN
 }
 
 function formatTooltip(value: unknown) {
@@ -230,7 +222,7 @@ const option = computed<EChartsOption>(() => ({
     </div>
     <ul class="sr-only">
       <li v-for="item in availableSeries" :key="item.name">
-        {{ item.name }}当前值：{{ formatSeriesValue(latestFiniteValue(item.values), item) }}
+        {{ item.name }}最新样本：{{ formatSeriesValue(item.values.at(-1) ?? Number.NaN, item) }}
       </li>
     </ul>
   </div>
