@@ -123,14 +123,14 @@ onBeforeUnmount(() => {
     <section class="terminal-tabs-panel panel" aria-label="终端标签与本页连接限制">
       <div class="terminal-tabs-row">
         <div ref="tablist" class="terminal-tablist" role="tablist" aria-label="终端标签">
-          <div v-for="(tab, index) in tabs" :key="tab.id" class="terminal-tab-item" :class="{ 'is-selected': tab.id === selectedId }" role="presentation">
-            <button :id="`tab-${tab.id}`" type="button" role="tab" :aria-selected="tab.id === selectedId" :aria-controls="`panel-${tab.id}`" :tabindex="tab.id === selectedId ? 0 : -1" :aria-label="`终端 ${index + 1}：${tab.summary.title}，${tab.summary.stateLabel}`" @click="selectTab(tab.id)" @keydown="tabKey($event, tab.id)">
-              <span class="terminal-tab-title">{{ tab.summary.title }}</span><small>{{ tab.summary.stateLabel }}</small>
-            </button>
-            <button class="terminal-tab-close" type="button" :aria-label="`关闭终端 ${index + 1}：${tab.summary.title}`" @click="requestClose(tab.id)"><X :size="15" aria-hidden="true" /></button>
-          </div>
+          <button v-for="(tab, index) in tabs" :id="`tab-${tab.id}`" :key="tab.id" class="terminal-tab-item" :class="{ 'is-selected': tab.id === selectedId }" type="button" role="tab" :aria-selected="tab.id === selectedId" :aria-controls="`panel-${tab.id}`" :tabindex="tab.id === selectedId ? 0 : -1" :aria-label="`终端 ${index + 1}：${tab.summary.title}，${tab.summary.stateLabel}`" @click="selectTab(tab.id)" @keydown="tabKey($event, tab.id)">
+            <span class="terminal-tab-title">{{ tab.summary.title }}</span><small>{{ tab.summary.stateLabel }}</small>
+          </button>
         </div>
-        <ActionButton class="terminal-add-tab" :icon="Plus" :disabled="tabs.length >= 4 || !!pendingClose" @click="addTab">新建标签</ActionButton>
+        <div class="terminal-tab-actions">
+          <ActionButton class="terminal-tab-close" :icon="X" :disabled="!!pendingClose" :aria-label="`关闭当前标签：终端 ${tabs.findIndex(tab => tab.id === selectedId) + 1}，${selected.summary.title}`" @click="requestClose(selectedId)">关闭当前标签</ActionButton>
+          <ActionButton class="terminal-add-tab" :icon="Plus" :disabled="tabs.length >= 4 || !!pendingClose" @click="addTab">新建标签</ActionButton>
+        </div>
       </div>
       <p class="terminal-capacity-note">最多 4 个本地标签；本页连接 {{ page.occupiedCount }}/{{ page.limit }}（含连接中与关闭中）。服务端默认全局上限为 1，标签数量不代表可用名额。</p>
       <p v-if="page.retiredCount" class="terminal-retired-status" role="status">{{ page.retiredCount }} 个已关闭标签的本地连接仍在关闭中，收到连接关闭事件前继续计入本页限制；服务端资源回收可能更晚完成。</p>
@@ -149,13 +149,11 @@ onBeforeUnmount(() => {
 .terminal-tabs-panel { min-width: 0; padding: 12px 14px; }
 .terminal-tabs-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .terminal-tablist { display: flex; flex: 1; gap: 6px; overflow-x: auto; min-width: 0; padding: 3px; }
-.terminal-tab-item { display: flex; flex: 0 0 auto; max-width: 270px; align-items: center; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
+.terminal-tab-item { display: grid; flex: 0 0 auto; min-width: 0; max-width: 270px; gap: 3px; padding: 8px 10px; text-align: left; color: var(--ncp-text); border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .terminal-tab-item.is-selected { border-color: var(--ncp-primary); background: var(--ncp-primary-soft); }
-.terminal-tab-item [role=tab] { display: grid; min-width: 0; gap: 3px; padding: 8px 10px; text-align: left; color: var(--ncp-text); }
 .terminal-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; font-weight: 650; }
 .terminal-tab-item small { color: var(--ncp-text-muted); font-size: .7rem; }
-.terminal-tab-close { display: grid; flex-shrink: 0; place-items: center; width: 36px; height: 40px; border-radius: 7px; color: var(--ncp-text-muted); }
-.terminal-add-tab { flex-shrink: 0; }
+.terminal-tab-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; }
 .terminal-capacity-note,.terminal-retired-status { margin: 9px 3px 0; color: var(--ncp-text-muted); font-size: .73rem; line-height: 1.5; overflow-wrap: anywhere; }
 .terminal-retired-status { color: var(--ncp-warning-strong); }
 .terminal-close-confirm { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; border-color: var(--ncp-warning); }
@@ -165,5 +163,5 @@ onBeforeUnmount(() => {
 .terminal-close-actions > button:first-child { min-height: 40px; padding: 0 10px; border-radius: 8px; }
 button:focus-visible { outline: 2px solid var(--ncp-primary); outline-offset: 2px; }
 [role=tabpanel][hidden] { display: none; }
-@media(max-width:760px) { .terminal-tabs-panel { padding: 10px; } .terminal-tabs-row { flex-wrap: wrap; gap: 8px; } .terminal-tablist { flex-basis: 100%; } .terminal-add-tab { margin-left: auto; } .terminal-close-confirm { align-items: stretch; flex-direction: column; } .terminal-close-actions { justify-content: flex-end; flex-wrap: wrap; } }
+@media(max-width:760px) { .terminal-tabs-panel { padding: 10px; } .terminal-tabs-row { flex-wrap: wrap; gap: 8px; } .terminal-tablist { flex-basis: 100%; } .terminal-tab-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; } .terminal-close-confirm { align-items: stretch; flex-direction: column; } .terminal-close-actions { justify-content: flex-end; flex-wrap: wrap; } }
 </style>

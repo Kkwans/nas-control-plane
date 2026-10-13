@@ -521,7 +521,7 @@ describe('M1b 真正独立的本地终端标签', () => {
   const panels = () => [...host.querySelectorAll<HTMLElement>('[role="tabpanel"]')]
   const activePanel = () => panels().find(panel => !panel.hidden)!
   const activeButton = (text: string) => [...activePanel().querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent?.trim() === text)!
-  const closeButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.terminal-tab-close')]
+  const closeButton = () => host.querySelector<HTMLButtonElement>('.terminal-tab-close')!
   async function add() { button('新建标签').click(); await flush() }
   async function connectActive() { activeButton('连接终端').click(); await flush() }
 
@@ -533,6 +533,13 @@ describe('M1b 真正独立的本地终端标签', () => {
     expect(sockets).toHaveLength(0)
     expect(mocks.terminals).toHaveLength(0)
     expect(tabs().filter(tab => tab.tabIndex === 0)).toHaveLength(1)
+    const list = host.querySelector('[role="tablist"]')!
+    expect([...list.children].every(child => child.getAttribute('role') === 'tab')).toBe(true)
+    expect(list.querySelectorAll('button:not([role="tab"])')).toHaveLength(0)
+    expect(list.contains(closeButton())).toBe(false)
+    expect(closeButton().getAttribute('aria-hidden')).toBeNull()
+    expect(closeButton().tabIndex).toBe(0)
+    expect(closeButton().getAttribute('aria-label')).toBe('关闭当前标签：终端 4，root@主机')
     for (const tab of tabs()) {
       const panel = document.getElementById(tab.getAttribute('aria-controls')!)!
       expect(panel.getAttribute('aria-labelledby')).toBe(tab.id)
@@ -543,6 +550,7 @@ describe('M1b 真正独立的本地终端标签', () => {
       current.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
       await flush()
       expect(document.activeElement).toBe(tabs()[index])
+      expect(closeButton().getAttribute('aria-label')).toBe(`关闭当前标签：终端 ${index + 1}，root@主机`)
       expect(tabs()[index]!.getAttribute('aria-selected')).toBe('true')
       expect(panels().filter(panel => panel.hidden && panel.hasAttribute('inert'))).toHaveLength(3)
     }
@@ -571,7 +579,7 @@ describe('M1b 真正独立的本地终端标签', () => {
 
   it.each(['abort', 'pagehide'])('%s 同步失效后的旧关闭确认不得删除标签或抛错', async cause => {
     mount(); await connectActive()
-    closeButtons()[0]!.click(); await flush()
+    closeButton().click(); await flush()
     const confirm = button('断开并关闭标签')
     const id = tabs()[0]!.id
     if (cause === 'abort') invalidateSession()
@@ -586,7 +594,8 @@ describe('M1b 真正独立的本地终端标签', () => {
 
   it('删除等待期间较新的选页优先，不把焦点拉回旧相邻标签', async () => {
     mount(); await add(); await add()
-    closeButtons()[0]!.click()
+    tabs()[0]!.click(); await flush()
+    closeButton().click()
     tabs()[1]!.focus(); tabs()[1]!.click()
     await flush()
     expect(tabs().find(tab => tab.getAttribute('aria-selected') === 'true')?.id).toBe('tab-terminal-2')
@@ -662,14 +671,14 @@ describe('M1b 真正独立的本地终端标签', () => {
     if (state === 'connected') sockets[0]!.started()
     await flush()
     const oldId = tabs()[0]!.id
-    closeButtons()[0]!.click(); await flush()
+    closeButton().click(); await flush()
     expect(host.querySelector('[role="alertdialog"]')?.textContent).toContain('不能保证远端任务已结束')
     expect(document.activeElement).toBe(button('保留标签'))
     expect(sockets[0]!.close).not.toHaveBeenCalled()
     button('保留标签').click(); await flush()
     expect(tabs()).toHaveLength(1)
     expect(sockets[0]!.close).not.toHaveBeenCalled()
-    closeButtons()[0]!.click(); await flush()
+    closeButton().click(); await flush()
     button('断开并关闭标签').click(); await flush()
     expect(tabs()).toHaveLength(1)
     expect(tabs()[0]!.id).not.toBe(oldId)
@@ -692,7 +701,7 @@ describe('M1b 真正独立的本地终端标签', () => {
       sockets[i]!.started()
     }
     await flush()
-    closeButtons()[3]!.click(); await flush()
+    closeButton().click(); await flush()
     button('断开并关闭标签').click(); await flush()
     await add()
     expect(activeButton('连接终端').disabled).toBe(true)
@@ -714,7 +723,7 @@ describe('M1b 真正独立的本地终端标签', () => {
 
   it('关闭空白标签不需要确认；页面失效同步关闭所有独立 owner，不自动恢复', async () => {
     mount()
-    closeButtons()[0]!.click(); await flush()
+    closeButton().click(); await flush()
     expect(host.querySelector('[role="alertdialog"]')).toBeNull()
     expect(tabs()).toHaveLength(1)
     for (let i = 0; i < 3; i++) {

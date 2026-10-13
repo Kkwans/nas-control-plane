@@ -1,0 +1,25 @@
+# 终端标签：首次真实CI与像素
+
+`53962e4541d0812266afd2fe6ed566f82ff11a13`，[CI 38454094162](https://github.com/Kkwans/nas-control-plane/actions/runs/38454094162)，2026-10-13 19:30 UTC检查。
+
+## 阻断结论
+
+1226单元 / 69文件通过，**278浏览器通过、7失败（4.6分钟）**。Go115492207220、Compose115492207172成功，前端115492206689失败。
+
+四项为已知设置字号选项不可见。新增三项终端失败为critical `aria-required-children`：全页/terminal可访问性，以及390/1440标签截图用例。`.terminal-tablist[role=tablist]`拥有普通`.terminal-tab-close`按钮，axe明确报告不允许的子项`button[aria-label]`。需修正真实角色结构，不能排除规则。
+
+七项其他新标签行为用例实际通过，原十三项终端用例也通过。两项截图用例在第一份“两标签”截图后的axe断言中止；四标签、关闭确认、退役连接及第五连接等待的后半段未完成，不能算通过。
+
+## 两幅已查看的实际PNG
+
+逐张查看 `terminal-tabs-two-{390,1440}.png`，核对两份geometry capture-state：documentWidth等于390/1440，恰好一个tabpanel可见，隐藏tabpanel均inert。两标签名称、关闭入口、新建按钮和容量边界说明可读，桌面正常排列，390px说明换行完整。
+
+390px full-page图顶部出现“跳到主要内容”链接，固定topbar覆盖页面标题上部，存在焦点/滚动截屏状态需进一步核对；不能把这幅图称作完整首屏布局通过。其余新状态尚无图。
+
+本提交raw axe JSON名为`*-axe.json`，不在工件筛选范围内；违规由准确CI日志证实。后续filename修复3258dff将保留raw axe，不能回溯称本提交已有该文件。
+
+## 工件与边界
+
+官方分片2工件11841354557，13,546,614字节，SHA256 `a40047d77b0bbc7b99fbc1199be695eacedec6b863230aa29108f4bab556f8b0`；165条目 / 15,119,247展开字节。大小/摘要、安全路径、类型、体积/展开比和CRC通过。所需两幅PNG与两份geometry均在此分片。
+
+全部API/WebSocket为fixture，无真实NAS、PTY或Docker exec。JSON不内嵌提交SHA，按准确运行/工件摘要关联；普通字体、未覆盖200%放大或控件中心命中。语义修复后还需新准确CI、全部八幅状态图及保留的axe记录验收。

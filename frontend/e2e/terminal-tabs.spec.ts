@@ -30,7 +30,11 @@ const panel = (page: Page, index: number) => page.locator('[role="tabpanel"]').n
 const add = (page: Page) => page.getByRole('button', { name: '新建标签', exact: true })
 const connect = (page: Page) => activePanel(page).locator('.terminal-toolbar').getByRole('button', { name: '连接终端', exact: true })
 const status = (page: Page) => activePanel(page).locator('.terminal-frame > header [role="status"]')
-const closeTab = (page: Page, index: number) => page.locator('.terminal-tab-close').nth(index)
+async function closeTab(page: Page, index: number) {
+  await tabs(page).nth(index).click()
+  await expect(tabs(page).nth(index)).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: new RegExp(`^关闭当前标签：终端 ${index + 1}，`) }).click()
+}
 const capacity = (page: Page) => page.locator('.terminal-capacity-note')
 
 // 真 Chromium + 真实 xterm；只替换传输。所有 API fail-closed，禁止真实 WS、PTY、NAS。
@@ -105,6 +109,10 @@ async function install(page: Page) {
   await page.goto('/terminal', { waitUntil: 'domcontentloaded' })
   await expect(connect(page)).toBeEnabled()
   await expect(tabs(page)).toHaveCount(1)
+  // tablist 仅拥有 tab；普通关闭动作置于外部，避免 aria-required-children 回归。
+  await expect(page.getByRole('tablist', { name: '终端标签', exact: true }).getByRole('button')).toHaveCount(0)
+  await expect(page.locator('.terminal-tablist > [role="tab"]')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: /^关闭当前标签：/ })).toHaveCount(1)
   await expect.poll(() => recorded.api.filter(path => path === 'GET /api/v1/auth/status').length).toBeGreaterThan(0)
   await expect.poll(() => recorded.api.filter(path => path === 'GET /api/v1/docker/inventory').length).toBeGreaterThan(0)
 }
@@ -153,7 +161,7 @@ async function captureAndCheck(page: Page, info: TestInfo, name: string) {
       const { x, y, width, height, right, bottom } = element.getBoundingClientRect()
       return { x, y, width, height, right, bottom }
     }
-    const nodes = Array.from(root.querySelectorAll('.terminal-tabs-panel, .terminal-close-confirm, .terminal-capacity-note, .terminal-retired-status, .terminal-close-actions button, .terminal-add-tab'))
+    const nodes = Array.from(root.querySelectorAll('.terminal-tabs-panel, .terminal-close-confirm, .terminal-capacity-note, .terminal-retired-status, .terminal-close-actions button, .terminal-add-tab, .terminal-tab-close'))
     return {
       viewport: innerWidth, documentWidth: document.documentElement.scrollWidth,
       panels: Array.from(root.querySelectorAll('[role="tabpanel"]'), element => ({ id: element.id, hidden: (element as HTMLElement).hidden, inert: (element as HTMLElement).inert })),
@@ -177,6 +185,7 @@ async function captureAndCheck(page: Page, info: TestInfo, name: string) {
   await writeFile(axePath, JSON.stringify(accessibility, null, 2))
   await info.attach(`${name}-axe`, { path: axePath, contentType: 'application/json' })
   expect(accessibility.violations).toEqual([])
+  await expect(page.getByRole('tablist', { name: '终端标签', exact: true }).getByRole('button')).toHaveCount(0)
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport)
   expect(geometry.panels.filter(item => !item.hidden)).toHaveLength(1)
   expect(geometry.panels.filter(item => item.hidden).every(item => item.inert)).toBe(true)
@@ -208,10 +217,10 @@ test('创建、切换、键盘导航不连接；关闭最后标签留下新空�
     await expect(page.locator('[role="tab"][tabindex="0"]')).toHaveCount(1)
   }
   expect(await count(page)).toBe(0)
-  await closeTab(page, 2).click()
-  await closeTab(page, 1).click()
+  await closeTab(page, 2)
+  await closeTab(page, 1)
   const oldId = await tabs(page).first().getAttribute('id')
-  await closeTab(page, 0).click()
+  await closeTab(page, 0)
   await expect(tabs(page)).toHaveCount(1)
   expect(await tabs(page).first().getAttribute('id')).not.toBe(oldId)
   await expect(connect(page)).toBeEnabled()
@@ -266,13 +275,13 @@ for (const width of [390, 1440]) {
     await expect(add(page)).toBeDisabled()
     await expect(capacity(page)).toContainText('本页连接 4/4')
     await captureAndCheck(page, info, `terminal-tabs-four-${width}`)
-    await closeTab(page, 3).click()
+    await closeTab(page, 3)
     await expect(page.getByRole('alertdialog')).toContainText('不能保证远端任务已结束')
     await expect(page.getByRole('button', { name: '保留标签', exact: true })).toBeFocused()
     await captureAndCheck(page, info, `terminal-tabs-close-confirm-${width}`)
     await page.getByRole('button', { name: '保留标签', exact: true }).click()
     expect(await closes(page)).toEqual([0, 0, 0, 0])
-    await closeTab(page, 3).click()
+    await closeTab(page, 3)
     await page.getByRole('button', { name: '断开并关闭标签', exact: true }).click()
     await expect(tabs(page)).toHaveCount(3)
     expect(await closes(page)).toEqual([0, 0, 0, 1])
@@ -307,13 +316,13 @@ test('切换清除待粘贴；快捷键可 Escape 关闭；连接中关闭先确
   await add(page).click()
   await expect(page.getByRole('dialog', { name: '确认多行粘贴', includeHidden: true })).toHaveCount(0)
   await begin(page, 2, false)
-  await closeTab(page, 1).click()
+  await closeTab(page, 1)
   await expect(page.getByRole('alertdialog')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('alertdialog')).toHaveCount(0)
   await expect(tabs(page).nth(1)).toBeFocused()
   expect(await closes(page)).toEqual([0, 0])
-  await closeTab(page, 1).click()
+  await closeTab(page, 1)
   await page.getByRole('button', { name: '断开并关闭标签', exact: true }).click()
   expect(await closes(page)).toEqual([0, 1])
   await activePanel(page).getByRole('button', { name: '快捷键', exact: true }).click()
