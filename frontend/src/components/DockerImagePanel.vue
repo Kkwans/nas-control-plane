@@ -249,10 +249,31 @@ onMounted(() => {
 .job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
 .resource-select-head{display:flex;min-width:0;align-items:center;gap:8px}.resource-name-cell{display:flex;min-width:0;align-items:center;gap:8px}.resource-select-head input,.resource-name-cell>input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--ncp-primary)}.usage-cell{display:grid;justify-items:center;gap:2px;line-height:1.25}.usage-warning{color:var(--ncp-danger-strong);font-size:.72rem;font-weight:720}.bulk-remove-error>div{min-width:0}.bulk-remove-error ul{margin:4px 0 0;padding-left:17px}.selection-count{white-space:nowrap;font-variant-numeric:tabular-nums}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 100px;gap:8px}}
-@media(max-width:820px){.image-modebar{align-items:stretch;flex-direction:column}.image-modebar .section-tabs{width:100%}.image-modebar .section-tabs button{flex:1;justify-content:center}.mode-actions,.download-mode-actions{width:100%;flex-wrap:wrap}.mode-actions :deep(.el-input){min-width:160px;flex:1 1 180px}.resource-table{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.resource-table{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
 </style>
 
 <style scoped>
+.image-workspace { container: image-workspace / inline-size; }
+/* 工具栏根据可用面板宽度和字号换行，标签不能依赖横向滚动才能读全。 */
+.image-modebar { min-width: 0; flex-wrap: wrap; }
+.image-modebar .section-tabs { min-width: 0; flex-wrap: wrap; overflow: visible; }
+.image-modebar :deep(.section-tabs button) { min-width: 0; max-width: 100%; white-space: normal; }
+.image-modebar :deep(.section-tabs button>span) { min-width: 0; overflow-wrap: anywhere; }
+.image-modebar :deep(.section-tabs button>svg),.image-modebar :deep(.section-tabs button>small) { flex: 0 0 auto; }
+.mode-actions { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.mode-actions :deep(.el-input) { min-width: min(100%, 11.25rem); max-width: 100%; flex: 1 1 11.25rem; }
+.mode-actions .icon-button { flex: 0 0 40px; }
+.download-mode-actions :deep(.ncp-select) { width: max(150px, 9.375rem); min-width: 0; flex: 0 1 max(150px, 9.375rem); }
+.download-mode-actions :deep(.el-select__wrapper) { line-height: 1.4; }
+.download-mode-actions :deep(.el-select__placeholder) { position: static; transform: none; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
+@container image-workspace (max-width:980px) or (max-width:61.25rem) {
+  .image-modebar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .image-modebar .section-tabs { width: 100%; }
+  .image-modebar :deep(.section-tabs button) { min-height: 44px; flex: 1 1 auto; }
+  .mode-actions,.download-mode-actions { width: 100%; }
+  .mode-actions .icon-button { width: 44px; min-height: 44px; flex-basis: 44px; }
+  .mode-actions :deep(.el-input__wrapper),.download-mode-actions :deep(.el-select__wrapper) { min-height: 44px; }
+}
 .download-workspace { container: image-downloads / inline-size; }
 .download-read-state { margin: 12px 16px; gap: 12px; }
 .download-read-state>div { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
@@ -287,7 +308,6 @@ onMounted(() => {
   .download-workspace .resource-pagination,.download-workspace .resource-pagination>div { flex-wrap: wrap; }
   .download-workspace .resource-pagination button { min-height: 44px; }
 }
-@media(max-width:820px) { .download-mode-actions .icon-button { width: 44px; min-height: 44px; } }
 .resource-select-head button { width: auto; min-width: 0; flex: 1; }
 .resource-head>button:nth-child(5) { justify-content: center; }
 .resource-name-cell .resource-name { flex: 1; }

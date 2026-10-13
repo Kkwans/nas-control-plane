@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, ref, type App } from 'vue'
+import { compileStyle, parse } from 'vue/compiler-sfc'
 import SectionTabs, { type SectionTab } from './SectionTabs.vue'
 import dockerImagePanelSource from './DockerImagePanel.vue?raw'
 
@@ -74,19 +75,55 @@ describe('SectionTabs 分段按钮组', () => {
     expect(buttons[2]!.classList.contains('active')).toBe(true)
   })
 
-  it('镜像来源的现有与窄屏样式选择器仍匹配实际分段按钮', () => {
-    const { host } = mountTabs('镜像来源')
-    host.className = 'image-modebar'
-    const selectors = [...dockerImagePanelSource.matchAll(/(\.image-modebar \.section-tabs[^{}]*)\{/g)].map((match) => match[1]!)
-    expect(selectors).toEqual([
-      '.image-modebar .section-tabs',
-      '.image-modebar .section-tabs button',
-      '.image-modebar .section-tabs button.active',
-      '.image-modebar .section-tabs span',
-      '.image-modebar .section-tabs',
-      '.image-modebar .section-tabs button',
-    ])
-    for (const selector of selectors) expect(host.querySelector(selector)).not.toBeNull()
+  it('镜像来源的编译后作用域与窄屏深层选择器匹配真实子组件结构', () => {
+    const scopeId = 'data-v-image-test'
+    const icon = { render: () => h('svg') }
+    const parent = {
+      __scopeId: scopeId,
+      render: () => h('header', { class: 'image-modebar' }, [h(SectionTabs, {
+        modelValue: 'local', tabs: tabs.map((tab) => ({ ...tab, icon })), accessibleLabel: '镜像来源',
+      })]),
+    }
+    const host = document.createElement('div')
+    document.body.append(host)
+    const app = createApp(parent)
+    app.mount(host)
+    mounted.push({ app, host })
+
+    const group = host.querySelector('.section-tabs')!
+    expect(group.hasAttribute(scopeId)).toBe(true)
+    // Vue 仅将父组件 scope 传给子组件根节点；普通后代选择器曾在这里静默失效。
+    for (const element of group.querySelectorAll('button, button>span, button>small, button>svg')) {
+      expect(element.hasAttribute(scopeId)).toBe(false)
+    }
+    const { descriptor } = parse(dockerImagePanelSource, { filename: 'DockerImagePanel.vue' })
+    const styles = descriptor.styles.map((style) => compileStyle({ filename: 'DockerImagePanel.vue', id: scopeId, source: style.content, scoped: true }))
+    expect(styles.flatMap((style) => style.errors)).toEqual([])
+    const selectors = new Set<string>()
+    const responsiveButtons: Record<string, string> = {}
+    for (const style of styles) {
+      style.rawResult!.root.walkRules((rule) => {
+        for (const selector of rule.selectors) selectors.add(selector)
+        const container = rule.parent
+        if (container?.type === 'atrule' && container.name === 'container'
+          && container.params === 'image-workspace (max-width:980px) or (max-width:61.25rem)'
+          && rule.selectors.includes(`.image-modebar[${scopeId}] .section-tabs button`)) {
+          rule.walkDecls((declaration) => { responsiveButtons[declaration.prop] = declaration.value })
+        }
+      })
+    }
+    const required = [
+      [`.image-modebar .section-tabs[${scopeId}]`, 1],
+      [`.image-modebar[${scopeId}] .section-tabs button`, tabs.length],
+      [`.image-modebar[${scopeId}] .section-tabs button>span`, tabs.length],
+      [`.image-modebar[${scopeId}] .section-tabs button>small`, 2],
+      [`.image-modebar[${scopeId}] .section-tabs button>svg`, tabs.length],
+    ] as const
+    for (const [selector, count] of required) {
+      expect(selectors.has(selector), `缺少实际编译选择器：${selector}`).toBe(true)
+      expect(host.querySelectorAll(selector), `选择器必须命中真实子组件：${selector}`).toHaveLength(count)
+    }
+    expect(responsiveButtons).toMatchObject({ flex: '1 1 auto', 'min-height': '44px' })
     expect(dockerImagePanelSource).not.toContain('.image-modebar nav')
   })
 

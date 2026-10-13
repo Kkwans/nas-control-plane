@@ -121,11 +121,15 @@ async function downloadLayout(page: Page) {
         scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
         scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
         text: element.textContent, whiteSpace: style.whiteSpace, overflow: style.overflow,
+        textOverflow: style.textOverflow,
         textBounds: [...range.getClientRects()].map((rect) => rect.toJSON()),
       }
     }
     const style = getComputedStyle(panel)
     const row = panel.querySelector('.download-row')
+    const toolbar = document.querySelector('.image-modebar')!
+    const tabs = toolbar.querySelector('.section-tabs')!
+    const actions = toolbar.querySelector('.download-mode-actions')!
     const selectors = {
       identity: '.job-identity strong', message: '.job-identity small', status: '.job-state',
       warning: '.job-observation-warning', progress: '.job-progress', progressText: '.job-progress small',
@@ -139,6 +143,17 @@ async function downloadLayout(page: Page) {
       panel: { ...bounds(panel), scrollLeft: panel.scrollLeft,
         contentWidth: panel.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight),
         containerName: style.containerName, containerType: style.containerType },
+      toolbar: {
+        ...bounds(toolbar),
+        tabs: { ...bounds(tabs), scrollLeft: tabs.scrollLeft },
+        actions: bounds(actions),
+        buttons: [...tabs.querySelectorAll('button')].map((button) => ({
+          ...bounds(button), selected: button.getAttribute('aria-pressed') === 'true',
+          label: bounds(button.querySelector('span')!),
+          count: button.querySelector('small') ? bounds(button.querySelector('small')!) : null,
+        })),
+        controls: Object.fromEntries(['.el-input', '.ncp-select', '.el-select__placeholder', '.icon-button'].map((selector) => [selector, bounds(actions.querySelector(selector)!)])),
+      },
       headDisplay: getComputedStyle(panel.querySelector('.download-head')!).display,
       rowColumns: row ? getComputedStyle(row).gridTemplateColumns.split(' ') : [],
       fields: Object.fromEntries(Object.entries(selectors).map(([name, selector]) => {
@@ -149,8 +164,52 @@ async function downloadLayout(page: Page) {
   })
 }
 
+function expectImageToolbarLayout(layout: Awaited<ReturnType<typeof downloadLayout>>) {
+  const { toolbar } = layout
+  type Field = typeof toolbar.buttons[number]['label']
+  expect(toolbar.bounds.left).toBeGreaterThanOrEqual(layout.panel.bounds.left - 1)
+  expect(toolbar.bounds.right).toBeLessThanOrEqual(layout.panel.bounds.right + 1)
+  expect(toolbar.tabs.scrollLeft, '镜像来源不能通过自动横向滚动隐藏其他标签').toBe(0)
+  expect(toolbar.buttons.map((button) => button.label.text)).toEqual(['本地镜像', '线上仓库', '下载任务'])
+  expect(toolbar.buttons.filter((button) => button.selected).map((button) => button.label.text)).toEqual(['下载任务'])
+  const contents: [string, Field][] = [
+    ['toolbar', toolbar], ['tabs', toolbar.tabs], ['actions', toolbar.actions],
+    ...toolbar.buttons.flatMap((button, index): [string, Field][] => [[`tab-${index}`, button], [`tab-label-${index}`, button.label], ...(button.count ? [[`tab-count-${index}`, button.count] as [string, Field]] : [])]),
+    ...Object.entries(toolbar.controls),
+  ]
+  for (const [name, entry] of contents) {
+    // label/count 是行内元素，clientWidth 为 0；其 Range 必须完整落在按钮和工具栏内。
+    expect(entry.bounds.width, `${name} 必须可见`).toBeGreaterThan(0)
+    if (entry.clientWidth) expect(entry.scrollWidth, `${name} 不得横向截断或依赖滚动`).toBeLessThanOrEqual(entry.clientWidth + 1)
+    if (entry.clientHeight) expect(entry.scrollHeight, `${name} 不得纵向截断`).toBeLessThanOrEqual(entry.clientHeight + 1)
+    for (const rect of [entry.bounds, ...entry.textBounds]) {
+      expect(rect.left, `${name} 不得藏在工具栏左侧`).toBeGreaterThanOrEqual(toolbar.bounds.left - 1)
+      expect(rect.right, `${name} 不得藏在工具栏右侧`).toBeLessThanOrEqual(toolbar.bounds.right + 1)
+      expect(rect.top, `${name} 不得藏在工具栏上侧`).toBeGreaterThanOrEqual(toolbar.bounds.top - 1)
+      expect(rect.bottom, `${name} 不得藏在工具栏下侧`).toBeLessThanOrEqual(toolbar.bounds.bottom + 1)
+    }
+  }
+  const overlaps = (a: Field, b: Field) => Math.min(a.bounds.right, b.bounds.right) - Math.max(a.bounds.left, b.bounds.left) > 1
+    && Math.min(a.bounds.bottom, b.bounds.bottom) - Math.max(a.bounds.top, b.bounds.top) > 1
+  expect(overlaps(toolbar.tabs, toolbar.actions), '来源标签与搜索筛选不得重叠').toBe(false)
+  for (const button of toolbar.buttons) {
+    for (const sibling of toolbar.buttons) {
+      if (sibling !== button) expect(overlaps(button, sibling), '换行后的来源按钮不得互相重叠').toBe(false)
+    }
+    expect(button.label.textOverflow, '标签不得省略完整名称').not.toBe('ellipsis')
+    for (const rect of button.label.textBounds) {
+      expect(rect.left).toBeGreaterThanOrEqual(button.bounds.left - 1)
+      expect(rect.right).toBeLessThanOrEqual(button.bounds.right + 1)
+      expect(rect.top).toBeGreaterThanOrEqual(button.bounds.top - 1)
+      expect(rect.bottom).toBeLessThanOrEqual(button.bounds.bottom + 1)
+    }
+  }
+  expect(toolbar.controls['.el-select__placeholder']!.textOverflow, '状态筛选保留完整文字').not.toBe('ellipsis')
+}
+
 async function expectDownloadLayout(page: Page, reference: string, interrupted = true, requireCards = false) {
   const layout = await downloadLayout(page)
+  expectImageToolbarLayout(layout)
   // 200% 字号必须明确进入卡片，不能退回桌面省略/弱几何断言。
   const cards = requireCards || layout.panel.contentWidth <= Math.max(980, 61.25 * layout.rootFontPixels)
   expect(layout.root.scrollWidth, '页面不得依赖横向滚动').toBeLessThanOrEqual(layout.root.clientWidth + 1)
@@ -236,6 +295,7 @@ async function capture(page: Page, info: TestInfo, name: string, state: Awaited<
     }),
   }))
   const layout = await downloadLayout(page)
+  expectImageToolbarLayout(layout)
   expect(layout.root.scrollWidth).toBeLessThanOrEqual(layout.root.clientWidth + 1)
   expect(layout.panel.scrollWidth).toBeLessThanOrEqual(layout.panel.clientWidth + 1)
   expect(layout.panel.scrollLeft).toBe(0)
