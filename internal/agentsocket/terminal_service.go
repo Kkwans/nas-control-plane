@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"google.golang.org/grpc/codes"
@@ -13,12 +16,15 @@ import (
 
 const terminalOutputChunkSize = 16 * 1024
 
+const terminalCloseNotificationTimeout = 100 * time.Millisecond
+
 type terminalPOCService struct {
 	manager *terminal.Manager
+	logger  *slog.Logger
 }
 
 func newTerminalPOCService(manager *terminal.Manager) *terminalPOCService {
-	return &terminalPOCService{manager: manager}
+	return &terminalPOCService{manager: manager, logger: slog.Default()}
 }
 
 func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) error {
@@ -45,9 +51,25 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if err != nil {
 		return terminalManagerError(err)
 	}
+	// 显式关闭与错误收尾共享结果；日志不包含底层错误或终端内容。
+	cleanup := sync.OnceValue(func() error {
+		err := s.manager.Close(opened.ID)
+		if err != nil && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
+			classification := "TERMINAL_CLOSE_FAILED"
+			if errors.Is(err, terminal.ErrContainerExitUnconfirmed) {
+				classification = "TERMINAL_CONTAINER_EXIT_UNCONFIRMED"
+			}
+			logger := s.logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Warn("terminal cleanup incomplete", "code", classification, "session_id", opened.ID, "target", opened.Target, "local_cleanup_unconfirmed", errors.Is(err, terminal.ErrContainerCleanupUnconfirmed))
+		}
+		return err
+	})
 	defer func() {
 		cancel()
-		_ = s.manager.Close(opened.ID)
+		_ = cleanup()
 	}()
 
 	started, err := terminalMessageToStruct(terminal.Message{
@@ -66,13 +88,19 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 	if sessionContext.Err() != nil {
 		return nil
 	}
-	if err := stream.Send(started); err != nil {
-		return terminalStreamSendError(err)
-	}
-
-	// 输出协程只报告一次结果；容量 1 保证接收端退出后仍可完成发送。
+	// started 与后续输出使用同一个 sender；初始 Send 也可能只在 RPC 返回后解除。
 	outputDone := make(chan error, 1)
-	go s.copyTerminalOutput(sessionContext, stream, opened.ID, outputDone)
+	go func() {
+		if sessionContext.Err() != nil {
+			outputDone <- nil
+			return
+		}
+		if err := stream.Send(started); err != nil {
+			outputDone <- terminalStreamSendError(err)
+			return
+		}
+		s.copyTerminalOutput(sessionContext, stream, opened.ID, outputDone)
+	}()
 
 	incoming := make(chan terminalReceiveResult, 1)
 	go receiveTerminalMessages(sessionContext, stream, incoming)
@@ -111,10 +139,15 @@ func (s *terminalPOCService) Open(stream AgentTerminalPOCService_OpenServer) err
 					return terminalManagerError(err)
 				}
 			case terminal.MessageClose:
-				if err := s.manager.Close(opened.ID); err != nil && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
+				if err := cleanup(); err != nil && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
 					return terminalManagerError(err)
 				}
+				// Send/Recv 可能必须等 RPC 返回才解除，最后通知只占短窗口。
+				notification := time.NewTimer(terminalCloseNotificationTimeout)
+				defer notification.Stop()
 				select {
+				case <-notification.C:
+					return nil
 				case err := <-outputDone:
 					return err
 				case <-sessionContext.Done():
@@ -157,7 +190,7 @@ func (s *terminalPOCService) copyTerminalOutput(ctx context.Context, stream Agen
 		if err == nil {
 			continue
 		}
-		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) && terminal.ErrorCode(err) != "TERMINAL_SESSION_NOT_FOUND" {
 			done <- grpcstatus.Error(codes.Internal, "TERMINAL_STREAM_FAILED")
 			return
 		}

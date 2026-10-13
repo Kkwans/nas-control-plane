@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -64,30 +66,11 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	return ContainerAttachment{
 		ExecID:       exec.ID,
 		Reader:       attachment.Reader,
-		Writer:       attachment.Conn,
+		Conn:         attachment.Conn,
 		Shell:        metadata.Shell,
 		Enhancement:  metadata.Enhancement,
 		Reason:       metadata.Reason,
 		Capabilities: metadata.Capabilities,
-		Close: func() error {
-			attachment.Close()
-			return nil
-		},
-		CloseWrite: attachment.CloseWrite,
-		CancelRead: func() error {
-			var cancelErr error
-			if err := writeAll(attachment.Conn, []byte{3}); err != nil {
-				cancelErr = err
-			}
-			if err := writeAll(attachment.Conn, []byte("exit\n")); err != nil && cancelErr == nil {
-				cancelErr = err
-			}
-			if err := attachment.CloseWrite(); err != nil && cancelErr == nil {
-				cancelErr = err
-			}
-			attachment.Close()
-			return cancelErr
-		},
 	}, nil
 }
 
@@ -136,8 +119,7 @@ func (g *mobyContainerGateway) probeContainerCommandOutput(ctx context.Context, 
 	if err != nil {
 		return false, nil, err
 	}
-	defer attachment.Close()
-	output, err := io.ReadAll(io.LimitReader(attachment.Reader, maxCapabilityProbeOutput))
+	output, err := readContainerProbe(probeContext, attachment.Reader, attachment.Conn)
 	if err != nil {
 		return false, nil, err
 	}
@@ -146,6 +128,22 @@ func (g *mobyContainerGateway) probeContainerCommandOutput(ctx context.Context, 
 		return false, nil, err
 	}
 	return inspection.ExitCode == 0, output, nil
+}
+
+// 探测 attachment 与交互会话采用同一纯 transport 中断契约。
+func readContainerProbe(ctx context.Context, reader io.Reader, conn net.Conn) ([]byte, error) {
+	var once sync.Once
+	abort := func() { once.Do(func() { _ = conn.Close() }) }
+	stop := onContextAbort(ctx, abort)
+	defer func() { abort(); stop() }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	output, err := io.ReadAll(io.LimitReader(reader, maxCapabilityProbeOutput))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return output, err
 }
 
 func (g *mobyContainerGateway) probeContainerBashCapabilities(ctx context.Context, containerID, shell string) shellCapabilityProbe {

@@ -78,12 +78,13 @@ type Starter interface {
 }
 
 type Manager struct {
-	mu          sync.Mutex
-	host        Starter
-	container   Starter
-	maxSessions int
-	nextID      uint64
-	sessions    map[string]Session
+	mu           sync.Mutex
+	host         Starter
+	container    Starter
+	maxSessions  int
+	nextID       uint64
+	sessions     map[string]Session
+	closingCount int
 }
 
 func NewManager(host, container Starter, maxSessions int) *Manager {
@@ -108,7 +109,7 @@ func (m *Manager) Open(ctx context.Context, request StartRequest) (SessionInfo, 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.sessions) >= m.maxSessions {
+	if len(m.sessions)+m.closingCount >= m.maxSessions {
 		return SessionInfo{}, coded("TERMINAL_SESSION_LIMIT_REACHED", errors.New("terminal session limit reached"))
 	}
 
@@ -203,11 +204,13 @@ func (m *Manager) Close(sessionID string) error {
 	session, exists := m.sessions[sessionID]
 	if exists {
 		delete(m.sessions, sessionID)
+		m.closingCount++
 	}
 	m.mu.Unlock()
 	if !exists {
 		return coded("TERMINAL_SESSION_NOT_FOUND", errors.New("terminal session not found"))
 	}
+	defer func() { m.mu.Lock(); m.closingCount--; m.mu.Unlock() }()
 	if err := session.Close(); err != nil {
 		return coded("TERMINAL_CLOSE_FAILED", err)
 	}

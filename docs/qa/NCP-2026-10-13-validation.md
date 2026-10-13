@@ -155,3 +155,11 @@
 - [7dc9d21 CI 38393981077](https://github.com/Kkwans/nas-control-plane/actions/runs/38393981077)全部必需检查成功：420项前端单元、151项Chromium，Go测试/vet及本机/ARM64构建、Compose配置检查通过；发布任务跳过。
 - 撤销保证限定在同一Service实例；Login/UpdatePassword最终状态重验不检测期间禁用再启用的ABA。关闭流传输不等同于容器exec或PTY全部子孙已结束。
 - M08-C1已进入实现：已取得容器attachment后的可中断I/O、总关闭预算和退出未确认分类；预会话握手、全局启动锁、主机PTY另片。M14-C同时实现保守结果字节计费、完整行前缀截断和RPC/HTTP编码边界，尚未形成完成或测试通过结论。
+
+
+## 12:23 UTC 容器终端有界关闭
+
+- M08-C1收紧为同一net.Conn与缓冲Reader的attachment契约，取消直接关闭连接；Write/Resize感知生命周期，Close总预算从入口开始。传输关闭、exec主进程退出核验、本地I/O收尾分别判断，无法确认时保存独立错误；日志不输出底层敏感错误。关闭中保留Manager配额。
+- 独立审查用纯fake负对照复现了首帧Send阻塞取消、Close先于本地Read收尾的缺口。最终采用唯一输出sender负责started及后续帧，等待已准入Read与输入gate使用剩余关闭预算，耗尽时明确本地清理未确认；不把返回RPC之前强制join依赖RPC返回的transport泵当作正确方案。
+- 最终28项新cleanup测试与4项M08-B回归，race重复20轮通过；独立复核race重复10轮通过。三包仅编译、terminal/agentsocket vet、server/agent构建及精确diff检查通过。实际连接用内存net.Pipe，Agent使用受控fake Session，退出超时/错误通过fake gateway注入；没有真实Docker/PTY/NAS操作。
+- 预会话ExecAttach握手、Manager.Start全局持锁、宿主机PTY和任意子孙进程清理仍不在此片。两秒Close预算加100ms最后通知及调度开销不能表述为严格2.000秒RPC保证；预算耗尽不能表述为全部本地owner已结束。
