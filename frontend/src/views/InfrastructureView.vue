@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElButton, ElDialog, ElInput } from 'element-plus'
 import {
   Activity,
@@ -72,6 +72,12 @@ const dnsChangeId = ref('')
 const dnsMessage = ref('')
 const dnsDialogOpen = ref(false)
 const dnsPending = ref(false)
+const dnsCapabilityFresh = ref(false)
+const dnsChangeBackend = ref('')
+const dnsOperation = ref<'preview' | 'confirm' | 'rollback' | null>(null)
+let dnsOperationId = 0
+let dnsRevision = 0
+let previewOwner: { revision: number; backend: string; draft: string; previewId: string } | null = null
 const mihomoInspection = ref<MihomoInspection | null>(null)
 const publicEgressMessage = ref('')
 const publicEgressLoading = ref(false)
@@ -101,6 +107,12 @@ function dispose() {
   dnsDraft.value = dnsChangeId.value = dnsMessage.value = ''
   errorMessage.value = publicEgressMessage.value = ''
   dnsPreview.value = null
+  previewOwner = null
+  dnsRevision++
+  dnsOperationId++
+  dnsOperation.value = null
+  dnsCapabilityFresh.value = false
+  dnsChangeBackend.value = ''
   dnsDialogOpen.value = false
   pageSession.signal.removeEventListener('abort', dispose)
 }
@@ -112,6 +124,14 @@ const dnsDetails = computed<DNSCapability>(() => dnsCapability.value ?? details.
   configuredNameservers: [],
   detectionSource: '', errorCode: '',
 })
+const canPreviewDNS = computed(() => dnsCapabilityFresh.value && !dnsDetails.value.readOnly && dnsDetails.value.canPreview)
+const canConfirmDNS = computed(() => dnsCapabilityFresh.value && !dnsDetails.value.readOnly && dnsDetails.value.canConfirm)
+const canRollbackDNS = computed(() => dnsCapabilityFresh.value && !dnsDetails.value.readOnly && dnsDetails.value.canRollback && dnsChangeBackend.value === dnsDetails.value.backend)
+// 展示入口沿用同一新鲜度与 pending 门禁，不把旧快照伪装成新写权限。
+const dnsPanelDetails = computed(() => ({ ...dnsDetails.value, canPreview: canPreviewDNS.value && !dnsPending.value }))
+const dnsWriting = computed(() => dnsOperation.value === 'confirm' || dnsOperation.value === 'rollback')
+watch([dnsDraft, dnsDialogOpen], () => invalidateDNSPreview(), { flush: 'sync' })
+watch(() => [dnsDetails.value.backend, dnsDetails.value.readOnly, dnsDetails.value.canPreview, dnsDetails.value.canConfirm, dnsDetails.value.canRollback, dnsCapabilityFresh.value], () => invalidateDNSPreview(false), { flush: 'sync' })
 const editableDNS = computed(() => editableDNSNameservers(dnsDetails.value))
 const tailscaleDetails = computed<TailscaleCapability>(() => details.value?.tailscale ?? {
   detected: false, state: 'not-found', backendState: 'unknown', version: '', interface: '',
@@ -206,6 +226,7 @@ const capabilityItems = computed(() => [
 
 async function loadDetails() {
   if (!ownsPage()) return
+  dnsCapabilityFresh.value = false
   const requestSequence = detailsRequestGate.begin()
   detailsController?.abort()
   detailsController = new AbortController()
@@ -225,9 +246,7 @@ async function loadDetails() {
     if (!ownsRead()) return
     details.value = systemDetails
     dnsCapability.value = liveDNSCapability
-    dnsDraft.value = editableDNS.value.join(', ')
-    dnsPreview.value = null
-    dnsMessage.value = ''
+    dnsCapabilityFresh.value = liveDNSCapability !== null
     publicEgressMessage.value = ''
     mihomoRequestGate.invalidate()
     void checkMihomo(false)
@@ -244,8 +263,23 @@ function dnsServersFromDraft() {
   return [...new Set(dnsDraft.value.split(/[\s,，]+/).map((value) => value.trim()).filter(Boolean))]
 }
 
+// 编辑意图与已发出的操作分别持有所有权；编辑失效不能锁死 busy。
+function beginDNSOperation(kind: 'preview' | 'confirm' | 'rollback') {
+  const id = ++dnsOperationId
+  dnsOperation.value = kind
+  dnsPending.value = true
+  return {
+    owns: () => ownsPage() && id === dnsOperationId,
+    finish: () => {
+      if (!ownsPage() || id !== dnsOperationId) return
+      dnsOperation.value = null
+      dnsPending.value = false
+    },
+  }
+}
+
 async function previewDNS() {
-  if (!ownsPage() || !dnsDetails.value.canPreview || dnsDetails.value.readOnly || dnsPending.value) return
+  if (!ownsPage() || !dnsDialogOpen.value || !canPreviewDNS.value || dnsPending.value) return
   const nameservers = dnsServersFromDraft()
   if (!nameservers.length) {
     dnsMessage.value = '至少填写一个 DNS 地址。'
@@ -255,71 +289,92 @@ async function previewDNS() {
     dnsMessage.value = 'UGOS 最多支持配置 2 个 DNS 服务器。'
     return
   }
-  dnsMessage.value = ''
-  dnsPending.value = true
+  invalidateDNSPreview()
+  const owner = { revision: dnsRevision, backend: dnsDetails.value.backend, draft: dnsDraft.value }
+  const operation = beginDNSOperation('preview')
+  const ownsPreview = () => operation.owns() && dnsDialogOpen.value && owner.revision === dnsRevision && owner.backend === dnsDetails.value.backend && owner.draft === dnsDraft.value && canPreviewDNS.value
   try {
     const preview = await previewDNSChange({ nameservers })
-    if (!ownsPage()) return
+    if (!ownsPreview()) return
+    if (preview.errorCode || !preview.previewId || preview.backend !== owner.backend) {
+      dnsMessage.value = `DNS 预览不可用（${preview.errorCode || '后端或预览标识不匹配'}）。`
+      return
+    }
     dnsPreview.value = preview
-    dnsMessage.value = dnsPreview.value.requiresConfirm ? '预览已生成，确认后才会应用。' : '当前后端不要求二次确认。'
+    previewOwner = { ...owner, previewId: preview.previewId }
+    dnsMessage.value = preview.requiresConfirm ? '预览已生成，确认后才会应用。' : '当前后端不要求二次确认。'
   } catch (error) {
-    if (!ownsPage()) return
-    dnsMessage.value = error instanceof Error ? error.message : 'DNS 预览失败。'
+    if (ownsPreview()) dnsMessage.value = error instanceof Error ? error.message : 'DNS 预览失败。'
   } finally {
-    if (ownsPage()) dnsPending.value = false
+    operation.finish()
   }
 }
 
 async function confirmDNS() {
-  if (!ownsPage() || !dnsPreview.value || dnsPending.value) return
-  const previewId = dnsPreview.value.previewId
-  dnsPending.value = true
+  if (!ownsPage() || !dnsDialogOpen.value || !canConfirmDNS.value || dnsPending.value || !dnsPreview.value || !previewOwner) return
+  if (previewOwner.revision !== dnsRevision || previewOwner.backend !== dnsDetails.value.backend || previewOwner.draft !== dnsDraft.value || previewOwner.previewId !== dnsPreview.value.previewId) return
+  const { previewId, backend } = previewOwner
+  // 一次性消费，传输失败也不能证明写入未发生。
+  invalidateDNSPreview()
+  const operation = beginDNSOperation('confirm')
   try {
     const result = await confirmDNSChange({ previewId, confirmed: true })
-    if (!ownsPage()) return
-    const rollbackId = result.applied && result.rollbackAvailable ? result.changeId : ''
-    await loadDetails()
-    if (!ownsPage()) return
-    dnsChangeId.value = rollbackId
-    dnsMessage.value = result.applied ? 'DNS 已应用。' : `DNS 未应用（${result.errorCode || '未知原因'}）。`
+    if (!operation.owns()) return
+    if (!result.errorCode && result.applied && result.backend === backend && result.changeId) {
+      dnsChangeId.value = result.rollbackAvailable ? result.changeId : ''
+      dnsChangeBackend.value = result.rollbackAvailable ? backend : ''
+      dnsMessage.value = 'DNS 已应用。'
+      void loadDetails()
+    } else {
+      dnsMessage.value = `DNS 未确认应用（${result.errorCode || '结果不明确'}），请先核实当前配置，再生成新预览。`
+    }
   } catch (error) {
-    if (!ownsPage()) return
-    dnsMessage.value = error instanceof Error ? error.message : 'DNS 应用失败。'
+    if (operation.owns()) dnsMessage.value = `DNS 应用结果不明确，请先核实当前配置，再生成新预览。${error instanceof Error ? error.message : ''}`
   } finally {
-    if (ownsPage()) dnsPending.value = false
+    operation.finish()
   }
 }
 
 async function rollbackDNS() {
-  if (!ownsPage() || !dnsChangeId.value || dnsPending.value) return
-  dnsPending.value = true
+  if (!ownsPage() || !dnsDialogOpen.value || !canRollbackDNS.value || !dnsChangeId.value || dnsPending.value) return
+  const changeId = dnsChangeId.value
+  const backend = dnsChangeBackend.value
+  invalidateDNSPreview()
+  const operation = beginDNSOperation('rollback')
   try {
-    const result = await rollbackDNSChange(dnsChangeId.value)
-    if (!ownsPage()) return
-    await loadDetails()
-    if (!ownsPage()) return
-    dnsChangeId.value = ''
-    dnsMessage.value = !result.applied && !result.rollbackAvailable ? 'DNS 已回滚。' : `DNS 未回滚（${result.errorCode || '未知原因'}）。`
+    const result = await rollbackDNSChange(changeId)
+    if (!operation.owns()) return
+    if (!result.errorCode && !result.applied && !result.rollbackAvailable && result.changeId === changeId && result.backend === backend) {
+      if (dnsChangeId.value === changeId && dnsChangeBackend.value === backend) {
+        dnsChangeId.value = ''
+        dnsChangeBackend.value = ''
+      }
+      dnsMessage.value = 'DNS 已回滚。'
+      void loadDetails()
+    } else {
+      dnsMessage.value = `DNS 未确认回滚（${result.errorCode || '结果不明确'}），请先核实当前配置。`
+    }
   } catch (error) {
-    if (!ownsPage()) return
-    dnsMessage.value = error instanceof Error ? error.message : 'DNS 回滚失败。'
+    if (operation.owns()) dnsMessage.value = `DNS 回滚结果不明确，请先核实当前配置。${error instanceof Error ? error.message : ''}`
   } finally {
-    if (ownsPage()) dnsPending.value = false
+    operation.finish()
   }
 }
 
 function openDNSEditor() {
-  if (!ownsPage()) return
+  if (!ownsPage() || !canPreviewDNS.value || dnsPending.value) return
+  invalidateDNSPreview()
   dnsDraft.value = editableDNS.value.join(', ')
-  dnsPreview.value = null
-  dnsMessage.value = ''
   dnsDialogOpen.value = true
 }
 
-function invalidateDNSPreview() {
+function invalidateDNSPreview(clearMessage = true) {
   if (!ownsPage()) return
+  const hadPreview = dnsPreview.value !== null || dnsOperation.value === 'preview'
+  dnsRevision++
+  previewOwner = null
   dnsPreview.value = null
-  dnsMessage.value = ''
+  if ((clearMessage || hadPreview) && !dnsWriting.value) dnsMessage.value = ''
 }
 
 async function checkMihomo(force: boolean) {
@@ -347,6 +402,7 @@ async function checkMihomo(force: boolean) {
 
 function handleManualRefresh() {
   if (!ownsPage()) return
+  invalidateDNSPreview(false)
   return loadDetails().then(() => {
     if (ownsPage() && errorMessage.value) throw new Error(errorMessage.value)
   })
@@ -423,6 +479,7 @@ onBeforeUnmount(dispose)
     </section>
 
     <template v-else-if="details">
+      <p v-if="errorMessage" class="warning-strip" role="status">详情刷新失败：{{ errorMessage }}。请先核实当前配置。</p>
       <div v-if="details.warnings.length" class="warning-strip">
         <AlertTriangle :size="17" />
         <span>{{ details.warnings.join('；') }}</span>
@@ -453,7 +510,7 @@ onBeforeUnmount(dispose)
 
         <InfrastructureDnsPanel
           :details="details"
-          :dns-details="dnsDetails"
+          :dns-details="dnsPanelDetails"
           :route-icon="Route"
           @edit="openDNSEditor"
         />
@@ -533,7 +590,7 @@ onBeforeUnmount(dispose)
         <div class="dns-editor__notice"><Route :size="18" /><span><strong>安全修改</strong><small>先生成差异预览，确认后才调用 UGOS 网络服务；应用前保存完整配置，可立即回滚。</small></span></div>
         <label class="dns-editor__field">
           <span>DNS 服务器</span>
-          <ElInput v-model="dnsDraft" placeholder="例如 223.5.5.5, 1.1.1.1" clearable @input="invalidateDNSPreview" />
+          <ElInput v-model="dnsDraft" placeholder="例如 223.5.5.5, 1.1.1.1" clearable :disabled="dnsWriting" />
           <small>支持 IPv4 或 IPv6，多个地址可用逗号或空格分隔；UGOS 最多保存 2 个地址。</small>
         </label>
         <div v-if="dnsPreview" class="dns-preview" aria-label="DNS 修改预览">
@@ -545,9 +602,9 @@ onBeforeUnmount(dispose)
       <template #footer>
         <div class="dns-editor__footer">
           <ActionButton :disabled="dnsPending" @click="dnsDialogOpen = false">取消</ActionButton>
-          <ActionButton v-if="dnsChangeId" variant="danger" :loading="dnsPending" @click="rollbackDNS">回滚上次修改</ActionButton>
-          <ActionButton v-if="!dnsPreview" variant="primary" :loading="dnsPending" @click="previewDNS">预览修改</ActionButton>
-          <ActionButton v-else variant="primary" :loading="dnsPending" @click="confirmDNS">确认应用</ActionButton>
+          <ActionButton v-if="dnsChangeId" variant="danger" :disabled="!canRollbackDNS" :loading="dnsPending" @click="rollbackDNS">回滚上次修改</ActionButton>
+          <ActionButton v-if="!dnsPreview" variant="primary" :disabled="!canPreviewDNS" :loading="dnsPending" @click="previewDNS">预览修改</ActionButton>
+          <ActionButton v-else variant="primary" :disabled="!canConfirmDNS" :loading="dnsPending" @click="confirmDNS">确认应用</ActionButton>
         </div>
       </template>
     </ElDialog>
