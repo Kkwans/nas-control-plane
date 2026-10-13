@@ -112,3 +112,13 @@
 - fixture-task-center-768-font-200-list.png: aac570a3d581be4ed050dc7f8e980d1e82ef687f0b5aa853ba1b5df80f443aaa (116190 bytes)
 - fixture-task-center-768-font-200-topbar.png: 22b5a23e557f2e86a1d0b39187cd32af61577058618122bbd2d86d6b0c13c530 (145621 bytes)
 - fixture-legacy-image-unknown-artifact.png: 56d984625f11366443df88694223188264dc8cc7802196f1d44e8e8b23f1fd5f (125158 bytes)
+
+
+## c5938af最终验收（2026-10-13 15:47 UTC）
+
+- 精确提交c5938afc673999771fc3b86abac535cfe4a1d072，[完整CI](https://github.com/Kkwans/nas-control-plane/actions/runs/38423448527)通过：655项单元、192项浏览器，含全部19项任务中心用例。Go/Compose通过，发布跳过。
+- [制品11827507615](https://github.com/Kkwans/nas-control-plane/actions/runs/38423448527/artifacts/11827507615)为21,355,559字节，SHA256 aa96c70e8e36b8753c7aa00f77120f99998e21b141b4f05cc7b154efb8d7ff13；264文件、23,318,071字节解压内容，路径/CRC/大小等检查通过。
+- 实际查看全部33张相关PNG：四宽度390/768/1280/1440 × 根字号100/200%，每组顶栏/列表/滚动列表/详情四态，加旧镜像页一张。截图与声明视口一致；33组精确SHA与fixture标记正确。
+- 八组最终滚动后关闭按钮均为44×44、完整可见且中心命中；标题sticky top0，抽屉body padding0。八组查看详情按钮也完整可见且中心命中。此前390/100%用例现按钮top506.234375、bottom550.234375，视口640，未降低ratio1要求。
+- 全部组合无横向overflow，长引用、中文错误与代码正常折行，script字样作为文本；小屏整体滚动可达列表/详情/分页。旧镜像页显示“已完成 / 镜像未核实”，不误报删除。axe、reduced-motion、键盘焦点和生命周期fixture通过。
+- Task-center范围无剩余验收阻断，保留11→3→1失败历史。390/200%背景总览时间既有裁切不属于本片，未宣称整页完美。测试为Chromium加模拟API；根字号15/30px不等同浏览器zoom，也不代表真实NAS任务、手机软键盘、OS后台标签或人工读屏验收。
