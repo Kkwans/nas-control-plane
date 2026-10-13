@@ -1,6 +1,6 @@
 # M13：服务侧独立指标采集与共享实时快照
 
-日期：2026-10-13。A代码已完成并通过隔离测试与独立审查，待提交及CI；B/C仍为后续方案。未运行真实Agent、未连接NAS、未采集当前机器指标、未访问Docker。
+日期：2026-10-13。A已提交e776c17并通过隔离测试、独立审查及CI 38377913634；B/C仍为后续方案。未运行真实Agent、未连接NAS、未采集当前机器指标、未访问Docker。
 
 调查基线：HEAD `7060732a416279ebf6886670e9f044df9bd40ca1`，工作树已有其他模块并行修改。本文所列行号以调查时文件为准，实施时按符号定位。已读 `AGENTS.md`、2026-10-13 roadmap/backend-audit/frontend-audit。遵守 Agent 独占宿主机能力，Server 管生命周期与 SQLite，浏览器只消费 API；不启用 OpenSpec。
 
@@ -133,3 +133,11 @@ A 完成 = 无浏览器仍产生一致、有界、可清理历史，错误可见
 - 共享10秒关闭预算，先取消owner上下文，再并行等待HTTP/Job/Collector；正常RPC/SQL须响应context。超时不能强制结束不合作的外部实现，不能宣称硬杀保证。
 - Fake时钟、故障Source、临时SQLite的四包TestMetrics race通过，root另跑3轮；无页面3分钟、8天源故障清理、并发快照隔离、原子失败重试及100次HTTP/5次SSE零写入均覆盖。go vet ./...通过。
 - SQL上下界/LIMIT、共享summary/SSE、实时过期UI、Docker事件与断线对账尚未实现；真实NAS与性能基准未执行。旧版MetricSamples仍是since-only查询，后续B改造不能静默裁切温度却声称数据完整。
+
+## 11. B实施收敛决定
+
+B1先完成GET/summary SSE共享A的Latest、15秒接收/数据双年龄判断、64连接名额、5秒写入/flush预算与15秒注释心跳。保留每连接ticker读取缓存，不新增Subscribe队列；interval仅为发送节拍，不触发summary RPC。Docker仍直读，混合流发送前再读summary以避免其等待导致陈旧发送。responseRecorder增加可传播错误的FlushError。
+
+前端统一store、Overview与AppShell的陈旧/部分源失败状态，onopen/外层时间/重复数据不得保鲜；停止MonitoringView将实时秒级summary灌回持久化分钟历史，避免补造A故意留下的缺口。历史写失败与实时源不可用分别说明。
+
+B2单独完成SQL上下界及limit+1检测、明确响应预算与完整图表gap。旧版超限温度集合不得静默截断或删除，超过响应预算应返回稳定显式错误并提示缩小范围。Docker共享/事件对账、会话撤销传播均不在B1完成声明内。

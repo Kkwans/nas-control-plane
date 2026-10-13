@@ -89,3 +89,20 @@
 - 8d75639/38372051121终端输入取消首片CI通过。fake输入泵覆盖满缓冲、正常转发、错误与超时；独立审查无阻塞。尚未覆盖完整handler清理顺序的独立fake测试，容器同步写可能仍阻塞，会话撤销传播另行实施。
 - 2bb32b3存储首片：版本CAS/仅创建/条件删除与可重复迁移，controlstore race及HTTP Job兼容通过，双连接竞争20轮通过。旧运行时仍用兼容Upsert，本片不宣称B05已修复。
 - 补测旧接口INSERT revision=1及UPDATE保留取消/错误元数据，race通过。
+
+## 09:32 UTC 可靠性与导航闭环
+
+- db959e4总览收藏四态、08b1b96安全stale socket恢复及168855f Job运行时/协议均已获得各自完整CI成功。M09实际运行的是普通Linux CI隔离Unix socket与受控异常退出，不是NAS部署。
+- ca3aa18增加不安全HTTP方法来源检查、端口保留代理契约与稳定403映射；Go CI通过，首次整体CI受已有导航焦点测试失败影响。
+- 7060732两项Job浏览器测试通过；96通过/1失败的真实失败是窄高导航从769px回768px时CSS先隐藏焦点元素、MQL回调后到。9bf1de9修复焦点历史与过时断点事件，增加6项组件回归，保留原浏览器断言。
+- [9bf1de9 CI 38376241497](https://github.com/Kkwans/nas-control-plane/actions/runs/38376241497)全部必需检查成功，闭环上述导航失败及来源防护、Job浏览器验证。未跳过失败测试。
+- 41c9d5c辅助文字提升：数据库摘要与移动Docker元数据字号下限12px并随实际偏好缩放；路径换行。全前端194项单元、typecheck/lint/build通过；新增30项视口×字号浏览器用例已发现，执行和新截图尚待CI。
+- 来源防护尚未进行真实nginx/双站点浏览器攻击或NAS实机测试；Go原生Origin回退比较authority而非scheme，详细边界见来源方案。
+
+## 09:40 UTC 独立历史采集与辅助字号
+
+- [41c9d5c CI 38377160024](https://github.com/Kkwans/nas-control-plane/actions/runs/38377160024)成功：194项单元测试、127项浏览器测试（含30项新字号矩阵）、Go/Compose检查通过。90张fixture PNG已下载并核验SHA256；辅助文字截图视觉复核单独记录，不能仅以断言通过替代视觉验收。
+- e776c17已推送：M13-A服务生命周期采集、主样本/温度原子写、独立7天清理及HTTP/SSE零历史写入。两个独立后端审查无阻塞；四包TestMetrics race×3、完整controlstore race及go vet ./...通过；补测同分钟候选错误恢复和待写失败保持，OpenAPI检查通过。[CI 38377913634](https://github.com/Kkwans/nas-control-plane/actions/runs/38377913634)全部必需检查成功。
+- A仍保留HTTP/SSE直接summary读取；多标签消重、过期提示与流预算属于正在实施的B1。有界历史查询与完整图表缺口为B2，Docker对账为C。所有测试仅fake/临时SQLite，未采集真实主机或NAS指标。
+
+- [辅助文字截图复核](NCP-2026-10-13-secondary-text.md)：30张目标截图通过；共同基线47张RGB不变、12张预期变化，另1张日志滚动后全页捕获出现悬浮页头/skip-link异常，已安排视口断言与规范全页重拍，尚未关闭该异常。
