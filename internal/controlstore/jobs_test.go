@@ -399,3 +399,46 @@ func TestJobsListIncludesRevisionMetadataAndStableOrder(t *testing.T) {
 		t.Fatal("list masked database failure")
 	}
 }
+
+func TestLegacyUpsertJobInitialRevision(t *testing.T) {
+	store, _ := openJobTestStore(t)
+	ctx := context.Background()
+	job := jobFixture("legacy-insert")
+	if err := store.UpsertJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	got := requireJob(t, store, job.ID)
+	if got.Revision != 1 {
+		t.Fatalf("legacy insert revision = %d, want 1", got.Revision)
+	}
+	job.Revision = 1
+	if !reflect.DeepEqual(got, job) {
+		t.Fatalf("legacy insert changed record: got %#v, want %#v", got, job)
+	}
+}
+
+func TestLegacyUpsertJobPreservesLifecycleMetadata(t *testing.T) {
+	store, _ := openJobTestStore(t)
+	ctx := context.Background()
+	job := jobFixture("legacy-update")
+	job.CancellationStatus, job.ErrorCode = "unknown", "JOB_EXECUTION_TIMEOUT"
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	// 旧调用方的快照不含新增字段；更新不得清除已保存的生命周期元信息。
+	legacy := jobFixture(job.ID)
+	legacy.Status, legacy.Message = "interrupted", "旧接口更新"
+	if err := store.UpsertJob(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	got := requireJob(t, store, job.ID)
+	if got.CancellationStatus != job.CancellationStatus || got.ErrorCode != job.ErrorCode {
+		t.Fatalf("legacy update lost lifecycle metadata: %#v", got)
+	}
+	if got.Revision != 2 || got.Status != legacy.Status || got.Message != legacy.Message {
+		t.Fatalf("legacy update did not advance record: %#v", got)
+	}
+	if _, err := store.UpdateJob(ctx, job, 1); !errors.Is(err, ErrJobConflict) {
+		t.Fatalf("legacy update did not invalidate stale revision: %v", err)
+	}
+}
