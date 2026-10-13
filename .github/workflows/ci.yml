@@ -108,8 +108,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}
-          # 仅上传明确的 fixture PNG，不包含 trace、认证状态或其他测试输出。
-          path: frontend/test-results/**/ui-captures/*.png
+          # 仅上传 fixture PNG 与捕获坐标 JSON，不包含 trace、认证状态或其他测试输出。
+          path: |
+            frontend/test-results/**/ui-captures/*.png
+            frontend/test-results/**/ui-captures/*-capture-state.json
           if-no-files-found: warn
           retention-days: 14
 

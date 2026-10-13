@@ -1,4 +1,5 @@
-import { test, expect, type Locator } from '@playwright/test'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import { installMockApi } from './mockApi'
 import { waitForPageReady } from './pageReadiness'
@@ -24,6 +25,33 @@ async function expectReadableText(locator: Locator, singleLine = false) {
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1)
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight + 1)
   if (singleLine) expect(layout.lineTops).toHaveLength(1)
+}
+
+// fixed/sticky 必须按当前视口坐标验收，不能从滚动态 fullPage 拼图推断遮挡。
+async function expectUnobstructedShell(page: Page) {
+  const skipLink = page.locator('.skip-link')
+  await expect(skipLink).not.toBeFocused()
+  await expect(skipLink).not.toBeInViewport()
+  const header = page.locator('.topbar')
+  await expect(header).toBeInViewport({ ratio: 1 })
+  const bounds = (await header.boundingBox())!
+  expect(bounds.y).toBeCloseTo(0, 0)
+  expect(bounds.height).toBeGreaterThan(0)
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(page.viewportSize()!.height)
+  expect(bounds.x).toBeGreaterThanOrEqual(0)
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(page.viewportSize()!.width)
+  return page.evaluate(() => {
+    const skip = document.querySelector('.skip-link')!
+    const header = document.querySelector('.topbar')!
+    return {
+      scrollY: window.scrollY,
+      header: header.getBoundingClientRect().toJSON(),
+      skipLink: skip.getBoundingClientRect().toJSON(),
+      skipLinkFocused: document.activeElement === skip,
+      activeElement: document.activeElement?.tagName,
+      activeElementRole: document.activeElement?.getAttribute('role'),
+    }
+  })
 }
 
 for (const width of [320, 390, 768]) {
@@ -126,7 +154,24 @@ for (const width of [390, 768, 1280, 1440]) {
     const bounds = (await hours.boundingBox())!
     expect(bounds.x).toBeGreaterThanOrEqual(0)
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
+    // 先保留交互后的真实滚动态；不改变焦点，确保未聚焦的 skip-link
+    // 没有遮挡视口，sticky header 仍紧贴当前视口顶部。
+    const scrolledState = await expectUnobstructedShell(page)
     if (process.env.NCP_CAPTURE_UI === '1') {
+      await page.screenshot({ path: testInfo.outputPath('ui-captures', `fixture-logs-time-range-${width}-scrolled-viewport.png`), fullPage: false, animations: 'disabled' })
+    }
+    // 仅重置滚动坐标，再生成规范全页图；不通过 blur/focus 掩盖焦点问题。
+    await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+    const canonicalState = await expectUnobstructedShell(page)
+    const captureState = JSON.stringify({ scrolledState, canonicalState }, null, 2)
+    await testInfo.attach(`logs-time-range-${width}-capture-state`, {
+      body: captureState,
+      contentType: 'application/json',
+    })
+    if (process.env.NCP_CAPTURE_UI === '1') {
+      await mkdir(testInfo.outputPath('ui-captures'), { recursive: true })
+      await writeFile(testInfo.outputPath('ui-captures', `fixture-logs-time-range-${width}-capture-state.json`), captureState, 'utf8')
       await page.screenshot({ path: testInfo.outputPath('ui-captures', `fixture-logs-time-range-${width}.png`), fullPage: true, animations: 'disabled' })
     }
   })
