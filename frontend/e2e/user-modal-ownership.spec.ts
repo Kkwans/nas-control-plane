@@ -110,13 +110,21 @@ async function openDanger(page: Page, username: string, action: '禁用账号' |
 
 async function expectPendingAccountLocked(page: Page, username: string) {
   await expect(passwordButton(page, username)).toBeDisabled()
-  await row(page, username).getByRole('button', { name: '更多账号操作' }).click()
-  const status = page.getByRole('menuitem', { name: '禁用账号', exact: true })
-  const remove = page.getByRole('menuitem', { name: '删除账号', exact: true })
+  const trigger = row(page, username).getByRole('button', { name: '更多账号操作' })
+  await trigger.click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  const menuId = await trigger.getAttribute('aria-controls')
+  expect(menuId).toBeTruthy()
+  const menu = page.locator(`[id="${menuId}"]`)
+  await expect(menu).toBeVisible()
+  const status = menu.getByRole('menuitem', { name: '禁用账号', exact: true })
+  const remove = menu.getByRole('menuitem', { name: '删除账号', exact: true })
   await expect(status).toBeDisabled()
   await expect(remove).toBeDisabled()
-  await page.keyboard.press('Escape')
-  await expect(status).toBeHidden()
+  // 点击原触发器正常收起；按实际弹层等待退场，避免 role 查询消失被误认为实际弹层已退场。
+  await trigger.click()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  await expect(menu).toBeHidden()
   await expect(dialog(page)).toBeHidden()
 }
 
