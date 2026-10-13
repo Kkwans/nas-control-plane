@@ -14,7 +14,7 @@
 - 前端已有设计 Token、Lucide、44px触控规范、reduced-motion、可复用 ResourceState/requestSequence/sessionLifecycle。
 - 2026-10-10基线CI `38031600522` 成功；本轮重新运行前端117测试、lint、typecheck、生产build均通过。最大JS chunk515.6KiB，低于540KiB现有预算；不能仅凭Vite提示就盲目改拆包。
 - 本轮 controlstore/compose/database/docker Go测试通过。完整Go、race、浏览器与真实NAS验证仍须独立执行。
-- 当前浏览器门槛：Playwright浏览器下载返回损坏压缩包；系统Chromium启动报本地socket Operation not permitted，申请执行权限后的重试仍失败。因此本轮视觉截图未完成，静态审计不可冒充已看过界面。通过开发分支CI获得隔离Chromium证据后，再实施视觉重排。
+- 当前浏览器门槛：Playwright浏览器下载返回损坏压缩包；系统Chromium启动报本地socket Operation not permitted，申请执行权限后的重试仍失败。本地浏览器不可用，改由CI提供截图证据。已由开发分支CI获得48张隔离Chromium截图，见[本轮视觉审查](../qa/NCP-2026-10-13-visual-audit.md)，可据证据实施局部修复；并不代表完整任务流验收。
 - 详见[后端审计](NCP-2026-10-13-backend-audit.md)、[前端审计](NCP-2026-10-13-frontend-audit.md)、[技能选择](NCP-2026-10-13-skills.md)。静态风险的发生前提与需验证项不得省略。
 
 ## 产品方向
@@ -29,19 +29,19 @@
 
 | 编号 | 优先级/模块 | 技术边界与实现方向 | 验收/退出条件 | 状态 |
 |---|---|---|---|---|
-| M00 | P0 接手与持续CI | 保留基线，审计与计划；只增加开发分支push CI，不触发release | 文档可追溯，分支CI实际运行，工具限制明确 | 进行中 |
-| M01 | P0 Job快照隔离 | registry锁内深复制Layers及指针字段，返回值/持久化不持有内部可变对象 | 并发progress/get/list/JSON测试+race，无别名写回 | 已推送192fed6，CI待确认 |
-| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 代码与响应测试完成，浏览器待验收 |
-| M03 | P1 Compose前端事务 | project/path/session/revision绑定；提交与确认冻结payload；保存期间新编辑仍dirty | 延迟保存、切项目、关闭、编辑后迟到校验、重复确认回归 | 待实现 |
-| M04 | P1 数据库连接隔离 | source变化清空敏感草稿；旧请求无权更新新页面；发现/缺失/错误分态 | A慢B快、卸载、失败重试和深链验证 | 待实现 |
-| M05 | P1 Docker/日志请求隔离 | 详情latest-wins；日志query/cursor/follow/busy同一代次 | A/B详情、筛选中加载更多、迟到实时/历史合并回归 | 待实现 |
-| M06 | P1 Job持久化与取消 | 独立单调状态机；持久化顺序/删除墓碑；取消先请求后确认；错误可见 | fake store乱序/失败/删除后迟写/立即取消/重启恢复 | 待设计细化 |
-| M07 | P1 Compose后端恢复 | 目标串行化、基线hash、唯一备份；独立有界回滚context；分开配置/运行恢复结果 | 同秒/并发部署、超时回滚、外部修改、部分失败 | 待实现 |
+| M00 | P0 接手与持续CI | 保留基线，审计与计划；只增加开发分支push CI，不触发release | 文档可追溯，分支CI实际运行，工具限制明确 | 已推送f451fe2，CI通过 |
+| M01 | P0 Job快照隔离 | registry锁内深复制Layers及指针字段，返回值/持久化不持有内部可变对象 | 并发progress/get/list/JSON测试+race，无别名写回 | 已推送192fed6，CI通过 |
+| M02 | P0 本地图标安全 | 复用现有proxy SVG CSP sandbox/nosniff策略；保留图片兼容 | 上传/读取/条件响应安全header，浏览器恶意fixture不执行脚本 | 已推送32b2a47，响应测试/CI通过，浏览器脚本行为待验收 |
+| M03 | P1 Compose前端事务 | project/path/session/revision绑定；提交与确认冻结payload；保存期间新编辑仍dirty | 延迟保存、切项目、关闭、编辑后迟到校验、重复确认回归 | 已推送d014705；后代f06479f完整CI通过 |
+| M04 | P1 数据库连接隔离 | source变化清空敏感草稿；旧请求无权更新新页面；发现/缺失/错误分态 | A慢B快、卸载、失败重试和深链验证 | 已推送c2ee5ba，聚焦测试与CI通过 |
+| M05 | P1 Docker/日志请求隔离 | 详情latest-wins；日志query/cursor/follow/busy同一代次 | A/B详情、筛选中加载更多、迟到实时/历史合并回归 | 已推送bfbe091；f06479f修正可见点击目标，CI全部通过 |
+| M06 | P1 Job持久化与取消 | 独立单调状态机；持久化顺序/删除墓碑；取消先请求后确认；错误可见 | fake store乱序/失败/删除后迟写/立即取消/重启恢复 | [详细方案](NCP-2026-10-13-job-lifecycle.md)完成，按存储/执行器/协议分片 |
+| M07 | P1 Compose后端恢复 | 目标串行化、基线hash、唯一备份；独立有界回滚context；分开配置/运行恢复结果 | 同秒/并发部署、超时回滚、外部修改、部分失败 | 首切片32c1780已推送，其余边界未完成 |
 | M08 | P1 流式资源回收 | terminal通道send感知context；会话撤销/过期传播至PTY/SSE | fake双向流退出、泄漏、改密/禁用/退出后的输入拒绝 | 待设计细化 |
 | M09 | P1 Agent重启恢复 | 安全识别stale socket；不删除活跃端点/普通文件/symlink | 隔离socket异常退出后恢复及反例 | 待实现 |
 | M10 | P1 安全边界提案 | HTTP不安全方法Origin/CSRF与代理外部origin契约；socket专用身份设计 | 同源/跨端口/CLI回归；真实部署权限变更需单独授权 | 待设计/兼容审查 |
-| M11 | P2 导航与可达性 | 移动导航关闭inert，打开焦点与背景隔离，Escape/路由焦点；模块活跃态 | 390/768/1280/1440键盘/读屏/窄高屏 | 待截图基线 |
-| M12 | P2 状态与排版 | 总览收藏四态、数据库深链、监控空态；字号/间距/图标/断点归并 | 各页慢/空/错/刷新，200%字体、reduced-motion，无裁切 | 待截图基线 |
+| M11 | P2 导航与可达性 | 移动导航关闭inert，打开焦点与背景隔离，Escape/路由焦点；模块活跃态 | 390/768/1280/1440键盘/读屏/窄高屏 | 已推送00c5f8f，本地160项回归通过，浏览器CI进行中 |
+| M12 | P2 状态与排版 | 总览收藏四态、数据库深链、监控空态；字号/间距/图标/断点归并 | 各页慢/空/错/刷新，200%字体、reduced-motion，无裁切 | 首切片b208e40已推送，12项浏览器布局回归待CI |
 | M13 | P2 独立采集与事件 | 服务侧单采集器+有界历史；SSE共享订阅；Docker断线对账 | 无页面采集、多标签不重复、断线恢复、资源预算 | 待设计细化 |
 | M14 | P2 数据库能力完善 | bigint/decimal入站精度、SQL注释/RETURNING结果、总字节限额 | 精确往返、主键变更、超大结果有界，不破坏Root SQL能力 | 待设计细化 |
 | M15 | P3 功能扩展 | 基于前述稳定Job的任务中心、日志导出、终端多会话、可选告警 | 每项先明确需求与容量/保留/失败策略，不无界扩张 | 候选，后续排期 |
