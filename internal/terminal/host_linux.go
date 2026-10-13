@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/creack/pty"
@@ -62,7 +61,7 @@ func (s hostStarter) Start(ctx context.Context, request StartRequest) (Session, 
 	}
 	command := exec.CommandContext(ctx, shell, arguments...)
 	command.Dir = "/root"
-	locale := supportedTerminalLocale()
+	locale := supportedTerminalLocale(ctx)
 	command.Env = []string{
 		"HOME=/root",
 		"USER=root",
@@ -186,18 +185,6 @@ func appendCapabilityReason(reason, addition string) string {
 func pathExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func supportedTerminalLocale() string {
-	output, err := exec.Command("locale", "-a").Output()
-	if err == nil {
-		for _, locale := range strings.Fields(strings.ToLower(string(output))) {
-			if locale == "c.utf8" || locale == "c.utf-8" {
-				return "C.UTF-8"
-			}
-		}
-	}
-	return "C"
 }
 
 func waitForTerminalReady(reader *os.File, contexts ...context.Context) (bool, shellCapabilityProbe) {

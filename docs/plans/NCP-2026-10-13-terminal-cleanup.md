@@ -87,3 +87,17 @@ Manager.Open原先在全局锁内调用Starter.Start及Metadata。一个慢启�
 不新增不存在的CloseAll或每用户配额，不修改host/container传输、协议或依赖。卡住的Starter仍占其名额，H2不保证单次Open总时长有界；locale、PTY创建和SDK attach握手保留为独立问题。
 
 H2审查补充：裸主错误与带码的清理错误组合时，显式固定原主错误码（含空码），防止次级取消/目标错误改变原RPC失败分类，同时保留errors.Is因果。生产starter的每次会话资源独立；Moby首协商失败后重试存在静态观察到的潜在内部version并发边界，尚未动态复现，不将此片描述为SDK所有路径并发保证，默认容量1保持不变。
+
+## M08-H3：主机 locale 探测预算
+
+基线：ff92b16ec422d9008312dd4cfac35ca39899e5ed。状态：四文件实现与独立审查完成，精确fake/race、全包编译、vet及本机/ARM64构建通过；真实helper进程行为待隔离CI。
+
+现有locale -a通过无context的Output执行，位于PTY创建前，可无限等待并捕获无界stdout。H3只修改这一探测，不扩展到Bash能力探测或SDK attach。
+
+- 继承调用context，使用750ms专属预算及100ms WaitDelay；固定命令/参数，不通过Shell或改变权限/进程组。
+- stdout使用最多32KiB的专用writer，单次超限仅复制剩余预算并返回错误；stderr丢弃。仅完整成功、未取消且未超限的精确c.utf8/c.utf-8 token选C.UTF-8，其余回退C。
+- 不缓存，避免一次取消永久降级或系统locale变更后读取过时结果；LANG/LC_ALL保持同一选择。
+- 同步Run保留唯一直属child等待责任。WaitDelay约束继承管道收尾，不抢占PATH查找、StartProcess或任意内核Process.Wait，不承诺850ms硬截止或回收全部后代。
+- 本地仅fake预算/取消/容量/解析/race与编译；实际helper进程退出、取消、超限和继承管道行为交由既有隔离Linux CI，fixture须显式拥有并清理其资源，不在用户NAS运行。
+
+Bash能力探测虽有750ms context，但CombinedOutput与继承管道仍需另片处理；H3完成不能被描述为整个HostStarter.Start全程有界。

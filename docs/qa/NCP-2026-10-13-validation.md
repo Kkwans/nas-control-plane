@@ -269,3 +269,11 @@
 - 根因是横向wrap规则延续到窄屏column布局及说明的100% flex-basis。修复显式关闭column wrapping、重置说明basis，并让分页/跟随控件在放大字体下换行；页大小选择器改为随rem增宽，避免“5…”裁切。
 - 第三个失败是新增SSE快照用例点击隐藏Element Plus input；改为真实可见switch包装元素，不使用force。原有overflow断言不变；新增导出用例补充100%/200% body/main宽度及分页文字不裁切断言。
 - 独立源码审查、59项聚焦测试、lint/类型与fixture类型检查通过，替换CI与实际像素复核尚待执行。初次失败事实及制品hash见[日志导出视觉复核](NCP-2026-10-13-log-export-visual.md)，不得追溯改写为通过。
+
+## 14:12 UTC locale 探测资源边界
+
+- H3四文件冻结并独立审查：仅locale探测继承父context，750ms预算、100ms WaitDelay及32KiB固定stdout；stderr丢弃，完整成功且精确命中才选C.UTF-8，否则C，不缓存。
+- 精确纯fake/data/config选择器二十轮15.115s、race一轮1.781s通过，独立相同选择器也通过；全包仅编译、vet及本机/ARM64命令构建通过。实际locale/helper/PTY/监听器未在本地运行。
+- CI helper覆盖成功/失败/超限/父取消及管道未关闭；继承管道模拟由两个测试直属child持有真实exec stdout-copy管道，各自唯一Wait owner和有界失败清理，不能据此宣称生产回收任意后代。取消测试记录Wait后的context错误，防止把探测deadline误作显式父取消通过。
+- WaitDelay不抢占Process.Wait或PATH/启动中的内核等待，H2预留不会因未知owner提前释放；Bash能力CombinedOutput仍为独立缺口。
+- 日志窄屏修复37354be已推送并核对远端，[替换CI 38411236238](https://github.com/Kkwans/nas-control-plane/actions/runs/38411236238)进行中，未将初次失败改写为通过。
