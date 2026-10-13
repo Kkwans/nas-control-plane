@@ -128,7 +128,7 @@ describe('bootstrap 只读状态调和', () => {
     },
   )
 
-  it.each(['AUTH_INPUT_INVALID', 'VALIDATION_ERROR', 'AUTH_ORIGIN_FORBIDDEN', 'REQUEST_BODY_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE'])(
+  it.each(['AUTH_INPUT_INVALID', 'VALIDATION_ERROR', 'AUTH_ORIGIN_FORBIDDEN', 'AUTH_RATE_LIMITED', 'REQUEST_BODY_TOO_LARGE', 'UNSUPPORTED_MEDIA_TYPE'])(
     '明确 %s 不触发调和', async (code) => {
       const error = new NcpApiError(code, 'AUTH_UNAVAILABLE 503')
       apiMocks.bootstrapRoot.mockRejectedValue(error)

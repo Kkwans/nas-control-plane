@@ -65,6 +65,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '429':
+          $ref: '#/components/responses/AuthRateLimited'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -111,6 +113,8 @@ paths:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '429':
+          $ref: '#/components/responses/AuthRateLimited'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -2631,6 +2635,20 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   responses:
+    AuthRateLimited:
+      description: AUTH_RATE_LIMITED（含 requestId）。同一 handler 的 login/bootstrap 共用突发 10 次、每 5 秒补充 1 次、最多 2 个在途凭据请求的预算；bootstrap 创建与随后登录共占一次。拒绝发生在认证调用前，不设置或清除 Cookie。预算按 handler 隔离并在重启时重置，不按账号或转发头分组；持续攻击仍可能影响正常登录。不自动重放凭据，请稍后手动重试。
+      headers:
+        Retry-After:
+          description: 建议等待的整数秒，向上取整且至少 1 秒；不保证届时准入。
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
     RequestBodyTooLarge:
       description: 完整 JSON 请求体超过该操作的字节上限；稳定错误码 HTTP_REQUEST_BODY_TOO_LARGE，包含 requestId。仅在通过原有来源、认证、依赖、参数及 MIME 前置校验后检查实际请求体，不依赖 Content-Length；不会执行后续业务操作。不返回请求体或底层读取错误。
       content:

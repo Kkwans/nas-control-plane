@@ -184,6 +184,7 @@ type handler struct {
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
+	authAdmission       *authAdmission
 	controlStore        ControlStore
 	monitoringHistory   MonitoringHistoryStore
 	summarySnapshots    SummarySnapshots
@@ -204,6 +205,10 @@ type handler struct {
 }
 
 func NewHandler(config Config) http.Handler {
+	return newHandlerWithAuthAdmission(config, newAuthAdmission(time.Now))
+}
+
+func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.Handler {
 	if config.Agent == nil {
 		config.Agent = socketAgentClient{}
 	}
@@ -258,6 +263,7 @@ func NewHandler(config Config) http.Handler {
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
+		authAdmission:       admission,
 		controlStore:        config.ControlStore,
 		monitoringHistory:   config.MonitoringHistory,
 		summarySnapshots:    config.SummarySnapshots,

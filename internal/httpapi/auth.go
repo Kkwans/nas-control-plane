@@ -84,6 +84,11 @@ func (api *handler) bootstrap(response http.ResponseWriter, request *http.Reques
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
+	release, admitted := api.admitCredentials(response, request)
+	if !admitted {
+		return
+	}
+	defer release()
 	if _, err := api.auth.Bootstrap(request.Context(), credentials.Username, credentials.Password); err != nil {
 		api.writeAuthError(response, request, err)
 		return
@@ -115,6 +120,11 @@ func (api *handler) login(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusBadRequest, "AUTH_INPUT_INVALID", "用户名或密码格式无效。")
 		return
 	}
+	release, admitted := api.admitCredentials(response, request)
+	if !admitted {
+		return
+	}
+	defer release()
 	session, err := api.auth.Login(request.Context(), credentials.Username, credentials.Password)
 	if err != nil {
 		api.writeAuthError(response, request, err)

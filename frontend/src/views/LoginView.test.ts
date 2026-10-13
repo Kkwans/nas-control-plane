@@ -207,3 +207,52 @@ describe('LoginView 初始化结果恢复', () => {
     expect(authenticated).not.toHaveBeenCalled()
   })
 })
+
+
+describe('LoginView 认证预算反馈', () => {
+  it.each(['setup', 'anonymous'] as const)('%s 限流释放忙碌状态，仅手动重试才继续', async (state) => {
+    vi.useFakeTimers()
+    try {
+      store.state = state
+      await nextTick()
+      const request = state === 'setup' ? api.bootstrapRoot : api.loginRoot
+      const otherRequest = state === 'setup' ? api.loginRoot : api.bootstrapRoot
+      const pending = deferred<unknown>()
+      request.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ user })
+      input(0, 'root'); input(1, 'fake-rate-secret')
+      if (state === 'setup') input(2, 'fake-rate-secret')
+      submit(); await settle(); submit()
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(host.querySelector('button')!.disabled).toBe(true)
+      expect([...host.querySelectorAll('input')].every((element) => element.disabled)).toBe(true)
+
+      const message = '认证请求过于频繁，请稍后重试。'
+      pending.reject(new NcpApiError('AUTH_RATE_LIMITED', message))
+      await settle()
+      expect(host.querySelector('[role=alert]')?.textContent).toBe(message)
+      expect(host.querySelector('.access-form__notice')).toBeNull()
+      expect(host.textContent).not.toContain('fake-rate-secret')
+      expect(store.state).toBe(state)
+      expect(store.user).toBeNull()
+      expect(store.isAuthenticated).toBe(false)
+      expect(host.querySelector('button')!.disabled).toBe(false)
+      expect([...host.querySelectorAll('input')].every((element) => !element.disabled)).toBe(true)
+      expect(authenticated).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(60_000); await settle()
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(otherRequest).not.toHaveBeenCalled()
+      expect(api.requestAuthStatus).not.toHaveBeenCalled()
+
+      submit(); await settle()
+      expect(request).toHaveBeenCalledTimes(2)
+      expect(store.isAuthenticated).toBe(true)
+      expect(authenticated).toHaveBeenCalledTimes(1)
+      expect(host.querySelector('[role=alert]')).toBeNull()
+      expect([...host.querySelectorAll('input[type=password]')].every((element) => (element as HTMLInputElement).value === '')).toBe(true)
+      expect(otherRequest).not.toHaveBeenCalled()
+      expect(api.requestAuthStatus).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
