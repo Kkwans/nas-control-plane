@@ -274,8 +274,8 @@ export async function requestDockerInventory(fetcher: typeof fetch = fetch, sign
   return requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
 }
 
-export async function requestDockerResources(fetcher: typeof fetch = fetch): Promise<DockerResources> {
-  return requestJson('/api/v1/docker/resources', {}, isDockerResources, fetcher, 'DOCKER_RESOURCES_RESPONSE_INVALID')
+export async function requestDockerResources(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerResources> {
+  return requestJson('/api/v1/docker/resources', signal ? { signal } : {}, isDockerResources, fetcher, 'DOCKER_RESOURCES_RESPONSE_INVALID')
 }
 
 export async function requestServices(fetcher: typeof fetch = fetch): Promise<ServiceListResponse> {

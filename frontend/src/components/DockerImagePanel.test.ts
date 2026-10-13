@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed, createApp, defineComponent, h, nextTick, ref, type App } from 'vue'
 import type { JobSnapshot } from '@/api/system'
 import DockerImagePanel from './DockerImagePanel.vue'
+import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 
-const hooks = vi.hoisted(() => ({ downloads: vi.fn(), local: vi.fn(), warning: vi.fn() }))
+const hooks = vi.hoisted(() => ({ downloads: vi.fn(), local: vi.fn(), warning: vi.fn(), inventoryRefresh: vi.fn() }))
 vi.mock('@/composables/useDockerImageDownloads', () => ({ useDockerImageDownloads: hooks.downloads }))
 vi.mock('@/composables/useDockerLocalImages', () => ({ useDockerLocalImages: hooks.local }))
-vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ refresh: vi.fn() }) }))
+vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ refresh: hooks.inventoryRefresh }) }))
 vi.mock('./DockerHubBrowser.vue', () => ({ default: defineComponent({ emits: ['job-created'], setup(_, { emit }) { return () => h('button', { class: 'hub-created-stub', onClick: () => emit('job-created', job()) }, 'fixture 创建下载任务') } }) }))
-vi.mock('./CreateContainerDrawer.vue', () => ({ default: { render: () => null } }))
+vi.mock('./CreateContainerDrawer.vue', () => ({ default: defineComponent({ emits: ['created'], setup(_, { emit }) { return () => h('button', { class: 'container-created-stub', onClick: () => emit('created', 'container-A') }, 'fixture 容器已创建') } }) }))
 vi.mock('./ListPageSizeControl.vue', () => ({ default: { render: () => null } }))
 vi.mock('./NcpSelect.vue', () => ({ default: { render: () => null } }))
 vi.mock('./SectionTabs.vue', () => ({ default: defineComponent({ emits: ['update:modelValue'], setup(_, { emit }) { return () => h('button', { onClick: () => emit('update:modelValue', 'downloads') }, '下载任务') } }) }))
@@ -56,6 +57,7 @@ async function mountDownloads() {
 function button(host: HTMLElement, text: string) { return [...host.querySelectorAll('button')].find((item) => item.textContent === text)! }
 beforeEach(() => {
   vi.clearAllMocks()
+  beginSession()
   downloads = downloadState(); hooks.downloads.mockReturnValue(downloads)
   hooks.local.mockReturnValue({
     images: ref([]), loading: ref(false), error: ref(''), removeFailures: ref([]), selectedImageIds: ref([]), localPage: ref(1),
@@ -163,5 +165,33 @@ describe('DockerImagePanel 下载观察状态', () => {
     const row = host.querySelector('.download-row')!
     expect(row.textContent).toContain('已完成'); expect(row.textContent).toContain('镜像已存在')
     expect(row.textContent).not.toContain('/s'); expect(row.textContent).not.toContain('进度连接中断'); expect(row.textContent).not.toContain('上次报告')
+  })
+})
+
+
+describe('DockerImagePanel 创建后对账归属', () => {
+  it.each(['session', 'unmount'])('%s 失效发生在 inventory await 期间时不提示或开始镜像 GET', async (kind) => {
+    let resolve!: (value: { failed: string[] }) => void
+    hooks.inventoryRefresh.mockReturnValue(new Promise<{ failed: string[] }>((done) => { resolve = done }))
+    const host = await mountDownloads()
+    const local = hooks.local.mock.results[0]!.value as { refresh: ReturnType<typeof vi.fn> }
+    expect(local.refresh).toHaveBeenCalledTimes(1)
+    host.querySelector<HTMLButtonElement>('.container-created-stub')!.click()
+    expect(hooks.inventoryRefresh).toHaveBeenCalledExactlyOnceWith({ inventory: true, force: true })
+    if (kind === 'session') invalidateSession()
+    else { const entry = mounted.pop()!; entry.app.unmount(); entry.host.remove() }
+    resolve({ failed: ['inventory'] }); await Promise.resolve(); await nextTick()
+    expect(hooks.warning).not.toHaveBeenCalled(); expect(local.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])('同页会话保持有效时完成后续只读对账，读取失败=%s', async (failed) => {
+    const failures = failed ? ['inventory'] : []
+    hooks.inventoryRefresh.mockResolvedValue({ failed: failures })
+    const host = await mountDownloads()
+    const local = hooks.local.mock.results[0]!.value as { refresh: ReturnType<typeof vi.fn> }
+    host.querySelector<HTMLButtonElement>('.container-created-stub')!.click()
+    await Promise.resolve(); await nextTick()
+    expect(local.refresh).toHaveBeenCalledTimes(2)
+    expect(hooks.warning).toHaveBeenCalledTimes(failures.length ? 1 : 0)
   })
 })

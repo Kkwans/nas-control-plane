@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowDown, ArrowUp, ArrowUpDown, Box, Download, Eye, HardDrive, Image as ImageIcon, PackagePlus, RefreshCw, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
@@ -19,11 +19,14 @@ import { useDockerImageDownloads } from '@/composables/useDockerImageDownloads'
 import { useDockerLocalImages } from '@/composables/useDockerLocalImages'
 import { formatBytes } from '@/domain/overview'
 import { useSystemStore } from '@/stores/system'
+import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 const props = defineProps<{ query: string; containers: DockerInventory['containers']; pageSize: number }>()
 const emit = defineEmits<{ 'update:query': [value: string] }>()
 type ImageMode = 'local' | 'hub' | 'downloads'
 const systemStore = useSystemStore()
+let alive = true
+onBeforeUnmount(() => { alive = false })
 
 const mode = ref<ImageMode>('local')
 const createImage = ref<DockerImageSummary | null>(null)
@@ -57,7 +60,11 @@ function openCreateDrawer(image: DockerImageSummary) {
 }
 
 async function handleContainerCreated() {
+  if (!alive) return
+  const session = captureSession()
   const refreshResult = await systemStore.refresh({ inventory: true, force: true })
+  // 创建对账跨两个读取阶段；页面或会话离开后不再提示或启动下一次读取。
+  if (!alive || !isCurrentSession(session.generation)) return
   if (refreshResult.failed.length) {
     ElMessage.warning('容器已创建，但状态刷新失败，请手动重新加载。')
   }

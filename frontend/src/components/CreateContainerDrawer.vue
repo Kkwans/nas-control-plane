@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { Box, Cpu, HardDrive, Network, Plus, Shield, Trash2 } from '@lucide/vue'
 import { ElAlert, ElDialog, ElDrawer, ElEmpty, ElInput, ElInputNumber, ElMessage, ElSwitch, ElTooltip } from 'element-plus'
 
@@ -20,6 +20,8 @@ import ActionButton from '@/components/ActionButton.vue'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import SectionHeader from '@/components/SectionHeader.vue'
 import { hostPortBindingKey } from '@/domain/dockerPorts'
+import { createScopedReadRequest } from '@/domain/scopedReadRequest'
+import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 type EnvironmentRow = { key: string; value: string }
 type MountRow = { type: 'bind' | 'volume' | 'tmpfs'; source: string; target: string; readOnly: boolean }
@@ -45,9 +47,15 @@ const pathBrowserOpen = ref(false)
 const pathBrowserLoading = ref(false)
 const pathBrowserError = ref('')
 const pathBrowserPage = ref<FileEntriesPage | null>(null)
-const pathBrowserTarget = ref<number | null>(null)
-let pathRequestSequence = 0
-let pathRequestKey = ''
+const pathBrowserTarget = shallowRef<MountRow | null>(null)
+const resourceRead = createScopedReadRequest()
+const pathRead = createScopedReadRequest()
+let alive = true
+let opening = 0
+let revision = 0
+let draftSession: number | null = null
+let previewOwner: { opening: number; revision: number; session: number } | null = null
+let releaseSession: (() => void) | undefined
 const environment = ref<EnvironmentRow[]>([])
 const mounts = ref<MountRow[]>([])
 const ports = ref<PortRow[]>([])
@@ -141,19 +149,69 @@ const currentPath = computed(() => pathBrowserPage.value?.path || '/')
 const pathEntries = computed(() => pathBrowserPage.value?.entries || [])
 const previewInput = computed(() => pendingInput.value)
 
-watch(() => props.modelValue, (open) => {
-  if (open) {
-    resetForm()
-    void loadResources()
-  } else {
-    previewOpen.value = false
-    pathBrowserOpen.value = false
+function invalidatePreview() {
+  previewOwner = null
+  pendingInput.value = null
+  previewOpen.value = false
+}
+
+function invalidateReads() {
+  resourceRead.invalidate()
+  pathRead.invalidate()
+  resourcesLoading.value = false
+  pathBrowserLoading.value = false
+  pathBrowserOpen.value = false
+  pathBrowserTarget.value = null
+}
+
+watch([form, environment, mounts, ports, devices, commandText], () => {
+  revision += 1
+  invalidatePreview()
+}, { deep: true, flush: 'sync' })
+
+watch(() => [props.modelValue, props.image?.id, imageReference.value] as const, ([open]) => {
+  opening += 1
+  releaseSession?.()
+  draftSession = null
+  invalidateReads()
+  invalidatePreview()
+  dockerResources.value = null
+  dockerInventory.value = null
+  if (!open) return
+  const session = captureSession()
+  draftSession = session.generation
+  const abort = () => {
+    draftSession = null
+    opening += 1
+    invalidateReads()
+    invalidatePreview()
+    dockerResources.value = null
+    dockerInventory.value = null
   }
-}, { immediate: true })
+  session.signal.addEventListener('abort', abort, { once: true })
+  releaseSession = () => session.signal.removeEventListener('abort', abort)
+  resetForm()
+  void loadResources()
+}, { immediate: true, flush: 'sync' })
+
+watch(pathBrowserOpen, (open) => {
+  if (open) return
+  pathRead.invalidate()
+  pathBrowserLoading.value = false
+  pathBrowserPage.value = null
+  pathBrowserTarget.value = null
+}, { flush: 'sync' })
+watch(previewOpen, (open) => { if (!open) { previewOwner = null; pendingInput.value = null } }, { flush: 'sync' })
+
+onBeforeUnmount(() => {
+  alive = false
+  opening += 1
+  releaseSession?.()
+  invalidateReads()
+  invalidatePreview()
+})
 
 function resetForm() {
-  pathRequestSequence += 1
-  pathRequestKey = ''
   form.name = suggestedName(imageReference.value)
   form.cpu = undefined
   form.memoryMiB = undefined
@@ -188,20 +246,25 @@ function resetForm() {
 }
 
 async function loadResources() {
+  const request = resourceRead.begin()
   resourcesLoading.value = true
   resourcesError.value = ''
-  const [resourceResult, inventoryResult] = await Promise.allSettled([requestDockerResources(), requestDockerInventory()])
-  if (resourceResult.status === 'fulfilled') {
-    dockerResources.value = resourceResult.value
-    if (!resourceResult.value.networks.some((network) => network.name === form.networkName)) {
-      form.networkName = resourceResult.value.networks[0]?.name || 'bridge'
+  try {
+    const [resourceResult, inventoryResult] = await Promise.allSettled([
+      requestDockerResources(undefined, request.signal), requestDockerInventory(undefined, request.signal),
+    ])
+    if (!request.isCurrent()) return
+    if (resourceResult.status === 'fulfilled') {
+      dockerResources.value = resourceResult.value
+    } else {
+      dockerResources.value = null
+      resourcesError.value = 'Docker 网络和卷清单暂不可用，可继续使用高级手输。'
     }
-  } else {
-    dockerResources.value = null
-    resourcesError.value = 'Docker 网络和卷清单暂不可用，可继续使用高级手输。'
+    dockerInventory.value = inventoryResult.status === 'fulfilled' ? inventoryResult.value : null
+  } finally {
+    if (request.isCurrent()) resourcesLoading.value = false
+    request.finish()
   }
-  dockerInventory.value = inventoryResult.status === 'fulfilled' ? inventoryResult.value : null
-  resourcesLoading.value = false
 }
 
 function suggestedName(reference: string) {
@@ -214,9 +277,13 @@ function addMount() { mounts.value.push({ type: 'bind', source: '', target: '', 
 function addPort() { ports.value.push({ hostIp: '', hostPort: undefined, containerPort: undefined, protocol: 'tcp' }) }
 function addDevice() { devices.value.push({ hostPath: '', containerPath: '', permissions: 'rwm' }) }
 
-function removeRow<T>(rows: T[], index: number) { rows.splice(index, 1) }
+function removeRow<T>(rows: T[], index: number) {
+  if (rows[index] === pathBrowserTarget.value) pathBrowserOpen.value = false
+  rows.splice(index, 1)
+}
 
 function setMountType(row: MountRow, value: string) {
+  if (row === pathBrowserTarget.value) pathBrowserOpen.value = false
   row.type = value as MountRow['type']
   if (row.type === 'tmpfs') row.source = ''
 }
@@ -227,22 +294,26 @@ function setNetworkName(value: string) {
 }
 
 async function openPathBrowser(index: number) {
-  pathBrowserTarget.value = index
+  if (!alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
+  pathRead.invalidate()
+  pathBrowserPage.value = null
+  pathBrowserTarget.value = mounts.value[index] || null
   pathBrowserOpen.value = true
   await loadPath('/')
 }
 
 async function loadPath(path: string, cursor = '') {
-  const requestKey = `${path}|${cursor}`
-  pathRequestKey = requestKey
-  const requestSequence = ++pathRequestSequence
+  const target = pathBrowserTarget.value
+  if (!props.modelValue || !pathBrowserOpen.value || !target || !mounts.value.includes(target)) return
+  const request = pathRead.begin()
+  const current = () => request.isCurrent() && pathBrowserOpen.value && pathBrowserTarget.value === target && mounts.value.includes(target) && target.type === 'bind'
   const append = Boolean(cursor)
   const previous = pathBrowserPage.value
   pathBrowserLoading.value = true
   pathBrowserError.value = ''
   try {
-    const result = await requestPathEntries(path, cursor, 100)
-    if (requestSequence !== pathRequestSequence || pathRequestKey !== requestKey) return
+    const result = await requestPathEntries(path, cursor, 100, undefined, request.signal)
+    if (!current()) return
     if (append && previous?.path === result.path) {
       const seen = new Set(previous.entries.map((entry) => entry.path))
       pathBrowserPage.value = {
@@ -253,19 +324,18 @@ async function loadPath(path: string, cursor = '') {
       pathBrowserPage.value = result
     }
   } catch (caught) {
-    if (requestSequence !== pathRequestSequence || pathRequestKey !== requestKey) return
+    if (!current()) return
     pathBrowserError.value = caught instanceof NcpApiError ? caught.message : 'NAS 目录暂不可读取，请重试。'
     if (!append) pathBrowserPage.value = null
   } finally {
-    if (requestSequence === pathRequestSequence) pathBrowserLoading.value = false
+    if (current()) pathBrowserLoading.value = false
+    request.finish()
   }
 }
 
 function choosePath(entry: FileEntry) {
-  const target = pathBrowserTarget.value
-  if (target === null) return
-  const row = mounts.value[target]
-  if (!row || row.type !== 'bind') return
+  const row = pathBrowserTarget.value
+  if (!props.modelValue || !pathBrowserOpen.value || !row || !mounts.value.includes(row) || row.type !== 'bind') return
   row.source = entry.path
   pathBrowserOpen.value = false
 }
@@ -275,7 +345,7 @@ function previewLabel(value: string | undefined, fallback: string) {
 }
 
 function openSubmitPreview(runContainer: boolean) {
-  if (submitting.value) return
+  if (submitting.value || !alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
   const input = buildInput(runContainer)
   const message = validationMessage(input)
   if (message) {
@@ -283,6 +353,7 @@ function openSubmitPreview(runContainer: boolean) {
     return
   }
   pendingInput.value = input
+  previewOwner = { opening, revision, session: captureSession().generation }
   pendingRunContainer.value = runContainer
   previewOpen.value = true
 }
@@ -363,23 +434,27 @@ function validationMessage(input: DockerContainerCreateInput) {
 async function executeSubmit() {
   if (submitting.value) return
   const input = pendingInput.value
-  if (!input) {
+  const owner = previewOwner
+  if (!input || !owner || !alive || !props.modelValue || owner.opening !== opening || owner.revision !== revision || !isCurrentSession(owner.session)) {
     previewOpen.value = false
     return
   }
   const runContainer = pendingRunContainer.value
+  const currentPage = () => alive && isCurrentSession(owner.session)
+  const currentDraft = () => currentPage() && props.modelValue && owner.opening === opening && owner.revision === revision
+  // 提交消费预览快照；关闭界面不会取消或重放真实 POST。
   previewOpen.value = false
   submitting.value = runContainer ? 'start' : 'create'
   try {
     const result = await createDockerContainer(input)
-    ElMessage.success(result.started ? `容器“${result.name || result.containerId.slice(0, 12)}”已创建并启动` : `容器“${result.name || result.containerId.slice(0, 12)}”已创建`)
+    if (!currentPage()) return
+    if (currentDraft()) ElMessage.success(result.started ? `容器“${result.name || result.containerId.slice(0, 12)}”已创建并启动` : `容器“${result.name || result.containerId.slice(0, 12)}”已创建`)
     emit('created', result.containerId)
-    emit('update:modelValue', false)
+    if (currentDraft()) emit('update:modelValue', false)
   } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '容器创建失败，请检查配置后重试。')
+    if (currentDraft()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '容器创建失败，请检查配置后重试。')
   } finally {
     submitting.value = null
-    pendingInput.value = null
   }
 }
 </script>
@@ -392,7 +467,7 @@ async function executeSubmit() {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <template #header>
-      <div class="drawer-heading"><span><Box :size="21" /></span><div><strong>{{ drawerTitle }}</strong><small>取消不会创建任何 Docker 对象</small></div></div>
+      <div class="drawer-heading"><span><Box :size="21" /></span><div><strong>{{ drawerTitle }}</strong><small>确认前可取消；提交后关闭不会取消容器创建</small></div></div>
     </template>
 
     <form class="container-form" @submit.prevent="openSubmitPreview(true)">
@@ -468,7 +543,7 @@ async function executeSubmit() {
 
       <section class="form-section">
         <SectionHeader title="启动命令" description="每行填写一个 argv 参数；留空时使用镜像默认命令" :icon="Cpu" heading-tag="h3" />
-        <textarea v-model="commandText" rows="4" placeholder="示例：&#10;sh&#10;-c&#10;echo $APP_MODE && exec /app/server"></textarea>
+        <textarea v-model="commandText" aria-label="容器启动参数（每行一个）" rows="4" placeholder="示例：&#10;sh&#10;-c&#10;echo $APP_MODE && exec /app/server"></textarea>
       </section>
 
       <section class="form-section form-section--advanced">
