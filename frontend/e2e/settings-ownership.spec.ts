@@ -65,9 +65,26 @@ async function fixture(page: Page) {
     async release(gate: Gate) { gate.release.resolve(); await gate.finished.promise },
   }
 }
+const routeFocusCaptures = new WeakMap<Page, unknown[]>()
+async function settleRouteFocus(page: Page) {
+  const observe = () => page.evaluate(() => ({
+    clock: Date.now(), path: location.pathname,
+    activeElement: { tag: document.activeElement?.tagName, id: document.activeElement?.id, classes: document.activeElement?.getAttribute('class') },
+  }))
+  const before = await observe()
+  // router.afterEach 用一次 rAF 聚焦 app-main；先完成真实路由焦点交接，再模拟用户打开菜单。
+  // 否则冻结的初始焦点回调会在菜单动画推进时触发 blur，令 ElSelect expanded 变为 false。
+  await page.clock.runFor(17)
+  const after = await observe()
+  const captures = routeFocusCaptures.get(page) ?? []
+  captures.push({ before, after })
+  routeFocusCaptures.set(page, captures)
+  await expect(page.locator('#app-main')).toBeFocused()
+}
 async function open(page: Page) {
   await page.goto('/settings', { waitUntil: 'domcontentloaded' })
   await page.locator('.settings-page').waitFor()
+  await settleRouteFocus(page)
 }
 async function ready(page: Page) {
   await expect(page.locator('.settings-grid')).not.toHaveAttribute('disabled', '')
@@ -107,6 +124,7 @@ async function dropdownState(page: Page, label: string, option: string) {
     const transitionMilliseconds = style ? Math.max(...seconds(style.transitionDuration)) + Math.max(...seconds(style.transitionDelay)) : 0
     return { clock: { now: Date.now(), performance: performance.now() }, viewport: { width: innerWidth, height: innerHeight },
       fonts: { status: document.fonts.status, loadedFamilies: [...new Set([...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family))] },
+      activeElement: document.activeElement ? describe(document.activeElement) : null,
       expanded: input.getAttribute('aria-expanded'), controls: input.getAttribute('aria-controls'),
       trigger: describe(input.closest('.el-select__wrapper') ?? input), optionAncestors: ancestors(choice),
       popup: popper ? describe(popper) : null, transitionMilliseconds,
@@ -151,7 +169,7 @@ async function select(page: Page, label: string, option: string) {
       await writeFile(info.outputPath('ui-captures', `${name}-capture-state.json`), JSON.stringify({
         sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), fixtureOnly: true,
         fixtureSource: 'frontend/e2e/settings-ownership.spec.ts + frontend/e2e/mockApi.ts',
-        label, option, viewport: page.viewportSize(), budget, advanced, samples, openingWrites,
+        label, option, viewport: page.viewportSize(), routeFocus: routeFocusCaptures.get(page), budget, advanced, samples, openingWrites,
       }, null, 2))
       const image = info.outputPath('ui-captures', `${name}.png`)
       await page.screenshot({ path: image, animations: 'allow' })
@@ -325,7 +343,12 @@ test('同会话离开并重开设置沿用串行队列，旧响应不覆盖新�
   await select(page, '基础字号', '17 px'); await advance(page); await a.received.promise
   await select(page, '基础字号', '18 px')
   await page.locator('.navigation a[href="/"]').click()
+  await expect(page).toHaveURL(/\/$/)
+  await settleRouteFocus(page)
   await page.locator('.navigation a[href="/settings"]').click()
+  await expect(page).toHaveURL(/\/settings$/)
+  await page.locator('.settings-page').waitFor()
+  await settleRouteFocus(page)
   await expect(row(page, '基础字号')).toContainText('18 px')
   await select(page, '基础字号', '14 px')
   const latest = api.hold('PUT')
