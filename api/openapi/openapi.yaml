@@ -1550,6 +1550,13 @@ paths:
     post:
       operationId: deployComposeConfig
       summary: Validate, back up, atomically save and deploy a Compose project
+      description: |
+        校验并备份目标文件后发布。部署命令失败时，仅当最终恢复 rename 前读取到的当前普通文件原始字节仍与本次写入相同，才尝试写回旧配置并重新应用。
+        该检查不是跨进程原子 CAS，检查与写入之间仍有竞态；不包含客户端编辑基线校验或容器健康验证。
+        已确认业务失败以 Job failed 和稳定 errorCode 返回：COMPOSE_DEPLOY_ROLLBACK_CONFLICT 表示发现内容、存在性或文件类型变化，跳过恢复；COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED 表示无法核实当前文件，跳过恢复。
+        COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED 表示旧配置写回失败且未重新应用；COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED 表示旧配置已写回但重新应用命令失败；COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED 仅表示旧配置已写回且重新应用命令成功，部署仍失败，运行健康未验证。
+        COMPOSE_CONFIG_INVALID、COMPOSE_REQUEST_INVALID 分别表示配置校验或请求失败；通用 COMPOSE_DEPLOY_FAILED 不确认任何恢复结果。
+        取消、超时或传输断开时，相关 Job 仍以 interrupted 和远端结果未确认终结；即使 Agent 的独立恢复随后继续，也不会推断成功。
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:

@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -137,10 +138,10 @@ func TestDeployCancellationRollbackHasIndependentBoundedContext(t *testing.T) {
 			if calls != 2 || result.Completed || !errors.Is(err, context.Canceled) {
 				t.Fatalf("calls=%d result=%+v err=%v", calls, result, err)
 			}
-			if rollbackFails && (!errors.Is(err, rollbackErr) || !strings.Contains(err.Error(), "rollback failed")) {
+			if rollbackFails && (!errors.Is(err, rollbackErr) || ErrorCode(err) != "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED") {
 				t.Fatalf("rollback failure missing: %v", err)
 			}
-			if !rollbackFails && !strings.Contains(err.Error(), "previous version was restored") {
+			if !rollbackFails && ErrorCode(err) != "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED" {
 				t.Fatalf("rollback success missing: %v", err)
 			}
 			if rollbackContext.Err() != context.Canceled {
@@ -169,7 +170,7 @@ func TestDeployRollbackTimeoutIsReported(t *testing.T) {
 	}})
 	manager.rollbackTimeout = 10 * time.Millisecond
 	_, err := manager.deploy(context.Background(), request)
-	if !errors.Is(err, deployErr) || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "rollback failed") {
+	if !errors.Is(err, deployErr) || !errors.Is(err, context.DeadlineExceeded) || ErrorCode(err) != "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED" {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -290,22 +291,27 @@ func TestDeploySameTargetWaitsThroughRollback(t *testing.T) {
 
 func TestDeployReportsConfigRestoreFailureWithoutRunningRollback(t *testing.T) {
 	request := deployFixture(t)
-	deployErr := errors.New("deploy failed")
+	deployErr, restoreErr := errors.New("deploy failed: secret"), errors.New("restore write failed: secret")
 	calls := 0
 	manager := NewManager(deployTestRunner{deploy: func(context.Context, string, []string) (string, error) {
 		calls++
-		if err := os.Remove(request.TargetPath); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(request.TargetPath, 0o700); err != nil {
-			t.Fatal(err)
-		}
 		return "", deployErr
 	}})
+	manager.restoreConfig = func(target string, _ []byte, _ os.FileMode, expected [sha256.Size]byte) error {
+		if err := verifyCurrentContent(target, expected, os.ReadFile); err != nil {
+			t.Fatalf("expected matching submitted bytes: %v", err)
+		}
+		return restoreErr
+	}
 	result, err := manager.deploy(context.Background(), request)
-	if result.Completed || calls != 1 || !errors.Is(err, deployErr) || !strings.Contains(err.Error(), "rollback failed") {
+	if result.Completed || calls != 1 || !errors.Is(err, deployErr) || !errors.Is(err, restoreErr) || ErrorCode(err) != "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED" {
 		t.Fatalf("calls=%d result=%+v error=%v", calls, result, err)
 	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("coded error leaked cause: %v", err)
+	}
+	assertFile(t, request.TargetPath, request.Content)
+	assertFile(t, result.BackupPath, "services: old\n")
 }
 
 func TestDeployCancelledWhileWaitingDoesNotModifyFiles(t *testing.T) {
@@ -364,8 +370,185 @@ func TestDeployDeadlineRollbackUsesFreshContext(t *testing.T) {
 			return "restored", nil
 		}})
 		_, err := manager.deploy(ctx, request)
-		if calls != 2 || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "previous version was restored") {
+		if calls != 2 || !errors.Is(err, context.DeadlineExceeded) || ErrorCode(err) != "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED" {
 			t.Fatalf("calls=%d error=%v", calls, err)
 		}
 	})
+}
+
+func TestDeployRollbackPreservesExternalChanges(t *testing.T) {
+	for _, change := range []string{"content", "same-yaml-different-bytes", "original", "missing", "directory", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			request := deployFixture(t)
+			// 原始字节（包括尾随空白）必须参与摘要。
+			request.Content = "services: new\n\n"
+			deployErr := errors.New("deploy failed: secret")
+			started, release := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			manager := NewManager(deployTestRunner{deploy: func(context.Context, string, []string) (string, error) {
+				if calls.Add(1) != 1 {
+					return "", errors.New("unexpected reapply")
+				}
+				close(started)
+				<-release
+				return "", deployErr
+			}})
+			type outcome struct {
+				result DeployResult
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				result, err := manager.deploy(context.Background(), request)
+				done <- outcome{result, err}
+			}()
+			<-started
+			assertFile(t, request.TargetPath, request.Content)
+			external := "services: external\n"
+			switch change {
+			case "same-yaml-different-bytes":
+				external = "services: new\n"
+			case "original":
+				external = "services: old\n"
+			}
+			var changeErr error
+			switch change {
+			case "content", "same-yaml-different-bytes", "original":
+				changeErr = os.WriteFile(request.TargetPath, []byte(external), 0o640)
+			default:
+				changeErr = os.Remove(request.TargetPath)
+				if changeErr == nil && change == "directory" {
+					changeErr = os.Mkdir(request.TargetPath, 0o700)
+				}
+				if changeErr == nil && change == "symlink" {
+					other := filepath.Join(request.WorkingDirectory, "external.yaml")
+					changeErr = os.WriteFile(other, []byte(request.Content), 0o600)
+					if changeErr == nil {
+						changeErr = os.Symlink(other, request.TargetPath)
+					}
+				}
+			}
+			close(release)
+			got := <-done
+			if changeErr != nil {
+				t.Fatal(changeErr)
+			}
+			if got.result.Completed || calls.Load() != 1 || !errors.Is(got.err, deployErr) || ErrorCode(got.err) != "COMPOSE_DEPLOY_ROLLBACK_CONFLICT" {
+				t.Fatalf("calls=%d result=%+v err=%v", calls.Load(), got.result, got.err)
+			}
+			if strings.Contains(got.err.Error(), "secret") {
+				t.Fatalf("coded error leaked deploy cause: %v", got.err)
+			}
+			assertFile(t, got.result.BackupPath, "services: old\n")
+			backupInfo, err := os.Stat(got.result.BackupPath)
+			if err != nil || backupInfo.Mode().Perm() != 0o600 {
+				t.Fatalf("backup mode = %v, %v", backupInfo, err)
+			}
+			info, err := os.Lstat(request.TargetPath)
+			switch change {
+			case "missing":
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing target recreated: %v", err)
+				}
+			case "directory":
+				if err != nil || !info.IsDir() {
+					t.Fatalf("directory replaced: %v, %v", info, err)
+				}
+			case "symlink":
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("symlink replaced: %v, %v", info, err)
+				}
+				assertFile(t, request.TargetPath, request.Content)
+			default:
+				assertFile(t, request.TargetPath, external)
+			}
+			assertNoComposeTemps(t, request.WorkingDirectory)
+		})
+	}
+}
+
+func TestDeployRollbackSkipsUnverifiedTarget(t *testing.T) {
+	request := deployFixture(t)
+	deployErr := errors.New("deploy failed")
+	readErr := &os.PathError{Op: "read", Path: request.TargetPath, Err: os.ErrPermission}
+	calls := 0
+	manager := NewManager(deployTestRunner{deploy: func(context.Context, string, []string) (string, error) {
+		calls++
+		return "", deployErr
+	}})
+	// 窄读函数替身保证 root/普通用户下都可确定性模拟无法读取。
+	manager.restoreConfig = func(target string, original []byte, mode os.FileMode, expected [sha256.Size]byte) error {
+		return atomicWriteGuarded(target, original, mode, func() error {
+			return verifyCurrentContent(target, expected, func(string) ([]byte, error) { return nil, readErr })
+		})
+	}
+	result, err := manager.deploy(context.Background(), request)
+	if result.Completed || calls != 1 || ErrorCode(err) != "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED" || !errors.Is(err, deployErr) || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("calls=%d result=%+v error=%v", calls, result, err)
+	}
+	assertFile(t, request.TargetPath, request.Content)
+	assertFile(t, result.BackupPath, "services: old\n")
+	assertNoComposeTemps(t, request.WorkingDirectory)
+}
+
+func TestGuardedWriteChecksAfterPreparingTemporaryBeforeRename(t *testing.T) {
+	request := deployFixture(t)
+	expected := sha256.Sum256([]byte("services: old\n"))
+	checked := false
+	err := atomicWriteGuarded(request.TargetPath, []byte("restored\n"), 0o640, func() error {
+		paths, err := filepath.Glob(filepath.Join(request.WorkingDirectory, ".ncp-compose-*"))
+		if err != nil || len(paths) != 1 {
+			t.Fatalf("guard ran before temporary file prepared: %v, %v", paths, err)
+		}
+		assertFile(t, paths[0], "restored\n")
+		assertFile(t, request.TargetPath, "services: old\n")
+		checked = true
+		if err := os.WriteFile(request.TargetPath, []byte("external\n"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return verifyCurrentContent(request.TargetPath, expected, os.ReadFile)
+	})
+	if !checked || ErrorCode(err) != "COMPOSE_DEPLOY_ROLLBACK_CONFLICT" {
+		t.Fatalf("checked=%v error=%v", checked, err)
+	}
+	assertFile(t, request.TargetPath, "external\n")
+	assertNoComposeTemps(t, request.WorkingDirectory)
+}
+
+func TestGuardedRestoreChecksExactSubmittedBytes(t *testing.T) {
+	request := deployFixture(t)
+	if err := os.WriteFile(request.TargetPath, []byte(request.Content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	err := guardedRestoreConfig(request.TargetPath, []byte("services: old\n"), 0o640, sha256.Sum256([]byte(request.Content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, request.TargetPath, "services: old\n")
+	info, err := os.Stat(request.TargetPath)
+	if err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %v, %v", info, err)
+	}
+	assertNoComposeTemps(t, request.WorkingDirectory)
+}
+
+func TestDeployErrorAllowlist(t *testing.T) {
+	for _, code := range []string{"COMPOSE_DEPLOY_ROLLBACK_CONFLICT", "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED", "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED", "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED", "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED", "COMPOSE_DEPLOY_FAILED", "COMPOSE_CONFIG_INVALID", "COMPOSE_REQUEST_INVALID"} {
+		if !IsDeployErrorCode(code) {
+			t.Fatalf("missing deployment code %q", code)
+		}
+	}
+	for _, code := range []string{"", "COMPOSE_DEPLOY_UNKNOWN", "COMPOSE_LIFECYCLE_FAILED", "COMPOSE_DEPLOY_FAILED: secret"} {
+		if IsDeployErrorCode(code) {
+			t.Fatalf("accepted unknown deployment code %q", code)
+		}
+	}
+}
+
+func assertNoComposeTemps(t *testing.T, directory string) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(directory, ".ncp-compose-*"))
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("temporary files leaked: %v, %v", paths, err)
+	}
 }

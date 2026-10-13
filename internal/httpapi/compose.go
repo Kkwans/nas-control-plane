@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 )
@@ -105,7 +106,12 @@ func (api *handler) deployComposeConfig(response http.ResponseWriter, request *h
 				api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "连接中断，远端部署结果未确认")
 				return
 			}
-			api.jobs.update(jobID, "failed", "Compose 部署失败，已尝试恢复上一版本", "请查看项目日志并核对 Compose 配置。", 100)
+			code, message := composeDeployFailure(agentsocket.ErrorCode(err))
+			api.jobs.fail(jobID, code, message, message)
+			return
+		}
+		if !result.Completed {
+			api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "未收到可信完成确认，请核对 Compose 配置和容器状态")
 			return
 		}
 		message := "Compose 项目部署完成并已保存版本"
@@ -123,6 +129,28 @@ func (api *handler) deployComposeConfig(response http.ResponseWriter, request *h
 		return
 	}
 	writeJSON(response, http.StatusAccepted, job)
+}
+
+// 只使用稳定代码生成公开文案，避免命令输出泄露配置，也不把命令成功视为运行健康。
+func composeDeployFailure(code string) (string, string) {
+	switch code {
+	case "COMPOSE_DEPLOY_ROLLBACK_CONFLICT":
+		return code, "Compose 部署失败；检测到配置已被外部修改，未覆盖当前配置，已跳过自动恢复；容器状态未确认。"
+	case "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED":
+		return code, "Compose 部署失败；无法确认当前配置，已跳过自动恢复；容器状态未确认。"
+	case "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED":
+		return code, "Compose 部署失败；旧配置未能写回，未重新应用；容器状态未确认。"
+	case "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED":
+		return code, "Compose 部署失败；已写回旧配置，但重新应用命令失败；容器状态未确认。"
+	case "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED":
+		return code, "Compose 部署失败；已写回旧配置，重新应用命令成功；运行健康未验证。"
+	case "COMPOSE_CONFIG_INVALID":
+		return code, "Compose 配置校验失败，请检查 YAML 结构、服务引用和环境变量。"
+	case "COMPOSE_REQUEST_INVALID", "AGENT_RPC_REQUEST_INVALID":
+		return code, "Compose 部署请求无效，请检查项目标识、配置路径和提交内容。"
+	default:
+		return "COMPOSE_DEPLOY_FAILED", "Compose 部署失败，恢复结果未确认；请核对配置和容器状态。"
+	}
 }
 
 func (api *handler) composeRevisions(response http.ResponseWriter, request *http.Request) {

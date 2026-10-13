@@ -171,6 +171,16 @@ describe('Compose 工作区事务隔离', () => {
     expect(state.error.value).toBe(status)
     expect(feedback.success).not.toHaveBeenCalledWith(status)
   })
+  it('部署确认说明恢复条件及运行状态复核，失败详情不会被通用文案遮住', async () => {
+    const { state, feedback } = setup(); await flush()
+    const detail = 'Compose 部署失败；检测到外部修改，未覆盖当前配置，容器状态未确认。'
+    api.subscribe.mockReturnValue({ close: vi.fn(), done: Promise.resolve({ status: 'failed', errorCode: 'COMPOSE_DEPLOY_ROLLBACK_CONFLICT', message: detail, error: detail }) })
+    await state.deploy()
+    expect(feedback.confirm.mock.calls[0]?.[0]).toContain('发现外部修改或无法核实当前文件时会停止')
+    expect(feedback.confirm.mock.calls[0]?.[0]).toContain('需核对配置和运行状态')
+    expect(state.error.value).toBe(detail)
+    expect(feedback.success).not.toHaveBeenCalledWith(detail)
+  })
   it('回滚确认冻结版本内容，关闭后确认不得提交', async () => {
     const revision = { id: 1, projectId: 'a', configPath: '/a/compose.yml', content: 'historical', contentHash: 'hash', backupPath: '', createdAt: '2026-10-12' }
     api.revisions.mockResolvedValue([revision])
@@ -180,6 +190,7 @@ describe('Compose 工作区事务隔离', () => {
     revision.content = 'mutated'
     confirmation.resolve(true); await rollback
     expect(api.deploy.mock.calls[0]?.[0].content).toBe('historical')
+    expect(feedback.confirm.mock.calls[0]?.[0]).toContain('发现外部修改或无法核实当前文件时会停止')
     const nextConfirmation = deferred<boolean>(); feedback.confirm.mockReturnValueOnce(nextConfirmation.promise)
     const next = state.rollback(revision)
     open.value = false; nextConfirmation.resolve(true); await next

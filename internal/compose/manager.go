@@ -3,6 +3,7 @@ package compose
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -73,24 +74,24 @@ type Runner interface {
 func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (DeployResult, error) {
 	workingDirectory, err := validateWorkingDirectory(request.WorkingDirectory)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 	}
 	targetPath, err := validateConfigPath(workingDirectory, request.TargetPath)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 	}
 	configFiles := make([]string, 0, len(request.ConfigFiles))
 	targetKnown := false
 	for _, value := range request.ConfigFiles {
 		configPath, err := validateConfigPath(workingDirectory, value)
 		if err != nil {
-			return DeployResult{}, err
+			return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 		}
 		configFiles = append(configFiles, configPath)
 		targetKnown = targetKnown || configPath == targetPath
 	}
 	if !targetKnown {
-		return DeployResult{}, errors.New("compose target is not part of project config")
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", errors.New("compose target is not part of project config"))
 	}
 	request.WorkingDirectory = workingDirectory
 	request.TargetPath = targetPath
@@ -108,7 +109,7 @@ func (manager *Manager) deploy(ctx context.Context, request DeployRequest) (Depl
 	workingDirectory, targetPath, configFiles := request.WorkingDirectory, request.TargetPath, request.ConfigFiles
 	validation, err := manager.validateContent(ctx, targetPath, request.Content)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, coded("COMPOSE_CONFIG_INVALID", err)
 	}
 	original, err := os.ReadFile(targetPath)
 	if err != nil {
@@ -126,11 +127,18 @@ func (manager *Manager) deploy(ctx context.Context, request DeployRequest) (Depl
 	if err != nil {
 		return DeployResult{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return DeployResult{}, err
+	result := DeployResult{
+		ProjectID: request.ProjectID, TargetPath: targetPath, BackupPath: backupPath,
+		Services: validation.Services,
 	}
-	if err := atomicWrite(targetPath, []byte(request.Content), info.Mode().Perm()); err != nil {
-		return DeployResult{}, err
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	// 对实际写入的原始字节计算摘要，不规范化 YAML 或移除空白。
+	submitted := []byte(request.Content)
+	submittedHash := sha256.Sum256(submitted)
+	if err := atomicWrite(targetPath, submitted, info.Mode().Perm()); err != nil {
+		return result, err
 	}
 	output, deployErr := manager.runner.Deploy(ctx, workingDirectory, configFiles)
 	if deployErr != nil {
@@ -142,25 +150,42 @@ func (manager *Manager) deploy(ctx context.Context, request DeployRequest) (Depl
 		}
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
-		restoreErr := atomicWrite(targetPath, original, info.Mode().Perm())
-		if restoreErr == nil {
-			_, restoreErr = manager.runner.Deploy(rollbackCtx, workingDirectory, configFiles)
-		}
+		restoreErr := manager.restoreConfig(targetPath, original, info.Mode().Perm(), submittedHash)
 		if restoreErr != nil {
-			return DeployResult{}, fmt.Errorf("compose deploy failed and rollback failed: %w; rollback: %w", deployErr, restoreErr)
+			code := ErrorCode(restoreErr)
+			if code != "COMPOSE_DEPLOY_ROLLBACK_CONFLICT" && code != "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED" {
+				code = "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED"
+			}
+			return result, coded(code, errors.Join(deployErr, restoreErr))
 		}
-		return DeployResult{}, fmt.Errorf("compose deploy failed and previous version was restored: %w", deployErr)
+		if _, reapplyErr := manager.runner.Deploy(rollbackCtx, workingDirectory, configFiles); reapplyErr != nil {
+			return result, coded("COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED", errors.Join(deployErr, reapplyErr))
+		}
+		// 只确认重新应用命令成功，不代表容器、镜像或健康状态已恢复。
+		return result, coded("COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED", deployErr)
 	}
-	return DeployResult{
-		ProjectID: request.ProjectID, TargetPath: targetPath, BackupPath: backupPath,
-		Services: validation.Services, Output: output, Completed: true,
-	}, nil
+	result.Output, result.Completed = output, true
+	return result, nil
+}
+
+// IsDeployErrorCode 仅允许已知部署业务失败穿过 RPC 边界，禁止转发任意错误文本。
+func IsDeployErrorCode(code string) bool {
+	switch code {
+	case "COMPOSE_DEPLOY_ROLLBACK_CONFLICT", "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED",
+		"COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED", "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED",
+		"COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED", "COMPOSE_DEPLOY_FAILED",
+		"COMPOSE_CONFIG_INVALID", "COMPOSE_REQUEST_INVALID":
+		return true
+	default:
+		return false
+	}
 }
 
 type Manager struct {
 	runner          Runner
 	now             func() time.Time
 	rollbackTimeout time.Duration
+	restoreConfig   func(string, []byte, os.FileMode, [sha256.Size]byte) error
 	locksMu         sync.Mutex
 	targetLocks     map[string]*targetLock
 }
@@ -213,7 +238,7 @@ func NewManager(runner Runner) *Manager {
 	if runner == nil {
 		runner = OSRunner{}
 	}
-	return &Manager{runner: runner, now: time.Now, rollbackTimeout: defaultRollbackTimeout}
+	return &Manager{runner: runner, now: time.Now, rollbackTimeout: defaultRollbackTimeout, restoreConfig: guardedRestoreConfig}
 }
 
 func (manager *Manager) Read(ctx context.Context, request ReadRequest) (ProjectConfig, error) {
@@ -362,6 +387,48 @@ func extractServiceNames(normalized string) []string {
 }
 
 func atomicWrite(target string, content []byte, mode os.FileMode) error {
+	return atomicWriteGuarded(target, content, mode, nil)
+}
+
+// guardedRestoreConfig 在临时文件写完后、最终 Rename 紧前检查当前内容。
+// 这只是尽力缩短检查到写入的窗口，并非跨进程原子 CAS；外部写入仍可能发生竞态。
+func guardedRestoreConfig(target string, content []byte, mode os.FileMode, expected [sha256.Size]byte) error {
+	return atomicWriteGuarded(target, content, mode, func() error {
+		return verifyCurrentContent(target, expected, os.ReadFile)
+	})
+}
+
+func verifyCurrentContent(target string, expected [sha256.Size]byte, readFile func(string) ([]byte, error)) error {
+	info, err := os.Lstat(target)
+	if err != nil {
+		return verificationError(err)
+	}
+	if !info.Mode().IsRegular() {
+		return coded("COMPOSE_DEPLOY_ROLLBACK_CONFLICT", errors.New("compose target is no longer a regular file"))
+	}
+	content, err := readFile(target)
+	if err != nil {
+		// 读取期间也可能被移除或换成其它类型；可证实的路径变化按冲突处理。
+		current, statErr := os.Lstat(target)
+		if errors.Is(statErr, os.ErrNotExist) || (statErr == nil && !current.Mode().IsRegular()) {
+			return coded("COMPOSE_DEPLOY_ROLLBACK_CONFLICT", err)
+		}
+		return verificationError(err)
+	}
+	if sha256.Sum256(content) != expected {
+		return coded("COMPOSE_DEPLOY_ROLLBACK_CONFLICT", errors.New("compose target content changed"))
+	}
+	return nil
+}
+
+func verificationError(err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return coded("COMPOSE_DEPLOY_ROLLBACK_CONFLICT", err)
+	}
+	return coded("COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED", err)
+}
+
+func atomicWriteGuarded(target string, content []byte, mode os.FileMode, beforeRename func() error) error {
 	temporary, err := os.CreateTemp(pathpkg.Dir(target), ".ncp-compose-*")
 	if err != nil {
 		return err
@@ -382,6 +449,11 @@ func atomicWrite(target string, content []byte, mode os.FileMode) error {
 	}
 	if err := temporary.Close(); err != nil {
 		return err
+	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
 	}
 	return os.Rename(temporaryPath, target)
 }

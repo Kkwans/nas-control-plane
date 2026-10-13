@@ -525,6 +525,26 @@ func (r *jobRegistry) interrupt(id, code, message string) {
 	}
 	r.finishLocked(e, j)
 }
+
+// fail 沿用终态持久化与版本检查；保存失败时不提前公开终态，也不覆盖待保存结果。
+func (r *jobRegistry) fail(id, code, message, detail string) {
+	e := r.lookup(id)
+	if e == nil {
+		return
+	}
+	e.opMu.Lock()
+	defer e.opMu.Unlock()
+	j := e.snapshot()
+	if jobTerminal(j.Status) || e.deleted || e.pending != nil {
+		return
+	}
+	j.Status = "failed"
+	j.ErrorCode = code
+	j.Message = message
+	j.Error = detail
+	r.finishLocked(e, j)
+}
+
 func (r *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
 	e := r.hydrate(id)
 	if e == nil {

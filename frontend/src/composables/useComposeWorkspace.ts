@@ -194,8 +194,8 @@ export function useComposeWorkspace(open: Ref<boolean>, project: Ref<DockerProje
       if (!revision && (!(await validate()) || !owns() || editRevision !== capturedRevision)) return
       try {
         await feedback.confirm(revision
-          ? `将把 ${name} 回滚到 ${new Date(revision.createdAt).toLocaleString('zh-CN')} 的版本。NCP 仍会先备份现有文件，并在应用失败时自动恢复。`
-          : `将发布 ${name}，预计变更 ${changes} 行。NCP 会先备份原文件；部署失败时自动恢复并重新应用旧配置。`,
+          ? `将把 ${name} 回滚到 ${new Date(revision.createdAt).toLocaleString('zh-CN')} 的版本。NCP 会先备份现有文件；应用失败时尝试恢复，发现外部修改或无法核实当前文件时会停止。之后需核对配置和运行状态。`
+          : `将发布 ${name}，预计变更 ${changes} 行。NCP 会先备份原文件；部署失败时尝试恢复并重新应用旧配置，发现外部修改或无法核实当前文件时会停止。之后需核对配置和运行状态。`,
         revision ? '确认回滚 Compose 配置' : '确认部署 Compose 项目', Boolean(revision))
       } catch { return }
       if (!owns()) return

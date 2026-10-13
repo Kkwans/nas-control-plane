@@ -504,6 +504,14 @@ func DeployComposeConfig(ctx context.Context, socketPath string, request ncpcomp
 		return ncpcompose.DeployResult{}, err
 	}
 	defer connection.Close()
+	return DeployComposeConfigWithClient(ctx, NewAgentComposeServiceClient(connection), request)
+}
+
+// DeployComposeConfigWithClient 复用已建立的 RPC 客户端，保留部署请求、响应和错误码校验。
+func DeployComposeConfigWithClient(ctx context.Context, client AgentComposeServiceClient, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ncpcompose.DeployResult{}, contextError(err)
+	}
 	files := make([]any, 0, len(request.ConfigFiles))
 	for _, configPath := range request.ConfigFiles {
 		files = append(files, configPath)
@@ -515,7 +523,7 @@ func DeployComposeConfig(ctx context.Context, socketPath string, request ncpcomp
 	if err != nil {
 		return ncpcompose.DeployResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
-	response, err := NewAgentComposeServiceClient(connection).DeployConfig(ctx, payload)
+	response, err := client.DeployConfig(ctx, payload)
 	if err != nil {
 		return ncpcompose.DeployResult{}, rpcError(err)
 	}
@@ -724,6 +732,12 @@ func rpcError(err error) error {
 	status := grpcstatus.Convert(err)
 	if status.Code() == codes.Unimplemented {
 		return coded("AGENT_PROTOCOL_MISMATCH", err)
+	}
+	switch status.Code() {
+	case codes.Internal, codes.InvalidArgument, codes.Aborted:
+		if ncpcompose.IsDeployErrorCode(status.Message()) {
+			return coded(status.Message(), err)
+		}
 	}
 	switch status.Message() {
 	case "DOCKER_CONTAINER_NOT_FOUND":

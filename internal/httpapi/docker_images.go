@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
+	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
 )
 
@@ -86,8 +87,12 @@ func (api *handler) runImagePull(ctx context.Context, jobID string, input docker
 
 // 只有明确的执行失败代码才归档 failed；传输错误不能证明远端操作失败或停止。
 func jobRPCOutcomeUnknown(err error) bool {
-	switch agentsocket.ErrorCode(err) {
-	case "DOCKER_IMAGE_PULL_FAILED", "COMPOSE_DEPLOY_FAILED", "COMPOSE_CONFIG_INVALID", "AGENT_RPC_REQUEST_INVALID":
+	code := agentsocket.ErrorCode(err)
+	if ncpcompose.IsDeployErrorCode(code) {
+		return false
+	}
+	switch code {
+	case "DOCKER_IMAGE_PULL_FAILED", "AGENT_RPC_REQUEST_INVALID":
 		return false
 	default:
 		return true
