@@ -86,6 +86,7 @@ func (registry *jobRegistry) create(kind, reference string) jobSnapshot {
 	job := jobSnapshot{ID: newJobID(), Type: kind, Status: "queued", Reference: reference, Message: "任务已进入队列", Progress: 0, CreatedAt: now, UpdatedAt: now, Layers: make(map[string]jobLayer), ArtifactState: jobArtifactUnknown}
 	registry.mu.Lock()
 	registry.jobs[job.ID] = job
+	job = cloneJobSnapshot(job)
 	registry.mu.Unlock()
 	registry.persist(job)
 	return job
@@ -107,7 +108,7 @@ func (registry *jobRegistry) update(id, status, message, errorMessage string, pr
 		job.CompletedAt = &completedAt
 	}
 	registry.jobs[id] = job
-	go registry.persist(job)
+	go registry.persist(cloneJobSnapshot(job))
 }
 
 func (registry *jobRegistry) setCancel(id string, cancel context.CancelFunc) {
@@ -130,6 +131,7 @@ func (registry *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
 		return jobSnapshot{}, false, nil
 	}
 	if job.Status != "queued" && job.Status != "running" {
+		job = cloneJobSnapshot(job)
 		registry.mu.Unlock()
 		return job, true, errors.New("job is not cancellable")
 	}
@@ -143,6 +145,7 @@ func (registry *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
 		job.CompletedAt = &now
 		registry.jobs[id] = job
 	}
+	job = cloneJobSnapshot(job)
 	registry.mu.Unlock()
 	if cancel == nil {
 		return job, true, errors.New("job cancel function unavailable")
@@ -194,6 +197,7 @@ func (registry *jobRegistry) updatePullProgress(id string, layer jobLayer) {
 	job.Message = layer.Status
 	job.UpdatedAt = time.Now().UTC()
 	registry.jobs[id] = job
+	job = cloneJobSnapshot(job)
 	registry.mu.Unlock()
 	registry.persist(job)
 }
@@ -207,6 +211,7 @@ func (registry *jobRegistry) setExpectedTotal(id string, total int64) {
 	if exists {
 		job.TotalBytes = max(job.TotalBytes, total)
 		registry.jobs[id] = job
+		job = cloneJobSnapshot(job)
 	}
 	registry.mu.Unlock()
 	if exists {
@@ -224,6 +229,7 @@ func (registry *jobRegistry) completePull(id string) {
 		job.SpeedBytes = 0
 		job.Progress = 100
 		registry.jobs[id] = job
+		job = cloneJobSnapshot(job)
 	}
 	registry.mu.Unlock()
 	if exists {
@@ -235,7 +241,7 @@ func (registry *jobRegistry) get(id string) (jobSnapshot, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 	job, exists := registry.jobs[id]
-	return normalizeJobSnapshot(job), exists
+	return normalizeJobSnapshot(cloneJobSnapshot(job)), exists
 }
 
 func (registry *jobRegistry) list(kind string) []jobSnapshot {
@@ -244,7 +250,7 @@ func (registry *jobRegistry) list(kind string) []jobSnapshot {
 	result := make([]jobSnapshot, 0, len(registry.jobs))
 	for _, job := range registry.jobs {
 		if kind == "" || job.Type == kind {
-			result = append(result, normalizeJobSnapshot(job))
+			result = append(result, normalizeJobSnapshot(cloneJobSnapshot(job)))
 		}
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].CreatedAt.After(result[right].CreatedAt) })
@@ -259,15 +265,17 @@ func (registry *jobRegistry) delete(id string) (jobSnapshot, bool, error) {
 		return jobSnapshot{}, false, nil
 	}
 	if job.Status == "queued" || job.Status == "running" {
+		job = cloneJobSnapshot(job)
 		registry.mu.Unlock()
 		return job, true, errors.New("active job cannot be deleted")
 	}
 	delete(registry.jobs, id)
+	job = cloneJobSnapshot(job)
 	registry.mu.Unlock()
 	if registry.store != nil {
 		if err := registry.store.DeleteJob(context.Background(), id); err != nil {
 			registry.mu.Lock()
-			registry.jobs[id] = job
+			registry.jobs[id] = cloneJobSnapshot(job)
 			registry.mu.Unlock()
 			return job, true, err
 		}
@@ -275,6 +283,7 @@ func (registry *jobRegistry) delete(id string) (jobSnapshot, bool, error) {
 	return job, true, nil
 }
 
+// persist 仅接收锁内复制的独立快照，序列化和存储 IO 不占用 registry 锁。
 func (registry *jobRegistry) persist(job jobSnapshot) {
 	if registry.store == nil {
 		return
@@ -304,6 +313,22 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 	}
 	if !record.CompletedAt.IsZero() {
 		completedAt := record.CompletedAt
+		job.CompletedAt = &completedAt
+	}
+	return job
+}
+
+// cloneJobSnapshot 必须在持有 registry 锁时调用（或输入已独立），避免可变字段逃逸。
+func cloneJobSnapshot(job jobSnapshot) jobSnapshot {
+	if job.Layers != nil {
+		layers := make(map[string]jobLayer, len(job.Layers))
+		for id, layer := range job.Layers {
+			layers[id] = layer
+		}
+		job.Layers = layers
+	}
+	if job.CompletedAt != nil {
+		completedAt := *job.CompletedAt
 		job.CompletedAt = &completedAt
 	}
 	return job
