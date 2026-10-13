@@ -2,7 +2,7 @@ name: NCP CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dot/ncp-modernization]
     tags: ['*']
   pull_request:
   workflow_dispatch:
