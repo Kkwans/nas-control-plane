@@ -78,10 +78,10 @@ func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Ses
 	attachment, err := s.gateway.Open(ctx, info.ID, request.Rows, request.Cols)
 	if err != nil {
 		if attachment.Conn != nil {
-			_ = attachment.Conn.Close()
+			err = errors.Join(err, attachment.Conn.Close())
 		}
 		if ctx.Err() != nil {
-			return nil, coded("TERMINAL_SESSION_CANCELED", ctx.Err())
+			return nil, coded("TERMINAL_SESSION_CANCELED", errors.Join(ctx.Err(), err))
 		}
 		return nil, coded("TERMINAL_CONTAINER_OPEN_FAILED", err)
 	}
@@ -102,9 +102,8 @@ func (s *containerStarter) Start(ctx context.Context, request StartRequest) (Ses
 	}
 	session := newContainerSession(ctx, s.gateway, attachment)
 	if err := ctx.Err(); err != nil {
-		session.abort()
-		session.stopLifecycle()
-		return nil, coded("TERMINAL_SESSION_CANCELED", err)
+		// 有效会话交给 Manager 的唯一清理 owner，保留退出确认与 closing 名额。
+		return session, coded("TERMINAL_SESSION_CANCELED", err)
 	}
 	return session, nil
 }

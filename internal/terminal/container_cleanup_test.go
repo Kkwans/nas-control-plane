@@ -289,13 +289,25 @@ func TestTerminalCleanupRepeatedCloseReturnsSameResult(t *testing.T) {
 }
 func TestTerminalCleanupOpenCanceledBeforePublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	local, peer := net.Pipe()
-	defer peer.Close()
-	c := &cleanupConn{Conn: local}
+	defer cancel()
+	c := &cleanupConn{closeFn: func() error { return nil }}
 	g := &cleanupGateway{attachment: ContainerAttachment{ExecID: "exec", Reader: c, Conn: c}, openFn: cancel}
 	s, err := newContainerStarter(g).Start(ctx, StartRequest{})
-	if s != nil || !errors.Is(err, context.Canceled) || c.closes.Load() != 1 {
-		t.Fatalf("session=%v error=%v closes=%d", s, err, c.closes.Load())
+	if s == nil || !errors.Is(err, context.Canceled) || ErrorCode(err) != "TERMINAL_SESSION_CANCELED" {
+		t.Fatalf("session=%v error=%v", s, err)
+	}
+	if g.waits.Load() != 0 {
+		t.Fatal("starter consumed the caller's cleanup ownership")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertCleanupClosed(t, c, g)
+	if c.writes.Load() != 0 {
+		t.Fatal("canceled unpublished session sent control input")
 	}
 }
 func TestTerminalCleanupExitConfirmationIsNotTransportEOF(t *testing.T) {

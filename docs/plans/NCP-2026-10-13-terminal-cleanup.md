@@ -132,13 +132,20 @@ WaitDelay约束管道收尾，不保证StartProcess/Process.Wait内核异常可�
 H4 后续验收：cadd8b8 的 [CI 38413659465](https://github.com/Kkwans/nas-control-plane/actions/runs/38413659465)于14:32 UTC整体通过，Go/Compose通过，前端610项单元及173项浏览器测试通过。H3与H4实际helper行为均已由隔离CI覆盖，NAS实机未验证。
 
 
-## M08-C3：容器升级握手取消与前发布归属（实施中）
+## M08-C3：容器升级握手取消与前发布归属（实现与独立审查完成）
 
 固定Moby SDK v0.5.0在dial后同步写HTTP升级请求、读取响应头，未把后续context取消连接到raw Conn。已用实际SDK加内存fake Conn复现：阻塞Write/Read不随取消返回，关闭所持连接后才退出；race通过，无真实socket或Docker。原探测两秒context不能覆盖这个间隙，opening名额会被持续占用。
 
 - 采用每次Attach独立的连接owner，将取消绑定到准确Conn并幂等Close；停止并等待已启动回调，同步SDK退出后再交接。保留SDK原Reader及预读数据，不复制协议，不遗弃go ExecAttach。
 - attach-only客户端使用固定本地Docker端点与已成功协商的版本，避免共享HTTP池/懒协商连接被错绑。版本选择需在可取消的协商边界明确同步，不能无锁读取并发变更的ClientVersion；失败不得假装已经协商。
 - 探测保留共享两秒预算和C2捕获/校验；最终交互Create+Attach增加独立两秒启动预算，成功后解绑启动取消而保留会话父生命周期。不是整个Open两秒保证。
-- 启动请求可能已到达daemon但升级失败时，关闭连接不证明远端进程退出；保留退出未确认类别并停止不安全的自动重试，不杀容器/PID1/Root后代。
+- 握手写请求后发生本次取消/截止时，关闭连接不证明远端进程退出；保留退出未确认类别并停止该次shell后备尝试，不杀容器/PID1/Root后代。未取消的SDK升级错误缺少结构化拒绝来源，保留原后备行为，不宣称解决所有不确定启动。成功Attach后读取/Inspect阶段的子探测截止也保持原行为。
 - 有效session晚取消交给既有Manager唯一Close owner，不丢掉退出诊断，不提前释放容量；取消主码及errors.Is因果保持。
 - 验收覆盖真实SDK+纯fake阻塞Write/Read、升级失败、预读、幂等Close/回调join、成功交接后预算取消、并发隔离/协商、共享预算与晚取消容量。真实Docker行为仍未验证；不守约Conn.Close/内核等待不可凭空抢占。
+
+
+C3兼容性复核：Engine v28.5.1在执行程序前先发101升级；找不到bash通常通过升级后的帧输出失败并由Inspect给出非零退出，随后尝试sh。已使用真实SDK加内存响应覆盖此路径及完整非101拒绝，未以错误文本匹配猜测类型。参考[Engine升级入口](https://github.com/moby/moby/blob/v28.5.1/api/server/router/container/exec.go)及[执行失败状态](https://github.com/moby/moby/blob/v28.5.1/daemon/exec.go)。这些源码与fixture不等同用户当前Docker版本实测。
+
+独立审查覆盖精确连接/CloseWrite/预读/回调join、协商失败重试及取消等待、启动预算与晚取消Manager名额；发现测试在截止瞬间sleep可能早于取消回调，改为等待context完成，未放宽结果断言。相关race重复25轮、cleanup重复10轮和全包仅编译通过，Go构建/vet通过；真实隔离CI仍待提交后验收。
+
+最终预算补充：探测的协商及版本gate等待也置于原两秒截止之内，不从握手阶段重新开始计时。新增两项纯fake预算测试，合并相关race×20、全包仅编译/vet/build通过；未设置生产网络或安全配置。

@@ -14,10 +14,13 @@ import (
 )
 
 type mobyContainerGateway struct {
-	client *client.Client
+	client      *client.Client
+	versionGate chan struct{}
+	api         *containerSDK
 }
 
 const containerShellProbeTimeout = 2 * time.Second
+const containerExecStartTimeout = 2 * time.Second
 
 var errContainerProbeOutputLimit = errors.New("container probe output exceeds wire limit")
 
@@ -29,11 +32,36 @@ type containerProbeClient interface {
 }
 
 func newMobyContainerGateway(apiClient *client.Client) *mobyContainerGateway {
-	return &mobyContainerGateway{client: apiClient}
+	return &mobyContainerGateway{client: apiClient, versionGate: make(chan struct{}, 1)}
+}
+
+// 在任意普通请求之前明确完成协商。失败可重试，但不会让 SDK 在失败
+// 协商后继续请求并与下一次协商并发读写 version。client 不得在 gateway 外使用。
+func (g *mobyContainerGateway) sdk(ctx context.Context) (*containerSDK, error) {
+	select {
+	case g.versionGate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-g.versionGate }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if g.api == nil {
+		if _, err := g.client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+			return nil, errors.Join(err, ctx.Err())
+		}
+		g.api = &containerSDK{Client: g.client, version: g.client.ClientVersion()}
+	}
+	return g.api, nil
 }
 
 func (g *mobyContainerGateway) Inspect(ctx context.Context, containerID string) (ContainerInfo, error) {
-	response, err := g.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return ContainerInfo{}, err
+	}
+	response, err := api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return ContainerInfo{}, err
 	}
@@ -58,23 +86,26 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	}
 	var metadata SessionMetadata
 	if filepath.Base(shell) == "bash" {
-		metadata = containerShellMetadataWithProbe(shell, g.probeContainerBashCapabilities(ctx, containerID, shell))
+		probe := g.probeContainerBashCapabilities(ctx, containerID, shell)
+		if errors.Is(probe.Err, ErrContainerExitUnconfirmed) {
+			return ContainerAttachment{}, probe.Err
+		}
+		metadata = containerShellMetadataWithProbe(shell, probe)
 	} else {
 		metadata = containerShellMetadata(shell)
 	}
-	exec, err := g.client.ExecCreate(ctx, containerID, protectedContainerExecOptionsForShell(rows, cols, shell))
+	api, err := g.sdk(ctx)
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
-	attachment, err := g.client.ExecAttach(ctx, exec.ID, client.ExecAttachOptions{
-		TTY:         true,
-		ConsoleSize: client.ConsoleSize{Height: uint(rows), Width: uint(cols)},
+	execID, attachment, err := startContainerExec(ctx, api, containerID, protectedContainerExecOptionsForShell(rows, cols, shell), client.ExecAttachOptions{
+		TTY: true, ConsoleSize: client.ConsoleSize{Height: uint(rows), Width: uint(cols)},
 	})
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
 	return ContainerAttachment{
-		ExecID:       exec.ID,
+		ExecID:       execID,
 		Reader:       attachment.Reader,
 		Conn:         attachment.Conn,
 		Shell:        metadata.Shell,
@@ -85,19 +116,23 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 }
 
 func (g *mobyContainerGateway) detectContainerShell(ctx context.Context, containerID string) (string, error) {
+	return detectContainerShell(ctx, g.probeContainerCommand, containerID)
+}
+
+func detectContainerShell(ctx context.Context, probe func(context.Context, string, ...string) (bool, error), containerID string) (string, error) {
 	for _, shell := range []string{"/bin/bash", "/usr/bin/bash", "bash"} {
-		available, err := g.probeContainerCommand(ctx, containerID, shell, "--version")
-		if err != nil && ctx.Err() != nil {
-			return "", ctx.Err()
+		available, err := probe(ctx, containerID, shell, "--version")
+		if err != nil && (ctx.Err() != nil || errors.Is(err, ErrContainerExitUnconfirmed)) {
+			return "", errors.Join(err, ctx.Err())
 		}
 		if available {
 			return shell, nil
 		}
 	}
 	for _, shell := range []string{"/bin/sh", "/usr/bin/sh", "sh"} {
-		available, err := g.probeContainerCommand(ctx, containerID, shell, "-n")
-		if err != nil && ctx.Err() != nil {
-			return "", ctx.Err()
+		available, err := probe(ctx, containerID, shell, "-n")
+		if err != nil && (ctx.Err() != nil || errors.Is(err, ErrContainerExitUnconfirmed)) {
+			return "", errors.Join(err, ctx.Err())
 		}
 		if available {
 			return shell, nil
@@ -115,7 +150,14 @@ func (g *mobyContainerGateway) probeContainerCommand(ctx context.Context, contai
 }
 
 func (g *mobyContainerGateway) probeContainerCommandOutput(ctx context.Context, containerID string, command ...string) (bool, []byte, error) {
-	return probeContainerCommandOutput(ctx, g.client, containerID, command...)
+	// 协商及等待版本 gate 也计入探测原有总预算。内层截止不会延长它。
+	probeContext, cancel := context.WithTimeout(ctx, containerShellProbeTimeout)
+	defer cancel()
+	api, err := g.sdk(probeContext)
+	if err != nil {
+		return false, nil, err
+	}
+	return probeContainerCommandOutput(probeContext, api, containerID, command...)
 }
 
 func probeContainerCommandOutput(ctx context.Context, api containerProbeClient, containerID string, command ...string) (bool, []byte, error) {
@@ -131,6 +173,9 @@ func probeContainerCommandOutput(ctx context.Context, api containerProbeClient, 
 	})
 	if err = errors.Join(err, probeContext.Err()); err != nil {
 		return false, nil, err
+	}
+	if exec.ID == "" {
+		return false, nil, errors.New("container exec create returned no ID")
 	}
 	attachment, err := api.ExecAttach(probeContext, exec.ID, client.ExecAttachOptions{})
 	if err != nil {
@@ -319,15 +364,23 @@ func containerShellMetadataWithProbe(shellPath string, probe shellCapabilityProb
 }
 
 func (g *mobyContainerGateway) Resize(ctx context.Context, execID string, rows, cols uint16) error {
-	_, err := g.client.ExecResize(ctx, execID, client.ExecResizeOptions{Height: uint(rows), Width: uint(cols)})
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = api.ExecResize(ctx, execID, client.ExecResizeOptions{Height: uint(rows), Width: uint(cols)})
 	return err
 }
 
 func (g *mobyContainerGateway) WaitForExit(ctx context.Context, execID string) error {
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return err
+	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		inspection, err := g.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		inspection, err := api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return err
 		}
@@ -378,4 +431,28 @@ func protectedContainerExecOptionsForShell(rows, cols uint16, shell string) clie
 		},
 		Cmd: arguments,
 	}
+}
+
+// 最终交互 Create 与 Attach 共用启动预算，交还后不再绑定该预算。
+func startContainerExec(ctx context.Context, api containerProbeClient, containerID string, createOptions client.ExecCreateOptions, attachOptions client.ExecAttachOptions) (string, client.ExecAttachResult, error) {
+	startup, cancel := context.WithTimeout(ctx, containerExecStartTimeout)
+	defer cancel()
+	if err := startup.Err(); err != nil {
+		return "", client.ExecAttachResult{}, err
+	}
+	exec, err := api.ExecCreate(startup, containerID, createOptions)
+	if err = errors.Join(err, startup.Err()); err != nil {
+		return "", client.ExecAttachResult{}, err
+	}
+	if exec.ID == "" {
+		return "", client.ExecAttachResult{}, errors.New("container exec create returned no ID")
+	}
+	attachment, err := api.ExecAttach(startup, exec.ID, attachOptions)
+	if err = errors.Join(err, startup.Err()); err != nil {
+		if attachment.Conn != nil {
+			err = errors.Join(err, attachment.Conn.Close(), ErrContainerExitUnconfirmed)
+		}
+		return "", client.ExecAttachResult{}, err
+	}
+	return exec.ID, attachment, nil
 }
