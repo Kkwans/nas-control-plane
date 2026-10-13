@@ -106,3 +106,18 @@
 - A仍保留HTTP/SSE直接summary读取；多标签消重、过期提示与流预算属于正在实施的B1。有界历史查询与完整图表缺口为B2，Docker对账为C。所有测试仅fake/临时SQLite，未采集真实主机或NAS指标。
 
 - [辅助文字截图复核](NCP-2026-10-13-secondary-text.md)：30张目标截图通过；共同基线47张RGB不变、12张预期变化，另1张日志滚动后全页捕获出现悬浮页头/skip-link异常，已安排视口断言与规范全页重拍，尚未关闭该异常。
+
+## 10:05 UTC 精度、共享实时与截图闭环
+
+- [9bcd424 CI 38379521199](https://github.com/Kkwans/nas-control-plane/actions/runs/38379521199)成功。数据库直接标量values/keys精度修复由HTTP/protobuf/临时SQLite回归验证，原代码负对照可重现相邻大主键舍入；不保证客户端已经舍入的JS Number、嵌套对象或数据库自身任意精度。
+- [6ca7d3b CI 38380342147](https://github.com/Kkwans/nas-control-plane/actions/runs/38380342147)成功。后端共享快照、连接/逐帧写预算、心跳及状态分离通过独立race十轮；正常Linux CI执行完整Go测试，包括实际loopback HTTP空闲6秒后再次发送和provider关闭EOF。全部使用fake源；Docker仍逐连接RPC，未宣称C已完成。
+- [37ed104 CI 38379835528](https://github.com/Kkwans/nas-control-plane/actions/runs/38379835528)与[实际截图/JSON复核](NCP-2026-10-13-logs-capture.md)关闭日志捕获异常验收：390px明确scrollY=120、header y=0、未聚焦skip-link在视口外，视口及回顶全页像素均正常。旧异常具体成因仍为推测。
+- B1前端独立审查修复了遗漏storage质量判断、fixture时钟漂移、EventSource未就绪注入，以及移动端隐藏状态提示等问题。最终228项单元、typecheck/lint/build通过；5项新浏览器场景与新状态截图待CI。
+
+
+## 10:27 UTC 历史查询边界与图表缺口
+
+- B1前端11d04d3的228项单元及5项新增实时新鲜度浏览器场景通过；该次完整CI失败于既有视觉测试暂停页面时钟后axe异步检查超时。f03775f将原严重/关键无障碍断言分离到正常推进时钟的独立测试，不删除断言、不放宽阈值。[CI 38382227692](https://github.com/Kkwans/nas-control-plane/actions/runs/38382227692)完整通过。
+- e213199历史查询后端：精确闭区间、同一只读快照、父样本与温度行双限额、8MiB完整JSON含换行限额、5秒协作取消预算；过大/无效/超时返回稳定错误，无部分数组。有效7天10081样本×6短名传感器返回5,050,583字节；7传感器超过65536温度行时明确拒绝。独立审查与race/取消/并发快照/全Unicode计数测试通过，[CI 38382724643](https://github.com/Kkwans/nas-control-plane/actions/runs/38382724643)完整成功。非驱动峰值内存硬上限或NAS性能实测。
+- 52a7d85历史图表：真实时间轴、每个缺口一个null、计数器重置/不安全整数不算速率；稀疏温度索引、最多八条选中曲线、有限搜索DOM；加载/错误/空数据与成功状态互斥。独立审查无阻塞，320项单元、typecheck/lint/build及六项新Chromium场景发现通过。像素测试有连续曲线正对照、保留两端要求和缺口无连线断言；[CI 38383466014](https://github.com/Kkwans/nas-control-plane/actions/runs/38383466014)完整通过，139项Chromium测试含六项新增历史图场景实际执行通过；截图独立视觉复核中，不等同于NAS实机验收。
+- M07外部修改回滚保护与明确恢复失败代码正在独立实施；不与上述已发布历史查询/图表修改混合提交。
