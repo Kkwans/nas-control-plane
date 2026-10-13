@@ -147,3 +147,11 @@
 - [c4f4473 CI 38389527278](https://github.com/Kkwans/nas-control-plane/actions/runs/38389527278)通过，SQL截图规范化未改产品CSS/API。实际打开29张SQL图并核对9份JSON，135个工具栏命中点全部有效；控件在sticky页头下方、回顶全页与拍后scrollY为0。先前截图验收缺口在这些状态下关闭，[完整视觉证据](NCP-2026-10-13-sql-visual.md)保留成因边界。
 - 少数即时采样的补全菜单坐标落后滚动一帧，实际PNG位置正确；不把该非阻塞坐标限制隐藏成全部动态坐标稳定。
 - 下一片M08-B正在实现活动流会话租约、提交后撤销/到期、WS连接关闭和logs/jobs SSE写入预算；不宣称全部容器exec/PTY子进程已回收。
+
+
+## 12:10 UTC 活动流撤销闭环与后续切片
+
+- 7dc9d21已推送：活动流以数据库重验的会话租约准入，退出仅撤销当前token，改密/禁用/删除在提交后撤销该用户活动流；到期与父请求取消也清理。WS同时关闭浏览器和独占Agent连接，logs/jobs SSE补齐逐帧写入预算。三个独立审查通过，真实SQLite会话至四类流的隔离回归及race通过。
+- [7dc9d21 CI 38393981077](https://github.com/Kkwans/nas-control-plane/actions/runs/38393981077)全部必需检查成功：420项前端单元、151项Chromium，Go测试/vet及本机/ARM64构建、Compose配置检查通过；发布任务跳过。
+- 撤销保证限定在同一Service实例；Login/UpdatePassword最终状态重验不检测期间禁用再启用的ABA。关闭流传输不等同于容器exec或PTY全部子孙已结束。
+- M08-C1已进入实现：已取得容器attachment后的可中断I/O、总关闭预算和退出未确认分类；预会话握手、全局启动锁、主机PTY另片。M14-C同时实现保守结果字节计费、完整行前缀截断和RPC/HTTP编码边界，尚未形成完成或测试通过结论。
