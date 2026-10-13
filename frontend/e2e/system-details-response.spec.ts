@@ -103,7 +103,7 @@ for (const width of [390, 1440]) {
     expect(fixture.inspectionRequests()).toBe(0)
     await captureError(page, info, width)
     fixture.respondWith(systemDetails)
-    await page.getByRole('button', { name: '重试', exact: true }).click()
+    await page.getByRole('button', { name: '重试系统详情', exact: true }).click()
     await expect(page.getByText(systemDetails.device.model, { exact: true })).toBeVisible()
     await expect(page.locator('.details-error')).toHaveCount(0)
     await expect.poll(fixture.inspectionRequests).toBe(1)

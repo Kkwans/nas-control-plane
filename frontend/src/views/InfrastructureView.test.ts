@@ -12,12 +12,13 @@ vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ services: [] }) }))
 vi.mock('@/composables/manualRefresh', () => ({ useManualRefreshRegistry: () => ({ register: refresh.register }) }))
 vi.mock('@/components/WorkspaceHeader.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/InfrastructureOverviewPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('@/components/InfrastructureProxyPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('element-plus', () => {
   const passthrough = defineComponent({ setup(_, { slots }) { return () => h('div', [slots.default?.(), slots.footer?.()]) } })
   return { ElButton: passthrough, ElInput: passthrough, ElDialog: passthrough }
 })
 const dns: DNSCapability = { backend: 'ugos-network-service', detected: true, state: 'ready', readOnly: false, canRead: true, canPreview: true, canConfirm: true, canRollback: true, nameservers: ['192.0.2.1'], configuredNameservers: ['192.0.2.1'], detectionSource: 'fixture', errorCode: '' }
-const details = { device: { architecture: 'fixture' }, warnings: [], network: { interfaces: [], routes: [], gateway: '', listeningPorts: [] }, storage: { mounts: [], disks: [] }, proxy: { mihomo: { detected: false, state: 'unknown' } }, dns } as unknown as SystemDetails
+const details = { device: { architecture: 'fixture' }, warnings: [], network: { interfaces: [], routes: [], gateway: '', listeningPorts: [], dnsServers: [] }, storage: { mounts: [], disks: [] }, proxy: { mihomo: { detected: false, state: 'unknown' } }, dns } as unknown as SystemDetails
 const inspection = { errorCode: '', publicEgress: { address: '192.0.2.10' } } as MihomoInspection
 const preview: DNSChangePreview = { previewId: 'fixture-preview', backend: dns.backend, before: { interface: '', connectionId: '', nameservers: dns.nameservers, searchDomains: [] }, after: { interface: '', connectionId: '', nameservers: ['192.0.2.2'], searchDomains: [] }, requiresConfirm: true, rollbackAvailable: true, expiresAt: '', errorCode: '' }
 const applied = { backend: dns.backend, applied: true, rollbackAvailable: true, changeId: 'fixture-change', errorCode: '' }
@@ -28,10 +29,11 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 type State = {
+  activeTab: string; dnsCapabilityLoading: boolean; dnsCapabilityError: string; dnsCapabilityFresh: boolean; canPreviewDNS: boolean; canConfirmDNS: boolean; canRollbackDNS: boolean;
   details: SystemDetails | null; dnsCapability: DNSCapability | null; loading: boolean; errorMessage: string;
   dnsDraft: string; dnsPreview: DNSChangePreview | null; dnsChangeId: string; dnsMessage: string; dnsDialogOpen: boolean; dnsPending: boolean; dnsChangeBackend: string;
   mihomoInspection: MihomoInspection | null; publicEgressLoading: boolean; publicEgressMessage: string;
-  loadDetails(): Promise<void>; checkMihomo(force: boolean): Promise<void>; previewDNS(): Promise<void>; confirmDNS(): Promise<void>; rollbackDNS(): Promise<void>;
+  loadDetails(): Promise<unknown>; loadSystemDetails(): Promise<unknown>; loadDNSCapability(): Promise<unknown>; checkMihomo(force: boolean): Promise<void>; previewDNS(): Promise<void>; confirmDNS(): Promise<void>; rollbackDNS(): Promise<void>;
   openDNSEditor(): void; invalidateDNSPreview(): void; handleManualRefresh(): Promise<void> | undefined;
 }
 let app: App | undefined
@@ -49,7 +51,7 @@ async function flush() { for (let i = 0; i < 8; i++) await nextTick() }
 function expectCleared() {
   expect(state.details).toBeNull(); expect(state.dnsCapability).toBeNull(); expect(state.mihomoInspection).toBeNull()
   expect(state.dnsDraft).toBe(''); expect(state.dnsPreview).toBeNull(); expect(state.dnsChangeId).toBe(''); expect(state.dnsMessage).toBe(''); expect(state.dnsDialogOpen).toBe(false)
-  expect(state.loading).toBe(false); expect(state.dnsPending).toBe(false); expect(state.publicEgressLoading).toBe(false); expect(state.errorMessage).toBe(''); expect(state.publicEgressMessage).toBe('')
+  expect(state.dnsCapabilityLoading).toBe(false); expect(state.dnsCapabilityError).toBe(''); expect(state.dnsCapabilityFresh).toBe(false); expect(state.loading).toBe(false); expect(state.dnsPending).toBe(false); expect(state.publicEgressLoading).toBe(false); expect(state.errorMessage).toBe(''); expect(state.publicEgressMessage).toBe('')
 }
 beforeEach(() => {
   vi.resetAllMocks(); beginSession(); refresh.register.mockReturnValue(refresh.unregister)
@@ -197,12 +199,12 @@ describe('DNS 编辑器同页所有权', () => {
   })
 
   it.each(['failure', 'pending'] as const)('确认结果先于复核读取 %s 保存；读取不抹去操作文案或恢复预览', async (outcome) => {
-    await ready(); const read = deferred<SystemDetails>(); api.requestSystemDetails.mockReturnValueOnce(read.promise)
+    await ready(); const read = deferred<DNSCapability>(); api.requestDNSCapability.mockReturnValueOnce(read.promise)
     await state.confirmDNS(); expect(state.dnsChangeId).toBe('fixture-change'); expect(state.dnsMessage).toBe('DNS 已应用。'); expect(state.dnsPending).toBe(false)
     await state.confirmDNS(); await state.rollbackDNS(); expect(api.confirmDNSChange).toHaveBeenCalledTimes(1); expect(api.rollbackDNSChange).not.toHaveBeenCalled()
-    if (outcome === 'failure') read.reject(new Error('read failed')); else read.resolve(details)
+    if (outcome === 'failure') read.reject(new Error('read failed')); else read.resolve(dns)
     await flush(); expect(state.dnsChangeId).toBe('fixture-change'); expect(state.dnsMessage).toBe('DNS 已应用。'); expect(state.dnsPreview).toBeNull()
-    if (outcome === 'failure') { expect(state.errorMessage).toBe('read failed'); expect(host.textContent).toContain('详情刷新失败') }
+    if (outcome === 'failure') { expect(state.dnsCapabilityError).toBe('read failed'); expect(host.textContent).toContain('DNS 能力读取失败') }
   })
 
   it.each(['confirm', 'rollback'] as const)('手动刷新不释放在途 %s 的锁且不夺取已知结果', async (kind) => {
@@ -231,7 +233,7 @@ describe('DNS 编辑器同页所有权', () => {
 
   it('能力读取失败禁止使用旧写权限；恢复读取不恢复已消费预览', async () => {
     await ready(); handle(); api.requestDNSCapability.mockRejectedValueOnce(new Error('offline'))
-    await state.handleManualRefresh(); await state.previewDNS(); await state.confirmDNS(); await state.rollbackDNS()
+    await expect(state.handleManualRefresh()).rejects.toThrow('DNS 能力：offline'); await state.previewDNS(); await state.confirmDNS(); await state.rollbackDNS()
     expect(api.previewDNSChange).toHaveBeenCalledTimes(1); expect(api.confirmDNSChange).not.toHaveBeenCalled(); expect(api.rollbackDNSChange).not.toHaveBeenCalled()
     await state.loadDetails(); expect(state.dnsPreview).toBeNull(); expect(state.dnsChangeId).toBe('fixture-change')
   })
@@ -262,5 +264,148 @@ describe('DNS 编辑器同页所有权', () => {
   it('关闭重开保留同后端句柄，已知不可回滚的成功清理旧句柄', async () => {
     await ready(); handle(); state.dnsDialogOpen = false; state.openDNSEditor(); expect(state.dnsChangeId).toBe('fixture-change')
     await state.previewDNS(); api.confirmDNSChange.mockResolvedValueOnce({ ...applied, rollbackAvailable: false }); await state.confirmDNS(); expect(state.dnsChangeId).toBe('')
+  })
+})
+
+describe('系统详情与辅助 DNS 读取隔离', () => {
+  it('详情先成功立即发布并检查 Mihomo；DNS 等待与失败均不可借用 embedded 写权限', async () => {
+    const read = deferred<DNSCapability>(); api.requestDNSCapability.mockReturnValueOnce(read.promise)
+    mount(); await flush()
+    expect(state.loading).toBe(false); expect(state.details).toEqual(details); expect(api.inspectMihomo).toHaveBeenCalledTimes(1)
+    expect(state.dnsCapabilityLoading).toBe(true); expect(state.dnsCapabilityFresh).toBe(false)
+    expect(host.querySelector('[aria-label="正在加载系统详情"]')).toBeNull(); expect(host.textContent).toContain('DNS 能力读取中')
+    state.activeTab = 'network'; await flush()
+    expect(host.textContent).toContain('上次读取 DNS（尚未核实）'); expect(host.textContent).not.toContain('支持安全修改')
+    state.openDNSEditor(); expect(state.dnsDialogOpen).toBe(false)
+    state.dnsDialogOpen = true; state.dnsChangeId = 'fixture-change'; state.dnsChangeBackend = dns.backend
+    await state.previewDNS(); await state.confirmDNS(); await state.rollbackDNS()
+    expect(api.previewDNSChange).not.toHaveBeenCalled(); expect(api.confirmDNSChange).not.toHaveBeenCalled(); expect(api.rollbackDNSChange).not.toHaveBeenCalled()
+    read.reject(new Error('DNS offline')); await flush()
+    expect(state.details).toEqual(details); expect(state.errorMessage).toBe(''); expect(state.dnsCapabilityError).toBe('DNS offline')
+    expect(host.querySelector('[data-testid="dns-read-status"]')?.textContent).toContain('重试 DNS 能力')
+    expect(host.querySelector('[data-testid="dns-dialog-read-status"]')?.textContent).toContain('重试 DNS 能力')
+  })
+
+  it.each([false, true])('详情失败、DNS 成功独立保留（已有快照 %s）', async (existing) => {
+    if (existing) { mount(); await flush(); state.openDNSEditor(); state.dnsDraft = '192.0.2.9' }
+    const freshDNS = { ...dns, nameservers: ['192.0.2.7'] }
+    api.requestSystemDetails.mockRejectedValueOnce(new Error('details offline')); api.requestDNSCapability.mockResolvedValueOnce(freshDNS)
+    if (existing) await state.loadDetails(); else { mount(); await flush() }
+    expect(state.details).toEqual(existing ? details : null); expect(state.errorMessage).toBe('details offline')
+    expect(state.dnsCapability).toEqual(freshDNS); expect(state.dnsCapabilityFresh).toBe(true); expect(state.canPreviewDNS).toBe(true)
+    expect(host.textContent).toContain('重试系统详情'); expect(state.dnsCapabilityError).toBe('')
+    if (existing) { expect(state.dnsDraft).toBe('192.0.2.9'); await state.previewDNS(); expect(api.previewDNSChange).toHaveBeenCalledTimes(1) }
+  })
+
+  it('目标重试仅请求所属 GET；DNS 不影响 inspection，详情不撤销能力、草稿或预览', async () => {
+    mount(); await flush(); state.openDNSEditor(); state.dnsDraft = '192.0.2.9'; await state.previewDNS()
+    const inspecting = deferred<MihomoInspection>(); api.inspectMihomo.mockReturnValueOnce(inspecting.promise)
+    const inspectionPending = state.checkMihomo(true); const inspectionSignal = api.inspectMihomo.mock.calls[1]![2] as AbortSignal
+    await state.loadDNSCapability()
+    expect(api.requestSystemDetails).toHaveBeenCalledTimes(1); expect(api.requestDNSCapability).toHaveBeenCalledTimes(2); expect(api.inspectMihomo).toHaveBeenCalledTimes(2)
+    expect(inspectionSignal.aborted).toBe(false); expect(state.publicEgressLoading).toBe(true); expect(state.dnsPreview).toBeNull()
+    inspecting.resolve(inspection); await inspectionPending
+    await state.previewDNS(); const read = deferred<SystemDetails>(); api.requestSystemDetails.mockReturnValueOnce(read.promise)
+    const retry = state.loadSystemDetails(); expect(state.canPreviewDNS).toBe(true); expect(state.dnsPreview).toEqual(preview)
+    read.resolve(details); await retry; expect(api.requestDNSCapability).toHaveBeenCalledTimes(2); expect(api.inspectMihomo).toHaveBeenCalledTimes(3); expect(state.dnsDraft).toBe('192.0.2.9')
+  })
+
+  it.each(['success', 'failure'] as const)('旧 DNS %s 与 finally 不发布或解除最新 DNS busy，详情完全独立', async (outcome) => {
+    const old = deferred<DNSCapability>(); const latest = deferred<DNSCapability>()
+    api.requestDNSCapability.mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise)
+    mount(); await flush(); const oldSignal = api.requestDNSCapability.mock.calls[0]![1] as AbortSignal
+    const retry = state.loadDNSCapability(); expect(oldSignal.aborted).toBe(true)
+    if (outcome === 'success') old.resolve(dns); else old.reject(new Error('old DNS'))
+    await flush(); expect(state.dnsCapabilityLoading).toBe(true); expect(state.dnsCapability).toBeNull(); expect(state.dnsCapabilityError).toBe(''); expect(state.loading).toBe(false)
+    latest.resolve({ ...dns, nameservers: ['192.0.2.8'] }); await retry
+    expect(state.dnsCapability?.nameservers).toEqual(['192.0.2.8']); expect(state.dnsCapabilityFresh).toBe(true); expect(api.inspectMihomo).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['none', 'details', 'dns', 'both'] as const)('单一注册刷新聚合本次结果：%s', async (failure) => {
+    mount(); await flush(); expect(refresh.register).toHaveBeenCalledTimes(1)
+    if (failure === 'details' || failure === 'both') api.requestSystemDetails.mockRejectedValueOnce(new Error('details failed'))
+    if (failure === 'dns' || failure === 'both') api.requestDNSCapability.mockRejectedValueOnce(new Error('DNS failed'))
+    const handler = refresh.register.mock.calls[0]![0] as () => Promise<void>
+    if (failure === 'none') await expect(handler()).resolves.toBeUndefined()
+    else await expect(handler()).rejects.toThrow(failure === 'both' ? '系统详情：details failed；DNS 能力：DNS failed' : failure === 'details' ? '系统详情：details failed' : 'DNS 能力：DNS failed')
+  })
+
+  it.each(['details', 'dns'] as const)('聚合等待 %s，但已成功的另一资源立即发布', async (resource) => {
+    mount(); await flush(); const read = deferred<unknown>()
+    const mock = resource === 'details' ? api.requestSystemDetails : api.requestDNSCapability
+    mock.mockReturnValueOnce(read.promise); let settled = false
+    const pending = state.handleManualRefresh()!.then(() => { settled = true }); await flush(); expect(settled).toBe(false)
+    expect(resource === 'details' ? state.dnsCapabilityFresh : !state.loading).toBe(true)
+    read.resolve(resource === 'details' ? details : dns); await pending; expect(settled).toBe(true)
+  })
+
+  it.each(['details', 'dns'] as const)('聚合结束忽略已被目标重试取代的 %s 错误，不拼接新错误', async (resource) => {
+    mount(); await flush(); const waiting = deferred<unknown>()
+    const failedMock = resource === 'details' ? api.requestSystemDetails : api.requestDNSCapability
+    const waitingMock = resource === 'details' ? api.requestDNSCapability : api.requestSystemDetails
+    failedMock.mockRejectedValueOnce(new Error('old error')); waitingMock.mockReturnValueOnce(waiting.promise)
+    const pending = state.handleManualRefresh(); await flush()
+    failedMock.mockRejectedValueOnce(new Error('new error'))
+    await (resource === 'details' ? state.loadSystemDetails() : state.loadDNSCapability())
+    waiting.resolve(resource === 'details' ? dns : details)
+    await expect(pending).resolves.toBeUndefined()
+    expect(resource === 'details' ? state.errorMessage : state.dnsCapabilityError).toBe('new error')
+  })
+
+  it.each(['pending', 'failure'] as const)('已知写结果复核 DNS 先成功，详情 %s 不阻止合法回滚', async (outcome) => {
+    mount(); await flush(); state.openDNSEditor(); await state.previewDNS()
+    const read = deferred<SystemDetails>(); api.requestSystemDetails.mockReturnValueOnce(read.promise)
+    await state.confirmDNS(); await flush()
+    if (outcome === 'failure') { read.reject(new Error('details failed')); await flush() }
+    expect(state.dnsChangeId).toBe('fixture-change'); expect(state.dnsMessage).toBe('DNS 已应用。'); expect(state.canRollbackDNS).toBe(true)
+    await state.rollbackDNS(); await flush(); expect(api.rollbackDNSChange).toHaveBeenCalledExactlyOnceWith('fixture-change'); expect(state.dnsMessage).toBe('DNS 已回滚。')
+    if (outcome === 'pending') { read.resolve(details); await flush() }
+    expect(state.dnsMessage).toBe('DNS 已回滚。'); expect(api.confirmDNSChange).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('独立读取交叉代次', () => {
+  it('DNS-only 重试不取消 pending 详情，详情-only 重试不取消 pending DNS', async () => {
+    const systemRead = deferred<SystemDetails>(); const dnsRead = deferred<DNSCapability>()
+    api.requestSystemDetails.mockReturnValueOnce(systemRead.promise); api.requestDNSCapability.mockReturnValueOnce(dnsRead.promise)
+    mount(); const systemSignal = api.requestSystemDetails.mock.calls[0]![1] as AbortSignal; const dnsSignal = api.requestDNSCapability.mock.calls[0]![1] as AbortSignal
+    await state.loadDNSCapability(); expect(systemSignal.aborted).toBe(false); expect(dnsSignal.aborted).toBe(true); expect(state.loading).toBe(true)
+    const nextDNS = deferred<DNSCapability>(); api.requestDNSCapability.mockReturnValueOnce(nextDNS.promise)
+    const dnsPending = state.loadDNSCapability(); const nextDNSSignal = api.requestDNSCapability.mock.calls[2]![1] as AbortSignal
+    await state.loadSystemDetails(); expect(nextDNSSignal.aborted).toBe(false); expect(systemSignal.aborted).toBe(true); expect(state.dnsCapabilityLoading).toBe(true)
+    systemRead.resolve({ ...details, warnings: ['old'] }); dnsRead.resolve({ ...dns, nameservers: ['192.0.2.99'] }); await flush()
+    expect(state.details?.warnings).toEqual([]); expect(state.dnsCapabilityLoading).toBe(true)
+    nextDNS.resolve(dns); await dnsPending; expect(state.dnsCapability).toEqual(dns)
+  })
+
+  it.each(['unmount', 'session'] as const)('聚合 pending 时 %s 静默收尾，不发布迟到错误', async (action) => {
+    mount(); await flush(); const systemRead = deferred<SystemDetails>(); const dnsRead = deferred<DNSCapability>()
+    api.requestSystemDetails.mockReturnValueOnce(systemRead.promise); api.requestDNSCapability.mockReturnValueOnce(dnsRead.promise)
+    const pending = state.handleManualRefresh(); stop(action)
+    systemRead.reject(new Error('old details')); dnsRead.reject(new Error('old DNS'))
+    await expect(pending).resolves.toBeUndefined(); expectCleared()
+  })
+
+  it('已知确认后的新 DNS 读取取代旧刷新，旧成功不覆盖新能力或恢复预览', async () => {
+    mount(); await flush(); state.openDNSEditor(); await state.previewDNS()
+    const mutation = deferred<unknown>(); api.confirmDNSChange.mockReturnValueOnce(mutation.promise); const confirming = state.confirmDNS()
+    const oldDNS = deferred<DNSCapability>(); const newDNS = deferred<DNSCapability>()
+    api.requestDNSCapability.mockReturnValueOnce(oldDNS.promise).mockReturnValueOnce(newDNS.promise)
+    const refreshing = state.handleManualRefresh(); const oldSignal = api.requestDNSCapability.mock.calls[1]![1] as AbortSignal
+    mutation.resolve(applied); await confirming; expect(oldSignal.aborted).toBe(true)
+    newDNS.resolve({ ...dns, nameservers: ['192.0.2.8'] }); await flush()
+    oldDNS.resolve({ ...dns, nameservers: ['192.0.2.9'] }); await refreshing
+    expect(state.dnsCapability?.nameservers).toEqual(['192.0.2.8']); expect(state.dnsCapabilityFresh).toBe(true)
+    expect(state.dnsMessage).toBe('DNS 已应用。'); expect(state.dnsChangeId).toBe('fixture-change'); expect(state.dnsPreview).toBeNull(); expect(api.confirmDNSChange).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('读取失败稳定呈现', () => {
+  it.each(['details', 'dns'] as const)('%s 空错误消息仍显示目标重试并使手动刷新失败', async (resource) => {
+    mount(); await flush()
+    const mock = resource === 'details' ? api.requestSystemDetails : api.requestDNSCapability
+    mock.mockRejectedValueOnce(new Error(''))
+    await expect(state.handleManualRefresh()).rejects.toThrow(resource === 'details' ? '系统详情：系统详情暂不可用' : 'DNS 能力：DNS 能力暂不可用')
+    await flush(); expect(host.textContent).toContain(resource === 'details' ? '重试系统详情' : '重试 DNS 能力')
   })
 })

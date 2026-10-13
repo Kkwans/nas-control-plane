@@ -8,6 +8,9 @@ import SectionHeader from '@/components/SectionHeader.vue'
 const props = defineProps<{
   details: SystemDetails
   dnsDetails: DNSCapability
+  capabilityFresh: boolean
+  capabilityLoading: boolean
+  capabilityError: string
   routeIcon: Component
 }>()
 
@@ -16,6 +19,9 @@ const emit = defineEmits<{
 }>()
 
 const dnsCapabilityExplanation = computed(() => {
+  if (props.capabilityLoading) return 'DNS 能力读取中；以下为上次读取信息，尚未核实，修改暂不可用。'
+  if (props.capabilityError) return 'DNS 能力读取失败；以下为上次读取信息，尚未核实，修改暂不可用。'
+  if (!props.capabilityFresh) return '以下为上次读取信息，尚未核实，修改暂不可用。'
   if (!props.dnsDetails.readOnly && props.dnsDetails.backend === 'ugos-network-service') return '通过 UGOS 官方网络服务预览和应用；修改前保存完整配置，且支持并发变更保护与一键回滚。'
   if (!props.dnsDetails.readOnly && props.dnsDetails.backend === 'static-resolv-conf') return '修改前自动备份，确认后原子应用；若配置未被其他进程改动，可一键回滚。'
   if (props.dnsDetails.errorCode === 'DNS_BACKEND_READ_ONLY') return '检测到静态 /etc/resolv.conf，未发现可管理的 systemd-resolved 或 NetworkManager；保持只读。'
@@ -31,7 +37,7 @@ const dnsCapabilityExplanation = computed(() => {
     <SectionHeader class="detail-card__section-header" title="路由与 DNS" description="默认网关保持只读；DNS 由已确认的系统后端安全管理" :icon="routeIcon">
       <template #actions>
         <ActionButton
-          v-if="dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly"
+          v-if="capabilityFresh && dnsDetails.canPreview && dnsDetails.canConfirm && dnsDetails.canRollback && !dnsDetails.readOnly"
           size="sm"
           @click="emit('edit')"
         >编辑 DNS</ActionButton>
@@ -45,11 +51,11 @@ const dnsCapabilityExplanation = computed(() => {
     </dl>
     <div class="dns-management">
       <div class="dns-management__state">
-        <span :class="['capability-state', { off: !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
+        <span :class="['capability-state', { off: !capabilityFresh || !dnsDetails.detected || dnsDetails.readOnly }]"><i></i>{{ !capabilityFresh ? (capabilityLoading ? '能力读取中' : capabilityError ? '能力读取失败' : '能力尚未核实') : dnsDetails.readOnly ? '只读展示' : dnsDetails.detected ? '支持安全修改' : '未检测到可管理后端' }}</span>
         <small>{{ dnsCapabilityExplanation }}</small>
       </div>
       <div class="dns-current-grid">
-        <div class="dns-current-value"><span>当前生效 DNS</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
+        <div class="dns-current-value"><span>{{ capabilityFresh ? '当前生效 DNS' : '上次读取 DNS（尚未核实）' }}</span><code>{{ dnsDetails.nameservers.join('、') || '未读取到 DNS 地址' }}</code></div>
         <div v-if="!dnsDetails.readOnly" class="dns-current-value dns-current-value--managed"><span>UGOS 手动配置</span><code>{{ dnsDetails.configuredNameservers?.join('、') || '未读取到可编辑配置' }}</code></div>
       </div>
     </div>

@@ -17,7 +17,7 @@ const endpoint = (nameservers: string[]) => ({ interface: '', connectionId: '', 
 const dialog = (page: Page) => page.getByRole('dialog', { name: '编辑 DNS 服务器', exact: true })
 const input = (page: Page) => dialog(page).getByLabel('DNS 服务器', { exact: false })
 const button = (page: Page, name: string) => dialog(page).getByRole('button', { name, exact: true })
-const status = (page: Page) => dialog(page).getByRole('status')
+const status = (page: Page) => dialog(page).locator('.dns-editor__message[role="status"]')
 function deferred() {
   let resolve!: () => void
   const promise = new Promise<void>((done) => { resolve = done })
@@ -155,7 +155,8 @@ test('确认成功在挂起 GET 前落账，一次性预览与回滚目标不重
   await open(page)
   await preview(page)
   const confirm = api.hold(`${root}/confirm`)
-  const refresh = api.hold(detailsPath)
+  // 独立 DNS 能力决定写权限；仅挂起详情不能阻止回滚。
+  const refresh = api.hold(capabilityPath)
   await button(page, '确认应用').click()
   await confirm.received.promise
   await expect(input(page)).toBeDisabled()
