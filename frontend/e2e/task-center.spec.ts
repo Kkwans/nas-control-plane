@@ -310,10 +310,21 @@ async function capture(page: Page, info: TestInfo, name: string, topbarBeforeOpe
         className: element.className, scrollTop: element.scrollTop, scrollHeight: element.scrollHeight,
         clientHeight: element.clientHeight, bounds: bounds(element),
       })),
-      controls: [...(dialog?.querySelectorAll('button, input, select') ?? [])].map((element) => ({
-        tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent,
-        bounds: bounds(element), disabled: element.hasAttribute('disabled'),
-      })),
+      controls: [...(dialog?.querySelectorAll('button, input, select') ?? [])].map((element) => {
+        const rect = element.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+        const clippingAncestors = []
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor)
+          if (/(auto|scroll|hidden|clip)/.test(`${style.overflowX} ${style.overflowY}`)) {
+            clippingAncestors.push({ className: ancestor.className, bounds: bounds(ancestor),
+              overflowX: style.overflowX, overflowY: style.overflowY, scrollTop: ancestor.scrollTop })
+          }
+        }
+        return { tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent,
+          bounds: bounds(element), disabled: element.hasAttribute('disabled'),
+          centerHit: Boolean(hit && element.contains(hit)), clippingAncestors }
+      }),
       activeElement: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') },
     }
   })
@@ -371,14 +382,19 @@ for (const width of [390, 768, 1280, 1440]) {
       await dialog.getByLabel('搜索已加载记录', { exact: true }).fill('中文媒体归档项目')
       const row = rowOf(page, longReference)
       const details = row.getByRole('button', { name: '查看详情', exact: true })
-      await details.scrollIntoViewIfNeeded()
+      // 居中滚动避免 nearest 把控件贴在裁切边缘；仍严格要求完整可见与命中。
+      await details.evaluate(async (element) => {
+        element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' })
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      })
+      // 先保留实际滚动后的几何和像素，失败时也能诊断裁切祖先。
+      await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-scrolled-list`, topbarBeforeOpen)
       await expect(details).toBeInViewport({ ratio: 1 })
       expect(await details.evaluate((element) => {
         const bounds = element.getBoundingClientRect()
         const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
         return Boolean(hit && element.contains(hit))
       })).toBe(true)
-      if (width === 390) await capture(page, info, `fixture-task-center-${width}-font-${fontScale * 100}-scrolled-list`, topbarBeforeOpen)
       await details.click()
       // 全局 reduced-motion 契约用 .01ms!important 保留动画结束事件。
       const motionDurations = await row.locator('.task-detail-toggle svg').evaluate((element) =>
