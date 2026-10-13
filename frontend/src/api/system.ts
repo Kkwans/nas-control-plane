@@ -581,6 +581,10 @@ export interface JobSnapshot {
   type: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
   artifactState: 'present' | 'deleted' | 'unknown'
+  cancellationStatus?: 'requested' | 'confirmed' | 'unknown'
+  persistenceStatus?: 'pending'
+  cancellable?: boolean
+  errorCode?: string
   reference?: string
   message: string
   progress: number

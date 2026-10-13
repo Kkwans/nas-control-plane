@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -39,52 +38,60 @@ func (api *handler) pullDockerImage(response http.ResponseWriter, request *http.
 		api.writeError(response, request, http.StatusBadRequest, "DOCKER_IMAGE_PULL_INVALID", "请输入完整的镜像引用。")
 		return
 	}
-	job := api.jobs.create("docker-image-pull", input.Reference)
-	api.jobs.setExpectedTotal(job.ID, input.ExpectedBytes)
-	job, _ = api.jobs.get(job.ID)
-	go api.runImagePull(job.ID, input)
+	job, err := api.submitImagePull(input)
+	if err != nil {
+		api.writeJobError(response, request, err)
+		return
+	}
 	writeJSON(response, http.StatusAccepted, job)
 }
 
-func (api *handler) runImagePull(jobID string, input docker.ImagePullRequest) {
-	requestContext, cancel := context.WithTimeout(context.Background(), defaultDockerImageTimeout)
-	api.jobs.setCancel(jobID, cancel)
-	defer api.jobs.clearCancel(jobID)
+func (api *handler) submitImagePull(input docker.ImagePullRequest) (jobSnapshot, error) {
+	return api.jobs.submit("docker-image-pull", input.Reference, input.ExpectedBytes, func(ctx context.Context, id string) { api.runImagePull(ctx, id, input) })
+}
+func (api *handler) runImagePull(ctx context.Context, jobID string, input docker.ImagePullRequest) {
+	requestContext, cancel := context.WithTimeout(ctx, defaultDockerImageTimeout)
 	defer cancel()
-	select {
-	case api.jobs.pullSlots <- struct{}{}:
-		defer func() { <-api.jobs.pullSlots }()
-	case <-requestContext.Done():
-		api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
+	var result docker.ImagePullResult
+	var err error
+	if client, ok := api.dockerImages.(DockerImageProgressAgentClient); ok {
+		result, err = client.PullDockerImageWithProgress(requestContext, api.agentSocketPath, input, func(progress docker.ImagePullProgress) {
+			api.jobs.updatePullProgress(jobID, jobLayer{ID: progress.LayerID, Status: progress.Status, Current: progress.Current, Total: progress.Total})
+		})
+	} else {
+		result, err = api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input)
+	}
+	if err != nil {
+		if requestContext.Err() != nil {
+			code := "JOB_EXECUTION_INTERRUPTED"
+			if requestContext.Err() == context.DeadlineExceeded {
+				code = "JOB_EXECUTION_TIMEOUT"
+			}
+			api.jobs.interrupt(jobID, code, "本地调用已结束，远端执行结果未确认")
+			return
+		}
+		if jobRPCOutcomeUnknown(err) {
+			api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "连接中断，远端镜像拉取结果未确认")
+			return
+		}
+		api.jobs.update(jobID, "failed", "镜像拉取失败", "请检查镜像引用、仓库连接与 Agent 日志。", 100)
 		return
 	}
-	api.jobs.update(jobID, "running", "正在连接镜像仓库", "", 1)
-	if client, ok := api.dockerImages.(DockerImageProgressAgentClient); ok {
-		_, err := client.PullDockerImageWithProgress(requestContext, api.agentSocketPath, input, func(progress docker.ImagePullProgress) {
-			api.jobs.updatePullProgress(jobID, jobLayer{
-				ID: progress.LayerID, Status: progress.Status, Current: progress.Current, Total: progress.Total,
-			})
-		})
-		if err != nil {
-			if errors.Is(requestContext.Err(), context.Canceled) {
-				api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
-				return
-			}
-			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
-			return
-		}
-	} else {
-		if _, err := api.dockerImages.PullDockerImage(requestContext, api.agentSocketPath, input); err != nil {
-			if errors.Is(requestContext.Err(), context.Canceled) {
-				api.jobs.update(jobID, "cancelled", "镜像拉取已停止", "", 0)
-				return
-			}
-			api.jobs.update(jobID, "failed", "镜像拉取失败", err.Error(), 100)
-			return
-		}
+	if !result.Completed || strings.TrimSpace(result.Reference) == "" {
+		api.jobs.update(jobID, "interrupted", "未收到可信完成确认，请核对镜像状态", "", 0)
+		return
 	}
-	api.jobs.completePull(jobID)
 	api.jobs.update(jobID, "completed", "镜像拉取完成", "", 100)
+}
+
+// 只有明确的执行失败代码才归档 failed；传输错误不能证明远端操作失败或停止。
+func jobRPCOutcomeUnknown(err error) bool {
+	switch agentsocket.ErrorCode(err) {
+	case "DOCKER_IMAGE_PULL_FAILED", "COMPOSE_DEPLOY_FAILED", "COMPOSE_CONFIG_INVALID", "AGENT_RPC_REQUEST_INVALID":
+		return false
+	default:
+		return true
+	}
 }
 
 func (api *handler) removeDockerImage(response http.ResponseWriter, request *http.Request) {

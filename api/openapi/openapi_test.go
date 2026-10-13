@@ -119,3 +119,69 @@ func parseHTTPRouteDeclarations(t *testing.T) map[string]bool {
 	})
 	return routes
 }
+
+func TestJobLifecycleCompatibilityContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	document, err := loader.LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := document.Components.Schemas["JobSnapshot"].Value
+	if len(job.Properties["status"].Value.Enum) != 6 {
+		t.Fatal("v1 Job status must retain six values")
+	}
+	for _, field := range []string{"cancellationStatus", "persistenceStatus", "cancellable", "errorCode", "completedAt"} {
+		if job.Properties[field] == nil {
+			t.Fatalf("missing optional lifecycle property %s", field)
+		}
+		for _, required := range job.Required {
+			if required == field {
+				t.Fatalf("lifecycle property %s must remain optional", field)
+			}
+		}
+	}
+	for _, path := range []string{"/api/v1/docker/images/pull", "/api/v1/docker/compose/deploy", "/api/v1/jobs/{jobID}/retry"} {
+		response := document.Paths.Value(path).Post.Responses.Value("503")
+		if response == nil {
+			t.Fatalf("%s missing 503", path)
+		}
+		for _, code := range []string{"JOB_QUEUE_FULL", "JOB_PERSIST_FAILED", "JOB_ENGINE_UNAVAILABLE"} {
+			if response.Value.Description == nil || !strings.Contains(*response.Value.Description, code) {
+				t.Fatalf("%s missing %s", path, code)
+			}
+		}
+	}
+	cancel := document.Paths.Value("/api/v1/jobs/{jobID}/cancel").Post
+	for _, status := range []string{"202", "404", "409", "503"} {
+		if cancel.Responses.Value(status) == nil {
+			t.Fatalf("cancel missing %s", status)
+		}
+	}
+	if strings.Contains(*cancel.Responses.Value("202").Value.Description, "任务已停止") {
+		t.Fatal("cancel request is not proof of remote stop")
+	}
+}
+
+func TestReadinessDocumentsJobStorageDegradation(t *testing.T) {
+	loader := openapi3.NewLoader()
+	document, err := loader.LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := document.Components.Schemas["ReadinessResponse"].Value.Properties["checks"].Value
+	jobs := checks.Properties["jobs"]
+	if jobs == nil {
+		t.Fatal("readiness missing jobs check")
+	}
+	for _, state := range []string{"ready", "degraded", "unavailable"} {
+		found := false
+		for _, value := range jobs.Value.Enum {
+			if value == state {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("jobs readiness missing %s", state)
+		}
+	}
+}

@@ -41,7 +41,7 @@ const {
   invalidDownloadJobCount, downloadStatus, downloadQuery, downloadPage,
   downloadStatusOptions, activePullCount, filteredDownloadJobs, downloadPageCount,
   pagedDownloadJobs, upsertDownloadJob, loadDownloadJobs, retryDownload, stopDownload,
-  confirmDeleteJob, downloadState, downloadStateLabel, effectiveTotal,
+  confirmDeleteJob, isLiveJob, canCancelJob, canDeleteJob, canRetryJob, downloadState, downloadStateLabel, effectiveTotal,
 } = downloads
 const imageModeTabs = computed<SectionTab[]>(() => [
   { value: 'local', label: '本地镜像', icon: HardDrive, count: images.value.length },
@@ -161,13 +161,13 @@ onMounted(() => {
     </div>
 
     <DockerHubBrowser
-      v-else-if="mode === 'hub'"
+      v-show="mode === 'hub'"
       @job-created="handleHubJobCreated"
       @job-progress="handleHubJobProgress"
       @local-refresh="handleHubLocalRefresh"
     />
 
-    <section v-else class="download-workspace panel">
+    <section v-if="mode === 'downloads'" class="download-workspace panel">
       <header>
         <div>
           <strong>镜像下载任务</strong>
@@ -185,10 +185,10 @@ onMounted(() => {
         <span>{{ job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
         <time>{{ dateLabel(job.updatedAt) }}</time>
         <div class="job-actions">
-          <button v-if="job.status === 'queued' || job.status === 'running'" type="button" title="停止下载" @click="stopDownload(job)"><Square :size="14" /></button>
-          <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" title="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /></button>
+          <button v-if="isLiveJob(job)" :disabled="!canCancelJob(job)" type="button" title="请求取消下载（不保证远端立即停止）" @click="stopDownload(job)"><Square :size="14" /></button>
+          <button v-else-if="job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled' || downloadState(job) === 'deleted'" type="button" :disabled="!canRetryJob(job)" title="重新下载" @click="retryDownload(job)"><RotateCcw :size="15" /></button>
           <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /></button>
-          <button v-if="job.status !== 'queued' && job.status !== 'running'" class="job-delete" type="button" title="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /></button>
+          <button v-if="canDeleteJob(job)" class="job-delete" type="button" title="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /></button>
         </div>
       </article>
       <div v-if="!filteredDownloadJobs.length" class="empty-state">没有匹配的镜像下载任务</div>

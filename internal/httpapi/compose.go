@@ -88,26 +88,40 @@ func (api *handler) deployComposeConfig(response http.ResponseWriter, request *h
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	job := api.jobs.create("compose-deploy", input.ProjectID)
-	go func() {
-		api.jobs.update(job.ID, "running", "正在校验、备份并部署 Compose 项目", "", 15)
-		requestContext, cancel := context.WithTimeout(context.Background(), composeDeployTimeout)
+	job, submitErr := api.jobs.submit("compose-deploy", input.ProjectID, 0, func(ctx context.Context, jobID string) {
+		requestContext, cancel := context.WithTimeout(ctx, composeDeployTimeout)
 		defer cancel()
 		result, err := api.compose.DeployComposeConfig(requestContext, api.agentSocketPath, input)
 		if err != nil {
-			api.jobs.update(job.ID, "failed", "Compose 部署失败，已尝试恢复上一版本", "请查看项目日志并核对 Compose 配置。", 100)
+			if requestContext.Err() != nil {
+				code := "JOB_EXECUTION_INTERRUPTED"
+				if requestContext.Err() == context.DeadlineExceeded {
+					code = "JOB_EXECUTION_TIMEOUT"
+				}
+				api.jobs.interrupt(jobID, code, "本地调用已结束，远端部署结果未确认")
+				return
+			}
+			if jobRPCOutcomeUnknown(err) {
+				api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "连接中断，远端部署结果未确认")
+				return
+			}
+			api.jobs.update(jobID, "failed", "Compose 部署失败，已尝试恢复上一版本", "请查看项目日志并核对 Compose 配置。", 100)
 			return
 		}
 		message := "Compose 项目部署完成并已保存版本"
 		if api.controlStore != nil {
-			if _, err := api.controlStore.RecordComposeRevision(context.Background(), controlstore.ComposeRevision{
+			if _, err := api.controlStore.RecordComposeRevision(requestContext, controlstore.ComposeRevision{
 				ProjectID: input.ProjectID, ConfigPath: input.TargetPath, Content: input.Content, BackupPath: result.BackupPath,
 			}); err != nil {
 				message = "Compose 项目部署完成，但版本记录保存失败"
 			}
 		}
-		api.jobs.update(job.ID, "completed", message, "", 100)
-	}()
+		api.jobs.update(jobID, "completed", message, "", 100)
+	})
+	if submitErr != nil {
+		api.writeJobError(response, request, submitErr)
+		return
+	}
 	writeJSON(response, http.StatusAccepted, job)
 }
 

@@ -145,6 +145,15 @@ func runHTTPServer(ctx context.Context, args []string) error {
 			*terminalEnabled = *legacyTerminalPOC
 		}
 	})
+	// 持锁覆盖初始化、恢复以及全部 store 关闭。
+	if err := os.MkdirAll(filepath.Dir(*databasePath), 0700); err != nil {
+		return err
+	}
+	unlockJobs, err := lockJobDatabase(*databasePath)
+	if err != nil {
+		return err
+	}
+	defer unlockJobs()
 	authService, err := auth.Open(*databasePath, auth.Options{})
 	if err != nil {
 		return err
@@ -181,12 +190,27 @@ func runHTTPServer(ctx context.Context, args []string) error {
 		}
 	}
 
+	jobEngine, err := httpapi.NewJobEngine(controlStore)
+	if err != nil {
+		return err
+	}
+	engineClosed := false
+	defer func() {
+		if engineClosed {
+			return
+		}
+		closeContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		defer cancel()
+		_ = jobEngine.Close(closeContext)
+	}()
+
 	listener, err := net.Listen("tcp", *listenAddress)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
 		Handler: httpapi.NewHandler(httpapi.Config{
+			JobEngine:           jobEngine,
 			AgentSocketPath:     *agentSocketPath,
 			Auth:                authService,
 			ControlStore:        controlStore,
@@ -214,7 +238,14 @@ func runHTTPServer(ctx context.Context, args []string) error {
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 		defer cancel()
-		if err := server.Shutdown(shutdownContext); err != nil {
+		jobEngine.StopAdmission()
+		engineClosed = true
+		httpErr := server.Shutdown(shutdownContext)
+		if httpErr != nil {
+			_ = jobEngine.Close(shutdownContext)
+			return httpErr
+		}
+		if err := jobEngine.Close(shutdownContext); err != nil {
 			return err
 		}
 		return <-serveErrors

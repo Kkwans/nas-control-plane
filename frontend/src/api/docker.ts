@@ -1,3 +1,4 @@
+import { captureSession } from '@/session/sessionLifecycle'
 import {
   NcpApiError,
   jsonRequest,
@@ -93,6 +94,7 @@ export interface JobSubscription {
 }
 
 export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => void): JobSubscription {
+  const session = captureSession()
   let settled = false
   let resolveDone!: (job: JobSnapshot) => void
   let rejectDone!: (error: unknown) => void
@@ -104,25 +106,31 @@ export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => vo
   const close = () => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     rejectDone(new DOMException('Job subscription closed', 'AbortError'))
   }
   const finish = (job: JobSnapshot) => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     resolveDone(job)
   }
+  session.signal.addEventListener('abort', close, { once: true })
+  if (session.signal.aborted) close()
   source.addEventListener('progress', (event) => {
+    if (settled) return
     try {
       const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
       const job = parseJobSnapshot(payload)
       if (!job) throw new Error('任务进度格式无效')
       onProgress(job)
-      if (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') finish(job)
+      if (job.persistenceStatus !== 'pending' && (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled')) finish(job)
     } catch (error) {
       if (settled) return
       settled = true
+      session.signal.removeEventListener('abort', close)
       source.close()
       rejectDone(error)
     }
@@ -130,6 +138,7 @@ export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => vo
   source.onerror = () => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     rejectDone(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
   }
@@ -488,7 +497,11 @@ function parseJobSnapshot(value: unknown): JobSnapshot | null {
     typeof value.downloadedBytes === 'number' &&
     typeof value.totalBytes === 'number' &&
     typeof value.speedBytes === 'number' &&
-    isRecord(value.layers))) {
+    isRecord(value.layers) &&
+    (value.cancellationStatus === undefined || value.cancellationStatus === 'requested' || value.cancellationStatus === 'confirmed' || value.cancellationStatus === 'unknown') &&
+    (value.persistenceStatus === undefined || value.persistenceStatus === 'pending') &&
+    (value.cancellable === undefined || typeof value.cancellable === 'boolean') &&
+    (value.errorCode === undefined || typeof value.errorCode === 'string'))) {
     return null
   }
   const artifactState =

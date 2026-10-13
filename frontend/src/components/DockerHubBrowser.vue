@@ -12,6 +12,7 @@ import {
 import { pullDockerImage, requestDockerHubTags, searchDockerHub, subscribeJob, type JobSubscription } from '@/api/docker'
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
 import { formatBytes } from '@/domain/overview'
+import { captureSession } from '@/session/sessionLifecycle'
 import { useSystemStore } from '@/stores/system'
 
 const emit = defineEmits<{
@@ -35,6 +36,9 @@ const selectedTag = ref('latest')
 const submittingReference = ref('')
 let hubRequestSequence = 0
 let tagRequestSequence = 0
+const session = captureSession()
+let disposed = false
+const alive = () => !disposed && !session.signal.aborted
 const jobSubscriptions = new Map<string, JobSubscription>()
 
 const hubSortOptions: NcpSelectOption[] = [
@@ -71,7 +75,7 @@ async function runHubSearch(page = 1) {
   const requestSequence = ++hubRequestSequence
   try {
     const result = await searchDockerHub(term, page, 20, hubSort.value)
-    if (requestSequence !== hubRequestSequence) return
+    if (!alive() || requestSequence !== hubRequestSequence) return
     repositories.value = result.results
     hubCount.value = result.count
     hubPage.value = result.page
@@ -79,10 +83,10 @@ async function runHubSearch(page = 1) {
     if (firstRepository) await selectRepository(firstRepository)
     else selectedRepository.value = null
   } catch (caught) {
-    if (requestSequence !== hubRequestSequence) return
+    if (!alive() || requestSequence !== hubRequestSequence) return
     hubError.value = caught instanceof NcpApiError ? caught.message : 'Docker Hub 搜索失败。'
   } finally {
-    if (requestSequence === hubRequestSequence) hubLoading.value = false
+    if (alive() && requestSequence === hubRequestSequence) hubLoading.value = false
   }
 }
 
@@ -99,27 +103,29 @@ async function selectRepository(repository: DockerHubRepository) {
   const requestSequence = ++tagRequestSequence
   try {
     const result = await requestDockerHubTags(repository.namespace, repository.name)
-    if (requestSequence !== tagRequestSequence) return
+    if (!alive() || requestSequence !== tagRequestSequence) return
     tags.value = [...result.results].sort(compareTags)
     selectedTag.value = tags.value.find((tag) => tag.name === 'latest')?.name ?? tags.value[0]?.name ?? 'latest'
   } catch (caught) {
-    if (requestSequence !== tagRequestSequence) return
+    if (!alive() || requestSequence !== tagRequestSequence) return
     hubError.value = caught instanceof NcpApiError ? caught.message : '镜像标签读取失败。'
   } finally {
-    if (requestSequence === tagRequestSequence) tagsLoading.value = false
+    if (alive() && requestSequence === tagRequestSequence) tagsLoading.value = false
   }
 }
 
 async function submitPull() {
-  if (!pullReference.value || submittingReference.value === pullReference.value) return
+  if (!alive() || !pullReference.value || submittingReference.value) return
   const reference = pullReference.value
   submittingReference.value = reference
   try {
     const job = await pullDockerImage(reference, selectedTagDetails.value?.fullSize ?? 0)
+    if (!alive()) return
     emit('job-created', job)
-    const subscription = subscribeJob(job.id, (progress) => emit('job-progress', progress))
+    const subscription = subscribeJob(job.id, (progress) => { if (alive()) emit('job-progress', progress) })
     jobSubscriptions.set(job.id, subscription)
     void subscription.done.then((completed) => {
+      if (!alive()) return
       emit('job-progress', completed)
       if (completed.status === 'completed') {
         ElMessage.success(`镜像 ${reference} 已拉取`)
@@ -131,16 +137,20 @@ async function submitPull() {
       if (jobSubscriptions.get(job.id) === subscription) jobSubscriptions.delete(job.id)
     })
   } catch (caught) {
-    ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像拉取失败。')
+    if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '镜像拉取失败。')
   } finally {
-    submittingReference.value = ''
+    if (alive()) submittingReference.value = ''
   }
 }
 
-onBeforeUnmount(() => {
+function dispose() {
+  disposed = true
   for (const subscription of jobSubscriptions.values()) subscription.close()
   jobSubscriptions.clear()
-})
+  session.signal.removeEventListener('abort', dispose)
+}
+session.signal.addEventListener('abort', dispose, { once: true })
+onBeforeUnmount(dispose)
 
 function normalizeArchitecture(value: string) {
   const normalized = value.trim().toLowerCase().replaceAll('_', '-')
@@ -261,7 +271,7 @@ function repositoryLogo(repository: DockerHubRepository) {
             <div><dt>本机兼容性</dt><dd>{{ hostCompatibilityLabel(selectedTagDetails) }}</dd></div>
           </dl>
         </div>
-        <footer><span>任务将进入后台下载队列，最多并行拉取 3 个镜像</span><button class="primary-button" type="button" :disabled="submittingReference === pullReference || !selectedTag" @click="submitPull"><Download :size="17" />{{ submittingReference === pullReference ? '正在提交' : '加入下载队列' }}</button></footer>
+        <footer><span>任务将进入后台下载队列，最多并行拉取 3 个镜像</span><button class="primary-button" type="button" :disabled="Boolean(submittingReference) || !selectedTag" @click="submitPull"><Download :size="17" />{{ submittingReference === pullReference ? '正在提交' : '加入下载队列' }}</button></footer>
       </template>
       <div v-else class="detail-empty"><Search :size="28" /><strong>选择一个镜像仓库</strong><span>查看标签、架构并直接拉取到 NAS</span></div>
     </section>

@@ -1309,7 +1309,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
         '400':
-          description: Invalid image reference or pull failed
+          description: Invalid image reference; execution failures are reported by the accepted job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
           content:
             application/json:
               schema:
@@ -1409,6 +1415,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/compose/revisions:
     get:
       operationId: listComposeRevisions
@@ -1466,6 +1478,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: deleteJob
       summary: 删除已结束的后台任务记录
@@ -1476,8 +1494,24 @@ paths:
       responses:
         '204':
           description: 任务记录已删除
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: 排队中或运行中的任务不能删除
+          description: JOB_DELETE_UNAVAILABLE：活动任务、取消请求中或结果待保存的任务不能删除。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: JOB_PERSIST_FAILED：删除记录失败，任务记录保留。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/jobs/{jobID}/events:
     get:
       operationId: followJob
@@ -1488,7 +1522,16 @@ paths:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
         '200':
-          description: text/event-stream progress snapshots
+          description: text/event-stream progress snapshots；取消请求中及结果待保存时继续发送，持久化终态后结束。
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '501':
+          description: JOB_STREAM_UNSUPPORTED：当前连接不支持 SSE。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/jobs:
     get:
       operationId: listJobs
@@ -1513,7 +1556,7 @@ paths:
   /api/v1/jobs/{jobID}/retry:
     post:
       operationId: retryJob
-      summary: 重试失败或中断的后台任务
+      summary: 为已结束的镜像拉取任务创建一个新的重试任务
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
@@ -1525,21 +1568,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: JOB_NOT_FOUND：原任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: JOB_RETRY_UNAVAILABLE：当前任务不允许重试。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/jobs/{jobID}/cancel:
     post:
       operationId: cancelJob
-      summary: 停止排队或正在执行的镜像拉取任务
+      summary: 请求取消排队或正在执行的镜像拉取任务
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
         '202':
-          description: 任务已停止
+          description: 取消请求已接收，可能仍在执行。返回当前快照；requested 不是远端停止证明。已取消任务重复请求返回相同快照。
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: JOB_CANCEL_UNAVAILABLE：任务已经结束或执行器不支持取消（例如 Compose）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: JOB_PERSIST_FAILED：取消请求未能持久化，未触发新的用户取消信号。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/services:
     get:
       operationId: listServices
@@ -2446,9 +2525,14 @@ components:
         checks:
           type: object
           required: [agent, docker]
+          properties:
+            jobs:
+              type: string
+              enum: [ready, degraded, unavailable]
+              description: Job 引擎状态。结果等待持久化时为 degraded；初始化失败或已关闭时为 unavailable。非 ready 会使 /readyz 返回 503。
           additionalProperties:
             type: string
-            enum: [ready, unavailable, not_checked]
+            enum: [ready, degraded, unavailable, not_checked]
     HealthResponse:
       type: object
       required: [status, service]
@@ -2865,6 +2949,24 @@ components:
         id: { type: string }
         type: { type: string }
         status: { type: string, enum: [queued, running, completed, failed, interrupted, cancelled] }
+        cancellationStatus:
+          type: string
+          enum: [requested, confirmed, unknown]
+          description: 可选取消证据。requested 仅表示已接收；confirmed 表示执行器确认停止或排队时未执行；unknown 表示远端结果未确认。取消不能撤销已有副作用。
+        persistenceStatus:
+          type: string
+          enum: [pending]
+          description: 执行结果待持久化。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，不代表执行失败。
+        cancellable:
+          type: boolean
+          description: 执行器是否支持取消；Compose 为 false。实际操作仍由服务端状态校验决定。
+        errorCode:
+          type: string
+          description: 稳定错误码，例如 JOB_QUEUE_TIMEOUT、JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
+        completedAt:
+          type: string
+          format: date-time
+          description: 持久化终态的完成时间；活动任务及结果待保存时省略。
         artifactState: { type: string, enum: [present, deleted, unknown] }
         reference: { type: string }
         message: { type: string }

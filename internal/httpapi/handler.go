@@ -120,6 +120,7 @@ type ControlStore interface {
 }
 
 type Config struct {
+	JobEngine           *JobEngine
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
 	DatabaseConnections DatabaseConnectionCoordinator
@@ -249,7 +250,10 @@ func NewHandler(config Config) http.Handler {
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
 		logger:              config.Logger,
-		jobs:                newJobRegistry(config.ControlStore),
+		jobs:                config.JobEngine,
+	}
+	if api.jobs == nil {
+		api.jobs = newJobRegistry(config.ControlStore)
 	}
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
