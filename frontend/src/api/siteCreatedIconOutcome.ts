@@ -17,7 +17,7 @@ export class SiteIconUploadError extends Error {
   constructor(readonly siteId: string, readonly iconOutcome: 'rejected' | 'unknown') {
     super(iconOutcome === 'rejected'
       ? '本次图标上传未完成，请核对站点和文件后重新选择。'
-      : '图标上传可能已经执行，结果未确认。本页已暂停该站点的重复上传，请只读核对目录。')
+      : '图标上传可能已经执行，结果未确认。请勿重复上传。')
     this.name = 'SiteIconUploadError'
   }
 }

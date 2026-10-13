@@ -224,6 +224,8 @@ describe('站点写入未知结果的只读核对', () => {
     expect(messages.error).not.toHaveBeenCalled()
     expect(messages.success).not.toHaveBeenCalled()
     expect(document.querySelector('.site-editor')?.textContent).toContain('结果未确认')
+    expect(document.querySelector('.site-editor')?.textContent).toContain('草稿保留在当前编辑窗口，提交和图标上传已暂停。')
+    expect(document.querySelector('.site-editor')?.textContent).toContain('只读核对仅查看当前目录，不能确认最终结果，也不会解除暂停。')
     expect(document.querySelector('.site-editor')?.textContent).toContain('只读核对结果')
     expect(document.querySelector<HTMLInputElement>('.site-editor input[type=file]')?.disabled).toBe(true)
     view.draft.name = 'New draft'
@@ -236,7 +238,7 @@ describe('站点写入未知结果的只读核对', () => {
     expect(create).toHaveBeenCalledTimes(operation === 'update' ? 0 : 1)
     expect(save).toHaveBeenCalledTimes(operation === 'update' ? 1 : 0)
     expect(upload).not.toHaveBeenCalled()
-    if (operation === 'create') expect(view.unknownObservation).toContain('没有可信 ID')
+    if (operation === 'create') expect(view.unknownObservation).toContain('没有可用于核对的站点 ID。创建结果仍未确认')
   })
 
   it.each(['present', 'hidden', 'ignored', 'both', 'absent'] as const)('已知手工 ID 的 %s 观察保持有限陈述，不解锁提交', async (observation) => {
@@ -248,8 +250,8 @@ describe('站点写入未知结果的只读核对', () => {
     await view.recheckUnknownWrite()
     expect(view.unknownWrite).not.toBeNull()
     if (observation === 'absent') {
-      expect(view.unknownObservation).toContain('本次未发现')
-      expect(view.unknownObservation).toContain('不证明图标请求未执行')
+      expect(view.unknownObservation).toContain('本次未找到该记录')
+      expect(view.unknownObservation).toContain('仍不能确认请求是否完成')
     } else if (observation === 'ignored') expect(view.unknownObservation).toContain('已忽略列表中发现')
     else if (observation === 'both') expect(view.unknownObservation).toContain('两份列表均发现')
     else expect(view.unknownObservation).toContain('站点目录中发现')
@@ -264,7 +266,7 @@ describe('站点写入未知结果的只读核对', () => {
     await view.recheckUnknownWrite()
     expect(view.unknownObservation).toContain('未完成')
     await view.recheckUnknownWrite()
-    expect(view.unknownObservation).toContain('本次未发现')
+    expect(view.unknownObservation).toContain('本次未找到该记录')
     store.sites = [{ ...site, iconUrl: '/late-icon.png' }]
     await view.recheckUnknownWrite()
     expect(view.unknownObservation).toContain('站点目录中发现')
@@ -423,6 +425,9 @@ it('图标未知结果按警告、真实预览、完整资料顺序呈现，保�
   const notice = editor.querySelector('.editor-sync-notice')!
   const preview = editor.querySelector<HTMLImageElement>('.icon-upload__preview img')!
   const fields = editor.querySelector('.editor-grid')!
+  expect(notice.textContent).toContain('图标上传可能已经执行，结果未确认。请勿重复上传。')
+  expect(notice.textContent).toContain('草稿保留在当前编辑窗口，提交和图标上传已暂停。')
+  expect(notice.textContent).toContain('只读核对仅查看当前目录，不能确认最终结果，也不会解除暂停。')
   expect(notice.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(preview.compareDocumentPosition(fields) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(preview.getAttribute('src')).toBe('blob:fixture-icon')

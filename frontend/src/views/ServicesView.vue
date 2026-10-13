@@ -353,7 +353,7 @@ async function recheckUnknownWrite() {
   }
   const id = operation.siteId
   if (!id) {
-    unknownObservation.value = '列表已读取，但创建响应没有可信 ID，无法确认本次创建结果。请关闭并查看目录，勿直接重复添加。'
+    unknownObservation.value = '目录已读取，但没有可用于核对的站点 ID。创建结果仍未确认，请勿重复添加。'
     return
   }
   const present = sitesStore.sites.some((site) => site.id === id)
@@ -364,7 +364,7 @@ async function recheckUnknownWrite() {
       ? '本次在站点目录中发现该 ID。请关闭并从目录打开已有站点。'
       : ignored
         ? '本次在已忽略列表中发现该 ID，记录仍可见。请关闭并查看已忽略站点。'
-        : '本次未发现该记录；这不证明图标请求未执行、未来不会出现或图标文件已清理。请关闭并查看目录，勿直接重复添加。'
+        : '本次未找到该记录，仍不能确认请求是否完成。请勿重复添加或上传。'
   // 核对仅陈述本次观察；两次 GET 非原子，也不能阻止服务端迟到写入。
   // 即使观察到存在，也不把当前未知操作自动恢复为可提交的新建/更新。
 }
@@ -639,8 +639,8 @@ function sitesForCategory(category: string) {
         <div>
           <p>{{ unknownWrite.message }}</p>
           <p v-if="unknownWrite.siteId">记录 ID：{{ unknownWrite.siteId }}</p>
-          <p>当前草稿已保留，提交和图标上传已暂停。可只读核对，或关闭后查看目录。</p>
-          <p>两次列表读取并非原子快照，不能确认图标清理或阻止服务端迟到写入。</p>
+          <p>草稿保留在当前编辑窗口，提交和图标上传已暂停。</p>
+          <p>只读核对仅查看当前目录，不能确认最终结果，也不会解除暂停。</p>
           <p v-if="unknownObservation">{{ unknownObservation }}</p>
         </div>
       </div>

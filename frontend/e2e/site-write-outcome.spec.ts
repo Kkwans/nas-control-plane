@@ -146,7 +146,8 @@ async function expectHeldEditor(page: Page, description: string) {
   await expect(create(page)).toHaveCount(0)
   await expect(editor(page).locator('input[type="file"]')).toBeDisabled()
   await expect(editor(page).locator('.icon-upload__preview')).toBeDisabled()
-  await expect(warning(page)).toContainText('当前草稿已保留，提交和图标上传已暂停')
+  await expect(warning(page)).toContainText('草稿保留在当前编辑窗口，提交和图标上传已暂停。')
+  await expect(warning(page)).toContainText('只读核对仅查看当前目录，不能确认最终结果，也不会解除暂停。')
   await expect(page.getByText('站点资料保存失败，请检查 URL 和输入内容', { exact: true })).toHaveCount(0)
 }
 async function controlGeometry(locator: Locator) {
@@ -253,7 +254,7 @@ for (const width of [390, 1440]) {
     fixture.catalog(true)
     before = fixture.requests.length
     await retry(page).click()
-    await expect(warning(page)).toContainText('创建响应没有可信 ID，无法确认本次创建结果')
+    await expect(warning(page)).toContainText('没有可用于核对的站点 ID。创建结果仍未确认')
     await expectHeldEditor(page, '未知期间继续编辑')
     expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
     expect(fixture.writes()).toEqual(writes)
@@ -305,7 +306,7 @@ for (const observation of ['present', 'ignored', 'absent', 'both'] as const) {
     await retry(page).click()
     const text = {
       present: '本次在站点目录中发现该 ID', ignored: '本次在已忽略列表中发现该 ID',
-      absent: '本次未发现该记录；这不证明图标请求未执行、未来不会出现或图标文件已清理',
+      absent: '本次未找到该记录，仍不能确认请求是否完成',
       both: '本次两份列表均发现该 ID，状态可能正在变化',
     }[observation]
     await expect(warning(page)).toContainText(text)
@@ -408,7 +409,7 @@ for (const failure of ['disconnect', 'gateway'] as const) {
       const before = fixture.requests.length
       await retry(page).click()
       await expect(retry(page)).toBeEnabled()
-      await expect(warning(page)).toContainText('创建响应没有可信 ID，无法确认本次创建结果')
+      await expect(warning(page)).toContainText('没有可用于核对的站点 ID。创建结果仍未确认')
       await expectHeldEditor(page, '传输未确认的创建草稿')
       expect(fixture.requests.slice(before)).toHaveLength(2)
       expect(fixture.requests.slice(before).map(({ method }) => method)).toEqual(['GET', 'GET'])
