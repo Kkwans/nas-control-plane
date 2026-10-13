@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { expect, test, type Page, type Request, type TestInfo } from '@playwright/test'
 import { installMockApi } from './mockApi'
 
 const path = '/api/v1/preferences'
@@ -84,19 +84,85 @@ async function assertBaselineLocked(page: Page) {
     return document.activeElement === input
   })).toBe(false)
 }
+async function dropdownState(page: Page, label: string, option: string) {
+  return row(page, label).getByRole('combobox').evaluate((input, expected) => {
+    const listbox = document.getElementById(input.getAttribute('aria-controls') ?? '')
+    const popper = listbox?.closest('.el-select__popper')
+    const choice = [...(listbox?.querySelectorAll('[role="option"]') ?? [])].find((element) => element.textContent?.trim() === expected)
+    const describe = (element: Element) => {
+      const style = getComputedStyle(element)
+      return { tag: element.tagName, id: element.id, classes: element.getAttribute('class'),
+        bounds: element.getBoundingClientRect().toJSON(), display: style.display, visibility: style.visibility,
+        opacity: style.opacity, transform: style.transform, overflow: style.overflow,
+        transitionDuration: style.transitionDuration, transitionDelay: style.transitionDelay,
+        ariaHidden: element.getAttribute('aria-hidden'), placement: element.getAttribute('data-popper-placement') }
+    }
+    const ancestors = (element: Element | undefined) => {
+      const result = []
+      for (let current = element; current; current = current.parentElement ?? undefined) result.push(describe(current))
+      return result
+    }
+    const seconds = (value: string) => value.split(',').map((part) => Number.parseFloat(part) * (part.trim().endsWith('ms') ? 1 : 1000))
+    const style = popper ? getComputedStyle(popper) : null
+    const transitionMilliseconds = style ? Math.max(...seconds(style.transitionDuration)) + Math.max(...seconds(style.transitionDelay)) : 0
+    return { clock: { now: Date.now(), performance: performance.now() }, viewport: { width: innerWidth, height: innerHeight },
+      fonts: { status: document.fonts.status, loadedFamilies: [...new Set([...document.fonts].filter((font) => font.status === 'loaded').map((font) => font.family))] },
+      expanded: input.getAttribute('aria-expanded'), controls: input.getAttribute('aria-controls'),
+      trigger: describe(input.closest('.el-select__wrapper') ?? input), optionAncestors: ancestors(choice),
+      popup: popper ? describe(popper) : null, transitionMilliseconds,
+      entering: Boolean(popper && [...popper.classList].some((name) => /^el-zoom-in-top-enter-/.test(name))),
+    }
+  }, option)
+}
+const selectionCaptures = new WeakMap<Page, number>()
 async function select(page: Page, label: string, option: string) {
   // 非搜索型 ElSelect 的只读 input 会被占位文案覆盖；点击用户实际看到的 wrapper。
   const control = row(page, label).locator('.el-select__wrapper')
   await control.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }))
   await expect(control).toBeVisible()
-  await control.click()
-  await expect(row(page, label).getByRole('combobox')).toHaveAttribute('aria-expanded', 'true')
-  // ElSelect 使用 el-zoom-in-top：Vue nextFrame 的两次 rAF 才移除 scaleY(0)。
-  // 仅推进两个 16 ms 帧及边界余量；此时尚未选择新值，不能推进整个 400 ms 保存窗口。
-  await page.clock.runFor(34)
-  const choice = page.getByRole('option', { name: option, exact: true })
-  await expect(choice).toBeVisible()
-  await choice.click()
+  const openingWrites: string[] = []
+  const observeWrite = (request: Request) => {
+    if (request.method() === 'PUT' && new URL(request.url()).pathname === path) openingWrites.push(request.postData() ?? '')
+  }
+  page.on('request', observeWrite)
+  try {
+    await control.click()
+    await expect(row(page, label).getByRole('combobox')).toHaveAttribute('aria-expanded', 'true')
+    const samples = [await dropdownState(page, label, option)]
+    // Vue 两次 rAF 移除 enter-from，随后按实际 CSS duration + 1 ms 完成 transition。
+    // 观察类名逐帧推进，最多为当前 CSS 时长加 34 ms；硬上限低于 400 ms 保存 debounce。
+    const budget = Math.min(384, Math.max(34, Math.ceil(samples[0]!.transitionMilliseconds + 34)))
+    let advanced = 34
+    await page.clock.runFor(advanced)
+    samples.push(await dropdownState(page, label, option))
+    while (samples.at(-1)!.entering && advanced < budget) {
+      const frame = Math.min(16, budget - advanced)
+      await page.clock.runFor(frame)
+      advanced += frame
+      samples.push(await dropdownState(page, label, option))
+    }
+    if (process.env.NCP_CAPTURE_UI === '1') {
+      const info = test.info()
+      const sequence = (selectionCaptures.get(page) ?? 0) + 1
+      selectionCaptures.set(page, sequence)
+      const name = `settings-dropdown-${sequence}-${option.replace(/[^a-z0-9]+/gi, '-')}`
+      await mkdir(info.outputPath('ui-captures'), { recursive: true })
+      // 在可见性断言前落盘；allow 保留真实动画，不能由诊断截图修复待观察状态。
+      await writeFile(info.outputPath('ui-captures', `${name}-capture-state.json`), JSON.stringify({
+        sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), fixtureOnly: true,
+        fixtureSource: 'frontend/e2e/settings-ownership.spec.ts + frontend/e2e/mockApi.ts',
+        label, option, viewport: page.viewportSize(), budget, advanced, samples, openingWrites,
+      }, null, 2))
+      const image = info.outputPath('ui-captures', `${name}.png`)
+      await page.screenshot({ path: image, animations: 'allow' })
+      await info.attach(name, { path: image, contentType: 'image/png' })
+    }
+    expect(openingWrites, '打开选择菜单不能提前发送待保存草稿').toEqual([])
+    await expect(page.getByRole('option', { name: option, exact: true })).toBeVisible()
+  } finally {
+    page.off('request', observeWrite)
+  }
+  await page.getByRole('option', { name: option, exact: true }).click()
 }
 async function font(page: Page, size: number) {
   await expect(row(page, '基础字号')).toContainText(`${size} px`)
