@@ -297,3 +297,15 @@
 
 - [b5c4844 CI 38412715113](https://github.com/Kkwans/nas-control-plane/actions/runs/38412715113)整体成功，51文件610项单元、173/173项Chromium，Go/Compose通过，发布跳过。
 - 最后一项实时快照场景通过：模拟日志事件到达后页面更新，但真实下载文件仍是点击前快照且事件源未重启。37354be八图视觉闭环适用于未变化的前端产品代码；不将模拟事件源描述为真实网络SSE。后代完整CI同时覆盖H3实际locale helper。
+
+
+## 14:36 UTC Bash 能力探测完整 CI 闭环
+
+- cadd8b8192bb57951b7c009f26bda8c02d53b7da 的 [CI 38413659465](https://github.com/Kkwans/nas-control-plane/actions/runs/38413659465)整体成功；Go/Compose通过，前端51文件610项单元、173项浏览器测试通过，发布跳过。
+- 继续容器能力探测完整帧、有界捕获和退出状态确认；静态补丁审查不替代编译、race与运行验收。
+
+## 14:42 UTC 容器预探测完整性
+
+- 三文件实现仅修改容器能力预探测：32KiB捕获加哨兵、完整帧校验、取消/关闭回调收尾、非Running且零退出才接受输出；失败前缀不再报告能力。
+- 30项纯fake测试0.011s，race 1.038s；独立审查及此前20轮race1.288s通过，补充缺失Reader/Conn用例后再次复验。全包仅编译、vet、命令构建及diff检查通过。
+- 不在本地运行Docker/PTY/真实helper或NAS；SDK预读、解码缓冲、attach前握手、Close不返回和远程进程退出仍保留各自边界。完整隔离CI待运行。

@@ -115,3 +115,18 @@ Bash能力探测虽有750ms context，但CombinedOutput与继承管道仍需另�
 - 本地仅明确前缀的fake/config/parser/race及编译；实际双流flood、退出/取消和fd1/fd2管道遗留由隔离CI的显式直属child fixture验证。保持每个child唯一Wait owner，不杀进程组或遗弃超时goroutine。
 
 WaitDelay约束管道收尾，不保证StartProcess/Process.Wait内核异常可抢占或850ms硬截止；主机ready握手及实际PTY启动仍保留自身边界。
+
+
+## M08-C2：容器能力探测完整性与有界捕获
+
+基线：cadd8b8192bb57951b7c009f26bda8c02d53b7da。状态：三文件实现与独立审查完成，30项纯fake测试、race、全包编译/vet/构建通过，完整CI待验收。
+
+- 保留 Root、固定两秒 context、非 TTY 及现有 Shell 顺序/参数/环境。只处理预探测，不改变交互终端。
+- 捕获的原始 Docker 多路帧限制 32KiB，额外一字节辨别超限与精确上限后的 EOF；读取错误、取消或不完整输出全部失败关闭。
+- 两遍校验八字节帧头、流标识、保留位及声明长度；在分配前验证剩余长度，拒绝截断帧，不使用可能依据不可信长度分配的 StdCopy，也不回退为原始文本。
+- 同步读取原 attachment.Reader，连接只关闭一次；context 回调停止并等待结束，保留关闭错误。原始缓冲最多 32KiB+1，另有最多 32KiB 解码缓冲，不宣称合计只有 32KiB；SDK bufio.Reader 自身可能预读更多，限制不等于整个 SDK 或网络内存上限。
+- 仅完整读取、有效 context、Inspect 确认非 Running 且零退出时解析能力；任何失败三个能力标志全部 false。
+- 纯 fake/barrier/race 验证容量、帧、取消、读取与 Inspect 错误及唯一关闭；本地不调用 Docker 或用户 NAS。
+- SDK attach 返回前握手、Inspect JSON 缺失字段判定、远程进程终止以及 Close 自身不返回均未由此解决，不制造超时后遗弃的读取 goroutine。
+
+H4 后续验收：cadd8b8 的 [CI 38413659465](https://github.com/Kkwans/nas-control-plane/actions/runs/38413659465)于14:32 UTC整体通过，Go/Compose通过，前端610项单元及173项浏览器测试通过。H3与H4实际helper行为均已由隔离CI覆盖，NAS实机未验证。
