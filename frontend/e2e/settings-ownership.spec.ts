@@ -73,8 +73,24 @@ async function ready(page: Page) {
   await expect(page.locator('.settings-grid')).not.toHaveAttribute('disabled', '')
   await expect(row(page, '基础字号')).toContainText('16 px')
 }
+async function assertBaselineLocked(page: Page) {
+  const grid = page.locator('.settings-grid')
+  // Playwright 的 disabled matcher 不覆盖 fieldset 本身；核对原生属性及其子控件语义。
+  await expect(grid).toHaveAttribute('disabled', '')
+  await expect(grid).toHaveAttribute('inert', '')
+  expect(await grid.locator('input, button').evaluateAll((controls) => controls.length > 0 && controls.every((control) => control.matches(':disabled')))).toBe(true)
+  expect(await grid.locator('input').first().evaluate((input) => {
+    input.focus()
+    return document.activeElement === input
+  })).toBe(false)
+}
 async function select(page: Page, label: string, option: string) {
-  await row(page, label).getByRole('combobox').click()
+  // 非搜索型 ElSelect 的只读 input 会被占位文案覆盖；点击用户实际看到的 wrapper。
+  const control = row(page, label).locator('.el-select__wrapper')
+  await control.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }))
+  await expect(control).toBeVisible()
+  await control.click()
+  await expect(row(page, label).getByRole('combobox')).toHaveAttribute('aria-expanded', 'true')
   await page.getByRole('option', { name: option, exact: true }).click()
 }
 async function font(page: Page, size: number) {
@@ -143,8 +159,7 @@ test('首次读取挂起时禁用编辑，完整基线 hydration 不触发写入
   await held.received.promise
   await page.getByText('正在读取已保存设置…', { exact: true }).waitFor()
   await evidence(page, info, 'loading', api)
-  await expect(page.locator('.settings-grid')).toBeDisabled()
-  await expect(page.locator('.settings-grid')).toHaveAttribute('inert', '')
+  await assertBaselineLocked(page)
   await expect(page.getByRole('button', { name: '恢复全部默认', exact: true })).toBeDisabled()
   await expect(page.locator('.navigation-order li[draggable="true"]')).toHaveCount(0)
   await advance(page)
@@ -167,7 +182,7 @@ test('首次读取失败只读重试，单项编辑保留所有无关保存字�
   await api.release(failed)
   await page.getByText('设置读取失败，已保留可用数据。首次读取成功前无法编辑。', { exact: true }).waitFor()
   await evidence(page, info, 'load-error', api)
-  await expect(page.locator('.settings-grid')).toBeDisabled()
+  await assertBaselineLocked(page)
   await advance(page)
   expect(api.writes).toEqual([])
   const retry = api.hold('GET')
