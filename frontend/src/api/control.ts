@@ -1,6 +1,7 @@
 import { SiteWriteUnknownError } from './siteWriteOutcome'
 import { NcpApiError } from '@/api/system'
 import { parseIgnoredSitesResponse, parseSiteListResponse, parseSiteProfileResponse } from './siteResponse'
+import { parsePasswordPolicyResponse, parseUserListResponse } from './userResponse'
 
 export interface UserPreferences {
   refreshIntervalSeconds: number
@@ -145,7 +146,7 @@ export interface ManagedUser {
   disabled: boolean
   createdAt: string
   updatedAt: string
-  lastLoginAt?: string
+  lastLoginAt?: string | null
 }
 
 export interface PasswordPolicy {
@@ -308,12 +309,12 @@ export function requestLogs(
   return request(`/api/v1/logs?${logParameters(input)}`, { signal })
 }
 
-export function requestUsers(): Promise<ManagedUser[]> {
-  return request('/api/v1/users')
+export function requestUsers(signal?: AbortSignal): Promise<ManagedUser[]> {
+  return request('/api/v1/users', signal ? { signal } : {}, parseUserListResponse)
 }
 
-export function requestPasswordPolicy(): Promise<PasswordPolicy> {
-  return request('/api/v1/users/password-policy')
+export function requestPasswordPolicy(signal?: AbortSignal): Promise<PasswordPolicy> {
+  return request('/api/v1/users/password-policy', signal ? { signal } : {}, parsePasswordPolicyResponse)
 }
 
 export function updatePasswordPolicy(input: PasswordPolicy): Promise<PasswordPolicy> {

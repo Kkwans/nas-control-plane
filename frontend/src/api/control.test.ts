@@ -2,6 +2,56 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { requestMetricSamples, requestSites } from './control'
 
+describe('用户只读 API 传输契约', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const policy = { minLength: 8, requireUppercase: false, requireLowercase: true, requireDigit: true, requireSpecial: false }
+
+  it('两个 GET 独立返回并原样传递 signal，不携带密码或写入请求', async () => {
+    const { requestUsers, requestPasswordPolicy } = await import('./control')
+    const controller = new AbortController()
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response('[]'))
+      .mockResolvedValueOnce(new Response(JSON.stringify(policy)))
+    vi.stubGlobal('fetch', fetch)
+    await expect(requestUsers(controller.signal)).resolves.toEqual([])
+    await expect(requestPasswordPolicy(controller.signal)).resolves.toEqual(policy)
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual(['/api/v1/users', '/api/v1/users/password-policy'])
+    expect(fetch).toHaveBeenCalledTimes(2)
+    for (const [, init] of fetch.mock.calls) {
+      expect(init).toMatchObject({ signal: controller.signal, credentials: 'same-origin', headers: { Accept: 'application/json' } })
+      expect(init?.method ?? 'GET').toBe('GET')
+      expect(init?.body).toBeUndefined()
+    }
+  })
+
+  it.each(['requestUsers', 'requestPasswordPolicy'] as const)('%s 保留服务端错误码和取消，不重试', async (name) => {
+    const api = await import('./control')
+    const aborted = new DOMException('Aborted', 'AbortError')
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'USER_MANAGEMENT_UNAVAILABLE', message: 'fixture failure', requestId: 'fixture-request' }), { status: 503 }))
+      .mockRejectedValueOnce(aborted)
+    vi.stubGlobal('fetch', fetch)
+    await expect(api[name]()).rejects.toMatchObject({ code: 'USER_MANAGEMENT_UNAVAILABLE', requestId: 'fixture-request' })
+    await expect(api[name]()).rejects.toBe(aborted)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['requestUsers', 'requestPasswordPolicy'] as const)('%s 将损坏 JSON、204 和非法结构统一为稳定读取错误', async (name) => {
+    const api = await import('./control')
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response('{'))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response('{}'))
+    vi.stubGlobal('fetch', fetch)
+    for (let index = 0; index < 3; index++) {
+      await expect(api[name]()).rejects.toMatchObject({ code: 'CONTROL_RESPONSE_INVALID' })
+    }
+    expect(fetch).toHaveBeenCalledTimes(3)
+    for (const [, init] of fetch.mock.calls) expect(init?.method ?? 'GET').toBe('GET')
+  })
+})
+
 describe('site discovery API', () => {
   afterEach(() => vi.unstubAllGlobals())
 
