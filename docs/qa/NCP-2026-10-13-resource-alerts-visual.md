@@ -81,3 +81,13 @@
 86c49e4 的 CI38475317287 通过1708单元及359浏览器，六项失败均为已知账号禁用入口旧fixture；新增三项刷新帮助测试全部通过。但原fixture只有testInfo.attach，官方分片器未保留其PNG/axe，因此不能声称真实像素已复核。已将四个打开帮助的PNG和配对capture-state JSON直接写入ui-captures，保留源码/PNG摘要、完整axe、焦点/ARIA/真实页头归属与截图前后状态及请求。字体就绪后采样，要求截图和axe不改变帮助状态。
 
 此fixture修正经独立审查；严格E2E类型、lint、三项发现与精确基线462480d上的1777项单元、Vue类型检查通过。实际新版制品仍待CI下载和逐图查看。
+
+## 顶部刷新帮助的开态工件验收（2026-10-13 22:39 UTC）
+
+精确提交 `f3c351702a85059730d6a266c7157e18baf008e1`，[CI 38477685659](https://github.com/Kkwans/nas-control-plane/actions/runs/38477685659)：89 文件 / 1777 项单元通过，Chromium 371 / 373 通过（7.5 分钟），Go / Compose 成功，ARM64 发布跳过。三个刷新帮助用例全部通过；全仓两项失败仍为用户危险操作 fixture 中 A 菜单遮挡 B 的已知问题，不能写成整体 CI 成功。
+
+[官方分片 3 工件 11855816497](https://github.com/Kkwans/nas-control-plane/actions/runs/38477685659/artifacts/11855816497) 为 16,464,552 字节，低于 32 MiB；本地 ZIP SHA256 `1a76ca7e122b29275176763be59efcf4b970d3ad6587123f3502cd788ea39c88` 与官方值一致。直接逐幅查看 390px / 1440px 各自的 focus、hover 四幅 PNG，核对四份 `*-capture-state.json`：精确 sourceSha 和 fixtureOnly 正确，四个 PNG 摘要均与记录一致，前后请求列表不变，pageErrors 为空。
+
+四个实际画面中“立即刷新数据”提示均打开且文字可读，focus 图有刷新按钮焦点轮廓，hover 图记录主内容焦点与按钮悬停；状态记录确认提示为真实 header.topbar 的直接子节点，header/main 各一个，按钮 aria-describedby 指向该提示。390px 提示右界恰为 390px，1440px 右界为 1416px，均在所记录视口内。完整原始 axe 四份 `violations` 均为空，包括此前 body 弹层的 region；仍保留 `aria-prohibited-attr` 与 `color-contrast` 的 incomplete 人工检查项，不将零违规扩展为完整无障碍合规。
+
+图像限制必须保留：fullPage 捕获时实际 scrollY 为 58px（移动）/ 64px（桌面），画面同时出现跳转主内容链接，固定顶栏遮住总览标题的一部分。此处只接受刷新提示开态、焦点/悬停语义及 landmark 的有界结果，不称整页布局完美、无遮挡，也不把页面滚动状态误解为 NAS 产品数据。后续若评审顶部整体布局，应另取明确滚动位置的视口证据。所有运行均为 GitHub 隔离 fixture；本地仅下载与查看，未启动浏览器、监听器、Docker、PTY 或真实 NAS，也没有部署验证。

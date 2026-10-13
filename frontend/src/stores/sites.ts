@@ -11,11 +11,12 @@ import {
   restoreSite,
   updateSite,
   uploadSiteIcon,
+  uploadCreatedSiteIcon,
   type Site,
   type SiteDiscoverySummary,
   type SiteProfileInput,
 } from '@/api/control'
-import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
+import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
 import { NcpApiError } from '@/api/system'
 import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
@@ -88,19 +89,10 @@ export const useSitesStore = defineStore('sites', () => {
     const session = captureSession()
     const result = await createSite(input, session.signal)
     try {
-      if (icon && isCurrentSession(session.generation)) await uploadSiteIcon(result.projectId, icon, session.signal)
+      if (icon && isCurrentSession(session.generation)) await uploadCreatedSiteIcon(result.projectId, icon, session.signal)
     } catch (error) {
-      // 仅保留既有的一次补偿；失败可能是确认丢失，不能重试删除或创建。
-      // 即使 DELETE 已确认，未完成的服务端图标请求仍可能迟到写入。
-      if (isCurrentSession(session.generation)) {
-        try {
-          await deleteSite(result.projectId, session.signal)
-        } catch {
-          throw new SiteWriteUnknownError('icon-compensation', result.projectId)
-        }
-        if (isCurrentSession(session.generation)) await refresh(session)
-      }
-      throw error
+      // 图标失败不能授权删除已确认的站点；其他编辑器可能已写入新资料或图标。
+      throw error instanceof SiteCreatedIconError ? error : new SiteCreatedIconError(result.projectId, 'unknown')
     }
     await syncAfterWrite(session, result.projectId)
     return result

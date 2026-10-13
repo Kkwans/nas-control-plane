@@ -14,6 +14,10 @@ const site = (id: string, name: string) => ({
 })
 const existingSite = site(existingId, '原有站点')
 const otherSite = site(otherId, '其他站点')
+const winnerSite = {
+  ...site(createdId, '并发保留站点'), description: '并发写入的资料',
+  iconUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/%3E',
+}
 const pathFor = (id: string) => `/api/v1/sites/${encodeURIComponent(id)}`
 const editor = (page: Page) => page.locator('.site-editor:visible')
 const warning = (page: Page) => editor(page).getByRole('status')
@@ -37,15 +41,16 @@ async function installSiteFixture(page: Page) {
   let present = false
   let ignored = false
   let transportFailure: 'disconnect' | 'gateway' | undefined
+  let iconFailure: 'conflict' | 'commit-500' | 'disconnect' | undefined
   const committed: Array<{ method: string; id: string }> = []
   const committedSites = new Map<string, ReturnType<typeof site>>()
-  let gate: { received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; method: string } | undefined
+  let gate: { received: ReturnType<typeof deferred>; release: ReturnType<typeof deferred>; method: string; path?: string } | undefined
   await page.route('**/api/v1/sites**', async (route) => {
     const request = route.request()
     const method = request.method()
     const path = new URL(request.url()).pathname
     requests.push({ method, path })
-    if (gate?.method === method && path !== '/api/v1/sites/ignored') {
+    if (gate?.method === method && (!gate.path || gate.path === path) && path !== '/api/v1/sites/ignored') {
       const held = gate
       gate = undefined
       held.received.resolve()
@@ -62,6 +67,19 @@ async function installSiteFixture(page: Page) {
           discovery: { status: 'complete', probeAvailable: true, candidateCount: 2, verifiedCount: 2, failedCount: 0, issues: [] },
         } })
       }
+    } else if (iconFailure && method === 'POST' && path === `${pathFor(createdId)}/icon`) {
+      // 冲突由另一个写入者获胜；另两种情况模拟提交后清理失败或确认断线。
+      committedSites.set(createdId, { ...winnerSite })
+      if (iconFailure === 'disconnect') await route.abort('connectionfailed')
+      else await route.fulfill({
+        status: iconFailure === 'conflict' ? 409 : 500,
+        json: { code: iconFailure === 'conflict' ? 'SITE_ICON_CONFLICT' : 'SITE_ICON_SAVE_FAILED', message: '图标结果 fixture', requestId: 'fixture-icon' },
+      })
+    } else if (iconFailure && method === 'DELETE' && path === pathFor(createdId)) {
+      // 若前端错误补偿，真实删除内存记录，不能靠一个永远失败的 DELETE 掩盖数据丢失。
+      committedSites.delete(createdId)
+      present = false
+      await route.fulfill({ status: 204 })
     } else if (path.endsWith('/icon') || method === 'DELETE') {
       await route.fulfill({ status: 503, json: { code: 'AGENT_UNAVAILABLE', message: '确认不可用', requestId: 'fixture-write' } })
     } else if (transportFailure && (method === 'POST' && path === '/api/v1/sites' || method === 'PUT' && path === pathFor(existingId))) {
@@ -73,12 +91,17 @@ async function installSiteFixture(page: Page) {
       if (transportFailure === 'disconnect') await route.abort('connectionfailed')
       else await route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad Gateway' })
     } else if (method === 'POST') {
+      if (iconFailure && !malformedCreate) {
+        committed.push({ method, id: createdId })
+        committedSites.set(createdId, { ...site(createdId, '新建站点'), ...request.postDataJSON(), id: createdId, projectId: createdId })
+        present = true
+      }
       await route.fulfill(malformedCreate
         ? { status: 201, contentType: 'application/json', body: '{' }
         : { status: 201, json: { ...request.postDataJSON(), projectId: createdId } })
     } else if (method === 'PUT') {
       const id = decodeURIComponent(path.split('/').at(-1)!)
-      if (transportFailure) committedSites.set(id, { ...site(id, id === otherId ? '其他站点' : '原有站点'), ...request.postDataJSON(), id, projectId: id })
+      if (transportFailure || iconFailure) committedSites.set(id, { ...site(id, id === otherId ? '其他站点' : '原有站点'), ...request.postDataJSON(), id, projectId: id })
       await route.fulfill(malformedUpdate && id === existingId
         ? { json: { ...request.postDataJSON(), projectId: otherId } }
         : { json: { ...request.postDataJSON(), projectId: id } })
@@ -87,14 +110,16 @@ async function installSiteFixture(page: Page) {
   return {
     requests,
     committed,
+    persistedSite: () => committedSites.get(createdId),
+    failIcon(value: 'conflict' | 'commit-500' | 'disconnect') { iconFailure = value; malformedCreate = false },
     writes: () => requests.filter(({ method }) => method !== 'GET'),
     failAfterCommit(value: 'disconnect' | 'gateway') { transportFailure = value },
     setCreateValid() { malformedCreate = false },
     setUpdateValid() { malformedUpdate = false },
     failCatalog(value: boolean) { failCatalog = value },
     catalog(presentValue: boolean, ignoredValue = false) { present = presentValue; ignored = ignoredValue },
-    hold(method: string) {
-      const held = { received: deferred(), release: deferred(), method }
+    hold(method: string, path?: string) {
+      const held = { received: deferred(), release: deferred(), method, path }
       gate = held
       return held
     },
@@ -250,7 +275,7 @@ test('更新 200 返回错误 ID：保留请求期间的编辑，核对存在仍
 })
 
 for (const observation of ['present', 'ignored', 'absent', 'both'] as const) {
-  test(`创建后图标失败且单次补偿失败：${observation} 仅陈述本次观察`, async ({ page }) => {
+  test(`创建后图标未知且不删除整站：${observation} 仅陈述本次观察`, async ({ page }) => {
     const fixture = await installSiteFixture(page)
     fixture.setCreateValid()
     await page.goto('/sites')
@@ -260,13 +285,12 @@ for (const observation of ['present', 'ignored', 'absent', 'both'] as const) {
       name: 'fixture.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
     })
     await create(page).click()
-    await expect(warning(page)).toContainText('站点已创建，图标请求失败，补偿删除结果未确认。图标请求仍可能在服务端完成。')
+    await expect(warning(page)).toContainText('站点已创建，图标上传结果未确认。请只读核对目录，勿重复添加或上传。')
     await expect(warning(page)).toContainText(`记录 ID：${createdId}`)
     await expectHeldEditor(page, '保留图标草稿')
     const writes = [
       { method: 'POST', path: '/api/v1/sites' },
       { method: 'POST', path: `${pathFor(createdId)}/icon` },
-      { method: 'DELETE', path: pathFor(createdId) },
     ]
     expect(fixture.writes()).toEqual(writes)
     fixture.catalog(observation === 'present' || observation === 'both', observation === 'ignored' || observation === 'both')
@@ -274,7 +298,7 @@ for (const observation of ['present', 'ignored', 'absent', 'both'] as const) {
     await retry(page).click()
     const text = {
       present: '本次在站点目录中发现该 ID', ignored: '本次在已忽略列表中发现该 ID',
-      absent: '本次未发现该记录；这不证明补偿成功、未来不会出现或图标文件已清理',
+      absent: '本次未发现该记录；这不证明图标请求未执行、未来不会出现或图标文件已清理',
       both: '本次两份列表均发现该 ID，状态可能正在变化',
     }[observation]
     await expect(warning(page)).toContainText(text)
@@ -472,3 +496,95 @@ for (const failure of ['disconnect', 'gateway'] as const) {
     await expect(page.getByText('站点资料保存失败，请检查 URL 和输入内容', { exact: true })).toHaveCount(0)
   })
 }
+
+for (const failure of ['conflict', 'commit-500', 'disconnect'] as const) {
+  test(`创建确认后图标 ${failure}：保留获胜记录和图标草稿，只读核对不删站或重放`, async ({ page }) => {
+    const fixture = await installSiteFixture(page)
+    fixture.failIcon(failure)
+    await page.goto('/sites')
+    await openCreator(page)
+    await editor(page).getByLabel('简介', { exact: true }).fill('保留的创建草稿')
+    await editor(page).locator('input[type="file"]').setInputFiles({
+      name: 'pending.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+    })
+    const preview = editor(page).locator('.icon-upload__preview img')
+    await expect(preview).toBeVisible()
+    const stagedPreview = await preview.getAttribute('src')
+    const held = fixture.hold('POST', `${pathFor(createdId)}/icon`)
+    await create(page).click()
+    await held.received.promise
+    expect(fixture.persistedSite()?.id).toBe(createdId)
+    await editor(page).getByLabel('简介', { exact: true }).fill('图标在途时继续编辑')
+    held.release.resolve()
+    await expect(warning(page)).toContainText(failure === 'conflict'
+      ? '站点已创建，本次图标上传未完成。请只读核对目录，再打开已有站点处理图标。'
+      : '站点已创建，图标上传结果未确认。请只读核对目录，勿重复添加或上传。')
+    await expect(warning(page)).toContainText(`记录 ID：${createdId}`)
+    await expectHeldEditor(page, '图标在途时继续编辑')
+    await expect(preview).toHaveAttribute('src', stagedPreview!)
+    expect(fixture.committed).toEqual([{ method: 'POST', id: createdId }])
+    const writes = [{ method: 'POST', path: '/api/v1/sites' }, { method: 'POST', path: `${pathFor(createdId)}/icon` }]
+    expect(fixture.writes()).toEqual(writes)
+    expect(fixture.persistedSite()).toEqual(winnerSite)
+    for (const unreadable of [true, false, false]) {
+      fixture.failCatalog(unreadable)
+      const before = fixture.requests.length
+      await retry(page).click()
+      await expect(retry(page)).toBeEnabled()
+      await expect(warning(page)).toContainText(unreadable ? '本次核对未完成' : '本次在站点目录中发现该 ID')
+      await expectHeldEditor(page, '图标在途时继续编辑')
+      await expect(preview).toHaveAttribute('src', stagedPreview!)
+      expect(fixture.requests.slice(before)).toHaveLength(2)
+      expect(fixture.requests.slice(before)).toEqual(expect.arrayContaining([
+        { method: 'GET', path: '/api/v1/sites' }, { method: 'GET', path: '/api/v1/sites/ignored' },
+      ]))
+      expect(fixture.writes()).toEqual(writes)
+      expect(fixture.persistedSite()).toEqual(winnerSite)
+    }
+    await expect(page.getByText('站点已添加', { exact: true })).toHaveCount(0)
+    await editor(page).getByRole('button', { name: '关闭并查看目录', exact: true }).click()
+    await expect(editor(page)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '编辑 并发保留站点', exact: true })).toBeVisible()
+    expect(fixture.writes()).toEqual(writes)
+  })
+}
+
+test('迟到图标提交后 500 不污染新编辑器，也不删除已创建的获胜记录', async ({ page }) => {
+  const fixture = await installSiteFixture(page)
+  fixture.failIcon('commit-500')
+  await page.goto('/sites')
+  await openCreator(page)
+  await editor(page).locator('input[type="file"]').setInputFiles({
+    name: 'pending.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+  })
+  const iconPath = `${pathFor(createdId)}/icon`
+  const held = fixture.hold('POST', iconPath)
+  await create(page).click()
+  await held.received.promise
+  await editor(page).getByRole('button', { name: '取消', exact: true }).click()
+  await expect(editor(page)).toHaveCount(0)
+  await page.getByRole('button', { name: '编辑 其他站点', exact: true }).click()
+  await editor(page).getByLabel('简介', { exact: true }).fill('新编辑器的独立草稿')
+  const settled = page.waitForResponse((response) => response.request().method() === 'POST' && new URL(response.url()).pathname === iconPath)
+  held.release.resolve()
+  await (await settled).finished()
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(warning(page)).toHaveCount(0)
+  await expect(editor(page).getByLabel('站点名称', { exact: true })).toHaveValue('其他站点')
+  await expect(editor(page).getByLabel('简介', { exact: true })).toHaveValue('新编辑器的独立草稿')
+  await expect(editor(page).locator('input[type="file"]')).toBeEnabled()
+  await expect(editor(page).locator('.icon-upload__preview img')).toHaveCount(0)
+  await expect(save(page)).toBeEnabled()
+  await save(page).click()
+  await expect(editor(page)).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑 并发保留站点', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '编辑 其他站点', exact: true }).click()
+  await expect(editor(page).getByLabel('简介', { exact: true })).toHaveValue('新编辑器的独立草稿')
+  await expect(warning(page)).toHaveCount(0)
+  expect(fixture.persistedSite()).toEqual(winnerSite)
+  expect(fixture.committed).toEqual([{ method: 'POST', id: createdId }])
+  expect(fixture.writes()).toEqual([
+    { method: 'POST', path: '/api/v1/sites' }, { method: 'POST', path: iconPath },
+    { method: 'PUT', path: pathFor(otherId) },
+  ])
+})

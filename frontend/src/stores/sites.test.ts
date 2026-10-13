@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { invalidateSession } from '@/session/sessionLifecycle'
 
+import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
 import { useSitesStore } from './sites'
 
 const apiMocks = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ vi.mock('@/api/control', () => ({
   deleteSite: apiMocks.deleteSite,
   restoreSite: apiMocks.restoreSite,
   uploadSiteIcon: apiMocks.uploadSiteIcon,
+  uploadCreatedSiteIcon: apiMocks.uploadSiteIcon,
   deleteSiteIcon: apiMocks.deleteSiteIcon,
   recordSiteVisit: apiMocks.recordSiteVisit,
 }))
@@ -169,7 +171,7 @@ describe('站点写入后的列表同步', () => {
   })
 })
 
-describe('站点图标补偿结果', () => {
+describe('已创建站点的图标部分结果', () => {
   beforeEach(() => {
     invalidateSession()
     setActivePinia(createPinia())
@@ -179,29 +181,27 @@ describe('站点图标补偿结果', () => {
     apiMocks.requestIgnoredSites.mockResolvedValue([])
   })
 
-  it('图标失败且补偿失败保留创建 ID；后续只读核对不重放写入', async () => {
+  it.each(['rejected', 'unknown'] as const)('图标 %s 保留创建 ID，绝不删除整站；核对不重放写入', async (outcome) => {
     const store = useSitesStore()
-    apiMocks.uploadSiteIcon.mockRejectedValue(new Error('upload response lost'))
-    apiMocks.deleteSite.mockRejectedValue(new Error('delete response lost'))
-    await expect(store.create(input, new File(['icon'], 'icon.png'))).rejects.toMatchObject({
-      code: 'SITE_WRITE_UNKNOWN', operation: 'icon-compensation', siteId: 'manual:demo',
-    })
+    const error = new SiteCreatedIconError('manual:demo', outcome)
+    apiMocks.uploadSiteIcon.mockRejectedValue(error)
+    await expect(store.create(input, new File(['icon'], 'icon.png'))).rejects.toBe(error)
     expect(apiMocks.requestSites).not.toHaveBeenCalled()
     apiMocks.requestSites.mockRejectedValueOnce(new Error('read failed'))
     expect(await store.refresh()).toBe(false)
     expect(await store.refresh()).toBe(true)
     expect(apiMocks.createSite).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadSiteIcon).toHaveBeenCalledTimes(1)
-    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
+    expect(apiMocks.deleteSite).not.toHaveBeenCalled()
   })
 
-  it('补偿成功沿用原图标错误，不变成写后同步错误', async () => {
-    const failure = new Error('icon failed')
-    apiMocks.uploadSiteIcon.mockRejectedValue(failure)
-    apiMocks.deleteSite.mockResolvedValue(undefined)
-    await expect(useSitesStore().create(input, new File(['icon'], 'icon.png'))).rejects.toBe(failure)
-    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
-    expect(apiMocks.requestSites).toHaveBeenCalledTimes(1)
+  it('意外图标异常仍保留创建身份，不暴露原始错误', async () => {
+    apiMocks.uploadSiteIcon.mockRejectedValue(new Error('private diagnostics'))
+    await expect(useSitesStore().create(input, new File(['icon'], 'icon.png'))).rejects.toMatchObject({
+      code: 'SITE_CREATED_ICON_INCOMPLETE', iconOutcome: 'unknown', siteId: 'manual:demo',
+    })
+    expect(apiMocks.deleteSite).not.toHaveBeenCalled()
+    expect(apiMocks.requestSites).not.toHaveBeenCalled()
   })
 
   it('创建身份未知不上传、不删除；更新未知不被改为同步失败', async () => {
@@ -217,32 +217,12 @@ describe('站点图标补偿结果', () => {
     expect(apiMocks.requestSites).not.toHaveBeenCalled()
   })
 
-  it('补偿 DELETE 跨会话完成后不启动旧读取或污染 loading', async () => {
-    const removal = deferred<void>()
-    const failure = new Error('icon failed')
-    apiMocks.uploadSiteIcon.mockRejectedValue(failure)
-    apiMocks.deleteSite.mockReturnValue(removal.promise)
-    const store = useSitesStore()
-    const operation = store.create(input, new File(['icon'], 'icon.png'))
-    const check = expect(operation).rejects.toBe(failure)
-    for (let i = 0; i < 5; i++) await Promise.resolve()
-    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
-    invalidateSession()
-    store.resetSessionState()
-    removal.resolve()
-    await check
-    expect(apiMocks.requestSites).not.toHaveBeenCalled()
-    expect(apiMocks.requestIgnoredSites).not.toHaveBeenCalled()
-    expect(store.loading).toBe(false)
-    expect(store.error).toBeNull()
-  })
-
-  it('图标失败在退出后到达，不启动补偿或读取', async () => {
+  it('图标失败在退出后到达，不删除站点或污染新会话', async () => {
     const upload = deferred<never>()
     apiMocks.uploadSiteIcon.mockReturnValue(upload.promise)
     const store = useSitesStore()
     const operation = store.create(input, new File(['icon'], 'icon.png'))
-    const check = expect(operation).rejects.toThrow('late')
+    const check = expect(operation).rejects.toBeInstanceOf(SiteCreatedIconError)
     await Promise.resolve()
     invalidateSession()
     store.resetSessionState()
@@ -250,5 +230,7 @@ describe('站点图标补偿结果', () => {
     await check
     expect(apiMocks.deleteSite).not.toHaveBeenCalled()
     expect(apiMocks.requestSites).not.toHaveBeenCalled()
+    expect(store.loading).toBe(false)
+    expect(store.error).toBeNull()
   })
 })

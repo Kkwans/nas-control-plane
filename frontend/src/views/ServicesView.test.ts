@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { invalidateSession } from '@/session/sessionLifecycle'
+import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
 import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import type { Site, SiteProfileInput } from '@/api/control'
@@ -18,7 +19,7 @@ vi.mock('element-plus', async () => {
   }
 })
 vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ preferences: { siteDefaultProtocol: 'http', linkOpenMode: 'new-tab' } }) }))
-vi.mock('@/api/control', () => ({ requestSites: vi.fn(), requestIgnoredSites: vi.fn(), createSite: vi.fn(), updateSite: vi.fn(), deleteSite: vi.fn(), restoreSite: vi.fn(), uploadSiteIcon: vi.fn(), deleteSiteIcon: vi.fn(), recordSiteVisit: vi.fn() }))
+vi.mock('@/api/control', () => ({ requestSites: vi.fn(), requestIgnoredSites: vi.fn(), createSite: vi.fn(), updateSite: vi.fn(), deleteSite: vi.fn(), restoreSite: vi.fn(), uploadSiteIcon: vi.fn(), uploadCreatedSiteIcon: vi.fn(), deleteSiteIcon: vi.fn(), recordSiteVisit: vi.fn() }))
 
 const profile: SiteProfileInput = { name: 'Demo', description: '', iconUrl: '', category: 'web', primaryPort: 8080, launchUrl: '', favorite: false, sortOrder: 0, hidden: false }
 const site = { ...profile, id: 'manual:demo', projectId: 'manual:demo', ports: [8080], state: 'running', source: 'manual' } as Site
@@ -28,7 +29,7 @@ interface ViewState {
   editOpen: boolean
   saving: boolean
   syncPending: boolean
-  unknownWrite: SiteWriteUnknownError | null
+  unknownWrite: SiteWriteUnknownError | SiteCreatedIconError | null
   unknownObservation: string
   recheckUnknownWrite(): Promise<void>
   savedSiteId: string | null
@@ -244,7 +245,7 @@ describe('站点写入未知结果的只读核对', () => {
     expect(view.unknownWrite).not.toBeNull()
     if (observation === 'absent') {
       expect(view.unknownObservation).toContain('本次未发现')
-      expect(view.unknownObservation).toContain('不证明补偿成功')
+      expect(view.unknownObservation).toContain('不证明图标请求未执行')
     } else if (observation === 'ignored') expect(view.unknownObservation).toContain('已忽略列表中发现')
     else if (observation === 'both') expect(view.unknownObservation).toContain('两份列表均发现')
     else expect(view.unknownObservation).toContain('站点目录中发现')
@@ -356,5 +357,52 @@ describe('站点真实传输未知结果', () => {
     expect(fetch).toHaveBeenCalledWith(`/api/v1/sites/${encodeURIComponent(site.id)}`, expect.objectContaining({ method: 'PUT', redirect: 'error' }))
     expect(messages.error).not.toHaveBeenCalled()
     expect(messages.success).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('已创建站点的图标部分结果保留', () => {
+  it.each(['rejected', 'unknown'] as const)('%s 保留原始 File 和 ID，资料保存不能丢弃待传图标或重建', async (outcome) => {
+    const error = new SiteCreatedIconError(site.id, outcome)
+    const create = vi.spyOn(store, 'create').mockRejectedValue(error)
+    const save = vi.spyOn(store, 'save')
+    const upload = vi.spyOn(store, 'uploadIcon')
+    view.openCreator(); view.draft = { ...profile }
+    const file = new File(['icon'], 'icon.svg', { type: 'image/svg+xml' })
+    view.pendingIcon = file
+    await nextTick(); await view.saveSite(); await nextTick()
+    expect(view.savedSiteId).toBe(site.id)
+    expect(view.pendingIcon).toBe(file)
+    expect(host.textContent).toContain('站点已创建')
+    expect(host.textContent).toContain(outcome === 'rejected' ? '上传未完成' : '上传结果未确认')
+    expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
+    view.draft.name = '保留新草稿'
+    await view.saveSite()
+    await view.uploadIcon({ target: { files: [file] } } as unknown as Event)
+    store.sites = [site]
+    await view.recheckUnknownWrite()
+    await view.saveSite()
+    expect(view.unknownWrite).toBe(error)
+    expect(view.pendingIcon).toBe(file)
+    expect(view.draft.name).toBe('保留新草稿')
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(save).not.toHaveBeenCalled()
+    expect(upload).not.toHaveBeenCalled()
+    expect(messages.success).not.toHaveBeenCalled()
+  })
+
+  it.each(['close', 'switch', 'session', 'unmount'])('迟到部分结果不覆盖新编辑器：%s', async (change) => {
+    const write = deferred<never>()
+    vi.spyOn(store, 'create').mockReturnValue(write.promise)
+    view.openCreator(); view.draft = { ...profile }; await nextTick()
+    const operation = view.saveSite(); await settle()
+    if (change === 'session') invalidateSession()
+    else if (change === 'unmount') { app.unmount(); unmounted = true }
+    else if (change === 'close') view.editOpen = false
+    else view.openEditor({ ...site, id: 'manual:other', name: 'Other' })
+    write.reject(new SiteCreatedIconError(site.id, 'unknown')); await operation
+    expect(view.unknownWrite).toBeNull()
+    expect(messages.error).not.toHaveBeenCalled()
+    if (change === 'switch') { expect(view.draft.name).toBe('Other'); expect(view.savedSiteId).toBe('manual:other') }
   })
 })

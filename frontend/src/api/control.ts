@@ -1,5 +1,6 @@
 import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
+import { requestCreatedSiteIcon } from './siteCreatedIconOutcome'
 import { requestSiteProfileWrite } from './siteWriteOutcome'
 import { requestUserWrite } from './userWriteOutcome'
 import { NcpApiError } from '@/api/system'
@@ -237,6 +238,10 @@ export function restoreSite(siteId: string, signal?: AbortSignal): Promise<void>
     method: 'POST',
     ...(signal ? { signal } : {}),
   })
+}
+
+export function uploadCreatedSiteIcon(siteId: string, icon: File, signal?: AbortSignal): Promise<void> {
+  return requestCreatedSiteIcon(siteId, icon, signal)
 }
 
 export function uploadSiteIcon(

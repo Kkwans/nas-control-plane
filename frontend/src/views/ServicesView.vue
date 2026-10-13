@@ -36,6 +36,7 @@ import {
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
+import { SiteCreatedIconError } from '@/api/siteCreatedIconOutcome'
 import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import ActionButton from '@/components/ActionButton.vue'
 import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
@@ -61,7 +62,7 @@ const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
 const savedSiteId = ref<string | null>(null)
 const syncPending = ref(false)
-const unknownWrite = ref<SiteWriteUnknownError | null>(null)
+const unknownWrite = ref<SiteWriteUnknownError | SiteCreatedIconError | null>(null)
 const unknownObservation = ref('')
 const unknownFavorites = ref(new Set<string>())
 let editorGeneration = 0
@@ -304,7 +305,7 @@ async function saveSite() {
     ElMessage.success(siteId ? '站点资料已保存' : '站点已添加')
   } catch (error) {
     if (!current() || isAbortError(error)) return
-    if (error instanceof SiteWriteUnknownError) {
+    if (error instanceof SiteWriteUnknownError || error instanceof SiteCreatedIconError) {
       savedSiteId.value = error.siteId ?? siteId
       unknownWrite.value = error
       unknownObservation.value = ''
@@ -360,7 +361,7 @@ async function recheckUnknownWrite() {
       ? '本次在站点目录中发现该 ID。请关闭并从目录打开已有站点。'
       : ignored
         ? '本次在已忽略列表中发现该 ID，记录仍可见。请关闭并查看已忽略站点。'
-        : '本次未发现该记录；这不证明补偿成功、未来不会出现或图标文件已清理。请关闭并查看目录，勿直接重复添加。'
+        : '本次未发现该记录；这不证明图标请求未执行、未来不会出现或图标文件已清理。请关闭并查看目录，勿直接重复添加。'
   // 核对仅陈述本次观察；两次 GET 非原子，也不能阻止服务端迟到写入。
   // 即使观察到存在，也不把当前未知操作自动恢复为可提交的新建/更新。
 }
