@@ -283,7 +283,11 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 .monitor-header :deep(.workspace-toolbar) { flex-wrap: wrap; }
-.monitor-header :deep(.workspace-tools) { flex: 1 1 36rem; }
+/* 小屏工具栏改为纵向；宽度预算不能成为纵向 flex-basis。 */
+.monitor-header :deep(.workspace-tools) { flex: 0 0 auto; }
+@media (min-width: 641px) {
+  .monitor-header :deep(.workspace-tools) { flex: 1 1 36rem; }
+}
 .monitor-range-filter :deep(.compact-filter) { flex-wrap: wrap; overflow: visible; }
 .monitor-range-filter { display:flex; min-width:0; align-items:center; }
 .monitor-range-filter :deep(.el-segmented) { max-width:100%; }

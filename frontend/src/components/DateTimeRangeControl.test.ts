@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import DateTimeRangeControl from './DateTimeRangeControl.vue'
 import source from './DateTimeRangeControl.vue?raw'
+import monitoringSource from '../views/MonitoringView.vue?raw'
 
 describe('DateTimeRangeControl', () => {
   it('renders one compact range picker and keeps apply disabled until the range is complete', () => {
@@ -41,6 +42,12 @@ describe('DateTimeRangeControl', () => {
     expect(mobile).toMatch(/\.date-time-range__actions \{[^}]*flex-wrap: wrap/)
     expect(mobile).toMatch(/\.date-time-range__actions > \.action-button \{[^}]*flex: 1 0 auto/)
     expect(mobile).not.toContain('min-width: 0')
+  })
+
+  it('uses the font-relative tool width budget only while the toolbar lays out horizontally', () => {
+    expect(monitoringSource).toMatch(/\.monitor-header :deep\(\.workspace-tools\) \{ flex: 0 0 auto; \}/)
+    expect(monitoringSource).toMatch(/@media \(min-width: 641px\) \{\s*\.monitor-header :deep\(\.workspace-tools\) \{ flex: 1 1 36rem; \}\s*\}/)
+    expect(monitoringSource.match(/flex: 1 1 36rem/g)).toHaveLength(1)
   })
 
   it.each([false, true])('preserves clear/apply events and loading protection (loading=%s)', (loading) => {

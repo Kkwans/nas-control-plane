@@ -119,10 +119,33 @@ async function historyControlGeometry(page: Page) {
       }
     }),
     actionBounds: [...header.querySelectorAll('.date-time-range__actions button')].map((button) => button.getBoundingClientRect().toJSON()),
+    control: (() => {
+      const tools = header.querySelector('.workspace-tools')!
+      const range = header.querySelector('.date-time-range')!
+      const picker = header.querySelector('.date-time-range__picker')!
+      const actions = header.querySelector('.date-time-range__actions')!
+      return {
+        tools: tools.getBoundingClientRect().toJSON(), range: range.getBoundingClientRect().toJSON(),
+        picker: picker.getBoundingClientRect().toJSON(), actions: actions.getBoundingClientRect().toJSON(),
+        gap: Number.parseFloat(getComputedStyle(range).rowGap),
+        actionGap: Number.parseFloat(getComputedStyle(actions).rowGap),
+        rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+      }
+    })(),
   }))
 }
 function expectReadableHistoryControls(geometry: Awaited<ReturnType<typeof historyControlGeometry>>) {
   expect(geometry.fields).toHaveLength(14)
+  const { control, actionBounds } = geometry
+  // 单行日期编辑器允许随文字增高，但不能因纵向 flex-basis 拉成空白大面板。
+  const pickerHeightBudget = Math.max(44, control.rootFontSize * 2)
+  expect(control.picker.height).toBeGreaterThanOrEqual(40)
+  expect(control.picker.height).toBeLessThanOrEqual(pickerHeightBudget)
+  // 最保守的内容预算：日期编辑器 + 每个按钮独占一行 + 实际行间距。
+  const contentHeightBudget = pickerHeightBudget + control.gap +
+    actionBounds.reduce((height, button) => height + button.height, 0) + control.actionGap * (actionBounds.length - 1)
+  expect(control.range.height).toBeLessThanOrEqual(contentHeightBudget + 1)
+  expect(control.tools.height).toBeLessThanOrEqual(contentHeightBudget + 1)
   for (const field of geometry.fields) {
     expect(field.contained, `${field.text}: ${JSON.stringify(field)}`).toBe(true)
     expect(field.scrollWidth, field.text ?? '').toBeLessThanOrEqual(field.clientWidth + 1)
