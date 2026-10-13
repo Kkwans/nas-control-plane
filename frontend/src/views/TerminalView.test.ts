@@ -101,6 +101,8 @@ function paste(text = 'first\nsecond', element = host.querySelector('.terminal-c
 }
 beforeEach(() => {
   beginSession()
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
   vi.useFakeTimers()
   sockets = []
   observers = []
