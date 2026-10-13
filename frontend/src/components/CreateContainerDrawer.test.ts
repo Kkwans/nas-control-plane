@@ -37,6 +37,15 @@ beforeEach(() => { vi.resetAllMocks(); beginSession(); api.resources.mockResolve
 afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
 
 describe('创建容器草稿所有权', () => {
+  it('自定义标题保留抽屉名称与二级标题，切换镜像时同步更新', async () => {
+    const { state, host } = await mount()
+    expect(host.querySelector('.create-container-drawer')?.getAttribute('data-title')).toBe('从 alpine:latest 创建容器')
+    expect(host.querySelector('.drawer-heading h2')?.textContent).toBe('从 alpine:latest 创建容器')
+    state.image = image('redis'); await flush()
+    expect(host.querySelector('.create-container-drawer')?.getAttribute('data-title')).toBe('从 redis:latest 创建容器')
+    expect(host.querySelector('.drawer-heading h2')?.textContent).toBe('从 redis:latest 创建容器')
+  })
+
   it.each(['success', 'failure'])('A 提交关闭重开 B 后 A %s 不覆盖 B，锁只在 POST 完结释放', async (outcome) => {
     const write = deferred(); api.create.mockReturnValue(write.promise)
     const { state, host, created } = await mount(); await submit(host)

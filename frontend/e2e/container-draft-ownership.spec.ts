@@ -77,6 +77,8 @@ async function openImages(page: Page) {
 async function openDraft(page: Page, image = 'media-api:latest') {
   await page.getByRole('button', { name: `从镜像 ${image} 创建容器`, exact: true }).click()
   await expect(drawer(page)).toBeVisible()
+  await expect(drawer(page)).toHaveAccessibleName(`从 ${image} 创建容器`)
+  await expect(drawer(page).getByRole('heading', { name: `从 ${image} 创建容器`, level: 2, exact: true })).toBeVisible()
 }
 async function submitA(page: Page) {
   await nameInput(page).fill('draft-a')
@@ -92,7 +94,7 @@ async function closeDrawer(page: Page, method: 'x' | 'escape') {
   await expect(drawer(page)).toBeHidden()
 }
 async function capturePendingB(page: Page, info: TestInfo) {
-  const files = ['e2e/container-draft-ownership.spec.ts', 'e2e/mockApi.ts', 'src/components/CreateContainerDrawer.vue']
+  const files = ['e2e/container-draft-ownership.spec.ts', 'e2e/mockApi.ts', 'src/components/CreateContainerDrawer.vue', 'src/components/DockerImagePanel.vue']
   const sourceHashes = Object.fromEntries(await Promise.all(files.map(async (file) => [file, createHash('sha256').update(await readFile(file)).digest('hex')])))
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   const workingTree = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })
@@ -107,6 +109,10 @@ async function capturePendingB(page: Page, info: TestInfo) {
         viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY },
         focus: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label'), placeholder: document.activeElement?.getAttribute('placeholder') },
         bodyWidth: document.body.scrollWidth,
+        imageLayout: ['.image-workspace', '.image-modebar', '.image-workspace .resource-table'].map((selector) => {
+          const element = document.querySelector<HTMLElement>(selector)!
+          return { selector, bounds: element.getBoundingClientRect().toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, overflowX: getComputedStyle(element).overflowX }
+        }),
         controls: selectors.map((selector) => {
           const element = document.querySelector<HTMLElement>(selector)!
           const bounds = element.getBoundingClientRect()
@@ -199,13 +205,48 @@ for (const destination of ['logout', 'unmount'] as const) {
   })
 }
 
+test('本地镜像表格在窄屏内部滚动，不撑宽页面', async ({ page }) => {
+  const api = await fixture(page)
+  await openImages(page)
+  for (const width of [320, 390, 768, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    const layout = await page.evaluate(() => {
+      const table = document.querySelector<HTMLElement>('.image-workspace .resource-table')!
+      const workspace = document.querySelector<HTMLElement>('.image-workspace')!
+      return {
+        viewport: innerWidth,
+        bodyWidth: document.body.scrollWidth,
+        workspaceRight: workspace.getBoundingClientRect().right,
+        tableRight: table.getBoundingClientRect().right,
+        tableClientWidth: table.clientWidth,
+        tableScrollWidth: table.scrollWidth,
+        tableOverflowX: getComputedStyle(table).overflowX,
+      }
+    })
+    expect(layout.bodyWidth, `${width}px 页面不能被本地镜像表格撑宽：${JSON.stringify(layout)}`).toBeLessThanOrEqual(layout.viewport)
+    expect(layout.workspaceRight).toBeLessThanOrEqual(layout.viewport)
+    expect(layout.tableRight).toBeLessThanOrEqual(layout.viewport)
+    if (width <= 820) {
+      expect(layout.tableOverflowX).toBe('auto')
+      expect(layout.tableScrollWidth).toBeGreaterThan(layout.tableClientWidth)
+    }
+  }
+  expect(api.writes).toEqual([])
+  expect(api.unexpected).toEqual([])
+})
+
 test('资源读取中编辑专用网络名，迟到清单不覆盖用户输入', async ({ page }) => {
   const api = await fixture(page)
   await openImages(page)
   const held = api.hold(resourcePath)
   await openDraft(page); await held.received.promise
-  await drawer(page).getByRole('switch', { name: '启用自定义网络', exact: true }).click()
-  await drawer(page).locator('.network-mode-switch').getByRole('switch').click()
+  // Element Plus 的原生 input 为 0×0；点击用户可见的开关轨道，再验证实际 switch 状态。
+  const customNetwork = drawer(page).getByRole('switch', { name: '启用自定义网络', exact: true })
+  await drawer(page).locator('.el-switch').filter({ has: page.getByRole('switch', { name: '启用自定义网络', exact: true }) }).locator('.el-switch__core').click()
+  await expect(customNetwork).toBeChecked()
+  const dedicatedNetwork = drawer(page).locator('.network-mode-switch')
+  await dedicatedNetwork.locator('.el-switch__core').click()
+  await expect(dedicatedNetwork.getByRole('switch')).toBeChecked()
   await drawer(page).getByPlaceholder('例如 media-net').fill('my-edited-network')
   await drawer(page).getByPlaceholder('172.30.0.0/24').fill('172.29.0.0/24')
   await api.release(held)

@@ -462,12 +462,13 @@ async function executeSubmit() {
 <template>
   <ElDrawer
     :model-value="modelValue"
+    :title="drawerTitle"
     :size="'min(820px, 96vw)'"
     class="create-container-drawer"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <template #header>
-      <div class="drawer-heading"><span><Box :size="21" /></span><div><strong>{{ drawerTitle }}</strong><small>确认前可取消；提交后关闭不会取消容器创建</small></div></div>
+      <div class="drawer-heading"><span><Box :size="21" /></span><div><h2>{{ drawerTitle }}</h2><small>确认前可取消；提交后关闭不会取消容器创建</small></div></div>
     </template>
 
     <form class="container-form" @submit.prevent="openSubmitPreview(true)">
@@ -620,7 +621,7 @@ async function executeSubmit() {
 </template>
 
 <style scoped>
-.drawer-heading{display:flex;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;gap:2px}.drawer-heading strong{font-size:.96rem}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
+.drawer-heading{display:flex;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;gap:2px}.drawer-heading h2{margin:0;font-size:.96rem}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
 .container-form{display:grid;gap:12px}.form-section{display:grid;gap:15px;padding:17px 18px;border:1px solid var(--ncp-line);border-radius:14px;background:#fff}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}.section-heading__main{display:flex;min-width:0;align-items:center;gap:11px;color:var(--ncp-primary-strong)}.section-heading__icon{display:grid;width:34px;height:34px;flex:0 0 auto;place-items:center;border-radius:10px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.section-heading__copy{display:grid;min-width:0;gap:4px}.section-heading strong,.advanced-toggle strong{color:var(--ncp-text);font-size:.86rem;line-height:1.25}.section-heading small,.advanced-toggle small{color:var(--ncp-text-subtle);font-size:.7rem;font-weight:500;line-height:1.4}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field{display:grid;min-width:0;gap:7px}.field--wide{grid-column:1/-1}.field>span{color:var(--ncp-text-muted);font-size:.72rem;font-weight:700}.field :deep(.ncp-select),.repeat-row :deep(.ncp-select){width:100%;min-width:0}
 .row-group{display:grid;gap:8px}.repeat-row{display:grid;align-items:center;gap:8px}.repeat-row--env{grid-template-columns:minmax(150px,.8fr) minmax(220px,1.4fr) 40px}.repeat-row--mount{grid-template-columns:120px minmax(180px,1fr) minmax(150px,1fr) 82px 40px}.repeat-row--port{grid-template-columns:minmax(140px,1fr) 140px 22px 140px 90px 40px}.repeat-row--device{grid-template-columns:1fr 1fr 100px 40px}.source-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;min-width:0}.browse-button,.load-more{min-height:40px;padding:0 11px;border:1px solid var(--ncp-control-border);border-radius:10px;background:var(--ncp-control-surface);color:var(--ncp-primary-strong);font-size:.72rem;font-weight:700;white-space:nowrap}.browse-button:hover,.load-more:hover{background:var(--ncp-primary-soft)}.browse-button:focus-visible,.load-more:focus-visible,.path-entry__name:focus-visible{outline:2px solid var(--ncp-focus-ring);outline-offset:2px}.browse-button:disabled,.load-more:disabled{cursor:not-allowed;opacity:.55}.row-remove{display:grid;width:40px;height:40px;place-items:center;border:1px solid var(--ncp-danger-border);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.add-row{display:flex;width:max-content;min-height:34px;align-items:center;gap:6px;padding:0 10px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.row-placeholder{display:flex;min-height:40px;align-items:center;padding:0 11px;border:1px dashed var(--ncp-line-strong);border-radius:10px;color:var(--ncp-text-subtle);font-size:.7rem}.inline-switch{display:flex;align-items:center;gap:7px;color:var(--ncp-text-muted);font-size:.7rem}.network-mode-switch{align-items:center}.port-arrow{text-align:center;color:var(--ncp-text-subtle)}
