@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { createApp, h } from 'vue'
+import { createApp, h, nextTick, ref, type App } from 'vue'
 import { compileStyle, parse } from 'vue/compiler-sfc'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import DateTimeRangeControl from './DateTimeRangeControl.vue'
 import source from './DateTimeRangeControl.vue?raw'
@@ -90,4 +90,198 @@ describe('DateTimeRangeControl', () => {
     app.unmount()
   })
 
+})
+
+describe('DateTimeRangeControl 真实 tooltip 交互', () => {
+  let app: App | undefined
+  let host: HTMLElement
+  let main: HTMLElement | undefined
+
+  async function flush() {
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(250)
+    await nextTick()
+  }
+  async function mount(inMain = true) {
+    vi.useFakeTimers()
+    host = document.createElement('div')
+    if (inMain) {
+      main = document.createElement('main')
+      main.id = 'date-help-main'
+      main.append(host)
+      document.body.append(main)
+    }
+    const onNow = vi.fn(), onClear = vi.fn(), loading = ref(false)
+    app = createApp({ render: () => h(DateTimeRangeControl, { from: null, to: null, onNow, onClear, loading: loading.value }) })
+    app.mount(host)
+    await flush()
+    return {
+      buttons: [...host.querySelectorAll<HTMLButtonElement>('.date-time-range__actions button')],
+      onNow, onClear, loading,
+    }
+  }
+  function popper(button: HTMLButtonElement) {
+    const id = button.getAttribute('aria-describedby')
+    expect(id).toBeTruthy()
+    const element = (main ?? host).querySelector<HTMLElement>(`[id="${id}"]`)
+    expect(element?.getAttribute('role')).toBe('tooltip')
+    expect(element?.getAttribute('aria-hidden')).toBe('false')
+    return element!
+  }
+  function mouse(element: HTMLElement, type: 'mouseenter' | 'mouseleave') {
+    element.dispatchEvent(new MouseEvent(type))
+  }
+  function escape() {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+  }
+  afterEach(() => {
+    app?.unmount()
+    app = undefined
+    main?.remove()
+    main = undefined
+    host?.remove()
+    vi.useRealTimers()
+  })
+
+  it.each([0, 1])('将按钮 %s 的真实提示放入所属 main，保持关联并允许 Escape 后重新聚焦', async (index) => {
+    const { buttons } = await mount()
+    const button = buttons[index]!
+    button.focus()
+    await flush()
+    const tooltip = popper(button)
+    expect(tooltip.parentElement).toBe(main)
+    expect(tooltip.textContent).toBe(button.getAttribute('aria-label'))
+    expect(host.contains(tooltip)).toBe(false)
+    expect(document.activeElement).toBe(button)
+    escape()
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    expect(tooltip.isConnected).toBe(false)
+    expect(document.activeElement).toBe(button)
+    button.blur()
+    button.focus()
+    await flush()
+    expect(popper(button).parentElement).toBe(main)
+  })
+
+  it('独立脱离文档挂载时回退到自身，保留帮助且不创建 landmark', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { buttons } = await mount(false)
+      mouse(buttons[0]!, 'mouseenter')
+      await flush()
+      expect(popper(buttons[0]!).parentElement).toBe(host.querySelector('.date-time-range'))
+      expect(host.querySelector('main, [role="main"], [role="region"]')).toBeNull()
+      expect(warn).not.toHaveBeenCalled()
+    } finally { warn.mockRestore() }
+  })
+
+  it('焦点、按钮悬停及提示悬停之间切换时保留帮助，全部离开后关闭', async () => {
+    const { buttons } = await mount()
+    const button = buttons[0]!
+    button.focus()
+    mouse(button, 'mouseenter')
+    await flush()
+    mouse(button, 'mouseleave')
+    await flush()
+    let tooltip = popper(button)
+    mouse(tooltip, 'mouseenter')
+    button.blur()
+    await flush()
+    tooltip = popper(button)
+    mouse(tooltip, 'mouseleave')
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+
+    mouse(button, 'mouseenter')
+    button.focus()
+    await flush()
+    button.blur()
+    await flush()
+    popper(button)
+    mouse(button, 'mouseleave')
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+  })
+
+  it('仅鼠标悬停也可 Escape 关闭；未离开前不重开，重新进入后可显示', async () => {
+    const { buttons } = await mount()
+    const button = buttons[0]!
+    mouse(button, 'mouseenter')
+    await flush()
+    popper(button)
+    expect(document.activeElement).not.toBe(button)
+    escape()
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    mouse(button, 'mouseleave')
+    mouse(button, 'mouseenter')
+    await flush()
+    popper(button)
+  })
+
+  it('Escape 取消尚未显示的提示，卸载清除传送内容和自身键盘监听', async () => {
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const { buttons } = await mount()
+    mouse(buttons[0]!, 'mouseenter')
+    escape()
+    await flush()
+    expect(buttons[0]!.hasAttribute('aria-describedby')).toBe(false)
+    mouse(buttons[0]!, 'mouseleave')
+    mouse(buttons[0]!, 'mouseenter')
+    await flush()
+    const tooltip = popper(buttons[0]!)
+    app!.unmount()
+    app = undefined
+    expect(tooltip.isConnected).toBe(false)
+    expect(remove.mock.calls.some(([type, listener]) => type === 'keydown' && typeof listener === 'function' && listener.name === 'dismissHelp')).toBe(true)
+    remove.mockRestore()
+  })
+
+  it('Enter/Space 不被 tooltip 拦截，按钮仍保留原来的点击动作', async () => {
+    const { buttons, onNow, onClear } = await mount()
+    for (const button of buttons.slice(0, 2)) {
+      button.focus()
+      await flush()
+      for (const [key, code] of [['Enter', 'Enter'], [' ', 'Space'], ['Enter', 'NumpadEnter']]) {
+        const event = new KeyboardEvent('keydown', { key, code, bubbles: true, cancelable: true })
+        button.dispatchEvent(event)
+        expect(event.defaultPrevented).toBe(false)
+      }
+      button.click()
+    }
+    expect(onNow).toHaveBeenCalledOnce()
+    expect(onClear).toHaveBeenCalledOnce()
+  })
+
+  it.each([0, 1])('loading 禁用已聚焦按钮 %s 时清理帮助，恢复后只由新交互打开', async (index) => {
+    const { buttons, loading, onNow, onClear } = await mount()
+    const button = buttons[index]!
+    button.focus()
+    await flush()
+    const tooltip = popper(button)
+    loading.value = true
+    await flush()
+    expect(button.disabled).toBe(true)
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    expect(tooltip.isConnected).toBe(false)
+    mouse(button, 'mouseenter')
+    button.click()
+    await flush()
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    expect(onNow).not.toHaveBeenCalled()
+    expect(onClear).not.toHaveBeenCalled()
+    loading.value = false
+    await flush()
+    expect(button.disabled).toBe(false)
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+    button.blur()
+    button.focus()
+    await flush()
+    popper(button)
+  })
 })

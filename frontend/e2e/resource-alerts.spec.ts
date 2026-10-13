@@ -84,6 +84,20 @@ async function semanticState(page: Page) {
     notice: element.querySelector('.resource-alerts__notice')?.textContent ?? null,
   }))
 }
+async function dateHelpState(page: Page) {
+  return page.locator('.date-time-range__actions button').evaluateAll((buttons) => buttons.map((button) => {
+    const describedBy = button.getAttribute('aria-describedby')
+    const tooltip = describedBy ? document.getElementById(describedBy) : null
+    return {
+      name: button.getAttribute('aria-label'), focused: document.activeElement === button, describedBy,
+      tooltip: tooltip ? {
+        role: tooltip.getAttribute('role'), hidden: tooltip.getAttribute('aria-hidden'), text: tooltip.textContent,
+        mainId: tooltip.closest('main, [role="main"]')?.id ?? null,
+        placement: tooltip.getAttribute('data-popper-placement'), bounds: tooltip.getBoundingClientRect().toJSON(),
+      } : null,
+    }
+  }))
+}
 async function fullAxe(page: Page) {
   // axe 依赖运行中的页面计时器。允许只读轮询继续，但不能把过期后的 UI 当作原状态验收。
   // 请求数量的精确断言放在本 helper 之前，或在之后重新取得基线。
@@ -195,6 +209,7 @@ async function evidence(page: Page, info: TestInfo, state: string) {
   const axe = await fullAxe(page)
   const captureState = await semanticState(page)
   const historyControls = await historyControlGeometry(page)
+  const dateHelp = await dateHelpState(page)
   const checks = await panel(page).evaluate((element) => {
     const bounds = element.getBoundingClientRect()
     return {
@@ -213,7 +228,7 @@ async function evidence(page: Page, info: TestInfo, state: string) {
     const jsonPath = info.outputPath('ui-captures', `${name}-capture-state.json`)
     await writeFile(jsonPath, JSON.stringify({
       sourceSha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-      fixtureOnly: true, fixtureSource: 'frontend/e2e/resource-alerts.spec.ts + frontend/e2e/mockApi.ts', state, semanticState: captureState, historyControls, ...checks,
+      fixtureOnly: true, fixtureSource: 'frontend/e2e/resource-alerts.spec.ts + frontend/e2e/mockApi.ts', state, semanticState: captureState, historyControls, dateHelp, ...checks,
       axe: { violations: axe.violations, incomplete: axe.incomplete, passes: axe.passes.map(({ id }) => id) },
     }, null, 2))
     await page.screenshot({ path, fullPage: true, animations: 'disabled' })
@@ -227,6 +242,7 @@ async function evidence(page: Page, info: TestInfo, state: string) {
   expect(checks.panel.right).toBeLessThanOrEqual(checks.viewport.width)
   expect(checks.rules.every((item) => !item.overflow)).toBe(true)
   expect(axe.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical'), JSON.stringify(axe.violations, null, 2)).toEqual([])
+  return axe
 }
 
 test('当前正常与等待持续确认独立于历史范围，数值变化不重复播报', async ({ page }, info) => {
@@ -313,6 +329,89 @@ test('390px 默认字号完整展示已填写的日期时间和日历图标', as
   await evidence(page, info, 'populated-dates')
   expect(api.writes).toEqual([])
 })
+
+for (const scale of [1, 2]) {
+  test(`390px ${scale * 100}% 日期帮助位于真实 main，保留键盘动作和混合悬停焦点`, async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 1000 })
+    const api = await fixture(page)
+    await open(page)
+    const base = await page.locator('html').evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
+    await page.evaluate((size) => document.documentElement.style.setProperty('font-size', `${size}px`, 'important'), base * scale)
+    const now = page.getByRole('button', { name: '将结束时间设为现在', exact: true })
+    const clear = page.getByRole('button', { name: '清除精确时间范围', exact: true })
+    const tooltip = page.getByRole('tooltip', { name: '将结束时间设为现在', exact: true })
+    const inputs = page.locator('.date-time-range__picker input')
+    // 计数原生 click，不能仅因最终日期相同而漏掉键盘的双触发。
+    await page.locator('.date-time-range__actions button').evaluateAll((buttons) => {
+      for (const button of buttons) {
+        button.setAttribute('data-fixture-clicks', '0')
+        button.addEventListener('click', () => button.setAttribute('data-fixture-clicks', String(Number(button.getAttribute('data-fixture-clicks')) + 1)))
+      }
+    })
+    await now.focus()
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    const id = await tooltip.getAttribute('id')
+    expect(id).toBeTruthy()
+    await expect(now).toHaveAttribute('aria-describedby', id!)
+    expect(await tooltip.evaluate((element) => element.parentElement === document.querySelector('main#app-main'))).toBe(true)
+    await now.hover()
+    await page.mouse.move(1, 1)
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    await expect(now).toBeFocused()
+    await now.press('Enter')
+    await expect(now).toHaveAttribute('data-fixture-clicks', '1')
+    await expect(inputs.first()).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+    await expect(inputs.last()).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+    const axe = await evidence(page, info, `date-help-open-${scale * 100}-percent`)
+    await expect(tooltip).toBeVisible()
+    // 在提示实际打开时检查 region，不能先移开鼠标或关闭提示来消掉违规。
+    expect(axe.violations.filter(({ id }) => id === 'region'), JSON.stringify(axe.violations, null, 2)).toEqual([])
+    await page.keyboard.press('Escape')
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeHidden()
+    await expect(now).not.toHaveAttribute('aria-describedby')
+    await expect(now).toBeFocused()
+
+    await now.hover()
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    await tooltip.hover()
+    await clear.focus()
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    await page.mouse.move(1, 1)
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeHidden()
+    await clear.press('Space')
+    await expect(clear).toHaveAttribute('data-fixture-clicks', '1')
+    await expect(inputs.first()).toHaveValue('')
+    await expect(inputs.last()).toHaveValue('')
+    await expect(now).toBeEnabled()
+    await now.press('Space')
+    await expect(now).toHaveAttribute('data-fixture-clicks', '2')
+    await expect(inputs.first()).toHaveValue(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/)
+    await clear.press('Enter')
+    await expect(clear).toHaveAttribute('data-fixture-clicks', '2')
+    await expect(inputs.first()).toHaveValue('')
+    await expect(now).toBeEnabled()
+
+    await page.locator('#app-main').focus()
+    await now.hover()
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeHidden()
+    await expect(page.locator('#app-main')).toBeFocused()
+    await page.mouse.move(1, 1)
+    await now.hover()
+    await page.clock.runFor(250)
+    await expect(tooltip).toBeVisible()
+    expect(api.writes).toEqual([])
+  })
+}
 
 for (const width of [320, 390, 768, 1440]) {
   test(`${width}px 中断事件长原因码在 200% 根字号不溢出`, async ({ page }, info) => {

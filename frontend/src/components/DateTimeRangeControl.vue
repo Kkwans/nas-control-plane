@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
+import type { ShallowRef } from 'vue'
 import { Check, Clock3, X } from '@lucide/vue'
 import { ElDatePicker, ElTooltip } from 'element-plus'
+import type { TooltipInstance } from 'element-plus'
 
 import ActionButton from '@/components/ActionButton.vue'
 
@@ -19,6 +21,65 @@ const emit = defineEmits<{
   now: []
 }>()
 
+const control = useTemplateRef<HTMLElement>('control')
+const tooltipTarget = shallowRef<HTMLElement>()
+const nowTooltip = useTemplateRef<TooltipInstance>('nowTooltip')
+const clearTooltip = useTemplateRef<TooltipInstance>('clearTooltip')
+
+// Element Plus 分别处理 hover/focus 的关闭；任一交互仍在进行时保留帮助。
+function useActionHelp(tooltip: Readonly<ShallowRef<TooltipInstance | null>>) {
+  const state = reactive({ visible: false })
+  let focused = false, triggerHovered = false, contentHovered = false, dismissed = false
+  const update = (visible: boolean) => {
+    state.visible = !props.loading && !dismissed && (visible || focused || triggerHovered || contentHovered)
+  }
+  const triggerEvents = {
+    focus: () => { focused = true; dismissed = false },
+    blur: () => { focused = false },
+    mouseenter: () => { triggerHovered = true; dismissed = false },
+    mouseleave: () => { triggerHovered = false },
+  }
+  // 使用公开的 popper DOM ref，覆盖其内边距和箭头，而非仅监听文字 span。
+  watch(() => tooltip.value?.popperRef?.contentRef, (element, _previous, cleanup) => {
+    contentHovered = false
+    if (!element) return
+    const enter = () => { contentHovered = true }
+    const leave = () => { contentHovered = false }
+    element.addEventListener('mouseenter', enter)
+    element.addEventListener('mouseleave', leave)
+    cleanup(() => {
+      element.removeEventListener('mouseenter', enter)
+      element.removeEventListener('mouseleave', leave)
+    })
+  }, { flush: 'post' })
+  const dismiss = (event?: KeyboardEvent) => {
+    dismissed = true
+    state.visible = false
+    // 关闭同时取消待显示计时器；不移动焦点，也不吞掉其他控件的 Escape。
+    tooltip.value?.onClose(event, 0)
+  }
+  watch(() => props.loading, () => {
+    // 禁用原生按钮不保证浏览器派发 blur；恢复后不得复活旧交互。
+    focused = triggerHovered = contentHovered = false
+    dismiss()
+  })
+  return { state, triggerEvents, update, dismiss }
+}
+
+const nowHelp = useActionHelp(nowTooltip)
+const clearHelp = useActionHelp(clearTooltip)
+function dismissHelp(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  nowHelp.dismiss(event)
+  clearHelp.dismiss(event)
+}
+onMounted(() => {
+  // 真实页面传送到已有 main，避开页头裁切；独立挂载无需伪造 landmark。
+  tooltipTarget.value = control.value?.closest<HTMLElement>('main, [role="main"]') ?? control.value ?? undefined
+  document.addEventListener('keydown', dismissHelp)
+})
+onBeforeUnmount(() => document.removeEventListener('keydown', dismissHelp))
+
 const rangeValue = computed<[Date, Date] | null>({
   get: () => props.from && props.to ? [props.from, props.to] as [Date, Date] : null,
   set: (value: [Date, Date] | null) => {
@@ -29,7 +90,7 @@ const rangeValue = computed<[Date, Date] | null>({
 </script>
 
 <template>
-  <div class="date-time-range" role="group" aria-label="精确时间范围" :aria-busy="loading ? 'true' : 'false'">
+  <div ref="control" class="date-time-range" role="group" aria-label="精确时间范围" :aria-busy="loading ? 'true' : 'false'">
     <div class="date-time-range__picker-frame">
       <ElDatePicker
         v-model="rangeValue"
@@ -48,11 +109,11 @@ const rangeValue = computed<[Date, Date] | null>({
       />
     </div>
     <div class="date-time-range__actions" role="group" aria-label="时间范围操作">
-      <ElTooltip content="将结束时间设为现在" placement="bottom">
-        <ActionButton :icon="Clock3" :disabled="loading" aria-label="将结束时间设为现在" @click="emit('now')">现在</ActionButton>
+      <ElTooltip ref="nowTooltip" content="将结束时间设为现在" placement="bottom" :append-to="tooltipTarget" :trigger="['hover', 'focus']" :trigger-keys="[]" :disabled="loading" :visible="nowHelp.state.visible" @update:visible="nowHelp.update">
+        <ActionButton :icon="Clock3" :disabled="loading" aria-label="将结束时间设为现在" v-on="nowHelp.triggerEvents" @click="emit('now')">现在</ActionButton>
       </ElTooltip>
-      <ElTooltip content="清除精确时间范围" placement="bottom">
-        <ActionButton :icon="X" :disabled="loading" aria-label="清除精确时间范围" @click="emit('clear')">清除</ActionButton>
+      <ElTooltip ref="clearTooltip" content="清除精确时间范围" placement="bottom" :append-to="tooltipTarget" :trigger="['hover', 'focus']" :trigger-keys="[]" :disabled="loading" :visible="clearHelp.state.visible" @update:visible="clearHelp.update">
+        <ActionButton :icon="X" :disabled="loading" aria-label="清除精确时间范围" v-on="clearHelp.triggerEvents" @click="emit('clear')">清除</ActionButton>
       </ElTooltip>
       <ActionButton variant="primary" :icon="Check" :loading="loading" :disabled="loading || !from || !to" aria-label="应用精确时间范围" @click="emit('apply')">应用</ActionButton>
     </div>
