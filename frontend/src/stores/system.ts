@@ -360,6 +360,16 @@ export const useSystemStore = defineStore('system', () => {
     realtimeState.value = 'offline'
   }
 
+  function retryClosedRealtime(): boolean {
+    // 仅由用户刷新触发；CONNECTING 交给浏览器重连，停止或会话失效后不复活旧流。
+    if (document.visibilityState !== 'visible' || !eventSource ||
+      eventSource.readyState !== EventSource.CLOSED || !realtimeScopes.value.length) return false
+    const scopes = [...realtimeScopes.value]
+    stopRealtime()
+    startRealtime(scopes)
+    return true
+  }
+
   function applyRealtimeSnapshot(snapshot: RealtimeSnapshot) {
     const errors = snapshot.errors ?? []
     let receivedFreshData = false
@@ -494,6 +504,7 @@ export const useSystemStore = defineStore('system', () => {
     setListPreference,
     startRealtime,
     stopRealtime,
+    retryClosedRealtime,
     clear,
   }
 })
