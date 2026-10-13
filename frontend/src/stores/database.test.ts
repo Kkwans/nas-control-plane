@@ -55,3 +55,59 @@ describe('useDatabaseStore session isolation', () => {
     )
   })
 })
+
+
+describe('useDatabaseStore connection cancellation', () => {
+  beforeEach(() => {
+    invalidateSession()
+    setActivePinia(createPinia())
+    vi.resetAllMocks()
+  })
+
+  it('does not start a catalog read after an aborted connection completes', async () => {
+    let resolve!: (value: { connected: boolean }) => void
+    apiMocks.connectDatabase.mockReturnValue(new Promise((done) => { resolve = done }))
+    const store = useDatabaseStore()
+    const controller = new AbortController()
+    const operation = store.connect('a', { username: 'alice', password: 'secret' }, controller.signal)
+    const rejection = expect(operation).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+    resolve({ connected: true })
+    await rejection
+    expect(apiMocks.loadDatabaseCatalog).not.toHaveBeenCalled()
+    expect(store.catalogs).toEqual({})
+    expect(store.credentials).toEqual({})
+  })
+
+  it('does not publish a catalog or credentials after cancellation during catalog loading', async () => {
+    let resolve!: (value: { tables: [] }) => void
+    apiMocks.connectDatabase.mockResolvedValue({ connected: true })
+    apiMocks.loadDatabaseCatalog.mockReturnValue(new Promise((done) => { resolve = done }))
+    const store = useDatabaseStore()
+    const controller = new AbortController()
+    const operation = store.connect('a', { username: 'alice' }, controller.signal)
+    const rejection = expect(operation).rejects.toMatchObject({ name: 'AbortError' })
+    await Promise.resolve()
+    controller.abort()
+    resolve({ tables: [] })
+    await rejection
+    expect(store.catalogs).toEqual({})
+    expect(store.credentials).toEqual({})
+  })
+
+  it('uses a frozen credential snapshot and publishes only after both requests finish', async () => {
+    let resolve!: (value: { connected: boolean }) => void
+    apiMocks.connectDatabase.mockReturnValue(new Promise((done) => { resolve = done }))
+    apiMocks.loadDatabaseCatalog.mockResolvedValue({ tables: [] })
+    const store = useDatabaseStore()
+    const input = { username: 'alice' }
+    const operation = store.connect('a', input)
+    input.username = 'bob'
+    expect(store.credentials).toEqual({})
+    resolve({ connected: true })
+    await operation
+    expect(apiMocks.loadDatabaseCatalog).toHaveBeenCalledWith({ sourceId: 'a', credentials: { username: 'alice' } }, expect.any(AbortSignal))
+    expect(store.credentials.a).toEqual({ username: 'alice' })
+    expect(store.catalogs.a).toEqual({ tables: [] })
+  })
+})

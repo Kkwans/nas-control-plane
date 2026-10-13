@@ -95,29 +95,22 @@ export const useDatabaseStore = defineStore('database', () => {
     return catalog
   }
 
-  async function connect(sourceId: string, input: DatabaseCredentials) {
+  async function connect(sourceId: string, input: DatabaseCredentials, signal?: AbortSignal) {
     const session = captureSession()
-    credentials.value = { ...credentials.value, [sourceId]: { ...input } }
-    try {
-      const hasCredentials = Object.values(input).some((value) => typeof value === 'string' && value.trim() !== '')
-      const diagnostic = await connectDatabase(
-        hasCredentials ? { sourceId, credentials: input } : { sourceId },
-        session.signal,
-      )
-      if (!isCurrentSession(session.generation)) throw new DOMException('Session invalidated', 'AbortError')
-      if (!diagnostic.connected) {
-        throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
-      }
-      const catalog = await loadCatalog(sourceId)
-      return { catalog, diagnostic }
-    } catch (error) {
-      if (isCurrentSession(session.generation)) {
-        const next = { ...credentials.value }
-        delete next[sourceId]
-        credentials.value = next
-      }
-      throw error
-    }
+    const requestSignal = signal ? AbortSignal.any([signal, session.signal]) : session.signal
+    const snapshot = { ...input }
+    const hasCredentials = Object.values(snapshot).some((value) => typeof value === 'string' && value.trim() !== '')
+    const connectionInput = hasCredentials ? { sourceId, credentials: snapshot } : { sourceId }
+    const diagnostic = await connectDatabase(connectionInput, requestSignal)
+    if (requestSignal.aborted || !isCurrentSession(session.generation))
+      throw new DOMException('Session invalidated', 'AbortError')
+    if (!diagnostic.connected) throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
+    const catalog = await loadDatabaseCatalog(connectionInput, requestSignal)
+    if (requestSignal.aborted || !isCurrentSession(session.generation))
+      throw new DOMException('Session invalidated', 'AbortError')
+    credentials.value = { ...credentials.value, [sourceId]: snapshot }
+    catalogs.value = { ...catalogs.value, [sourceId]: catalog }
+    return { catalog, diagnostic }
   }
 
   function resetSessionState() {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   ArrowLeft,
@@ -20,8 +20,11 @@ import { ElButton, ElForm, ElFormItem, ElInput } from 'element-plus'
 
 import { NcpApiError } from '@/api/system'
 import { testDatabaseConnection } from '@/api/database'
-import type { DatabaseConnectionDiagnostic, DatabaseCredentials, DatabaseTable } from '@/api/database'
+import type { DatabaseConnectionDiagnostic, DatabaseCredentials, DatabaseSource, DatabaseTable } from '@/api/database'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
+import ResourceState from '@/components/ResourceState.vue'
+import { createRequestSequenceGate } from '@/domain/requestSequence'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
 
@@ -53,9 +56,11 @@ const sourceId = computed(() => String(route.params.sourceId ?? ''))
 const source = computed(() => databaseStore.source(sourceId.value))
 const catalog = computed(() => databaseStore.catalogs[sourceId.value] ?? null)
 const query = ref('')
+const discovering = ref(true)
 const loading = ref(false)
 const diagnosticLoading = ref(false)
 const errorState = ref<DatabaseErrorState | null>(null)
+const errorOperation = ref<'discovery' | 'catalog' | 'connection' | 'diagnostic' | null>(null)
 const credentialDraft = ref<DatabaseCredentials>({})
 const diagnostic = ref<ConnectionDiagnostic | null>(null)
 
@@ -83,100 +88,154 @@ const connectionState = computed(() => {
 })
 const sourceReachabilityBlocked = computed(() => source.value?.reachability === 'container-internal' || source.value?.reachability === 'unreachable')
 
-onMounted(() => void initialize())
-watch(sourceId, () => void initialize())
+const requests = createRequestSequenceGate()
+const session = captureSession()
+let controller: AbortController | null = null
+
+function resetLocalState() {
+  requests.invalidate()
+  controller?.abort()
+  controller = null
+  credentialDraft.value = {}
+  diagnostic.value = null
+  clearError()
+  query.value = ''
+  loading.value = false
+  diagnosticLoading.value = false
+  discovering.value = false
+}
+
+function beginRequest() {
+  controller?.abort()
+  controller = new AbortController()
+  const sequence = requests.begin()
+  const targetId = sourceId.value
+  const signal = AbortSignal.any([controller.signal, session.signal])
+  loading.value = false
+  diagnosticLoading.value = false
+  clearError()
+  return {
+    targetId,
+    signal,
+    current: () => !signal.aborted && requests.isLatest(sequence) &&
+      isCurrentSession(session.generation) && sourceId.value === targetId,
+  }
+}
+
+session.signal.addEventListener('abort', resetLocalState, { once: true })
+watch(sourceId, () => {
+  resetLocalState()
+  void initialize()
+}, { immediate: true, flush: 'sync' })
+onBeforeUnmount(() => {
+  resetLocalState()
+  session.signal.removeEventListener('abort', resetLocalState)
+})
 
 async function initialize() {
-  clearError()
-  diagnostic.value = null
+  const request = beginRequest()
+  discovering.value = true
   try {
-    if (!databaseStore.sources.length) await databaseStore.refreshDiscovery()
-  } catch (error) {
-    setError(error, '数据库发现失败，请确认 Root Agent 正常运行。')
-    return
-  }
-  const current = source.value
-  if (!current || catalog.value) return
-  if (current.requiresLogin) {
+    if (!databaseStore.source(request.targetId)) await databaseStore.refreshDiscovery()
+    if (!request.current()) return
+    discovering.value = false
+    const current = databaseStore.source(request.targetId)
+    if (!current || databaseStore.catalogs[request.targetId]) return
     loading.value = true
-    try {
-      const result = await databaseStore.connect(sourceId.value, {})
-      diagnostic.value = result.diagnostic
-    } catch (error) {
-      if (errorCode(error) !== 'credentials_required') {
-        diagnostic.value = diagnosticFromError(error)
-        setError(error, '自动连接失败，请检查保存的凭据或重新输入。')
+    if (current.requiresLogin) {
+      try {
+        const result = await databaseStore.connect(request.targetId, {}, request.signal)
+        if (request.current()) diagnostic.value = result.diagnostic
+      } catch (error) {
+        if (!request.current() || isAbortError(error)) return
+        if (errorCode(error) !== 'credentials_required') {
+          diagnostic.value = diagnosticFromError(error, current, {})
+          setError(error, '自动连接失败，请检查保存的凭据或重新输入。', 'connection')
+        }
       }
-    } finally {
+    } else {
+      try {
+        await databaseStore.loadCatalog(request.targetId, request.signal)
+      } catch (error) {
+        if (request.current() && !isAbortError(error)) setError(error, '数据库对象目录读取失败。', 'catalog')
+      }
+    }
+  } catch (error) {
+    if (request.current() && !isAbortError(error)) setError(error, '数据库发现失败，请确认 Root Agent 正常运行。', 'discovery')
+  } finally {
+    if (request.current()) {
+      discovering.value = false
       loading.value = false
     }
-    return
   }
-  await reloadCatalog()
 }
 
 async function reloadCatalog() {
   if (!source.value) return
+  const request = beginRequest()
   loading.value = true
-  clearError()
   try {
-    await databaseStore.loadCatalog(sourceId.value)
+    await databaseStore.loadCatalog(request.targetId, request.signal)
   } catch (error) {
-    setError(error, '数据库对象目录读取失败。')
+    if (request.current() && !isAbortError(error)) setError(error, '数据库对象目录读取失败。', 'catalog')
   } finally {
-    loading.value = false
+    if (request.current()) loading.value = false
   }
 }
 
 async function connectDatabase() {
-  if (!source.value) return
+  const target = source.value
+  if (!target) return
+  const credentials = { ...credentialDraft.value }
+  const request = beginRequest()
   loading.value = true
-  clearError()
+  diagnostic.value = null
   try {
-    const result = await databaseStore.connect(sourceId.value, credentialDraft.value)
-    diagnostic.value = result.diagnostic
+    const result = await databaseStore.connect(request.targetId, credentials, request.signal)
+    if (request.current()) {
+      diagnostic.value = result.diagnostic
+      credentialDraft.value = {}
+    }
   } catch (error) {
-    diagnostic.value = diagnosticFromError(error)
-    setError(error, '数据库连接失败，请检查登录信息。')
+    if (!request.current() || isAbortError(error)) return
+    diagnostic.value = diagnosticFromError(error, target, credentials)
+    setError(error, '数据库连接失败，请检查登录信息。', 'connection')
   } finally {
-    loading.value = false
+    if (request.current()) loading.value = false
   }
 }
 
 async function testConnection() {
-  if (!source.value) return
+  const target = source.value
+  if (!target) return
+  const credentials = { ...credentialDraft.value }
+  const request = beginRequest()
   diagnosticLoading.value = true
   diagnostic.value = null
-  clearError()
   try {
-    const result = await requestConnectionDiagnostic({
-      sourceId: sourceId.value,
-      credentials: credentialDraft.value,
-    })
+    const result = await testDatabaseConnection({ sourceId: request.targetId, credentials }, request.signal)
+    if (!request.current()) return
     diagnostic.value = result
     if (!result.connected) {
       const code = result.code || 'unreachable'
-      setError(new NcpApiError(code, databaseErrorCopy[code] || '连接诊断未通过。'), '连接诊断未通过。')
+      setError(new NcpApiError(code, databaseErrorCopy[code] || '连接诊断未通过。'), '连接诊断未通过。', 'diagnostic')
     }
   } catch (error) {
-    diagnostic.value = diagnosticFromError(error)
-    setError(error, '连接诊断失败，请稍后重试。')
+    if (!request.current() || isAbortError(error)) return
+    diagnostic.value = diagnosticFromError(error, target, credentials)
+    setError(error, '连接诊断失败，请稍后重试。', 'diagnostic')
   } finally {
-    diagnosticLoading.value = false
+    if (request.current()) diagnosticLoading.value = false
   }
 }
 
-async function requestConnectionDiagnostic(input: { sourceId: string; credentials: DatabaseCredentials }) {
-  return testDatabaseConnection(input)
-}
-
-function diagnosticFromError(error: unknown): ConnectionDiagnostic {
+function diagnosticFromError(error: unknown, target: DatabaseSource, credentials: DatabaseCredentials): ConnectionDiagnostic {
   return {
     connected: false,
     code: errorCode(error),
-    driver: source.value?.driver || 'sqlite',
-    endpoint: source.value?.location || '',
-    database: credentialDraft.value.database || source.value?.defaultDatabase,
+    driver: target.driver,
+    endpoint: target.location,
+    database: credentials.database || target.defaultDatabase,
     operation: 'test_connection',
     durationMs: 0,
   }
@@ -244,12 +303,14 @@ function errorNextStep(error: unknown) {
   }
 }
 
-function setError(error: unknown, fallback: string) {
+function setError(error: unknown, fallback: string, operation: NonNullable<typeof errorOperation.value>) {
+  errorOperation.value = operation
   const code = errorCode(error)
   errorState.value = { code, message: errorMessage(error, fallback), nextStep: errorNextStep(error) }
 }
 
 function clearError() {
+  errorOperation.value = null
   errorState.value = null
 }
 </script>
@@ -268,7 +329,8 @@ function clearError() {
       </template>
     </WorkspaceHeader>
 
-    <DatabaseErrorPanel v-if="errorState" title="数据库操作失败" :error="errorState" />
+    <ResourceState v-if="errorState && errorOperation === 'catalog'" state="error" title="数据库对象目录读取失败" :message="errorState.message" :code="errorState.code" :next-step="errorState.nextStep" retry-label="重新读取目录" @retry="reloadCatalog" />
+    <DatabaseErrorPanel v-else-if="errorState" :title="errorOperation === 'diagnostic' ? '数据库连接诊断失败' : '数据库连接失败'" :error="errorState" />
 
     <dl class="source-summary panel">
       <div class="source-summary__status">
@@ -358,6 +420,8 @@ function clearError() {
     </template>
   </div>
 
+  <div v-else-if="discovering" class="page" aria-busy="true"><ResourceState state="loading" title="正在发现数据库来源" message="发现完成后显示连接状态。" /></div>
+  <div v-else-if="errorState" class="page"><ResourceState state="error" title="数据库发现失败" :message="errorState.message" :code="errorState.code" :next-step="errorState.nextStep" @retry="initialize" /></div>
   <div v-else class="page"><section class="missing-source panel"><Database :size="26" /><h1>数据库来源不存在</h1><a href="/databases">返回数据库列表</a></section></div>
 </template>
 
