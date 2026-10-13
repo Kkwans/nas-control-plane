@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   CircleAlert,
   CircleCheck,
@@ -43,6 +43,7 @@ import NcpSelect from '@/components/NcpSelect.vue'
 import SegmentedTabs, { type SegmentedTab } from '@/components/SegmentedTabs.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
 
@@ -57,8 +58,14 @@ const selectedCategory = ref('全部分类')
 const editOpen = ref(false)
 const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
+const savedSiteId = ref<string | null>(null)
+const syncPending = ref(false)
+let editorGeneration = 0
+let active = true
+watch(editOpen, () => { editorGeneration += 1; saving.value = false }, { flush: 'sync' })
+function currentView(generation: number) { return active && isCurrentSession(generation) }
 const failedIcons = ref(new Set<string>())
-const favoritePending = ref<string | null>(null)
+const favoritePending = ref(new Set<string>())
 const draft = ref<SiteProfileInput>(emptyProfile())
 const iconInput = ref<HTMLInputElement | null>(null)
 const siteForm = ref<FormInstance>()
@@ -143,12 +150,14 @@ function formatCollectedAt(value: string) {
 }
 
 async function refreshSites(announce = true) {
-  await sitesStore.refresh()
+  const session = captureSession()
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation)) return
   if (sitesStore.error) {
     if (announce) ElMessage.error(sitesStore.error)
     return
   }
-  if (!announce) return
+  if (!synced || !announce) return
   if (sitesStore.discovery.status === 'complete') ElMessage.success(`识别完成，已确认 ${sitesStore.discovery.verifiedCount} 个站点入口`)
   else if (sitesStore.discovery.status === 'partial') ElMessage.warning(`识别完成，${sitesStore.discovery.failedCount} 个候选入口待核验`)
   else ElMessage.warning('网页入口探测暂不可用，已显示可确认的站点')
@@ -232,6 +241,10 @@ function visitedLabel(value: string | null) {
 }
 
 function openEditor(site: Site) {
+  editorGeneration += 1
+  saving.value = false
+  savedSiteId.value = site.id
+  syncPending.value = false
   resetPendingIcon()
   selectedSite.value = site
   draft.value = profileFor(site)
@@ -239,6 +252,10 @@ function openEditor(site: Site) {
 }
 
 function openCreator() {
+  editorGeneration += 1
+  saving.value = false
+  savedSiteId.value = null
+  syncPending.value = false
   resetPendingIcon()
   selectedSite.value = null
   draft.value = emptyProfile()
@@ -246,27 +263,66 @@ function openCreator() {
 }
 
 async function saveSite() {
+  if (saving.value || syncPending.value) return
+  const session = captureSession()
+  const generation = editorGeneration
+  const current = () => currentView(session.generation) && generation === editorGeneration
+  saving.value = true
+  const input = { ...draft.value }
+  const icon = pendingIcon.value
+  const siteId = savedSiteId.value
   const valid = await siteForm.value?.validate().catch(() => false)
-  if (valid === false) return
+  if (!current()) return
+  if (valid === false) { saving.value = false; return }
+  if (JSON.stringify(draft.value) !== JSON.stringify(input) || pendingIcon.value !== icon) {
+    saving.value = false
+    ElMessage.warning('资料已变更，请确认后重新保存')
+    return
+  }
   if (!draft.value.launchUrl.trim() && draft.value.primaryPort <= 0) {
+    saving.value = false
     ElMessage.warning('请填写完整入口 URL，或设置主入口端口')
     return
   }
-  saving.value = true
   try {
-    if (selectedSite.value) await sitesStore.save(selectedSite.value.id, draft.value)
-    else await sitesStore.create(draft.value, pendingIcon.value)
-    editOpen.value = false
-    resetPendingIcon()
-    ElMessage.success(selectedSite.value ? '站点资料已保存' : '站点已添加')
-  } catch {
-    ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
+    if (siteId) await sitesStore.save(siteId, input)
+    else {
+      const created = await sitesStore.create(input, icon)
+      if (current()) savedSiteId.value = created.projectId
+    }
+    if (!current()) return
+    if (pendingIcon.value === icon) resetPendingIcon()
+    if (JSON.stringify(draft.value) === JSON.stringify(input)) editOpen.value = false
+    ElMessage.success(siteId ? '站点资料已保存' : '站点已添加')
+  } catch (error) {
+    if (!current() || isAbortError(error)) return
+    if (error instanceof SiteSyncError) {
+      savedSiteId.value = error.siteId ?? siteId
+      syncPending.value = true
+      if (pendingIcon.value === icon) resetPendingIcon()
+      ElMessage.warning('站点资料已保存，但列表尚未同步。请重新同步，无需重复提交。')
+    } else ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
   } finally {
-    saving.value = false
+    if (current()) saving.value = false
   }
 }
 
+async function retryEditorSync() {
+  if (saving.value) return
+  const session = captureSession()
+  const generation = editorGeneration
+  saving.value = true
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation) || generation !== editorGeneration) return
+  saving.value = false
+  if (synced) {
+    syncPending.value = false
+    ElMessage.success('站点列表已同步，当前草稿已保留')
+  } else ElMessage.warning('站点资料已保存，列表仍未同步，请稍后重试。')
+}
+
 async function removeSite(site: Site) {
+  const session = captureSession()
   try {
     await ElMessageBox.confirm(
       site.source === 'manual'
@@ -275,9 +331,12 @@ async function removeSite(site: Site) {
       site.source === 'manual' ? '删除站点' : '忽略站点',
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
     )
+    if (!currentView(session.generation)) return
     await sitesStore.remove(site.id)
+    if (!currentView(session.generation)) return
     ElMessage.success(site.source === 'manual' ? '站点已删除' : '站点已忽略')
   } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
     if (error !== 'cancel' && error !== 'close') {
       if (error instanceof SiteSyncError) ElMessage.warning('站点操作已完成，但列表同步失败，请重新识别。')
       else ElMessage.error('站点删除失败')
@@ -286,15 +345,23 @@ async function removeSite(site: Site) {
 }
 
 async function restoreIgnoredSite(siteId: string) {
+  const session = captureSession()
   try {
     await sitesStore.restore(siteId)
+    if (!currentView(session.generation)) return
     ElMessage.success('站点已恢复，将在下次识别时重新出现')
-  } catch {
-    ElMessage.error('站点恢复失败')
+  } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
+    if (error instanceof SiteSyncError) ElMessage.warning('站点已恢复，但列表尚未同步，请重新识别。')
+    else ElMessage.error('站点恢复失败')
   }
 }
 
 async function uploadIcon(event: Event) {
+  if (saving.value) {
+    if (iconInput.value) iconInput.value.value = ''
+    return
+  }
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   if (!supportedSiteIconTypes.has(file.type) || file.size > maxSiteIconBytes) {
@@ -302,21 +369,28 @@ async function uploadIcon(event: Event) {
     if (iconInput.value) iconInput.value.value = ''
     return
   }
-  if (!selectedSite.value) {
+  if (!savedSiteId.value) {
     pendingIcon.value = file
     if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
     pendingIconPreview.value = URL.createObjectURL(file)
     if (iconInput.value) iconInput.value.value = ''
     return
   }
+  const session = captureSession()
+  const generation = editorGeneration
+  const siteId = savedSiteId.value
+  const current = () => currentView(session.generation) && generation === editorGeneration
   try {
-    await sitesStore.uploadIcon(selectedSite.value.id, file)
-    failedIcons.value.delete(selectedSite.value.id)
+    await sitesStore.uploadIcon(siteId, file)
+    if (!current()) return
+    failedIcons.value.delete(siteId)
     ElMessage.success('站点图标已上传')
-  } catch {
-    ElMessage.error('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件')
+  } catch (error) {
+    if (!current() || isAbortError(error)) return
+    if (error instanceof SiteSyncError) ElMessage.warning('站点图标已上传，但列表尚未同步，请重新识别。')
+    else ElMessage.error('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件')
   } finally {
-    if (iconInput.value) iconInput.value.value = ''
+    if (current() && iconInput.value) iconInput.value.value = ''
   }
 }
 
@@ -327,17 +401,20 @@ function resetPendingIcon() {
   if (iconInput.value) iconInput.value.value = ''
 }
 
-onBeforeUnmount(resetPendingIcon)
+onBeforeUnmount(() => { active = false; editorGeneration += 1; resetPendingIcon() })
 
 async function toggleFavorite(site: Site) {
-  if (favoritePending.value) return
-  favoritePending.value = site.id
+  if (favoritePending.value.has(site.id)) return
+  favoritePending.value.add(site.id)
+  const session = captureSession()
   try {
     await sitesStore.save(site.id, profileFor(site, { favorite: !site.favorite }))
-  } catch {
-    ElMessage.error('收藏状态保存失败')
+  } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
+    if (error instanceof SiteSyncError) ElMessage.warning('收藏状态已保存，但列表尚未同步，请重新识别。')
+    else ElMessage.error('收藏状态保存失败')
   } finally {
-    favoritePending.value = null
+    if (currentView(session.generation)) favoritePending.value.delete(site.id)
   }
 }
 
@@ -445,7 +522,7 @@ function sitesForCategory(category: string) {
             <span class="site-source">{{ sourceLabel(site) }}</span>
             <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
             <div class="row-actions">
-              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending === site.id" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
+              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending.has(site.id)" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
               <ListIconButton :icon="Pencil" :label="`编辑 ${site.name}`" @click="openEditor(site)" />
               <ListIconButton :icon="Trash2" tone="danger" :label="site.source === 'manual' ? `删除 ${site.name}` : `忽略 ${site.name}`" @click="removeSite(site)" />
               <a class="row-open" :class="{ disabled: site.state !== 'running' || !siteLaunchable(site) }" :href="site.state === 'running' && siteLaunchable(site) ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" :aria-disabled="site.state !== 'running' || !siteLaunchable(site)" @click="site.state === 'running' && siteLaunchable(site) && trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
@@ -471,7 +548,7 @@ function sitesForCategory(category: string) {
       </div>
     </section>
 
-    <ElDrawer v-model="editOpen" class="site-editor" :title="selectedSite ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
+    <ElDrawer v-model="editOpen" class="site-editor" :title="savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :class="{ 'site-logo--image': draft.iconUrl && !failedIcons.has(selectedSite.id) }" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
@@ -479,6 +556,7 @@ function sitesForCategory(category: string) {
         </div>
         <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
       </div>
+      <p v-if="syncPending" class="editor-sync-notice" role="status"><CircleAlert :size="18" aria-hidden="true" /><span>站点资料已保存，但列表尚未同步。当前草稿已保留，请重新同步，无需重复提交。</span></p>
       <ElForm ref="siteForm" :model="draft" :rules="formRules" label-position="top">
         <div class="editor-grid">
           <ElFormItem label="站点名称" prop="name" required><ElInput v-model="draft.name" maxlength="120" placeholder="例如 NAS 文件浏览器" /></ElFormItem>
@@ -498,14 +576,14 @@ function sitesForCategory(category: string) {
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
           <div class="icon-upload">
-            <input ref="iconInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
-            <button class="icon-upload__preview" type="button" @click="iconInput?.click()">
+            <input ref="iconInput" :disabled="saving" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
+            <button class="icon-upload__preview" :disabled="saving" type="button" @click="iconInput?.click()">
               <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
               <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
               <Upload v-else :size="20" />
             </button>
             <div>
-              <ElButton @click="iconInput?.click()"><Upload :size="15" />{{ selectedSite ? '更换本地图标' : '上传站点图标' }}</ElButton>
+              <ElButton :disabled="saving" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
               <span>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
             </div>
           </div>
@@ -531,13 +609,16 @@ function sitesForCategory(category: string) {
       </ElForm>
       <template #footer>
         <ElButton @click="editOpen = false">取消</ElButton>
-        <ElButton type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ selectedSite ? '保存站点资料' : '添加站点' }}</ElButton>
+        <ElButton v-if="syncPending" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
+        <ElButton v-else type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
     </ElDrawer>
   </div>
 </template>
 
 <style scoped>
+.editor-sync-notice { display: flex; align-items: flex-start; gap: var(--ncp-space-2); margin: 0 0 var(--ncp-space-4); padding: var(--ncp-space-3); border: 1px solid var(--ncp-line); border-radius: var(--ncp-radius-control); background: var(--ncp-warning-soft); color: var(--ncp-warning-strong); font-size: .82rem; line-height: 1.6; overflow-wrap: anywhere; }
+.editor-sync-notice svg { flex: 0 0 auto; margin-top: 3px; }
 .required-group-label::before{margin-right:4px;color:var(--el-color-danger);content:'*'}.required-group-label small{margin-left:5px;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:500}
 .site-search{width:min(360px,36vw)}.category-filter{width:150px}
 .site-error{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.site-error button{min-height:34px;padding:0 11px;border-radius:8px;background:#fff;color:inherit;font-weight:700}

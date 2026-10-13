@@ -149,3 +149,5 @@ C3兼容性复核：Engine v28.5.1在执行程序前先发101升级；找不到b
 独立审查覆盖精确连接/CloseWrite/预读/回调join、协商失败重试及取消等待、启动预算与晚取消Manager名额；发现测试在截止瞬间sleep可能早于取消回调，改为等待context完成，未放宽结果断言。相关race重复25轮、cleanup重复10轮和全包仅编译通过，Go构建/vet通过；真实隔离CI仍待提交后验收。
 
 最终预算补充：探测的协商及版本gate等待也置于原两秒截止之内，不从握手阶段重新开始计时。新增两项纯fake预算测试，合并相关race×20、全包仅编译/vet/build通过；未设置生产网络或安全配置。
+
+C3完整CI闭环：d146b110e6f21c738ad03764830a9944d53e7cf1的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/runs/38426843759)于16:05:24 UTC通过。实际日志19个Go包通过（terminal 5.848s）、vet、原生/ARM64构建与Compose成功，前端696项单元/206项浏览器成功，发布跳过。Go CI包括现有隔离helper测试；新握手仍为实际SDK加内存Conn，未连接真实Docker或NAS。

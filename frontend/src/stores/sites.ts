@@ -20,8 +20,8 @@ import { captureSession, isAbortError, isCurrentSession, type SessionContext } f
 
 export class SiteSyncError extends Error {
   readonly code = 'SITES_SYNC_FAILED'
-  constructor() {
-    super('站点操作已完成，但列表同步失败。')
+  constructor(readonly siteId?: string) {
+    super('站点操作已完成，但列表尚未同步。')
     this.name = 'SiteSyncError'
   }
 }
@@ -41,6 +41,7 @@ export const useSitesStore = defineStore('sites', () => {
   })
   const ignoredSites = ref<Array<SiteProfileInput & { projectId: string }>>([])
   let refreshSequence = 0
+  let syncedSequence = 0
 
   const visibleSites = computed(() => sites.value.filter((site) => !site.hidden))
 
@@ -52,6 +53,7 @@ export const useSitesStore = defineStore('sites', () => {
     try {
       const [result, ignored] = await Promise.all([requestSites(session.signal), requestIgnoredSites(session.signal)])
       if (sequence !== refreshSequence || !isCurrentSession(session.generation)) return false
+      syncedSequence = sequence
       sites.value = result.sites
       discovery.value = result.discovery
       ignoredSites.value = ignored
@@ -67,18 +69,25 @@ export const useSitesStore = defineStore('sites', () => {
     return true
   }
 
+  async function syncAfterWrite(session: SessionContext, siteId: string) {
+    if (!isCurrentSession(session.generation)) return
+    const pending = refresh(session)
+    const sequence = refreshSequence
+    const synced = await pending
+    if (!synced && syncedSequence < sequence && isCurrentSession(session.generation)) throw new SiteSyncError(siteId)
+  }
+
   async function save(siteId: string, input: SiteProfileInput) {
     const session = captureSession()
     await updateSite(siteId, input, session.signal)
-    if (!isCurrentSession(session.generation)) return
-    await refresh(session)
+    await syncAfterWrite(session, siteId)
   }
 
   async function create(input: SiteProfileInput, icon?: File | null) {
     const session = captureSession()
     const result = await createSite(input, session.signal)
     try {
-      if (icon) await uploadSiteIcon(result.projectId, icon, session.signal)
+      if (icon && isCurrentSession(session.generation)) await uploadSiteIcon(result.projectId, icon, session.signal)
     } catch (error) {
       // Creating a site and uploading its icon are exposed as two HTTP calls.
       // Roll the first call back so a failed icon upload cannot leave a
@@ -89,33 +98,33 @@ export const useSitesStore = defineStore('sites', () => {
       }
       throw error
     }
-    if (isCurrentSession(session.generation)) await refresh(session)
+    await syncAfterWrite(session, result.projectId)
     return result
   }
 
   async function remove(siteId: string) {
     const session = captureSession()
     await deleteSite(siteId, session.signal)
-    if (isCurrentSession(session.generation) && !(await refresh(session))) throw new SiteSyncError()
+    await syncAfterWrite(session, siteId)
   }
 
   async function restore(siteId: string) {
     const session = captureSession()
     await restoreSite(siteId, session.signal)
-    if (isCurrentSession(session.generation)) await refresh(session)
+    await syncAfterWrite(session, siteId)
   }
 
   async function uploadIcon(siteId: string, icon: File) {
     const session = captureSession()
     const result = await uploadSiteIcon(siteId, icon, session.signal)
-    if (isCurrentSession(session.generation)) await refresh(session)
+    await syncAfterWrite(session, siteId)
     return result
   }
 
   async function removeIcon(siteId: string) {
     const session = captureSession()
     await deleteSiteIcon(siteId, session.signal)
-    if (isCurrentSession(session.generation)) await refresh(session)
+    await syncAfterWrite(session, siteId)
   }
 
   async function visit(siteId: string) {

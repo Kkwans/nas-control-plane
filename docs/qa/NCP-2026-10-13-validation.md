@@ -394,3 +394,20 @@
 ## 16:01 UTC 初始化恢复完整CI与像素
 
 ab7c102的[CI 38425178060](https://github.com/Kkwans/nas-control-plane/actions/runs/38425178060)通过696项单元、196项浏览器及Go/Compose；六张实际恢复PNG确认503/409后登录表单与未确认重查，密码清理及窄屏长错误码可读。详细证据和根字号/fullPage/模拟边界见[视觉报告](NCP-2026-10-13-bootstrap-visual.md)。复核成功的说明仍偏红，另用稳定状态码区分中性提示与真正错误，不更改认证流程。
+
+
+## 16:05 UTC 容器握手修复完整CI
+
+d146b11的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/runs/38426843759)全部必需任务通过：19个Go包（terminal5.848s）、vet、原生及ARM64构建、Compose，696项前端单元及206项浏览器。最新握手验证为真实SDK加内存假连接；现有helper由隔离CI执行，不宣称真实Docker/用户NAS验证。
+
+
+## 16:07 UTC 总览摘要实际可读性闭环
+
+5ad0fc2的[CI 38426367491](https://github.com/Kkwans/nas-control-plane/actions/runs/38426367491)通过696项单元/206项浏览器及Go/Compose。十张PNG及逐对JSON确认320至1440五宽度、15/30px根字号下六个摘要字段完整，原390/30px更新时间裁切消失。证据与保留的极窄页头省略等边界见[视觉报告](NCP-2026-10-13-overview-readability-visual.md)。
+
+
+## 16:10 UTC 站点部分成功反馈
+
+- M18-A覆盖save/create/remove/restore/icon/favorite成功写入后的同步失败，显示部分成功而非错误地重放操作。编辑器保留真实创建ID和新草稿，只读同步后继续编辑；所有迟到结果按会话/编辑归属隔离，收藏按资源独立等待。
+- 独立审查发现创建后图标分支仍按旧selectedSite及保存期间可换文件的遗漏，已分别按已保存ID路由、保存期阻止图标变更修复。后置刷新不进入图标补偿删除catch。
+- 完整58文件720项单元（含24项聚焦）、限定lint、类型及生产构建/包预算通过；五项新隔离浏览器fixture覆盖只读重试、返回ID、草稿和旧请求，实际浏览器/截图待验。图标上传失败且补偿删除失败仍是明确M18-B边界。
