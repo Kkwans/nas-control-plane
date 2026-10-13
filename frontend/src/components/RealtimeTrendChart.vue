@@ -8,6 +8,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { EChartsOption } from 'echarts'
 import { Activity } from '@lucide/vue'
 
+import { useReducedMotion } from '@/composables/useReducedMotion'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent, AriaComponent])
@@ -34,7 +35,7 @@ const props = withDefaults(defineProps<{
   history: false,
 })
 
-const reducedMotion = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const reducedMotion = useReducedMotion()
 const availableSeries = computed(() => props.series.filter((item) => item.values.length > 0))
 const hasRightSeries = computed(() => availableSeries.value.some((item) => item.axis === 'right'))
 const leftAxisUnit = computed(() => availableSeries.value.find((item) => item.axis !== 'right')?.unit ?? props.unit ?? '')
@@ -197,7 +198,7 @@ function formatTooltip(value: unknown) {
 }
 
 const option = computed<EChartsOption>(() => ({
-  animation: !reducedMotion,
+  animation: !reducedMotion.value,
   animationDuration: 320,
   aria: {
     enabled: true,

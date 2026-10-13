@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, type App } from 'vue'
+import { mockReducedMotion } from '@/test/reducedMotion'
 import RealtimeTrendChart, { type TrendSeries } from './RealtimeTrendChart.vue'
 
 type ChartSeries = {
@@ -13,6 +14,7 @@ type ChartSeries = {
   symbol?: (value: unknown, params: { dataIndex: number }) => string
 }
 type ChartOption = {
+  animation: boolean
   tooltip: { formatter: (value: unknown) => string }
   xAxis: {
     type: string
@@ -30,7 +32,7 @@ let option: ChartOption | undefined
 vi.mock('vue-echarts', () => ({ default: { props: ['option'], setup: (props: { option: ChartOption }) => () => { option = props.option; return null } } }))
 let app: App | undefined
 let host: HTMLDivElement
-afterEach(() => { app?.unmount(); host?.remove(); app = undefined; option = undefined })
+afterEach(() => { app?.unmount(); host?.remove(); app = undefined; option = undefined; vi.unstubAllGlobals() })
 
 const start = new Date(2026, 9, 13, 0, 0, 0).valueOf()
 const minute = 60_000
@@ -321,5 +323,23 @@ describe('图例、单位与绘图区分层', () => {
     mountChart({ history: true, timestamps: [start], series: [{ name: '温度', color: '#d28a1b', values: [30] }] })
     const format = option!.xAxis.axisLabel.formatter!
     expect([0, 10_000, 20_000].map((offset) => format(start + offset))).toEqual(['00:00:00', '00:00:10', '00:00:20'])
+  })
+})
+
+
+describe('趋势图动态减少动效', () => {
+  it.each([true, false])('初始偏好 %s 与页面打开后的变化同步到图表，数据保持不变', async (initial) => {
+    const mock = mockReducedMotion(initial)
+    mountChart({ timestamps: [start, start + minute], series: [{ name: 'CPU', color: '#000000', values: [20, 25] }] })
+    expect(option!.animation).toBe(!initial)
+    for (const reduce of [!initial, initial]) {
+      mock.change(reduce)
+      await nextTick()
+      expect(option!.animation).toBe(!reduce)
+      expect(option!.series[0]!.data).toEqual([20, 25])
+    }
+    app!.unmount()
+    app = undefined
+    expect(mock.media.removeEventListener).toHaveBeenCalledTimes(1)
   })
 })

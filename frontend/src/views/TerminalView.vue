@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { CircleHelp, Container, Plug, Server, SquareTerminal, Trash2, Unplug } from '@lucide/vue'
 import { ElDialog } from 'element-plus'
 import { Terminal } from '@xterm/xterm'
@@ -26,6 +26,7 @@ import {
   type TerminalCapabilityState,
 } from '@/domain/terminal'
 import { getTerminalTheme } from '@/domain/terminalTheme'
+import { useReducedMotion } from '@/composables/useReducedMotion'
 import { useSystemStore } from '@/stores/system'
 
 type Target = 'host' | 'container'
@@ -39,6 +40,7 @@ const terminalErrorMessages: Record<string, string> = {
   TERMINAL_SESSION_FAILED: '终端会话异常结束，请重新连接。',
 }
 const systemStore = useSystemStore()
+const reducedMotion = useReducedMotion()
 const target = ref<Target>('host')
 const containerId = ref('')
 const state = ref<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle')
@@ -109,6 +111,10 @@ const stats = computed<WorkspaceStat[]>(() => [
   { label: '身份', value: target.value === 'host' ? 'root' : '容器用户' },
 ])
 
+watch(reducedMotion, (reduce) => {
+  if (terminal) terminal.options.cursorBlink = !reduce
+})
+
 onMounted(() => void systemStore.refresh({ inventory: true }))
 
 async function connect() {
@@ -128,7 +134,7 @@ async function connect() {
     return
   }
   terminal = new Terminal({
-    cursorBlink: true,
+    cursorBlink: !reducedMotion.value,
     cursorStyle: 'bar',
     cursorWidth: 2,
     convertEol: true,
