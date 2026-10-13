@@ -9,10 +9,13 @@ import (
 	"os/exec"
 	pathpkg "path"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxConfigBytes = 2 << 20
+
+const defaultRollbackTimeout = 2 * time.Minute
 
 type FileSnapshot struct {
 	Path    string `json:"path"`
@@ -89,7 +92,21 @@ func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (Depl
 	if !targetKnown {
 		return DeployResult{}, errors.New("compose target is not part of project config")
 	}
-	validation, err := manager.Validate(ctx, ValidateRequest{Path: targetPath, Content: request.Content})
+	request.WorkingDirectory = workingDirectory
+	request.TargetPath = targetPath
+	request.ConfigFiles = configFiles
+	return manager.deploy(ctx, request)
+}
+
+// deploy 只接收已通过路径校验和规范化的请求；将事务单独拆出便于隔离文件系统测试。
+func (manager *Manager) deploy(ctx context.Context, request DeployRequest) (DeployResult, error) {
+	unlock, err := manager.lockTarget(ctx, request.TargetPath)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	defer unlock()
+	workingDirectory, targetPath, configFiles := request.WorkingDirectory, request.TargetPath, request.ConfigFiles
+	validation, err := manager.validateContent(ctx, targetPath, request.Content)
 	if err != nil {
 		return DeployResult{}, err
 	}
@@ -105,8 +122,11 @@ func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (Depl
 	if err := os.MkdirAll(backupDirectory, 0o700); err != nil {
 		return DeployResult{}, err
 	}
-	backupPath := pathpkg.Join(backupDirectory, manager.now().UTC().Format("20060102T150405Z")+"-"+pathpkg.Base(targetPath))
-	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
+	backupPath, err := writeBackup(backupDirectory, manager.now().UTC().Format("20060102T150405Z")+"-"+pathpkg.Base(targetPath)+"-*", original)
+	if err != nil {
+		return DeployResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return DeployResult{}, err
 	}
 	if err := atomicWrite(targetPath, []byte(request.Content), info.Mode().Perm()); err != nil {
@@ -114,12 +134,20 @@ func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (Depl
 	}
 	output, deployErr := manager.runner.Deploy(ctx, workingDirectory, configFiles)
 	if deployErr != nil {
+		// 原部署可能已超时或取消；回滚 context 保留追踪信息并设置独立时间预算。
+		// 此预算不保证同步磁盘操作或不响应取消的 runner 在截止时硬退出。
+		timeout := manager.rollbackTimeout
+		if timeout <= 0 {
+			timeout = defaultRollbackTimeout
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
 		restoreErr := atomicWrite(targetPath, original, info.Mode().Perm())
 		if restoreErr == nil {
-			_, restoreErr = manager.runner.Deploy(ctx, workingDirectory, configFiles)
+			_, restoreErr = manager.runner.Deploy(rollbackCtx, workingDirectory, configFiles)
 		}
 		if restoreErr != nil {
-			return DeployResult{}, fmt.Errorf("compose deploy failed and rollback failed: %v; rollback: %w", deployErr, restoreErr)
+			return DeployResult{}, fmt.Errorf("compose deploy failed and rollback failed: %w; rollback: %w", deployErr, restoreErr)
 		}
 		return DeployResult{}, fmt.Errorf("compose deploy failed and previous version was restored: %w", deployErr)
 	}
@@ -130,15 +158,62 @@ func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (Depl
 }
 
 type Manager struct {
-	runner Runner
-	now    func() time.Time
+	runner          Runner
+	now             func() time.Time
+	rollbackTimeout time.Duration
+	locksMu         sync.Mutex
+	targetLocks     map[string]*targetLock
+}
+
+// 锁覆盖校验、备份、部署和回滚；同一 Manager 的不同目标仍可并行。
+type targetLock struct {
+	token chan struct{}
+	users int
+}
+
+func (manager *Manager) lockTarget(ctx context.Context, target string) (func(), error) {
+	manager.locksMu.Lock()
+	if manager.targetLocks == nil {
+		manager.targetLocks = make(map[string]*targetLock)
+	}
+	lock := manager.targetLocks[target]
+	if lock == nil {
+		lock = &targetLock{token: make(chan struct{}, 1)}
+		lock.token <- struct{}{}
+		manager.targetLocks[target] = lock
+	}
+	lock.users++
+	manager.locksMu.Unlock()
+	releaseReference := func() {
+		manager.locksMu.Lock()
+		defer manager.locksMu.Unlock()
+		lock.users--
+		if lock.users == 0 {
+			delete(manager.targetLocks, target)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		releaseReference()
+		return nil, ctx.Err()
+	case <-lock.token:
+		if err := ctx.Err(); err != nil {
+			lock.token <- struct{}{}
+			releaseReference()
+			return nil, err
+		}
+		return func() {
+			lock.token <- struct{}{}
+			releaseReference()
+		}, nil
+	}
 }
 
 func NewManager(runner Runner) *Manager {
 	if runner == nil {
 		runner = OSRunner{}
 	}
-	return &Manager{runner: runner, now: time.Now}
+	return &Manager{runner: runner, now: time.Now, rollbackTimeout: defaultRollbackTimeout}
 }
 
 func (manager *Manager) Read(ctx context.Context, request ReadRequest) (ProjectConfig, error) {
@@ -176,10 +251,14 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	if request.Content == "" || len(request.Content) > maxConfigBytes {
+	return manager.validateContent(ctx, configPath, request.Content)
+}
+
+func (manager *Manager) validateContent(ctx context.Context, configPath, content string) (ValidationResult, error) {
+	if content == "" || len(content) > maxConfigBytes {
 		return ValidationResult{}, errors.New("compose content is empty or too large")
 	}
-	normalized, err := manager.runner.Validate(ctx, pathpkg.Dir(configPath), request.Content)
+	normalized, err := manager.runner.Validate(ctx, pathpkg.Dir(configPath), content)
 	if err != nil {
 		return ValidationResult{Valid: false, Services: make([]string, 0)}, err
 	}
@@ -201,6 +280,9 @@ func (OSRunner) Validate(ctx context.Context, workingDirectory, content string) 
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", fmt.Errorf("compose validation failed: %s", strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
@@ -216,6 +298,9 @@ func (OSRunner) Deploy(ctx context.Context, workingDirectory string, configFiles
 	command.Dir = workingDirectory
 	output, err := command.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", fmt.Errorf("compose deploy failed: %s", strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
@@ -299,4 +384,28 @@ func atomicWrite(target string, content []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(temporaryPath, target)
+}
+
+// CreateTemp 使用独占创建，固定时钟或同秒部署也不会覆盖已有备份。
+func writeBackup(directory, pattern string, content []byte) (string, error) {
+	file, err := os.CreateTemp(directory, pattern)
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
