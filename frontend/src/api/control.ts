@@ -1,5 +1,6 @@
+import { SiteWriteUnknownError } from './siteWriteOutcome'
 import { NcpApiError } from '@/api/system'
-import { parseIgnoredSitesResponse, parseSiteListResponse } from './siteResponse'
+import { parseIgnoredSitesResponse, parseSiteListResponse, parseSiteProfileResponse } from './siteResponse'
 
 export interface UserPreferences {
   refreshIntervalSeconds: number
@@ -207,6 +208,9 @@ export function updateSite(
     method: 'PUT',
     body: JSON.stringify(input),
     ...(signal ? { signal } : {}),
+  }, (value) => {
+    try { return parseSiteProfileResponse(value, { operation: 'update', siteId }) }
+    catch { throw new SiteWriteUnknownError('update', siteId) }
   })
 }
 
@@ -214,7 +218,10 @@ export function createSite(
   input: SiteProfileInput,
   signal?: AbortSignal,
 ): Promise<SiteProfileInput & { projectId: string }> {
-  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input), ...(signal ? { signal } : {}) })
+  return request('/api/v1/sites', { method: 'POST', body: JSON.stringify(input), ...(signal ? { signal } : {}) }, (value) => {
+    try { return parseSiteProfileResponse(value, { operation: 'create' }) }
+    catch { throw new SiteWriteUnknownError('create') }
+  })
 }
 
 export function deleteSite(siteId: string, signal?: AbortSignal): Promise<void> {
@@ -391,7 +398,7 @@ function logParameters(input: {
   return parameters
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, parse?: (value: unknown) => T): Promise<T> {
   const isFormData = init.body instanceof FormData
   const response = await fetch(path, {
     ...init,
@@ -415,10 +422,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       throw new NcpApiError('CONTROL_REQUEST_FAILED', '控制面请求失败。')
     }
   }
-  if (response.status === 204) return undefined as T
+  if (response.status === 204) return parse ? parse(undefined) : undefined as T
+  let value: unknown
   try {
-    return (await response.json()) as T
+    value = await response.json()
   } catch {
+    if (parse) return parse(undefined)
     throw new NcpApiError('CONTROL_RESPONSE_INVALID', '控制面返回了无法识别的数据。')
   }
+  return parse ? parse(value) : value as T
 }

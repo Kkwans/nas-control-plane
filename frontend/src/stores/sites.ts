@@ -15,6 +15,7 @@ import {
   type SiteDiscoverySummary,
   type SiteProfileInput,
 } from '@/api/control'
+import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import { NcpApiError } from '@/api/system'
 import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
@@ -89,12 +90,15 @@ export const useSitesStore = defineStore('sites', () => {
     try {
       if (icon && isCurrentSession(session.generation)) await uploadSiteIcon(result.projectId, icon, session.signal)
     } catch (error) {
-      // Creating a site and uploading its icon are exposed as two HTTP calls.
-      // Roll the first call back so a failed icon upload cannot leave a
-      // successfully-created record that the user then submits again.
+      // 仅保留既有的一次补偿；失败可能是确认丢失，不能重试删除或创建。
+      // 即使 DELETE 已确认，未完成的服务端图标请求仍可能迟到写入。
       if (isCurrentSession(session.generation)) {
-        await deleteSite(result.projectId, session.signal).catch(() => undefined)
-        await refresh(session)
+        try {
+          await deleteSite(result.projectId, session.signal)
+        } catch {
+          throw new SiteWriteUnknownError('icon-compensation', result.projectId)
+        }
+        if (isCurrentSession(session.generation)) await refresh(session)
       }
       throw error
     }

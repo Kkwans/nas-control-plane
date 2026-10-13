@@ -4,7 +4,7 @@ import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { installMockApi } from './mockApi'
 
-const createdId = 'manual-created-fixture'
+const createdId = 'manual:created-fixture'
 const existingId = 'existing-fixture'
 const existingSite = {
   id: existingId, projectId: existingId, name: '原有站点', description: '原有说明',
@@ -32,7 +32,7 @@ async function installSiteFixture(page: Page) {
     const path = new URL(request.url()).pathname
     if (request.method() !== 'GET') {
       writes.push({ method: request.method(), path, body: request.postDataJSON() as Record<string, unknown> })
-      await route.fulfill({ json: { ...request.postDataJSON(), projectId: path === '/api/v1/sites' ? createdId : path.split('/').at(-1) } })
+      await route.fulfill({ json: { ...request.postDataJSON(), projectId: path === '/api/v1/sites' ? createdId : decodeURIComponent(path.split('/').at(-1)!) } })
       return
     }
     reads.push(path)
@@ -181,7 +181,7 @@ for (const width of [390, 1440]) {
     expect(fixture.writes).toHaveLength(1)
     await save(page).click()
     await expect(editor(page)).toHaveCount(0)
-    expect(fixture.writes.map(({ method, path }) => `${method} ${path}`)).toEqual(['POST /api/v1/sites', `PUT /api/v1/sites/${createdId}`])
+    expect(fixture.writes.map(({ method, path }) => `${method} ${path}`)).toEqual(['POST /api/v1/sites', `PUT /api/v1/sites/${encodeURIComponent(createdId)}`])
     expect(fixture.writes[1]!.body.description).toBe('同步期间继续编辑的草稿')
   })
 }

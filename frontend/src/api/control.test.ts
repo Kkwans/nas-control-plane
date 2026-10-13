@@ -81,3 +81,41 @@ describe('monitoring history bounded response errors', () => {
     await expect(requestMetricSamples('7d')).rejects.toMatchObject({ code })
   })
 })
+
+describe('站点写入响应未知结果', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const input = { name: 'Demo', description: '', iconUrl: '', category: '', primaryPort: 8080, launchUrl: '', favorite: false, sortOrder: 0, hidden: false }
+
+  it.each([{}, null, [], { ...input, projectId: 'other' }, { ...input, projectId: 'manual:' }])('POST 坏成功响应 %j 不产生可用身份', async (payload) => {
+    const { createSite } = await import('./control')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createSite(input)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', operation: 'create', siteId: undefined })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['broken-json', 'no-body'])('成功状态的 %s 仍归为未知，而不是普通失败', async (kind) => {
+    const { createSite } = await import('./control')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(kind === 'no-body' ? new Response(null, { status: 204 }) : new Response('{', { status: 201 })))
+    await expect(createSite(input)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', operation: 'create' })
+  })
+
+  it('PUT 保留原目标，拒绝错误身份；编码身份不会被双重解码', async () => {
+    const { updateSite } = await import('./control')
+    const id = 'manual:中文/%2F'
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ...input, projectId: 'manual:other' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...input, projectId: id })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateSite(id, input)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', operation: 'update', siteId: id })
+    await expect(updateSite(id, input)).resolves.toMatchObject({ projectId: id })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/v1/sites/${encodeURIComponent(id)}`)
+  })
+
+  it('合法 POST 返回手工 ID，HTTP 失败保留原始错误码', async () => {
+    const { createSite } = await import('./control')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ...input, projectId: 'manual:demo', source: 'manual' }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'INPUT_INVALID', message: 'invalid' }), { status: 400 })))
+    await expect(createSite(input)).resolves.toMatchObject({ projectId: 'manual:demo' })
+    await expect(createSite(input)).rejects.toMatchObject({ code: 'INPUT_INVALID' })
+  })
+})

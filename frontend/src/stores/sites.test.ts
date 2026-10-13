@@ -168,3 +168,87 @@ describe('站点写入后的列表同步', () => {
     expect(apiMocks.requestSites).not.toHaveBeenCalled()
   })
 })
+
+describe('站点图标补偿结果', () => {
+  beforeEach(() => {
+    invalidateSession()
+    setActivePinia(createPinia())
+    vi.resetAllMocks()
+    apiMocks.createSite.mockResolvedValue({ ...input, projectId: 'manual:demo' })
+    apiMocks.requestSites.mockResolvedValue(list())
+    apiMocks.requestIgnoredSites.mockResolvedValue([])
+  })
+
+  it('图标失败且补偿失败保留创建 ID；后续只读核对不重放写入', async () => {
+    const store = useSitesStore()
+    apiMocks.uploadSiteIcon.mockRejectedValue(new Error('upload response lost'))
+    apiMocks.deleteSite.mockRejectedValue(new Error('delete response lost'))
+    await expect(store.create(input, new File(['icon'], 'icon.png'))).rejects.toMatchObject({
+      code: 'SITE_WRITE_UNKNOWN', operation: 'icon-compensation', siteId: 'manual:demo',
+    })
+    expect(apiMocks.requestSites).not.toHaveBeenCalled()
+    apiMocks.requestSites.mockRejectedValueOnce(new Error('read failed'))
+    expect(await store.refresh()).toBe(false)
+    expect(await store.refresh()).toBe(true)
+    expect(apiMocks.createSite).toHaveBeenCalledTimes(1)
+    expect(apiMocks.uploadSiteIcon).toHaveBeenCalledTimes(1)
+    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
+  })
+
+  it('补偿成功沿用原图标错误，不变成写后同步错误', async () => {
+    const failure = new Error('icon failed')
+    apiMocks.uploadSiteIcon.mockRejectedValue(failure)
+    apiMocks.deleteSite.mockResolvedValue(undefined)
+    await expect(useSitesStore().create(input, new File(['icon'], 'icon.png'))).rejects.toBe(failure)
+    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
+    expect(apiMocks.requestSites).toHaveBeenCalledTimes(1)
+  })
+
+  it('创建身份未知不上传、不删除；更新未知不被改为同步失败', async () => {
+    const { SiteWriteUnknownError } = await import('@/api/siteWriteOutcome')
+    const createUnknown = new SiteWriteUnknownError('create')
+    apiMocks.createSite.mockRejectedValue(createUnknown)
+    apiMocks.updateSite.mockRejectedValue(new SiteWriteUnknownError('update', 'manual:demo'))
+    const store = useSitesStore()
+    await expect(store.create(input, new File(['icon'], 'icon.png'))).rejects.toBe(createUnknown)
+    await expect(store.save('manual:demo', input)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', siteId: 'manual:demo' })
+    expect(apiMocks.uploadSiteIcon).not.toHaveBeenCalled()
+    expect(apiMocks.deleteSite).not.toHaveBeenCalled()
+    expect(apiMocks.requestSites).not.toHaveBeenCalled()
+  })
+
+  it('补偿 DELETE 跨会话完成后不启动旧读取或污染 loading', async () => {
+    const removal = deferred<void>()
+    const failure = new Error('icon failed')
+    apiMocks.uploadSiteIcon.mockRejectedValue(failure)
+    apiMocks.deleteSite.mockReturnValue(removal.promise)
+    const store = useSitesStore()
+    const operation = store.create(input, new File(['icon'], 'icon.png'))
+    const check = expect(operation).rejects.toBe(failure)
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(apiMocks.deleteSite).toHaveBeenCalledTimes(1)
+    invalidateSession()
+    store.resetSessionState()
+    removal.resolve()
+    await check
+    expect(apiMocks.requestSites).not.toHaveBeenCalled()
+    expect(apiMocks.requestIgnoredSites).not.toHaveBeenCalled()
+    expect(store.loading).toBe(false)
+    expect(store.error).toBeNull()
+  })
+
+  it('图标失败在退出后到达，不启动补偿或读取', async () => {
+    const upload = deferred<never>()
+    apiMocks.uploadSiteIcon.mockReturnValue(upload.promise)
+    const store = useSitesStore()
+    const operation = store.create(input, new File(['icon'], 'icon.png'))
+    const check = expect(operation).rejects.toThrow('late')
+    await Promise.resolve()
+    invalidateSession()
+    store.resetSessionState()
+    upload.reject(new Error('late'))
+    await check
+    expect(apiMocks.deleteSite).not.toHaveBeenCalled()
+    expect(apiMocks.requestSites).not.toHaveBeenCalled()
+  })
+})

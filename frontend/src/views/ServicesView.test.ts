@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick, type App } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { invalidateSession } from '@/session/sessionLifecycle'
+import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import type { Site, SiteProfileInput } from '@/api/control'
 import ServicesView from './ServicesView.vue'
@@ -26,6 +27,9 @@ interface ViewState {
   editOpen: boolean
   saving: boolean
   syncPending: boolean
+  unknownWrite: SiteWriteUnknownError | null
+  unknownObservation: string
+  recheckUnknownWrite(): Promise<void>
   savedSiteId: string | null
   openCreator(): void
   openEditor(site: Site): void
@@ -197,4 +201,111 @@ it('创建未完成时不接收第二份图标，避免已创建后的暂存文�
   expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
   created.resolve({ ...profile, projectId: site.id }); await operation
   expect(view.editOpen).toBe(false)
+})
+
+describe('站点写入未知结果的只读核对', () => {
+  it.each(['create', 'update', 'icon-compensation'] as const)('%s 未确认时保留草稿与身份，阻止保存和图标重放', async (operation) => {
+    const error = new SiteWriteUnknownError(operation, operation === 'create' ? undefined : site.id)
+    const create = vi.spyOn(store, 'create').mockRejectedValue(error)
+    const save = vi.spyOn(store, 'save').mockRejectedValue(error)
+    const upload = vi.spyOn(store, 'uploadIcon')
+    if (operation === 'update') view.openEditor(site)
+    else { view.openCreator(); view.draft = { ...profile } }
+    await nextTick(); await view.saveSite(); await nextTick()
+    expect(view.unknownWrite).toBe(error)
+    expect(view.syncPending).toBe(false)
+    expect(view.savedSiteId).toBe(operation === 'create' ? null : site.id)
+    expect(messages.error).not.toHaveBeenCalled()
+    expect(messages.success).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('结果未确认')
+    expect(host.textContent).toContain('只读核对结果')
+    expect(host.querySelector<HTMLInputElement>('input[type=file]')?.disabled).toBe(true)
+    view.draft.name = 'New draft'
+    await view.saveSite()
+    await view.uploadIcon({ target: { files: [new File(['icon'], 'icon.png', { type: 'image/png' })] } } as unknown as Event)
+    await view.recheckUnknownWrite()
+    expect(view.unknownWrite).toBe(error)
+    expect(view.draft.name).toBe('New draft')
+    await view.saveSite()
+    expect(create).toHaveBeenCalledTimes(operation === 'update' ? 0 : 1)
+    expect(save).toHaveBeenCalledTimes(operation === 'update' ? 1 : 0)
+    expect(upload).not.toHaveBeenCalled()
+    if (operation === 'create') expect(view.unknownObservation).toContain('没有可信 ID')
+  })
+
+  it.each(['present', 'hidden', 'ignored', 'both', 'absent'] as const)('已知手工 ID 的 %s 观察保持有限陈述，不解锁提交', async (observation) => {
+    vi.spyOn(store, 'create').mockRejectedValue(new SiteWriteUnknownError('icon-compensation', site.id))
+    view.openCreator(); view.draft = { ...profile }; await nextTick(); await view.saveSite()
+    store.sites = ['present', 'hidden', 'both'].includes(observation) ? [{ ...site, hidden: observation === 'hidden' }] : []
+    store.ignoredSites = ['ignored', 'both'].includes(observation) ? [{ ...profile, projectId: site.id }] : []
+    store.discovery.status = 'unavailable'
+    await view.recheckUnknownWrite()
+    expect(view.unknownWrite).not.toBeNull()
+    if (observation === 'absent') {
+      expect(view.unknownObservation).toContain('本次未发现')
+      expect(view.unknownObservation).toContain('不证明补偿成功')
+    } else if (observation === 'ignored') expect(view.unknownObservation).toContain('已忽略列表中发现')
+    else if (observation === 'both') expect(view.unknownObservation).toContain('两份列表均发现')
+    else expect(view.unknownObservation).toContain('站点目录中发现')
+    await view.saveSite()
+    expect(store.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('读取失败保留未知，之后的迟到服务端记录只改变本次观察', async () => {
+    vi.spyOn(store, 'create').mockRejectedValue(new SiteWriteUnknownError('icon-compensation', site.id))
+    view.openCreator(); view.draft = { ...profile }; await nextTick(); await view.saveSite()
+    vi.mocked(store.refresh).mockResolvedValueOnce(false)
+    await view.recheckUnknownWrite()
+    expect(view.unknownObservation).toContain('未完成')
+    await view.recheckUnknownWrite()
+    expect(view.unknownObservation).toContain('本次未发现')
+    store.sites = [{ ...site, iconUrl: '/late-icon.png' }]
+    await view.recheckUnknownWrite()
+    expect(view.unknownObservation).toContain('站点目录中发现')
+    expect(view.unknownWrite).not.toBeNull()
+    expect(store.create).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['close', 'switch', 'session', 'unmount'])('未知保存迟到不覆盖编辑所有权：%s', async (change) => {
+    const write = deferred<never>()
+    vi.spyOn(store, 'create').mockReturnValue(write.promise)
+    view.openCreator(); view.draft = { ...profile }; await nextTick()
+    const operation = view.saveSite(); await settle()
+    if (change === 'session') invalidateSession()
+    else if (change === 'unmount') { app.unmount(); unmounted = true }
+    else if (change === 'close') view.editOpen = false
+    else view.openEditor({ ...site, id: 'manual:other', name: 'Other' })
+    write.reject(new SiteWriteUnknownError('icon-compensation', site.id)); await operation
+    expect(view.unknownWrite).toBeNull()
+    expect(messages.error).not.toHaveBeenCalled()
+    if (change === 'switch') { expect(view.draft.name).toBe('Other'); expect(view.savedSiteId).toBe('manual:other') }
+  })
+
+  it.each(['close', 'switch', 'session', 'unmount'])('只读核对迟到不影响新编辑会话：%s', async (change) => {
+    vi.spyOn(store, 'create').mockRejectedValue(new SiteWriteUnknownError('create'))
+    view.openCreator(); view.draft = { ...profile }; await nextTick(); await view.saveSite()
+    const read = deferred<boolean>()
+    vi.mocked(store.refresh).mockReturnValueOnce(read.promise)
+    const operation = view.recheckUnknownWrite()
+    if (change === 'session') invalidateSession()
+    else if (change === 'unmount') { app.unmount(); unmounted = true }
+    else {
+      view.editOpen = false
+      if (change === 'switch') { view.openCreator(); view.draft.name = 'Fresh' }
+    }
+    read.resolve(true); await operation
+    expect(view.unknownObservation).toBe('')
+    if (change === 'switch') { expect(view.unknownWrite).toBeNull(); expect(view.draft.name).toBe('Fresh'); expect(view.saving).toBe(false) }
+  })
+
+  it('收藏的坏成功响应暂停同一资源重复写入，其他站点仍可操作', async () => {
+    const save = vi.spyOn(store, 'save').mockRejectedValueOnce(new SiteWriteUnknownError('update', site.id)).mockResolvedValue(undefined)
+    await view.toggleFavorite(site)
+    await view.toggleFavorite(site)
+    await view.toggleFavorite({ ...site, id: 'manual:other' })
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(messages.error).not.toHaveBeenCalled()
+    await nextTick()
+    expect(host.textContent).toContain('收藏保存请求返回成功状态')
+  })
 })

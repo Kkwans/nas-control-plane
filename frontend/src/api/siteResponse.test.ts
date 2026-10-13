@@ -101,14 +101,14 @@ describe('站点读取传输语义', () => {
   })
 })
 
-describe('写入身份解析准备（暂不接入 POST/PUT）', () => {
-  it('在未知写入结果恢复接入前，保持 POST/PUT 的原有响应与传输行为', async () => {
+describe('写入身份解析与传输', () => {
+  it('POST/PUT 坏响应标记未知并保留请求目标与传输行为', async () => {
     const controller = new AbortController()
     const fetch = respond({})
-    await expect(createSite(profile, controller.signal)).resolves.toEqual({})
+    await expect(createSite(profile, controller.signal)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', operation: 'create' })
     fetch.mockResolvedValueOnce(new Response('{}'))
     const siteId = 'compose:a/b%20c'
-    await expect(updateSite(siteId, profile, controller.signal)).resolves.toEqual({})
+    await expect(updateSite(siteId, profile, controller.signal)).rejects.toMatchObject({ code: 'SITE_WRITE_UNKNOWN', operation: 'update', siteId })
     expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/sites', expect.objectContaining({ method: 'POST', signal: controller.signal }))
     expect(fetch).toHaveBeenNthCalledWith(2, `/api/v1/sites/${encodeURIComponent(siteId)}`, expect.objectContaining({ method: 'PUT', signal: controller.signal }))
     expect(fetch).toHaveBeenCalledTimes(2)

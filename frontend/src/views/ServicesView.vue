@@ -36,6 +36,7 @@ import {
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
+import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import ActionButton from '@/components/ActionButton.vue'
 import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
@@ -60,6 +61,9 @@ const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
 const savedSiteId = ref<string | null>(null)
 const syncPending = ref(false)
+const unknownWrite = ref<SiteWriteUnknownError | null>(null)
+const unknownObservation = ref('')
+const unknownFavorites = ref(new Set<string>())
 let editorGeneration = 0
 let active = true
 watch(editOpen, () => { editorGeneration += 1; saving.value = false }, { flush: 'sync' })
@@ -245,6 +249,8 @@ function openEditor(site: Site) {
   saving.value = false
   savedSiteId.value = site.id
   syncPending.value = false
+  unknownWrite.value = null
+  unknownObservation.value = ''
   resetPendingIcon()
   selectedSite.value = site
   draft.value = profileFor(site)
@@ -256,6 +262,8 @@ function openCreator() {
   saving.value = false
   savedSiteId.value = null
   syncPending.value = false
+  unknownWrite.value = null
+  unknownObservation.value = ''
   resetPendingIcon()
   selectedSite.value = null
   draft.value = emptyProfile()
@@ -263,7 +271,7 @@ function openCreator() {
 }
 
 async function saveSite() {
-  if (saving.value || syncPending.value) return
+  if (saving.value || syncPending.value || unknownWrite.value) return
   const session = captureSession()
   const generation = editorGeneration
   const current = () => currentView(session.generation) && generation === editorGeneration
@@ -296,7 +304,11 @@ async function saveSite() {
     ElMessage.success(siteId ? '站点资料已保存' : '站点已添加')
   } catch (error) {
     if (!current() || isAbortError(error)) return
-    if (error instanceof SiteSyncError) {
+    if (error instanceof SiteWriteUnknownError) {
+      savedSiteId.value = error.siteId ?? siteId
+      unknownWrite.value = error
+      unknownObservation.value = ''
+    } else if (error instanceof SiteSyncError) {
       savedSiteId.value = error.siteId ?? siteId
       syncPending.value = true
       if (pendingIcon.value === icon) resetPendingIcon()
@@ -308,7 +320,7 @@ async function saveSite() {
 }
 
 async function retryEditorSync() {
-  if (saving.value) return
+  if (saving.value || unknownWrite.value) return
   const session = captureSession()
   const generation = editorGeneration
   saving.value = true
@@ -319,6 +331,38 @@ async function retryEditorSync() {
     syncPending.value = false
     ElMessage.success('站点列表已同步，当前草稿已保留')
   } else ElMessage.warning('站点资料已保存，列表仍未同步，请稍后重试。')
+}
+
+async function recheckUnknownWrite() {
+  const operation = unknownWrite.value
+  if (saving.value || !operation) return
+  const session = captureSession()
+  const generation = editorGeneration
+  saving.value = true
+  unknownObservation.value = ''
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation) || generation !== editorGeneration || unknownWrite.value !== operation) return
+  saving.value = false
+  if (!synced) {
+    unknownObservation.value = '本次核对未完成，结果仍未确认，可再次只读核对。'
+    return
+  }
+  const id = operation.siteId
+  if (!id) {
+    unknownObservation.value = '列表已读取，但创建响应没有可信 ID，无法确认本次创建结果。请关闭并查看目录，勿直接重复添加。'
+    return
+  }
+  const present = sitesStore.sites.some((site) => site.id === id)
+  const ignored = sitesStore.ignoredSites.some((site) => site.projectId === id)
+  unknownObservation.value = present && ignored
+    ? '本次两份列表均发现该 ID，状态可能正在变化。请关闭并查看目录。'
+    : present
+      ? '本次在站点目录中发现该 ID。请关闭并从目录打开已有站点。'
+      : ignored
+        ? '本次在已忽略列表中发现该 ID，记录仍可见。请关闭并查看已忽略站点。'
+        : '本次未发现该记录；这不证明补偿成功、未来不会出现或图标文件已清理。请关闭并查看目录，勿直接重复添加。'
+  // 核对仅陈述本次观察；两次 GET 非原子，也不能阻止服务端迟到写入。
+  // 即使观察到存在，也不把当前未知操作自动恢复为可提交的新建/更新。
 }
 
 async function removeSite(site: Site) {
@@ -358,7 +402,7 @@ async function restoreIgnoredSite(siteId: string) {
 }
 
 async function uploadIcon(event: Event) {
-  if (saving.value) {
+  if (saving.value || unknownWrite.value) {
     if (iconInput.value) iconInput.value.value = ''
     return
   }
@@ -404,14 +448,15 @@ function resetPendingIcon() {
 onBeforeUnmount(() => { active = false; editorGeneration += 1; resetPendingIcon() })
 
 async function toggleFavorite(site: Site) {
-  if (favoritePending.value.has(site.id)) return
+  if (favoritePending.value.has(site.id) || unknownFavorites.value.has(site.id)) return
   favoritePending.value.add(site.id)
   const session = captureSession()
   try {
     await sitesStore.save(site.id, profileFor(site, { favorite: !site.favorite }))
   } catch (error) {
     if (!currentView(session.generation) || isAbortError(error)) return
-    if (error instanceof SiteSyncError) ElMessage.warning('收藏状态已保存，但列表尚未同步，请重新识别。')
+    if (error instanceof SiteWriteUnknownError) unknownFavorites.value.add(site.id)
+    else if (error instanceof SiteSyncError) ElMessage.warning('收藏状态已保存，但列表尚未同步，请重新识别。')
     else ElMessage.error('收藏状态保存失败')
   } finally {
     if (currentView(session.generation)) favoritePending.value.delete(site.id)
@@ -444,6 +489,11 @@ function sitesForCategory(category: string) {
     <div v-if="sitesStore.error" class="site-error" role="alert">
       <span>{{ sitesStore.error }}</span>
       <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites">重新加载</ActionButton>
+    </div>
+
+    <div v-if="unknownFavorites.size" class="site-error" role="status">
+      <span>部分收藏保存请求返回成功状态，但响应无效，结果未确认。本页已暂停这些站点的重复收藏提交，请只读核对目录。</span>
+      <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
     </div>
 
     <section v-if="!sitesStore.loading || sites.length" class="discovery-status panel" :class="`discovery-status--${discoveryTone}`" aria-labelledby="discovery-status-title">
@@ -522,7 +572,7 @@ function sitesForCategory(category: string) {
             <span class="site-source">{{ sourceLabel(site) }}</span>
             <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
             <div class="row-actions">
-              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending.has(site.id)" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
+              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending.has(site.id)" :disabled="unknownFavorites.has(site.id)" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
               <ListIconButton :icon="Pencil" :label="`编辑 ${site.name}`" @click="openEditor(site)" />
               <ListIconButton :icon="Trash2" tone="danger" :label="site.source === 'manual' ? `删除 ${site.name}` : `忽略 ${site.name}`" @click="removeSite(site)" />
               <a class="row-open" :class="{ disabled: site.state !== 'running' || !siteLaunchable(site) }" :href="site.state === 'running' && siteLaunchable(site) ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" :aria-disabled="site.state !== 'running' || !siteLaunchable(site)" @click="site.state === 'running' && siteLaunchable(site) && trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
@@ -548,13 +598,23 @@ function sitesForCategory(category: string) {
       </div>
     </section>
 
-    <ElDrawer v-model="editOpen" class="site-editor" :title="savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
+    <ElDrawer v-model="editOpen" class="site-editor" :title="unknownWrite ? '站点结果待核对' : savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :class="{ 'site-logo--image': draft.iconUrl && !failedIcons.has(selectedSite.id) }" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
           <span v-else>{{ draft.name.slice(0, 1).toUpperCase() }}</span>
         </div>
         <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
+      </div>
+      <div v-if="unknownWrite" class="editor-sync-notice" role="status">
+        <CircleAlert :size="18" aria-hidden="true" />
+        <div>
+          <p>{{ unknownWrite.message }}</p>
+          <p v-if="unknownWrite.siteId">记录 ID：{{ unknownWrite.siteId }}</p>
+          <p>当前草稿已保留，提交和图标上传已暂停。可只读核对，或关闭后查看目录。</p>
+          <p>两次列表读取并非原子快照，不能确认图标清理或阻止服务端迟到写入。</p>
+          <p v-if="unknownObservation">{{ unknownObservation }}</p>
+        </div>
       </div>
       <p v-if="syncPending" class="editor-sync-notice" role="status"><CircleAlert :size="18" aria-hidden="true" /><span>站点资料已保存，但列表尚未同步。当前草稿已保留，请重新同步，无需重复提交。</span></p>
       <ElForm ref="siteForm" :model="draft" :rules="formRules" label-position="top">
@@ -576,14 +636,14 @@ function sitesForCategory(category: string) {
           <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
           <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
           <div class="icon-upload">
-            <input ref="iconInput" :disabled="saving" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
-            <button class="icon-upload__preview" :disabled="saving" type="button" @click="iconInput?.click()">
+            <input ref="iconInput" :disabled="saving || Boolean(unknownWrite)" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
+            <button class="icon-upload__preview" :disabled="saving || Boolean(unknownWrite)" type="button" @click="iconInput?.click()">
               <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
               <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
               <Upload v-else :size="20" />
             </button>
             <div>
-              <ElButton :disabled="saving" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
+              <ElButton :disabled="saving || Boolean(unknownWrite)" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
               <span>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
             </div>
           </div>
@@ -608,8 +668,9 @@ function sitesForCategory(category: string) {
         </div>
       </ElForm>
       <template #footer>
-        <ElButton @click="editOpen = false">取消</ElButton>
-        <ElButton v-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
+        <ElButton @click="editOpen = false">{{ unknownWrite ? '关闭并查看目录' : '取消' }}</ElButton>
+        <ElButton v-if="unknownWrite" class="editor-sync-action" type="primary" :loading="saving" @click="recheckUnknownWrite">只读核对结果</ElButton>
+        <ElButton v-else-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
         <ElButton v-else type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
     </ElDrawer>
