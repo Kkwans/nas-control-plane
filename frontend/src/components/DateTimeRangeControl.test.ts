@@ -166,6 +166,27 @@ describe('DateTimeRangeControl 真实 tooltip 交互', () => {
     expect(popper(button).parentElement).toBe(main)
   })
 
+  it('待执行的导航帧移走焦点会关闭帮助，先完成导航帧后聚焦则持续显示', async () => {
+    const { buttons } = await mount()
+    const button = buttons[0]!
+    main!.tabIndex = -1
+    // router.afterEach 在 requestAnimationFrame 中将焦点交给 main。
+    // 冻结时钟下若先聚焦按钮，再推进时钟，就会实际触发 blur。
+    requestAnimationFrame(() => main!.focus())
+    button.focus()
+    await flush()
+    expect(document.activeElement).toBe(main)
+    expect(button.hasAttribute('aria-describedby')).toBe(false)
+
+    requestAnimationFrame(() => main!.focus())
+    await vi.advanceTimersByTimeAsync(32)
+    expect(document.activeElement).toBe(main)
+    button.focus()
+    await flush()
+    expect(document.activeElement).toBe(button)
+    popper(button)
+  })
+
   it('独立脱离文档挂载时回退到自身，保留帮助且不创建 landmark', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

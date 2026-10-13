@@ -348,8 +348,17 @@ for (const scale of [1, 2]) {
         button.addEventListener('click', () => button.setAttribute('data-fixture-clicks', String(Number(button.getAttribute('data-fixture-clicks')) + 1)))
       }
     })
+    await expect(page.locator('.date-time-range')).toHaveAttribute('aria-busy', 'false')
+    await expect(now).toBeEnabled()
+    await expect(clear).toBeEnabled()
+    // open() 只推进 1ms；先执行 router.afterEach 的导航聚焦帧，
+    // 否则后面的 250ms 会把焦点从按钮交回 main，真实触发 blur 并关闭帮助。
+    await page.clock.runFor(32)
+    await expect(page.locator('#app-main')).toBeFocused()
     await now.focus()
+    await expect(now).toBeFocused()
     await page.clock.runFor(250)
+    await expect(now).toBeFocused()
     await expect(tooltip).toBeVisible()
     const id = await tooltip.getAttribute('id')
     expect(id).toBeTruthy()
