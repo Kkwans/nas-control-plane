@@ -174,3 +174,13 @@ B 的实现只修改源代码及测试，未更新部署配置或凭据、未运
 **B 最终验证（2026-10-13 23:24 UTC）**：固定大小时间额度与最多两个在途许可已经实现，整个 bootstrap→Login 只消耗一次。认证前置校验顺序保持不变；已取消请求不扣预算，解码后取消沿用503标准错误而非隐式空200。独立审查通过新组 race 十轮和完整OpenAPI验证；实施者原auth/Origin十二项精确命名recorder/临时SQLite回归 race 通过。未运行完整含监听器的HTTP测试包。主任务以da0efba为基线的精确九文件快照通过新组race三轮、完整OpenAPI、全部命令构建及相关vet；前端90文件/1841项完整单元、全量lint、类型、构建及包预算通过。前端运行代码无改动：标准AUTH_RATE_LIMITED维持setup/anonymous、恢复busy且不自动核对或重放，用户手动重试可成功；非标准代理429仍可能走既有只读调和，不将二者混为一谈。
 
 旧测试实证扫描中，同一handler最多两次有效凭据调用、全部串行，因此无需放宽默认预算或改旧测试才能通过。新源代码尚待远端CI，未作NAS实机或公网攻击压力验证。
+
+## 数据库主键元数据身份修复（2026-10-13 23:37 UTC）
+
+发现并以未改生产函数的临时SQLite目录fixture复现：原`listColumns`只用约束名和表schema关联`table_constraints`与`key_column_usage`。MySQL三张表同名PRIMARY使目标id列重复三次；PostgreSQL父表PK与无主键子表FK同名，错误把非唯一owner_id识别成主键，原逐行删除谓词在测试数据中删除两行。该证据来自内存模拟目录，不是实际MySQL/PostgreSQL或生产数据操作。
+
+最小修复在关联中补齐constraint_catalog、constraint_schema及table_name；MySQL排除`referenced_table_name`非空的外键行，避免同表外键与索引命名空间冲突。不以DISTINCT掩盖错配，不改变公开API、用户SQL或数据。保留引擎自身标识符比较语义，不强制LOWER或二进制排序。审查发现MySQL的TABLE_CONSTRAINTS没有TABLE_CATALOG，该不兼容假设已移除，模拟目录也不虚构该列。
+
+五组回归覆盖重复主键名、跨表外键误授权、同表MySQL外键名称冲突、合法复合键/方言引号/占位符，以及UNIQUE与其他schema反例。主任务以cf62e07为基线的精确两文件快照通过完整database包race、完整OpenAPI、全部命令构建及database vet；实施者新组race三轮、独立复审race通过。没有前端源码或接口变更；远端完整CI及真实引擎集成尚未验证。
+
+依据：[PostgreSQL约束重名说明](https://www.postgresql.org/docs/current/information-schema.html)、[MySQL目录列定义](https://dev.mysql.com/doc/refman/8.4/en/information-schema-table-constraints-table.html)、[MySQL官方目录视图实现](https://raw.githubusercontent.com/mysql/mysql-server/8.4/sql/dd/impl/system_views/key_column_usage.cc)。SQLite关系fixture不覆盖实际引擎的权限可见性、目录版本与大小写行为，不能据此声称NAS实机通过。

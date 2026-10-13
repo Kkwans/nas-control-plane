@@ -596,8 +596,11 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		placeholderSchema, placeholderTable = "$1", "$2"
 	}
 	generatedSelect := "'' AS identity_generation, '' AS generated_kind"
+	primaryKeyFilter := ""
 	if driver == DriverMySQL {
 		generatedSelect = "c.extra, '' AS generated_kind"
+		// MySQL 的外键与索引约束可能同名；主键不能借用外键列。
+		primaryKeyFilter = " AND ku.referenced_table_name IS NULL"
 	} else if driver == DriverPostgreSQL {
 		generatedSelect = "c.is_identity, c.is_generated"
 	}
@@ -608,8 +611,12 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			SELECT ku.table_schema, ku.table_name, ku.column_name
 			FROM information_schema.table_constraints tc
 			JOIN information_schema.key_column_usage ku
-			  ON tc.constraint_name = ku.constraint_name AND tc.table_schema = ku.table_schema
-			WHERE tc.constraint_type = 'PRIMARY KEY'
+			  ON tc.constraint_catalog = ku.constraint_catalog
+			 AND tc.constraint_schema = ku.constraint_schema
+			 AND tc.constraint_name = ku.constraint_name
+			 AND tc.table_schema = ku.table_schema
+			 AND tc.table_name = ku.table_name
+			WHERE tc.constraint_type = 'PRIMARY KEY'` + primaryKeyFilter + `
 		) k ON k.table_schema = c.table_schema AND k.table_name = c.table_name AND k.column_name = c.column_name
 		WHERE c.table_schema = ` + placeholderSchema + ` AND c.table_name = ` + placeholderTable + `
 		ORDER BY c.ordinal_position`
