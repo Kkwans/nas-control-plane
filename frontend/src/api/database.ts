@@ -3,6 +3,7 @@ import { requestDatabaseInsert } from './databaseInsertOutcome'
 import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
 import { requestDatabaseQuery } from './databaseQueryOutcome'
 import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
+import { assertDatabaseCatalogIdentity, assertDatabaseRowsIdentity } from './databaseReadIdentity'
 import { decodeDatabaseConnectionDiagnostic, requestDatabaseConnect } from './databaseConnectionResponse'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
@@ -129,7 +130,10 @@ export async function connectDatabase(connection: DatabaseConnection, signal?: A
 }
 
 export async function loadDatabaseCatalog(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseCatalog> {
-  return decodeDatabaseCatalog(await request<unknown>('/api/v1/databases/catalog', connection, signal))
+  const sourceId = connection.sourceId
+  const catalog = decodeDatabaseCatalog(await request<unknown>('/api/v1/databases/catalog', connection, signal))
+  assertDatabaseCatalogIdentity(catalog, sourceId)
+  return catalog
 }
 
 export async function loadDatabaseRows(input: DatabaseConnection & {
@@ -140,7 +144,11 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
   sortColumn?: string
   sortDirection?: string
 }, signal?: AbortSignal): Promise<DatabaseRows> {
-  return decodeDatabaseRows(await request<unknown>('/api/v1/databases/rows', input, signal))
+  // PostgreSQL/MySQL 会补全缺省或空 schema；表名与非空 schema 必须精确对应。
+  const target = { table: input.table, schema: input.schema || undefined }
+  const rows = decodeDatabaseRows(await request<unknown>('/api/v1/databases/rows', input, signal))
+  assertDatabaseRowsIdentity(rows, target)
+  return rows
 }
 
 export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string; resultMode?: DatabaseQueryResultMode }, signal?: AbortSignal): Promise<QueryResult> {

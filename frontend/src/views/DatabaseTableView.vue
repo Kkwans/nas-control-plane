@@ -51,6 +51,7 @@ import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWr
 import { databaseColumnContract } from '@/domain/database/columnContract'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
+import { assertDatabaseRowsIdentity } from '@/api/databaseReadIdentity'
 import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
 import ConfirmDangerDialog from '@/components/ConfirmDangerDialog.vue'
 import SqlEditor from '@/components/SqlEditor.vue'
@@ -402,6 +403,7 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
   if (!table.value || schemaReloadPending.value && schemaReadSequence !== schemaReloadSequence) return { status: 'stale' }
   const sequence = ++rowsSequence
   const requestKey = routeKey.value
+  const requestedTable = { schema: table.value.schema, table: table.value.name }
   rowsController?.abort()
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, session.signal])
@@ -411,14 +413,15 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
   try {
     const result = await loadDatabaseRows({
       ...connection(),
-      schema: table.value.schema,
-      table: table.value.name,
+      ...requestedTable,
       limit: pageSize.value,
       offset: requestedOffset,
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
     }, signal)
     if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || !isCurrentSession(session.generation)) return { status: 'stale' }
+    // 页面目标来自目录，空 schema 也是精确身份；坏响应不能借用当前路由的编辑权。
+    assertDatabaseRowsIdentity(result, requestedTable)
     // 先核对最新目录合同，再授予行编辑归属；不接管、不覆盖已经打开的草稿。
     acceptedRowsContract.value = { targetKey: requestKey, columns: databaseColumnContract(result.table?.columns) }
     tableRows.value = result
@@ -432,6 +435,7 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
     return { status: 'success' }
   } catch (error) {
     if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || !isCurrentSession(session.generation) || isAbortError(error)) return { status: 'stale' }
+    if (error instanceof NcpApiError && error.code === 'DATABASE_RESPONSE_INVALID') loadedRowsTargetKey.value = null
     const failure = toErrorState(error, '表数据读取失败。')
     if (reportError) errorState.value = failure
     return { status: 'failed', error: failure }

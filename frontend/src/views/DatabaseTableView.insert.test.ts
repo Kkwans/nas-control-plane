@@ -134,7 +134,9 @@ beforeEach(() => {
     catalogs: { a: { source: source('a'), tables: [table, { ...table, name: 'other' }] }, b: { source: source('b'), tables: [table] } },
     source, connection: (sourceId: string) => ({ sourceId }),
   })
-  mocks.rows.mockResolvedValue(tableRows)
+  mocks.rows.mockImplementation(async (input: { table: string; schema?: string }) => ({
+    ...tableRows, table: { ...tableRows.table, name: input.table, schema: input.schema ?? '' },
+  }))
   mocks.execute.mockResolvedValue(result())
 })
 afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.unstubAllGlobals() })
