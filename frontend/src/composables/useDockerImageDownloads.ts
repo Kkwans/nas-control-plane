@@ -48,6 +48,8 @@ export function useDockerImageDownloads(
   const { pageSize: downloadPageSize } = useListPreference('docker.image-downloads')
   const subscriptions = new Map<string, JobSubscription>()
   const createdJobReferences = new Map<string, string>()
+  // 归属独立于可见历史列表；已通知任务被列表移除后也不能再次登记通知。
+  const observedCreatedJobs = new Set<string>()
 
   const session = captureSession()
   let disposed = false
@@ -101,6 +103,12 @@ export function useDockerImageDownloads(
     observations.value.set(job.id, { interrupted: false, lastObservedAt: new Date().toISOString() })
     if (!isLiveJob(job)) closeSubscription(job.id)
     downloadJobs.value = [...downloadJobs.value]
+    notifyCreatedDownloadResult(job)
+    return job
+  }
+
+  function notifyCreatedDownloadResult(job: JobSnapshot) {
+    if (!alive()) return
     const createdReference = createdJobReferences.get(job.id)
     if (!isLiveJob(job) && createdReference !== undefined) {
       createdJobReferences.delete(job.id)
@@ -115,18 +123,23 @@ export function useDockerImageDownloads(
         ElMessage.error(job.error || job.message || `镜像 ${createdReference} 拉取失败`)
       }
     }
-    return job
   }
 
   // 新建任务也交给同一个观察者，避免 Hub 与下载页各自创建进度流。
   function observeCreatedDownload(job: JobSnapshot) {
     if (!alive() || deletedJobs.has(job.id)) return
-    const previous = downloadJobs.value.find((item) => item.id === job.id)
-    if ((!previous || isLiveJob(previous)) && !createdJobReferences.has(job.id)) {
+    // 已结算归属的重复回调不能在列表移除记录后用旧运行态重新打开观察。
+    if (observedCreatedJobs.has(job.id) && !createdJobReferences.has(job.id)) return
+    if (!observedCreatedJobs.has(job.id)) {
+      observedCreatedJobs.add(job.id)
       createdJobReferences.set(job.id, job.reference || '未命名镜像')
     }
     const current = upsertDownloadJob(job)
-    if (current) followDownloadJob(current)
+    if (current) {
+      // GET 可能先于创建响应取得终态；即使迟到快照被拒绝，也处理已接受的结果。
+      notifyCreatedDownloadResult(current)
+      followDownloadJob(current)
+    }
   }
 
   function localImageForJob(job: JobSnapshot) {
@@ -264,8 +277,7 @@ export function useDockerImageDownloads(
       }
       if (!alive()) return
       const next = await retryJob(job.id)
-      const current = upsertDownloadJob(next)
-      if (current) followDownloadJob(current)
+      observeCreatedDownload(next)
     } catch (caught) {
       if (alive()) ElMessage.error(caught instanceof NcpApiError ? caught.message : '任务重试失败。')
     } finally {
@@ -327,6 +339,7 @@ export function useDockerImageDownloads(
     for (const subscription of subscriptions.values()) subscription.close()
     subscriptions.clear()
     createdJobReferences.clear()
+    observedCreatedJobs.clear()
     session.signal.removeEventListener('abort', dispose)
   }
   session.signal.addEventListener('abort', dispose, { once: true })
