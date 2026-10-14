@@ -246,10 +246,16 @@ async function captureState(page: Page, draft: boolean) {
       return true
     }
     function diagnostic(element: HTMLElement) {
+      const style = getComputedStyle(element)
       return {
         tag: element.tagName, visible: visible(element), bounds: element.getBoundingClientRect().toJSON(),
         role: element.getAttribute('role'), ariaHidden: element.closest('[aria-hidden="true"]') !== null,
         aria: Object.fromEntries([...element.attributes].filter((attribute) => attribute.name.startsWith('aria-')).map((attribute) => [attribute.name, attribute.value])),
+        paint: {
+          color: style.color, backgroundColor: style.backgroundColor, position: style.position,
+          zIndex: style.zIndex, transform: style.transform, isolation: style.isolation,
+          opacity: style.opacity, visibility: style.visibility, pointerEvents: style.pointerEvents,
+        },
       }
     }
     const notices = [...document.querySelectorAll<HTMLElement>('.insert-outcome-warning')]
@@ -294,6 +300,13 @@ async function captureState(page: Page, draft: boolean) {
           ...describeField(input), type: input.type, checked: input.checked, readOnly: input.readOnly,
           selectionStart: input.selectionStart, selectionEnd: input.selectionEnd, ...diagnostic(input),
         })),
+        selectPaintAncestors: [...panel.querySelectorAll<HTMLElement>('.el-select__placeholder > span')].map((span) => {
+          const chain = []
+          for (let node: HTMLElement | null = span; node; node = node.parentElement) {
+            chain.push({ class: node.className, ...diagnostic(node) })
+          }
+          return chain
+        }),
       },
       controls: selectors.flatMap((selector) => [...panel.querySelectorAll<HTMLElement>(selector)].map((element, index) => {
         const bounds = element.getBoundingClientRect()
