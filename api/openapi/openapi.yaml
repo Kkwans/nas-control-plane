@@ -3970,7 +3970,9 @@ components:
         name: { type: string }
         path: { type: string }
         type: { type: string, enum: [directory, file, symlink, other] }
-        readable: { type: boolean }
+        readable:
+          type: boolean
+          description: 当前 Agent 身份的瞬时读取权限提示，供路径选择使用，不保证后续打开、读取或挂载成功。Linux 检查有效身份权限并跟随符号链接，不打开目录条目；特殊文件可能为 true，但不表示已经打开或可以立即读取。非 Linux 保留原有打开探测行为。
     DockerImageInventory:
       type: object
       required: [collectedAt, images]

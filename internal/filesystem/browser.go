@@ -74,12 +74,13 @@ func (r Request) Normalize() (Request, error) {
 }
 
 type Browser struct {
-	readDir func(string) ([]fs.DirEntry, error)
-	now     func() time.Time
+	readDir         func(string) ([]fs.DirEntry, error)
+	checkReadAccess func(string) error
+	now             func() time.Time
 }
 
 func NewBrowser() *Browser {
-	return &Browser{readDir: os.ReadDir, now: time.Now}
+	return &Browser{readDir: os.ReadDir, checkReadAccess: checkEntryReadAccess, now: time.Now}
 }
 
 func (b *Browser) List(ctx context.Context, request Request) (Page, error) {
@@ -112,6 +113,9 @@ func (b *Browser) List(ctx context.Context, request Request) (Page, error) {
 		}
 		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
 	})
+	if err := ctx.Err(); err != nil {
+		return Page{}, err
+	}
 	offset := 0
 	if normalized.Cursor != "" {
 		offset, _ = strconv.Atoi(normalized.Cursor)
@@ -129,11 +133,18 @@ func (b *Browser) List(ctx context.Context, request Request) (Page, error) {
 			return Page{}, err
 		}
 		path := filepath.Join(normalized.Path, item.Name())
-		result = append(result, Entry{Name: item.Name(), Path: path, Type: entryType(item), Readable: entryReadable(path)})
+		readable := b.checkReadAccess(path) == nil
+		if err := ctx.Err(); err != nil {
+			return Page{}, err
+		}
+		result = append(result, Entry{Name: item.Name(), Path: path, Type: entryType(item), Readable: readable})
 	}
 	page := Page{Path: normalized.Path, Parent: filepath.Dir(normalized.Path), Entries: result, CollectedAt: b.now().UTC()}
 	if end < len(entries) {
 		page.NextCursor = strconv.Itoa(end)
+	}
+	if err := ctx.Err(); err != nil {
+		return Page{}, err
 	}
 	return page, nil
 }
@@ -153,15 +164,6 @@ func entryType(entry fs.DirEntry) EntryType {
 		return EntryFile
 	}
 	return EntryOther
-}
-
-func entryReadable(path string) bool {
-	handle, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	_ = handle.Close()
-	return true
 }
 
 func coded(code string, err error) error {
