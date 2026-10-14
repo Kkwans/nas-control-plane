@@ -164,8 +164,12 @@ func returnsRows(driver Driver, statement string) bool {
 // 不判断 RETURNING/CTE 主语句，也不会改写提交给驱动的 SQL 原文。
 func leadingQueryKeyword(driver Driver, statement string) string {
 	for len(statement) > 0 {
-		for len(statement) > 0 && sqlSpace(statement[0]) {
-			statement = statement[1:]
+		for {
+			size := querySpacePrefix(driver, statement)
+			if size == 0 {
+				break
+			}
+			statement = statement[size:]
 		}
 		if strings.HasPrefix(statement, "--") &&
 			(driver != DriverMySQL || (len(statement) > 2 && (statement[2] <= ' ' || statement[2] == 0x7f))) {
@@ -206,6 +210,18 @@ func leadingQueryKeyword(driver Driver, statement string) string {
 		return strings.ToUpper(statement[:end])
 	}
 	return ""
+}
+
+// querySpacePrefix 仅在词法 token 起点调用。SQLite 将完整 UTF-8 BOM 视为空白；
+// 不改写原 SQL，也不将其他 Unicode 字符或标识符内部的 BOM 归一化。
+func querySpacePrefix(driver Driver, statement string) int {
+	if len(statement) > 0 && sqlSpace(statement[0]) {
+		return 1
+	}
+	if driver == DriverSQLite && strings.HasPrefix(statement, "\xef\xbb\xbf") {
+		return 3
+	}
+	return 0
 }
 
 func sqlSpace(value byte) bool {

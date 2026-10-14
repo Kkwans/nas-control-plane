@@ -155,8 +155,8 @@ func (s *cteScanner) cteBody() bool {
 func (s *cteScanner) next() cteToken {
 	for s.position < len(s.statement) {
 		c := s.statement[s.position]
-		if sqlSpace(c) {
-			s.position++
+		if size := querySpacePrefix(s.driver, s.statement[s.position:]); size > 0 {
+			s.position += size
 			continue
 		}
 		if strings.HasPrefix(s.statement[s.position:], "--") {
@@ -190,6 +190,11 @@ func (s *cteScanner) next() cteToken {
 		s.position++
 		for s.position < len(s.statement) && (cteWordStart(s.statement[s.position]) || cteDigit(s.statement[s.position])) {
 			s.position++
+		}
+		// SQLite 的裸标识符允许非 ASCII 字节；不能在标识符内部把 BOM 拆为空白。
+		// 这些标识符仍超出本扫描器范围，保留未知词法回退。
+		if s.driver == DriverSQLite && s.position < len(s.statement) && s.statement[s.position] >= 0x80 {
+			return cteToken{}
 		}
 		word := s.statement[start:s.position]
 		if s.driver == DriverPostgreSQL && len(word) == 1 {
