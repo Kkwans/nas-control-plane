@@ -708,7 +708,16 @@ async function refreshUnresolvedInventory() {
           </ol>
         </dd>
         <dt>网络</dt><dd>{{ previewInput.network?.name || 'Docker 默认网络' }}<span v-if="previewInput.network?.subnet">（{{ previewInput.network.subnet }}）</span></dd>
-        <dt>端口</dt><dd>{{ previewInput.ports?.length ? previewInput.ports.map((port) => `${port.hostPort || '随机'} → ${port.containerPort}/${port.protocol || 'tcp'}`).join('；') : '未映射' }}</dd>
+        <dt>端口</dt><dd>
+          <ol v-if="previewInput.ports?.length" class="path-mappings" aria-label="端口映射">
+            <li v-for="(port, index) in previewInput.ports" :key="index">
+              <span>主机 IP：<code v-if="port.hostIp">{{ port.hostIp }}</code><template v-else>未指定（由 Docker 默认配置决定）</template></span>
+              <span>主机端口：{{ port.hostPort || '随机' }}</span>
+              <span>容器端口：{{ port.containerPort }}/{{ port.protocol || 'tcp' }}</span>
+            </li>
+          </ol>
+          <template v-else>未映射</template>
+        </dd>
         <dt>启动参数</dt><dd><code class="command-preview">{{ previewInput.command?.length ? JSON.stringify(previewInput.command) : '使用镜像默认命令' }}</code></dd>
         <dt>设备映射</dt><dd>
           {{ previewInput.devices?.length || 0 }} 项
