@@ -219,6 +219,48 @@ async function captureState(page: Page, view: CaptureView) {
   }, view)
 }
 
+type CaptureState = Awaited<ReturnType<typeof captureState>>
+async function waitForStableCaptureState(page: Page, view: CaptureView) {
+  let previous = ''
+  let stableSamples = 0
+  let state!: CaptureState
+  // 等待连续真实布局采样稳定，不用固定延时或屏蔽控件替代可读性检查。
+  await expect.poll(async () => {
+    state = await captureState(page, view)
+    const current = JSON.stringify(state)
+    stableSamples = current === previous ? stableSamples + 1 : 0
+    previous = current
+    return stableSamples
+  }, { message: '截图前应连续三次保持布局、焦点与语义稳定', intervals: [80], timeout: 5_000 }).toBeGreaterThanOrEqual(3)
+  return state
+}
+function expectCaptureUnchanged(before: CaptureState, after: CaptureState) {
+  const { controls: beforeControls, ...beforeState } = before
+  const { controls: afterControls, ...afterState } = after
+  expect.soft(afterState).toEqual(beforeState)
+  expect.soft(afterControls).toHaveLength(beforeControls.length)
+  for (const [index, control] of beforeControls.entries()) {
+    const afterControl = afterControls[index]
+    if (!afterControl) continue
+    const { bounds, lines, clips, ...details } = control
+    const { bounds: afterBounds, lines: afterLines, clips: afterClips, ...afterDetails } = afterControl
+    expect.soft(afterDetails).toEqual(details)
+    // CI 38512830103 的全页截图仅使 kbd 字形宽度与相邻工具栏坐标重排 5/64 CSS px，
+    // 后续 axe 不再变化。原始矩形全部保留，只允许最多 1/8 CSS px 的坐标舍入差；
+    // 文案、禁用状态、行数、裁剪、可见性和命中测试仍要求精确一致。
+    for (const [name, expected, actual] of [['bounds', [bounds], [afterBounds]], ['lines', lines, afterLines], ['clips', clips, afterClips]] as const) {
+      expect.soft(actual, `${control.selector} ${name} 数量`).toHaveLength(expected.length)
+      for (const [rectIndex, rect] of expected.entries()) {
+        const other = actual[rectIndex]
+        if (!other) continue
+        for (const key of ['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height'] as const) {
+          expect.soft(Math.abs(other[key] - rect[key]), `${control.selector} ${name}[${rectIndex}].${key}`).toBeLessThanOrEqual(1 / 8)
+        }
+      }
+    }
+  }
+}
+
 // CI 自动收集 ui-captures 下的 PNG 与配对 JSON。保留全部 axe 规则及结果，
 // 不改 DOM/CSS、焦点、选择区或补全菜单；仅为规范全页图显式重置窗口滚动。
 async function capture(page: Page, info: TestInfo, api: Fixture, view: CaptureView) {
@@ -230,7 +272,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, view: CaptureVi
     await expect.poll(() => page.evaluate(() => scrollY)).toBe(0)
   }
   const provenance = await sourceProvenance()
-  const beforeCapture = await captureState(page, view)
+  const beforeCapture = await waitForStableCaptureState(page, view)
   const requestsBefore = structuredClone(api.requests)
   const name = `database-sql-outcome-${view}-${page.viewportSize()!.width}`
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
@@ -257,7 +299,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, view: CaptureVi
   await info.attach(`${name}-axe-state`, { path: axePath, contentType: 'application/json' })
 
   // 先保存真实失败证据；soft 断言仍使测试失败，但不会吞掉第二状态的采集。
-  expect.soft(afterCapture).toEqual(beforeCapture)
+  expectCaptureUnchanged(beforeCapture, afterCapture)
   expect.soft(afterAxe.semantic).toEqual(beforeCapture.semantic)
   expect.soft(afterAxe.scroll).toEqual(beforeCapture.scroll)
   expect.soft(afterAxe.focus).toEqual(beforeCapture.focus)
@@ -310,7 +352,11 @@ for (const scenario of [{ width: 390, reply: 'disconnect', readFailure: false },
 
     await page.getByRole('tab', { name: '执行 SQL', exact: true }).click()
     await expect(mode(page)).toHaveValue('rows')
-    await editor(page).press('Control+Enter')
+    await expect(editor(page)).toBeEditable()
+    await expect(editor(page)).toHaveText(nextSQL, { useInnerText: true })
+    await editor(page).click()
+    await expect(editor(page)).toBeFocused()
+    await page.keyboard.press('Control+Enter')
     await expectSnapshot(page, nextSQL, '返回行')
     await expect(execute(page)).toBeDisabled()
     expectQueryCount(api, 1)

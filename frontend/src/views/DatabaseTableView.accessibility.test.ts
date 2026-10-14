@@ -165,4 +165,11 @@ describe('DatabaseTableView 表格键盘入口与按钮对比度', () => {
       expect(contrast(token('--ncp-primary-strong'), token(background))).toBeGreaterThanOrEqual(4.5)
     }
   })
+  it('执行按钮快捷键提示使用不透明深色底，普通字号对比度达到 4.5:1', () => {
+    const rule = declarations(`.sql-toolbar kbd[${scopeId}]`)
+    expect(rule.background).toBe('var(--ncp-primary-strong)')
+    expect(rule.color).toBe('inherit')
+    expect(contrast(token('--ncp-on-primary'), token('--ncp-primary-strong'))).toBeGreaterThanOrEqual(4.5)
+  })
+
 })

@@ -1770,7 +1770,7 @@ onBeforeUnmount(() => {
   padding: 1px 5px;
   border: 1px solid rgba(255, 255, 255, .35);
   border-radius: var(--ncp-radius-xs);
-  background: rgba(255, 255, 255, .14);
+  background: var(--ncp-primary-strong);
   color: inherit;
   font-size: .58rem;
 }

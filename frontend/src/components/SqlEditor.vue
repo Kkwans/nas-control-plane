@@ -25,22 +25,24 @@ onMounted(() => {
     parent: editorHost.value,
     doc: props.modelValue,
     extensions: [
-      basicSetup,
-      sql(),
-      EditorView.lineWrapping,
-      EditorView.editable.of(!props.disabled),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
-      }),
+      // 先于 basicSetup 的 Mod-Enter 换行快捷键处理 SQL 执行。
       EditorView.domEventHandlers({
         keydown(event) {
           if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault()
-            emit('execute')
+            if (!props.disabled) emit('execute')
             return true
           }
           return false
         },
+      }),
+      basicSetup,
+      sql(),
+      EditorView.lineWrapping,
+      EditorView.contentAttributes.of({ 'aria-label': 'SQL 编辑器' }),
+      EditorView.editable.of(!props.disabled),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
       }),
       EditorView.theme({
         '&': {
