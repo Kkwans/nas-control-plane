@@ -151,6 +151,8 @@ func returnsRows(driver Driver, statement string) bool {
 	switch leadingQueryKeyword(driver, statement) {
 	case "WITH":
 		return !cteMainDMLWithoutReturning(driver, statement)
+	case "INSERT", "UPDATE", "DELETE":
+		return sqliteDMLReturning(driver, statement)
 	case "SELECT", "PRAGMA", "EXPLAIN", "SHOW", "DESCRIBE", "DESC", "VALUES":
 		return true
 	default:

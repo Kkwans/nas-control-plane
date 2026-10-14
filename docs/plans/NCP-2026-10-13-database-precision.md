@@ -175,3 +175,17 @@ git diff --check
 主任务精确快照另通过internal/database、完整OpenAPI、全仓Go build/vet；UI说明与OpenAPI同步有限自动识别范围和不重放原则。前端完整验证及发布后CI继续跟进；完整直接RETURNING自动识别仍未完成。
 
 精确前端验收（02:07 UTC）：2410单元/106文件、全量lint、Vue类型、生产构建、dist权限与540KiB预算全部通过，最大chunk518.0KiB。主任务已审查全部精确diff；未改执行权限、RPC协议、生产连接或凭据。
+
+## M14-B3：SQLite 直接 DML RETURNING（2026-10-14）
+
+新证据允许把正向识别范围限于SQLite，不沿用此前被否定的跨驱动关键字判断：仓库固定SQLite 3.53.3的[parse.y](https://raw.githubusercontent.com/sqlite/sqlite/version-3.53.3/src/parse.y)中RETURNING不属于标识符或ID fallback，四个对应产生式均建立返回子句；ANY通配仅用于CREATE VIRTUAL TABLE参数，不能从直接DML进入。PostgreSQL的列标签/属性歧义仍存在，不扩展其auto。
+
+技术方案：仅首词INSERT/UPDATE/DELETE且driver=sqlite时复用cteScanner，完整扫描确认单条语句及顶层裸RETURNING、有后续返回表达式标记。最大1MiB SQL和256嵌套深度，线性扫描不积累全token数组；任何未知词法、不闭合、批次、重复顶层RETURNING或预算超限保留原exec路径，不拒绝原SQL。REPLACE、WITH、PG/MySQL及显式模式原路不变。不进行SQL语法验证或改写，派发始终一次，失败不切换重放。
+
+已知保守范围：十六进制数、下划线数字、未引用Unicode标识符及SQLite允许的未结束EOF块注释可仍走旧exec；需要返回行时显式rows可执行，不能宣称完整RETURNING识别。SELECT/EXPLAIN等既有行为不变。
+
+[SQLite官方RETURNING说明](https://www.sqlite.org/lang_returning.html)指出引擎在发出返回行前会缓存输出，返回次序不保证，且不包含AFTER触发器后的值。因此面板500行/1MiB预算只限制保留的展示数据，不限制SQLite内部临时内存、写入总数或事务范围；不把输出行数当作驱动影响行数。
+
+隔离验证：临时SQLite三种DML及auto/省略模式确认写一次并展示返回值，零匹配保留列和未知影响数；499/500/501行更新及首行2MiB字节截断都在Rows.Close后核验完整写入。fake执行器覆盖错误/取消/扫描/关闭不重放。独立56项额外SQLite语法oracle与960组模式/驱动/错误路径通过race；完整database测试/race、5秒23412次fuzz通过。主任务精确快照database/OpenAPI测试和全仓Go build/vet通过；无真实PG/MySQL或NAS运行。
+
+主任务前端精确验收（05:31 UTC）：3013单元/113文件、全量lint、Vue类型、生产构建、权限与540KiB预算全部通过。首轮一项旧提示文案断言失败，恢复“展示结果”措辞后全量复验通过，未修改断言。UI与OpenAPI同步SQLite有限识别范围；实际后继CI继续核验。

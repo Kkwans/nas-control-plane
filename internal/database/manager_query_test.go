@@ -146,10 +146,10 @@ func TestManagerQuery500RowDisplayLimitIsNotWriteLimit(t *testing.T) {
 	assertFixtureScalar(t, db, "SELECT SUM(n) FROM sample", 501)
 }
 
-func TestManagerQueryAutoDoesNotClaimFullReturningDetection(t *testing.T) {
+func TestManagerQueryAutoSQLiteReturningAndUnknownFallback(t *testing.T) {
 	manager, connection, db := newQueryFixture(t)
 	result := runFixtureQuery(t, manager, connection, `INSERT INTO sample VALUES(1,0,'RETURNING') RETURNING id`, QueryResultModeAuto)
-	if len(result.Columns) != 0 || len(result.Rows) != 0 || !result.RowsAffectedKnown || result.RowsAffected != 1 {
+	if len(result.Columns) != 1 || len(result.Rows) != 1 || result.Rows[0][0] != int64(1) || result.RowsAffectedKnown {
 		t.Fatalf("auto result=%#v", result)
 	}
 	assertFixtureScalar(t, db, "SELECT COUNT(*) FROM sample", 1)
@@ -158,6 +158,12 @@ func TestManagerQueryAutoDoesNotClaimFullReturningDetection(t *testing.T) {
 		t.Fatalf("auto comment result=%#v", result)
 	}
 	assertFixtureScalar(t, db, "SELECT n FROM sample WHERE id=1", 1)
+	// 未引用非 ASCII 标识符超出分类范围，SQL 仍原样执行一次并保留旧 exec。
+	result = runFixtureQuery(t, manager, connection, `UPDATE sample SET n=n+1 RETURNING n AS 数值`, QueryResultModeAuto)
+	if len(result.Columns) != 0 || len(result.Rows) != 0 || !result.RowsAffectedKnown || result.RowsAffected != 1 {
+		t.Fatalf("unknown auto result=%#v", result)
+	}
+	assertFixtureScalar(t, db, "SELECT n FROM sample WHERE id=1", 2)
 }
 
 func TestManagerQueryPartialBatchFailureDoesNotReplayOrImplyRollback(t *testing.T) {

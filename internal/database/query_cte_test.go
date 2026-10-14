@@ -222,7 +222,8 @@ func TestQueryCTEModesErrorsAndUnknownCountsNeverReplay(t *testing.T) {
 		{"pg unknown", `WITH x AS (SELECT E'plain') UPDATE t SET n=n+1`, DriverPostgreSQL, true},
 		{"mysql unchanged", `WITH x AS (SELECT 1) UPDATE t SET n=n+1`, DriverMySQL, true},
 		{"multiple statements", `WITH x AS (SELECT 1) UPDATE t SET n=n+1; SELECT 1`, DriverSQLite, true},
-		{"direct returning unchanged", `UPDATE t SET n=n+1 RETURNING n`, DriverSQLite, false},
+		{"sqlite direct returning", `UPDATE t SET n=n+1 RETURNING n`, DriverSQLite, true},
+		{"pg direct returning unchanged", `UPDATE t SET n=n+1 RETURNING n`, DriverPostgreSQL, false},
 	} {
 		for _, mode := range []QueryResultMode{"", QueryResultModeAuto, QueryResultModeRows, QueryResultModeExec} {
 			for _, outcome := range []struct {
