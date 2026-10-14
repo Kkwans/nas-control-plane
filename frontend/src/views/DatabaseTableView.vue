@@ -44,6 +44,7 @@ import {
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
 import { DatabaseInsertOutcomeUnknownError } from '@/api/databaseInsertOutcome'
+import { DatabaseRowWriteOutcomeUnknownError, type DatabaseRowWriteOperation } from '@/api/databaseRowWriteOutcome'
 import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWriteMode, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
@@ -108,6 +109,8 @@ const catalog = computed(() => databaseStore.catalogs[sourceId.value] ?? null)
 const table = computed(() => catalog.value?.tables.find((item) => item.name === tableName.value && item.schema === schema.value) ?? null)
 const mode = ref<TableMode>('data')
 const tableRows = ref<DatabaseRows | null>(null)
+// 可见行归属于最后一次成功读取的目标；路由已变但旧 DOM 尚未重绘时不能借用旧行。
+const loadedRowsTargetKey = ref<string | null>(null)
 const rowsLoading = ref(false)
 const rowsInitialized = ref(false)
 const errorState = ref<DatabaseErrorState | null>(null)
@@ -121,6 +124,15 @@ const rowNullFields = ref<Record<string, boolean>>({})
 const originalKeys = ref<Record<string, DatabaseValue>>({})
 const mutationPending = ref(false)
 const rowDraftGeneration = ref(0)
+const rowDraftRevision = ref(0)
+const rowDraftTargetKey = ref<string | null>(null)
+const deleteConfirmationTargetKey = ref<string | null>(null)
+const rowWriteDraftGeneration = ref<number | null>(null)
+const dangerGeneration = ref(0)
+// 按整表目标保护 UPDATE/DELETE，绝不把可能敏感的主键或行值写进 ledger。
+const rowWriteAttempts = ref(new Map<string, { operation: DatabaseRowWriteOperation; status: 'pending' | 'unknown' }>())
+const rowWriteRefreshError = ref<{ operation: DatabaseRowWriteOperation; error: DatabaseErrorState } | null>(null)
+let rowWriteController: AbortController | null = null
 const insertDraftGeneration = ref<number | null>(null)
 // 仅在当前页面实例内保留目标及状态，不保存提交值、连接凭据或原始异常。
 // 这不是后端幂等：完整重载/页面卸载后不能依靠此锁判断此前是否已写入。
@@ -156,7 +168,12 @@ const insertTargetKey = routeKey
 const insertStatus = computed(() => insertAttempts.value.get(insertTargetKey.value))
 const insertPending = computed(() => insertStatus.value === 'pending')
 const insertUnknown = computed(() => insertStatus.value === 'unknown')
-const rowDraftPending = computed(() => rowDialogMode.value === 'insert' && insertPending.value && insertDraftGeneration.value === rowDraftGeneration.value)
+const rowWriteAttempt = computed(() => rowWriteAttempts.value.get(routeKey.value))
+const rowWriteUnknown = computed(() => rowWriteAttempt.value?.status === 'unknown')
+const rowWritePending = computed(() => rowWriteAttempt.value?.status === 'pending')
+const rowDraftPending = computed(() => rowDialogMode.value === 'insert'
+  ? insertPending.value && insertDraftGeneration.value === rowDraftGeneration.value
+  : rowWritePending.value && rowWriteAttempt.value?.operation === 'update' && rowWriteDraftGeneration.value === rowDraftGeneration.value)
 const stablePagination = computed(() => tableRows.value?.ordering?.stable !== false)
 const isView = computed(() => table.value?.type.toLowerCase() === 'view')
 const canInsertRows = computed(() => Boolean(table.value) && !isView.value)
@@ -228,6 +245,9 @@ async function initialize() {
 
 function resetRouteState() {
   interruptInsert()
+  rowWriteController?.abort()
+  rowWriteController = null
+  rowWriteRefreshError.value = null
   clearRowDraft()
   insertRefreshSequence += 1
   insertRefreshError.value = null
@@ -243,6 +263,7 @@ function resetRouteState() {
   queryController = null
   mutationController = null
   tableRows.value = null
+  loadedRowsTargetKey.value = null
   rowsLoading.value = false
   rowsInitialized.value = false
   errorState.value = null
@@ -289,10 +310,12 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
     }, signal)
     if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || session && !isCurrentSession(session.generation)) return { status: 'stale' }
     tableRows.value = result
+    loadedRowsTargetKey.value = requestKey
     offset.value = requestedOffset
     if (reportError) {
       queryRefreshError.value = null
       insertRefreshError.value = null
+      rowWriteRefreshError.value = null
     }
     return { status: 'success' }
   } catch (error) {
@@ -318,6 +341,7 @@ async function changePage(direction: -1 | 1) {
 function invalidateRowsPage() {
   // 新排序或页大小必须先成功读取首屏，旧页不能作为新设置的翻页依据。
   tableRows.value = null
+  loadedRowsTargetKey.value = null
   offset.value = 0
 }
 
@@ -330,6 +354,7 @@ async function onSortChange(event: { prop?: string | null; order?: 'ascending' |
 
 function openInsert() {
   if (!canInsertRows.value) return
+  rowDraftTargetKey.value = routeKey.value
   rowDraftGeneration.value += 1
   rowDialogMode.value = 'insert'
   rowForm.value = Object.fromEntries(columns.value.map((column) => [column.name, '']))
@@ -340,13 +365,15 @@ function openInsert() {
 
 function clearRowDraft() {
   rowDraftGeneration.value += 1
+  rowDraftTargetKey.value = null
   rowForm.value = {}
   rowNullFields.value = {}
   originalKeys.value = {}
 }
 
 function openEdit(row: Record<string, DatabaseValue>) {
-  if (!canEditRows.value) return
+  if (!canEditRows.value || loadedRowsTargetKey.value !== routeKey.value) return
+  rowDraftTargetKey.value = routeKey.value
   rowDraftGeneration.value += 1
   rowDialogMode.value = 'edit'
   rowForm.value = Object.fromEntries(columns.value.map((column) => [
@@ -438,34 +465,103 @@ async function submitRow() {
     await submitInsert()
     return
   }
-  // UPDATE 与危险确认共享请求归属；竞争操作不能中止先发写入或抢占序号。
-  if (dangerBusy.value) return
+  // 保留同步准入；新草稿、关闭对话框均不能抢占已派发写入。
+  if (!canEditRows.value || dangerBusy.value || rowWriteAttempt.value || rowDraftTargetKey.value !== routeKey.value) return
+  await submitRowWrite('update')
+}
+
+async function submitRowWrite(operation: DatabaseRowWriteOperation) {
+  if (!table.value || rowWriteAttempt.value || mutationPending.value || dangerBusy.value) return
+  const target = Object.freeze({ sourceId: sourceId.value, schema: table.value.schema, table: table.value.name })
+  const key = JSON.stringify([target.sourceId, target.schema, target.table])
+  const routeGeneration = routeSequence
   const sequence = ++mutationSequence
-  const requestKey = routeKey.value
   const draftGeneration = rowDraftGeneration.value
-  mutationController?.abort()
+  const draftRevision = rowDraftRevision.value
+  const confirmationGeneration = dangerGeneration.value
+  const session = captureSession()
   const controller = new AbortController()
+  const signal = AbortSignal.any([controller.signal, session.signal])
+  let confirmed = false
+  const ownsPage = () => routeGeneration === routeSequence && key === routeKey.value && isCurrentSession(session.generation)
+  const ownsDialog = () => operation === 'update'
+    ? draftGeneration === rowDraftGeneration.value && draftRevision === rowDraftRevision.value
+    : confirmationGeneration === dangerGeneration.value
+  const releaseBusy = () => {
+    if (sequence !== mutationSequence) return
+    if (operation === 'update') mutationPending.value = false
+    else dangerBusy.value = false
+  }
+  const interrupt = () => {
+    // 中止观察不证明未执行；已确认写后的读取中止则不降格为未知。
+    if (!confirmed) rowWriteAttempts.value.set(key, { operation, status: 'unknown' })
+    releaseBusy()
+  }
+  rowWriteAttempts.value.set(key, { operation, status: 'pending' })
+  if (operation === 'update') {
+    mutationPending.value = true
+    rowWriteDraftGeneration.value = draftGeneration
+  } else dangerBusy.value = true
+  rowWriteController = controller
   mutationController = controller
-  mutationPending.value = true
+  signal.addEventListener('abort', interrupt, { once: true })
+  rowWriteRefreshError.value = null
   clearError()
   try {
-    const values = rowValues('edit')
-    await updateDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values, keys: originalKeys.value }, controller.signal)
-    if (sequence !== mutationSequence || routeKey.value !== requestKey || controller.signal.aborted) return
-    ElMessage.success('数据行已更新')
-    if (draftGeneration === rowDraftGeneration.value) rowDialogOpen.value = false
-    await refreshRows()
-  } catch (error) {
-    if (sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据写入失败。')
+    try {
+      // 仅当前请求瞬时持有发送数据；ledger/controller 均不复制主键、草稿或凭据。
+      if (operation === 'update') {
+        const values = rowValues('edit')
+        await updateDatabaseRow({ ...databaseStore.connection(target.sourceId), ...target, values, keys: { ...originalKeys.value } }, signal)
+      } else {
+        await deleteDatabaseRow({ ...databaseStore.connection(target.sourceId), ...target, keys: { ...pendingRow.value } }, signal)
+      }
+    } catch (error) {
+      if (error instanceof DatabaseRowWriteOutcomeUnknownError) {
+        rowWriteAttempts.value.set(key, { operation, status: 'unknown' })
+        if (operation === 'delete' && ownsPage() && ownsDialog()) {
+          dangerOpen.value = false
+          pendingRow.value = null
+        }
+      } else {
+        // 转换/序列化零派发，或 transport 已验证的准确派发前拒绝。
+        rowWriteAttempts.value.delete(key)
+        if (ownsPage() && ownsDialog()) {
+          errorState.value = error instanceof NcpApiError
+            ? { code: error.code, message: error.message, nextStep: '行修改请求未提交到数据库执行；请处理请求或登录问题后重新提交。' }
+            : toErrorState(error, '行修改请求未发送，请检查字段值。')
+        }
+      }
+      return
+    }
+    if (signal.aborted || !ownsPage()) return
+    confirmed = true
+    rowWriteAttempts.value.delete(key)
+    ElMessage.success(operation === 'update' ? '更新请求已执行' : '删除请求已执行')
+    if (ownsDialog()) {
+      if (operation === 'update') rowDialogOpen.value = false
+      else dangerOpen.value = false
+    }
+    // 行数为 0 同样是已执行；后续读取绝不重发写入或改变确认结论。
+    const refresh = await refreshRows(false, offset.value, session)
+    if (ownsPage() && sequence === mutationSequence && refresh.status === 'failed') {
+      rowWriteRefreshError.value = { operation, error: refresh.error }
+    }
   } finally {
-    if (sequence === mutationSequence) mutationPending.value = false
+    signal.removeEventListener('abort', interrupt)
+    if (rowWriteController === controller) rowWriteController = null
+    if (mutationController === controller) mutationController = null
+    releaseBusy()
   }
 }
 
 async function removeRow(row: Record<string, DatabaseValue>) {
-  if (!table.value || !canEditRows.value || mutationPending.value || queryPending.value || dangerBusy.value || dangerOpen.value) return
-  pendingRow.value = row
+  if (!table.value || !canEditRows.value || loadedRowsTargetKey.value !== routeKey.value || rowWriteAttempt.value || mutationPending.value || queryPending.value || dangerBusy.value || dangerOpen.value) return
+  deleteConfirmationTargetKey.value = routeKey.value
+  // 确认仅需主键，不把整行的其他敏感字段留在隐藏确认状态。
+  pendingRow.value = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
   pendingQuery.value = null
+  dangerGeneration.value += 1
   dangerAction.value = 'delete-row'
   dangerOpen.value = true
 }
@@ -506,41 +602,25 @@ async function executeSQL(snapshot: SQLExecutionSnapshot) {
 
 async function confirmDanger() {
   if (!table.value || !dangerOpen.value || mutationPending.value || dangerBusy.value || queryPending.value) return
-  const action = dangerAction.value
+  if (dangerAction.value === 'delete-row') {
+    if (!canEditRows.value || !pendingRow.value || rowWriteAttempt.value || deleteConfirmationTargetKey.value !== routeKey.value) return
+    await submitRowWrite('delete')
+    return
+  }
+  // SQL 保持独立明确执行的合同，不作为行修改未知结果的自动核对或重放。
   const snapshot = pendingQuery.value
+  if (!snapshot) return
   const sequence = ++mutationSequence
   const requestKey = routeKey.value
+  const confirmationGeneration = dangerGeneration.value
   mutationController?.abort()
-  const controller = action === 'delete-row' ? new AbortController() : null
-  if (controller) mutationController = controller
   dangerBusy.value = true
-  let succeeded = false
-  let attemptedSQL = false
   try {
-    if (action === 'delete-row') {
-      const row = pendingRow.value
-      if (!row) return
-      const keys = Object.fromEntries(primaryKeyColumns.value.map((column) => [column.name, row[column.name] ?? null]))
-      clearError()
-      await deleteDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, keys }, controller?.signal)
-      if (sequence !== mutationSequence || routeKey.value !== requestKey || controller?.signal.aborted) return
-      ElMessage.success('数据行已删除')
-      await refreshRows()
-      if (sequence !== mutationSequence || routeKey.value !== requestKey) return
-      succeeded = true
-    } else {
-      if (!snapshot) return
-      attemptedSQL = true
-      succeeded = await executeSQL(snapshot)
-      if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) ElMessage.success('SQL 执行完成')
-    }
-  } catch (error) {
-    if (action === 'delete-row' && sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据删除失败。')
+    const succeeded = await executeSQL(snapshot)
+    if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) ElMessage.success('SQL 执行完成')
   } finally {
-    if (sequence === mutationSequence) {
-      dangerBusy.value = false
-    }
-    if ((succeeded || attemptedSQL) && sequence === mutationSequence && routeKey.value === requestKey) {
+    if (sequence === mutationSequence) dangerBusy.value = false
+    if (sequence === mutationSequence && routeKey.value === requestKey && confirmationGeneration === dangerGeneration.value) {
       dangerOpen.value = false
       pendingRow.value = null
       pendingQuery.value = null
@@ -552,6 +632,7 @@ async function runSQL() {
   if (!sql.value.trim() || queryPending.value || dangerBusy.value || dangerOpen.value) return
   const snapshot = { sql: sql.value, resultMode: resultMode.value }
   if (sqlRisk.value) {
+    dangerGeneration.value += 1
     pendingQuery.value = snapshot
     pendingRow.value = null
     dangerAction.value = 'sql'
@@ -656,7 +737,16 @@ function clearError() {
 }
 
 watch(routeKey, () => { void initialize() }, { immediate: true })
-watch(rowDialogOpen, (open) => { if (!open) rowDraftGeneration.value += 1 }, { flush: 'sync' })
+watch(rowDialogOpen, (open) => { if (!open) clearRowDraft() }, { flush: 'sync' })
+watch([rowForm, rowNullFields], () => { rowDraftRevision.value += 1 }, { deep: true, flush: 'sync' })
+watch(dangerOpen, (open) => {
+  if (!open) {
+    dangerGeneration.value += 1
+    deleteConfirmationTargetKey.value = null
+    pendingRow.value = null
+    pendingQuery.value = null
+  }
+}, { flush: 'sync' })
 watch(pageSize, (next, previous) => {
   if (next === previous) return
   invalidateRowsPage()
@@ -665,6 +755,10 @@ watch(pageSize, (next, previous) => {
 })
 onBeforeUnmount(() => {
   interruptInsert()
+  rowWriteController?.abort()
+  rowWriteController = null
+  pendingRow.value = null
+  pendingQuery.value = null
   clearRowDraft()
   routeSequence += 1
   rowsSequence += 1
@@ -696,6 +790,17 @@ onBeforeUnmount(() => {
       <strong>新增请求已执行，表数据刷新失败。</strong>
       <span>{{ insertRefreshError.message }} 请只刷新表数据，勿重复新增。</span>
       <small>代码 {{ insertRefreshError.code }}</small>
+    </div>
+
+    <div v-if="rowWriteUnknown" class="insert-outcome-warning" role="alert">
+      <strong>{{ rowWriteAttempt?.operation === 'update' ? '更新' : '删除' }}结果未确认，可能已生效。</strong>
+      <span>已暂停当前数据源、schema 和表的所有行编辑与删除，包括其他行。刷新仅重新读取数据，不能证明此次请求成功或失败，也不会解除保护。</span>
+      <small>请独立只读核对，勿重复修改或删除。SQL 仍需单独明确执行，不会自动核对或重放。保护仅保留在当前页面实例；完整重载或离开此页面后不再保留，服务端尚无幂等保障。</small>
+    </div>
+    <div v-if="rowWriteRefreshError" class="insert-outcome-warning" role="alert">
+      <strong>{{ rowWriteRefreshError.operation === 'update' ? '更新' : '删除' }}请求已执行，表数据刷新失败。</strong>
+      <span>{{ rowWriteRefreshError.error.message }} 请只刷新表数据，勿重复修改或删除。</span>
+      <small>代码 {{ rowWriteRefreshError.error.code }}</small>
     </div>
 
     <div class="table-connection-note" role="note">
@@ -745,8 +850,8 @@ onBeforeUnmount(() => {
           <ElTableColumn label="行操作" fixed="right" width="156" align="center">
             <template #default="{ row }">
               <div class="row-actions">
-                <button type="button" :disabled="!canEditRows" aria-label="编辑当前行" @click.stop="openEdit(row)"><Pencil :size="14" />编辑</button>
-                <button class="danger" type="button" :disabled="!canEditRows || mutationPending || queryPending || dangerBusy || dangerOpen" aria-label="删除当前行" @click.stop="removeRow(row)"><Trash2 :size="14" />删除</button>
+                <button type="button" :disabled="!canEditRows || rowWriteUnknown" aria-label="编辑当前行" @click.stop="openEdit(row)"><Pencil :size="14" />编辑</button>
+                <button class="danger" type="button" :disabled="!canEditRows || Boolean(rowWriteAttempt) || mutationPending || queryPending || dangerBusy || dangerOpen" aria-label="删除当前行" @click.stop="removeRow(row)"><Trash2 :size="14" />删除</button>
               </div>
             </template>
           </ElTableColumn>
@@ -825,13 +930,14 @@ onBeforeUnmount(() => {
       <div class="row-dialog-context"><component :is="tableTypeIcon(table.type)" :size="18" /><span><strong>{{ table.name }}</strong><small>保存后将直接写入数据库</small></span></div>
       <div v-if="rowDialogMode === 'insert' && insertUnknown" class="insert-outcome-warning" role="alert"><strong>新增结果未确认，可能已生效。</strong><span>当前目标已暂停再次新增。请先只读核对数据库状态，刷新不会解除保护。</span></div>
       <div v-else-if="rowDialogMode === 'insert' && insertPending" class="object-warning" role="status">当前目标的新增请求正在等待结果，请勿重复提交。</div>
+      <div v-if="rowDialogMode === 'edit' && rowWriteUnknown" class="insert-outcome-warning" role="alert"><strong>行修改结果未确认，可能已生效。</strong><span>当前表所有行的编辑与删除已暂停。只读刷新不会解除保护。</span></div>
       <ElForm class="row-form" label-position="top">
         <ElFormItem v-for="column in columns" :key="column.name">
           <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable && !isBooleanColumn(column)" v-model="rowNullFields[column.name]" :disabled="rowDraftPending" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
           <DatabaseCellEditor :model-value="rowForm[column.name] ?? ''" :null-selected="rowNullFields[column.name] === true" :column="column" :disabled="rowDraftPending || rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" @update:model-value="rowForm[column.name] = $event" @update:null-selected="rowNullFields[column.name] = $event" />
         </ElFormItem>
       </ElForm>
-      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' ? insertUnknown : dangerBusy" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
+      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' ? insertUnknown : dangerBusy || rowWriteUnknown" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
     </ElDialog>
 
     <ConfirmDangerDialog

@@ -290,7 +290,7 @@ describe('数据库 INSERT 结果与草稿归属', () => {
     expect(mocks.execute).toHaveBeenCalledTimes(1)
     button('表数据').click(); await settle()
     await deleteRow()
-    expect(mocks.success).toHaveBeenCalledWith('数据行已删除')
+    expect(mocks.success).toHaveBeenCalledWith('删除请求已执行')
     if (state === 'pending') {
       expect(fetcher.mock.calls[0]![1]!.signal!.aborted).toBe(false)
       pending.reject(new TypeError('lost')); await settle()

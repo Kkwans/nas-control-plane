@@ -1,5 +1,6 @@
 import { NcpApiError } from './system'
 import { requestDatabaseInsert } from './databaseInsertOutcome'
+import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
@@ -158,7 +159,9 @@ export async function updateDatabaseRow(input: DatabaseConnection & {
   values: Record<string, DatabaseValue>
   keys: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/update', input, signal)
+  // 序列化在发送边界之外完成，本地失败仍然是零派发。
+  const body = JSON.stringify(input)
+  return requestDatabaseRowWrite('update', body, signal)
 }
 
 export async function deleteDatabaseRow(input: DatabaseConnection & {
@@ -166,7 +169,8 @@ export async function deleteDatabaseRow(input: DatabaseConnection & {
   table: string
   keys: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/delete', input, signal)
+  const body = JSON.stringify(input)
+  return requestDatabaseRowWrite('delete', body, signal)
 }
 
 async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
