@@ -404,8 +404,8 @@ function buildInput(runContainer: boolean): DockerContainerCreateInput {
     capAdd: commaList(form.capAdd),
     capDrop: commaList(form.capDrop),
     devices: devices.value.map((row) => ({
-      hostPath: row.hostPath.trim(),
-      containerPath: row.containerPath.trim(),
+      hostPath: row.hostPath,
+      containerPath: row.containerPath,
       cgroupPermissions: row.permissions.trim() || 'rwm',
     })),
     gpus: form.gpuEnabled ? [{

@@ -708,8 +708,6 @@ func normalizeDevices(values []ContainerDevice) ([]ContainerDevice, error) {
 	result := make([]ContainerDevice, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		value.HostPath = strings.TrimSpace(value.HostPath)
-		value.ContainerPath = strings.TrimSpace(value.ContainerPath)
 		value.CgroupPermissions = strings.ToLower(strings.TrimSpace(value.CgroupPermissions))
 		if !validMountSource(value.HostPath) || !validMountSource(value.ContainerPath) {
 			return nil, coded("DOCKER_CONTAINER_CREATE_INVALID", errors.New("device path is invalid"))

@@ -4124,8 +4124,12 @@ components:
       type: object
       required: [hostPath, containerPath]
       properties:
-        hostPath: { type: string }
-        containerPath: { type: string }
+        hostPath:
+          type: string
+          description: 主机设备的规范绝对路径；保留尾部空白，不做 trim。拒绝前导空白、点路径段、重复斜杠、NUL、CR、LF 和冒号。
+        containerPath:
+          type: string
+          description: 容器设备的规范绝对路径；保留尾部空白，不做 trim。拒绝前导空白、点路径段、重复斜杠、NUL、CR、LF 和冒号；不允许重复的相同目标路径。
         cgroupPermissions: { type: string, default: rwm }
     DockerContainerGPUInput:
       type: object
