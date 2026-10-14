@@ -26,7 +26,7 @@ function deferred() {
 
 // 只允许指定来源的静态 GET 与精确 API 白名单。创建许可仅供一次真实确认点击消费；
 // 未知请求、重发、WebSocket 均失败关闭，内存 SSE 不访问 Docker、NAS 或宿主机。
-async function fixture(page: Page, origin: string, expected: ReturnType<typeof expectedInput>) {
+async function fixture(page: Page, origin: string, expected: ReturnType<typeof expectedInput>, allowRootDirectory = false) {
   await page.clock.setFixedTime(new Date(stamp))
   await page.addInitScript(() => {
     class SilentSource extends EventTarget {
@@ -52,6 +52,7 @@ async function fixture(page: Page, origin: string, expected: ReturnType<typeof e
     ['/api/v1/docker/images', { collectedAt: stamp, images: [{ id: 'sha256:identity-fixture', repoTags: ['identity:latest'], repoDigests: [], sizeBytes: 1024, createdAt: stamp, containers: 0 }] }],
     ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
   ])
+  if (allowRootDirectory) reads.set('/api/v1/files/entries?path=%2F&limit=100', { path: '/', parent: '/', collectedAt: stamp, entries: [{ name: 'fixture.txt', path: '/fixture.txt', type: 'file', readable: true }] })
   page.on('pageerror', (error) => errors.push(error.message))
   await page.routeWebSocket('**', (socket) => { denied.push(`WS ${socket.url()}`); socket.close() })
   await page.route('**/*', async (route) => {
@@ -211,5 +212,59 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
       await writeFile(receiptPath, JSON.stringify(receipt, null, 2))
       await info.attach('strict-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
+  })
+}
+
+// 真实键盘事件验证最上层弹窗；整个用例不授权创建请求。
+for (const width of [390, 1440]) {
+  test(`${width}px 创建和路径弹窗循环焦点，Escape 归还且取消零写入`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+    const api = await fixture(page, new URL(baseURL!).origin, expectedInput(true), true)
+    await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: '镜像', exact: true }).click()
+    await page.getByRole('button', { name: '从镜像 identity:latest 创建容器', exact: true }).filter({ visible: true }).click()
+    const drawer = page.locator('.create-container-drawer')
+    await expect(drawer).toBeVisible()
+    await expect.poll(() => api.requests.includes('GET /api/v1/docker/resources')).toBe(true)
+    await expect(drawer.getByText('正在读取 Docker 网络、卷和端口清单…', { exact: true })).toHaveCount(0)
+    const states: unknown[] = []
+    for (const title of ['确认容器配置', '选择 NAS 路径']) {
+      if (title === '选择 NAS 路径') await drawer.getByRole('button', { name: '添加挂载', exact: true }).click()
+      const opener = drawer.getByRole('button', { name: title === '选择 NAS 路径' ? '浏览' : '仅创建', exact: true })
+      await opener.focus(); await page.keyboard.press('Enter')
+      const dialog = page.getByRole('dialog', { name: title, exact: true })
+      await expect(dialog).toBeVisible()
+      await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+      const close = dialog.locator('.el-dialog__headerbtn')
+      const last = dialog.getByRole('button', { name: title === '选择 NAS 路径' ? '选择' : '确认创建', exact: true })
+      await expect(last).toBeEnabled(); await last.focus()
+      await page.keyboard.press('Tab'); await expect(close).toBeFocused()
+      await page.keyboard.press('Shift+Tab'); await expect(last).toBeFocused()
+      const geometry = await dialog.evaluate((element) => ({
+        modal: element.getAttribute('aria-modal'), sectionAtBody: element.closest('section.create-container-dialogs')?.parentElement === document.body,
+        hiddenAncestor: Boolean(element.closest('[inert], [aria-hidden="true"]')),
+        dialogZ: Number(element.closest<HTMLElement>('.el-overlay')!.style.zIndex),
+        drawerZ: Number(document.querySelector('.create-container-drawer')!.closest<HTMLElement>('.el-overlay')!.style.zIndex),
+      }))
+      expect(geometry.modal).toBe('true'); expect(geometry.sectionAtBody).toBe(true)
+      expect(geometry.hiddenAncestor).toBe(false); expect(geometry.dialogZ).toBeGreaterThan(geometry.drawerZ)
+      const axe = await new AxeBuilder({ page }).analyze()
+      expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+      await page.keyboard.press('Escape')
+      await expect(dialog).not.toBeVisible(); await expect(drawer).toBeVisible(); await expect(opener).toBeFocused()
+      expect(api.writes).toEqual([])
+      states.push({ title, geometry, axe, tabWrappedToClose: true, shiftTabWrappedToLast: true, escapeRestoredOpener: true })
+    }
+    await page.waitForTimeout(6000)
+    expect(api.writes).toEqual([]); expect(api.requests.every((request) => request.startsWith('GET '))).toBe(true)
+    expect(api.requests.filter((request) => request.startsWith('GET /api/v1/files/entries'))).toEqual(['GET /api/v1/files/entries?path=%2F&limit=100'])
+    expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const path = info.outputPath('ui-captures', `docker-create-keyboard-${width}-capture-state.json`)
+    await writeFile(path, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+      evidenceKind: 'keyboard-modal-navigation', testTitle: info.title, states, requests: api.requests, writes: api.writes, denied: api.denied, errors: api.errors,
+      noWriteObservationMilliseconds: 6000 }, null, 2))
+    await info.attach('keyboard-modal-navigation', { path, contentType: 'application/json' })
   })
 }
