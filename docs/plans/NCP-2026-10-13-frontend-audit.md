@@ -375,3 +375,7 @@ UPDATE/DELETE新增九项浏览器fixture：390/1440提交后断网或损坏200�
 可访问性修复验证（00:52 UTC）：真实Element Plus六项测试确认三个表的tabindex落在实际滚动wrapper，区域本身没有伪造tabindex；空表与所有行操作禁用时依然可聚焦。组件script setup未变。静态色值对比由4.05提升至5.79，仍须实际计算样式/axe复验。隐藏dialog采集已分离可见语义和rawDiagnostics，保留所有input值、disabled/checked、ARIA、可见性和边界，不删除DOM或过滤axe。
 
 主任务三文件精确快照完整2229单元/100文件、全量lint、Vue及专项E2E严格类型、生产构建、dist权限与包预算全部退出成功；最大chunk518.0KiB。八图替代验收待新CI，旧四失败不作通过处理。
+
+结构漂移浏览器补验（00:53 UTC）：新增四项白名单内存fixture，390/1440在打开草稿时接受BOOLEAN→TEXT读取，核验原类型与可选择文本、禁止提交、显式catalog→rows恢复及新TEXT编辑器原样提交字符串false/大整数；另测两阶段读取失败与恢复成功不解除旧UPDATE未知保护。只允许用户路径明确许可的一次UPDATE。计划六张正式PNG与完整axe、源码/图片hash、前后状态/焦点/选择及最终请求/效果证据，隐藏保留DOM与可见语义分别记录。
+
+实施者及主任务独立lint、strict TypeScript、四项发现和diff检查通过，尚未运行实际浏览器或生成六图；由新的精确CI验收，不能以此前结构单测代替。
