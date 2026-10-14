@@ -401,9 +401,14 @@ for (const width of [390, 1440]) {
     await ready(page)
     await driftDuringDraft(page, api)
     const combo = dialog(page).getByRole('combobox', { name: '布尔字段值', exact: true })
+    const selectControl = dialog(page).locator('.database-cell-editor[data-field-kind="boolean"] .el-select__wrapper')
     for (const value of ['true', 'false']) {
-      await combo.click()
+      await expect(combo).toBeEnabled()
+      // 原生只读 combobox 被选中值覆盖；点击真实可见外壳，不强制穿透覆盖层。
+      await selectControl.click()
+      await expect(combo).toHaveAttribute('aria-expanded', 'true')
       await page.getByRole('option', { name: value, exact: true }).click()
+      await expect(combo).toHaveAttribute('aria-expanded', 'false')
     }
     await expectDraft(page, 'boolean', draftLabel)
     await editor(page, 'label').press('ControlOrMeta+A')
