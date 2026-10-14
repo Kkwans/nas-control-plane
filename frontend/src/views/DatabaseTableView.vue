@@ -996,7 +996,7 @@ onBeforeUnmount(() => {
           <ElButton type="primary" :loading="queryPending" :disabled="!sql.trim() || queryPending || dangerOpen || dangerBusy" @click="runSQL"><Play :size="15" />执行<kbd>Ctrl ↵</kbd></ElButton>
         </div>
       </div>
-      <div class="sql-mode-note" role="note">自动模式仅按开头语句类型选择结果方式，不能完整识别 RETURNING 或 CTE 写入。RETURNING 请选“返回行”；无返回行的 CTE 写入请选“执行”以获取驱动影响行数。返回行模式也会执行写操作；500 行与 1 MiB 仅限制展示结果，不限制写入范围。</div>
+      <div class="sql-mode-note" role="note">新版 Agent 的自动模式可识别 SQLite/PostgreSQL 部分无 RETURNING 的 CTE 写入，复杂语法仍可能无法识别。RETURNING 请选“返回行”；需要明确获取无返回行写入的驱动计数时请选择“执行”。返回行模式也会执行写操作；500 行与 1 MiB 仅限制展示结果，不限制写入范围。</div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
         <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryError ? '执行失败' : queryPending ? '正在执行' : '等待执行' }}</span></header>

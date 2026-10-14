@@ -2852,7 +2852,8 @@ components:
               description: >-
                 可选结果模式。省略字段沿用旧 Query 协议；空字符串或 null 也宽容地视为省略。
                 规范客户端应仅省略或发送 auto、rows、exec。显式 auto、rows、exec 使用新 QueryWithOptions 协议，旧 Agent 在执行 SQL 前返回 result_mode_unsupported，不自动降级或重放。
-                auto 跳过可识别的前导普通注释后按首关键字选择路径，不保证自动识别所有 RETURNING 或 CTE 写语句。
+                auto 跳过可识别的前导普通注释后按首关键字选择路径；新版 Agent 对 SQLite/PostgreSQL 完整识别的普通 WITH 主 INSERT/UPDATE/DELETE，且没有顶层裸 RETURNING 时选择执行路径。
+                未覆盖词法、复杂 WITH、多语句或扫描超限保留原有路径，不拒绝 SQL；不保证自动识别直接 DML RETURNING。原 SQL 只执行一次，失败不换路重放。
                 rows 调用返回行路径，适用于写语句 RETURNING，但仍会执行写入；exec 调用执行路径，获取驱动影响行数并丢弃可能的返回行，适用于无返回行的 CTE 写语句。
                 其他非空值（含大小写变体或前后空格）在准备数据库连接前返回 sql_invalid。
     DatabaseQueryResult:

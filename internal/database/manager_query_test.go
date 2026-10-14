@@ -97,7 +97,7 @@ func TestManagerQueryRowsReturningWritesAndEmptyResults(t *testing.T) {
 	assertFixtureScalar(t, db, "SELECT COUNT(*) FROM sample", 0)
 }
 
-func TestManagerQueryCTEModesRemainExplicit(t *testing.T) {
+func TestManagerQueryCTEModesAndOrdinaryAutoWrites(t *testing.T) {
 	manager, connection, db := newQueryFixture(t)
 	if _, err := db.Exec(`INSERT INTO sample VALUES(1,0,'x')`); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestManagerQueryCTEModesRemainExplicit(t *testing.T) {
 	}{
 		{"WHERE id=1", true, 1, QueryResultModeExec, 1},
 		{"WHERE id=2", true, 0, QueryResultModeExec, 1},
-		{"WHERE id=1", false, 0, QueryResultModeAuto, 2},
+		{"WHERE id=1", true, 1, QueryResultModeAuto, 2},
 		{"WHERE id=1", false, 0, QueryResultModeRows, 3},
 	} {
 		result := runFixtureQuery(t, manager, connection, `WITH x AS (SELECT 1) UPDATE sample SET n=n+1 `+tt.suffix, tt.mode)
@@ -182,5 +182,61 @@ func TestManagerQueryValidatesBeforeDiscovery(t *testing.T) {
 		if ErrorCodeOf(err) != CodeSQLInvalid || discoveries != 0 {
 			t.Fatalf("error=%v discoveries=%d", err, discoveries)
 		}
+	}
+}
+
+func TestManagerQueryCTEAutoDMLCountsAndSingleExecution(t *testing.T) {
+	for _, mode := range []QueryResultMode{"", QueryResultModeAuto} {
+		t.Run(string(mode), func(t *testing.T) {
+			manager, connection, db := newQueryFixture(t)
+			for _, tt := range []struct {
+				name, statement string
+				count, rows, n  int
+			}{
+				{"insert nonzero", `WITH x(id,n,label) AS (VALUES(1,0,'RETURNING')) INSERT INTO sample SELECT * FROM x`, 1, 1, 0},
+				{"insert zero", `WITH x AS (SELECT 2,0,'unused' WHERE 0) INSERT INTO sample SELECT * FROM x`, 0, 1, 0},
+				{"update nonzero", `WITH RECURSIVE x(n) AS MATERIALIZED (VALUES(1)), y AS NOT MATERIALIZED (SELECT n FROM x) UPDATE sample SET n=n+(SELECT n FROM y),label='RETURNING' WHERE id=1`, 1, 1, 1},
+				{"update zero", `WITH x AS (SELECT 1) UPDATE sample SET n=n+1 WHERE id=2`, 0, 1, 1},
+				{"delete zero", `WITH x AS (SELECT 1) DELETE FROM sample WHERE id=2`, 0, 1, 1},
+				{"delete nonzero", `WITH x AS (SELECT 1) DELETE FROM sample WHERE id=1`, 1, 0, 0},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					result := runFixtureQuery(t, manager, connection, tt.statement, mode)
+					if !result.RowsAffectedKnown || result.RowsAffected != int64(tt.count) || len(result.Columns) != 0 || len(result.Rows) != 0 {
+						t.Fatalf("result=%#v", result)
+					}
+					assertFixtureScalar(t, db, "SELECT COUNT(*) FROM sample", tt.rows)
+					assertFixtureScalar(t, db, "SELECT COALESCE(SUM(n),0) FROM sample", tt.n)
+				})
+			}
+		})
+	}
+}
+
+func TestManagerQueryCTEAutoReturningKeepsRowsAndSingleExecution(t *testing.T) {
+	for _, mode := range []QueryResultMode{"", QueryResultModeAuto} {
+		t.Run(string(mode), func(t *testing.T) {
+			manager, connection, db := newQueryFixture(t)
+			for _, tt := range []struct {
+				statement string
+				rows, n   int
+			}{
+				{`WITH x AS (SELECT 1) INSERT INTO sample VALUES(1,0,'inserted') RETURNING id,n`, 1, 0},
+				{`WITH x AS (SELECT 1) UPDATE sample SET n=n+1 WHERE id=1 RETURNING id,n`, 1, 1},
+				{`WITH x AS (SELECT 1) DELETE FROM sample WHERE id=2 RETURNING id,n`, 0, 1},
+			} {
+				result := runFixtureQuery(t, manager, connection, tt.statement, mode)
+				if result.RowsAffectedKnown || result.RowsAffected != 0 || len(result.Columns) != 2 || len(result.Rows) != tt.rows || (tt.rows > 0 && result.Rows[0][1] != int64(tt.n)) {
+					t.Fatalf("result=%#v", result)
+				}
+				assertFixtureScalar(t, db, "SELECT n FROM sample WHERE id=1", tt.n)
+				assertFixtureScalar(t, db, "SELECT COUNT(*) FROM sample", 1)
+			}
+			result := runFixtureQuery(t, manager, connection, `WITH x AS (SELECT 1) DELETE FROM sample WHERE id=1 RETURNING id,n`, mode)
+			if len(result.Rows) != 1 || result.Rows[0][1] != int64(1) || result.RowsAffectedKnown {
+				t.Fatalf("delete=%#v", result)
+			}
+			assertFixtureScalar(t, db, "SELECT COUNT(*) FROM sample", 0)
+		})
 	}
 }

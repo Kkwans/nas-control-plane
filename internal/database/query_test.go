@@ -69,7 +69,7 @@ func TestLeadingQueryKeyword(t *testing.T) {
 		{"empty", DriverSQLite, "", "", false},
 		{"spaces", DriverSQLite, " \n ", "", false},
 		{"dml returning stays exec", DriverSQLite, "INSERT INTO t VALUES(1) RETURNING id", "INSERT", false},
-		{"write cte stays rows", DriverSQLite, "WITH x AS (SELECT 1) UPDATE t SET n=n+1", "WITH", true},
+		{"ordinary write cte uses exec", DriverSQLite, "WITH x AS (SELECT 1) UPDATE t SET n=n+1", "WITH", false},
 		{"string returning", DriverSQLite, "UPDATE t SET s='RETURNING'", "UPDATE", false},
 		{"quoted returning", DriverSQLite, `UPDATE "RETURNING" SET n=1`, "UPDATE", false},
 		{"comment returning", DriverSQLite, "UPDATE /* RETURNING */ t SET n=1", "UPDATE", false},

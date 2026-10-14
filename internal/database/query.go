@@ -149,7 +149,9 @@ func finishResultRows(ctx context.Context, rows queryRows, primary error) error 
 
 func returnsRows(driver Driver, statement string) bool {
 	switch leadingQueryKeyword(driver, statement) {
-	case "SELECT", "WITH", "PRAGMA", "EXPLAIN", "SHOW", "DESCRIBE", "DESC", "VALUES":
+	case "WITH":
+		return !cteMainDMLWithoutReturning(driver, statement)
+	case "SELECT", "PRAGMA", "EXPLAIN", "SHOW", "DESCRIBE", "DESC", "VALUES":
 		return true
 	default:
 		return false

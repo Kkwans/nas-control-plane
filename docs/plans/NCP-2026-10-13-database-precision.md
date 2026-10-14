@@ -153,3 +153,25 @@ git diff --check
 继续保留显式rows/exec与既有auto契约，不引入通用RETURNING token分类器。PostgreSQL官方[grammar](https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/parser/gram.y)允许AS ColLabel及attr_name→ColLabel，[关键词规则](https://www.postgresql.org/docs/18/sql-keywords-appendix.html)也允许保留字作为列标签；例如SELECT项别名returning或t.returning属性引用不等于返回子句。不能仅靠顶层token出现就改变执行路径。
 
 当前UI与OpenAPI已说明RETURNING/CTE应显式选择结果模式；本次未确认新的实现缺陷，不增加未实现的窄语法待办。独立在53962e4源码上复跑九项既有纯函数/fake-runner query测试通过，未连接真实数据库或NAS。完整自动分类仍为保留范围，不能标记为已完成。
+
+## M14-B2：普通 WITH 主写语句影响计数（2026-10-14）
+
+现有显式 rows/exec 与只执行一次的协议保持。auto 仍把全部 WITH 走 Query，普通无 RETURNING 的主写语句因此显示影响数未知。临时 SQLite 已验证普通更新、零匹配、多 CTE、递归、materialization 以及字符串假 RETURNING 均可由 Exec 得到正确计数；n=n+1只执行一次。
+
+本片只为 SQLite/PostgreSQL 提供保守的负向证明：完整匹配 WITH [RECURSIVE] name [(names)] AS [NOT MATERIALIZED|MATERIALIZED] (非空body) [, ...] 后，主语句仅为 INSERT/UPDATE/DELETE，且主语句顶层没有裸 RETURNING token，才选择 Exec。任何顶层 RETURNING（包括别名或属性名）一律保留旧 Query；CTE body/子表达式/引号/普通注释中的同名文本不参与该否定判断。直接 DML RETURNING、MERGE、REPLACE、SEARCH/CYCLE 与完整 auto 分类未完成，不扩张宣称。
+
+扫描器要求单调游标、流式token、无递归/全文token数组/全文大写。新扫描限1MiB、括号与PG块注释深度256；超限或未知均回退旧行为，不拒绝Root SQL。支持普通ASCII词/数字、单双引号双写转义、有限运算符；SQLite另外支持反引号与方括号，PG块注释可嵌套、行注释CR/LF，SQLite非嵌套块注释和LF行注释。PG dollar、特殊字符串前缀(E/B/X/N/U&)、普通字符串反斜杠、未知标点，以及SQLite参数起始符均先保守回退；执行注释也回退。只接受单语句，最多一个顶层尾分号及普通尾注释；未闭合、内部裸分号、第二分号或尾随实质token均回退。MySQL路径不变；既有前导扫描不受新1MiB限制，不能宣称全auto CPU上限。
+
+集成仅在returnsRows的WITH分支增加纯helper；原SQL逐字传现有runner、仅调用一次。任何错误、取消、计数不可用、Close或预算失败都不换路重放。分类不证明只读、SQL有效或权限；PG影响计数仅代表主语句而非CTE内部所有写入。
+
+验收：纯分类覆盖支持/回退/大小与深度临界及随机输入；独立期望的fake runner覆盖省略/auto/rows/exec、原SQL与单次调用；临时SQLite覆盖三类主DML零/非零计数、n=n+1及WITH RETURNING保持结果。PG只纯函数/fake，无真实连接；同步UI说明与OpenAPI文字，不改模型/RPC/预算。明确保留完整RETURNING自动识别的后续边界。
+
+依据：[PostgreSQL WITH](https://www.postgresql.org/docs/18/queries-with.html)、[词法](https://www.postgresql.org/docs/18/sql-syntax-lexical.html)、[官方grammar](https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/parser/gram.y)、[SQLite WITH](https://www.sqlite.org/lang_with.html)、[RETURNING](https://www.sqlite.org/lang_returning.html)、[注释](https://www.sqlite.org/lang_comment.html)、[参数](https://www.sqlite.org/lang_expr.html)、[MySQL执行注释](https://dev.mysql.com/doc/refman/8.4/en/comments.html)。这些范围按实际引擎差异保守收敛，遇不确定直接保留旧路径。
+
+### M14-B2 发布前验证
+
+上述五个数据库文件已实现并冻结：新增流式scanner和独立期望测试，returnsRows仅新增WITH分支；executeQuery/预算/收尾不改。完整internal/database测试及race、vet通过；5秒fuzz共30,236次通过。独立对抗矩阵涵盖四模式/四结果、1MiB与256边界、PG续段/三引号/词边界、NUL与CR后语句，另以84条临时SQLite的实际返回列作为独立oracle，定向race全部通过，无阻塞发现。仅临时SQLite/fake，不宣称PG/MySQL实机。
+
+主任务精确快照另通过internal/database、完整OpenAPI、全仓Go build/vet；UI说明与OpenAPI同步有限自动识别范围和不重放原则。前端完整验证及发布后CI继续跟进；完整直接RETURNING自动识别仍未完成。
+
+精确前端验收（02:07 UTC）：2410单元/106文件、全量lint、Vue类型、生产构建、dist权限与540KiB预算全部通过，最大chunk518.0KiB。主任务已审查全部精确diff；未改执行权限、RPC协议、生产连接或凭据。
