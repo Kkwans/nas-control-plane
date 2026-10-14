@@ -46,6 +46,7 @@ import { NcpApiError } from '@/api/system'
 import { DatabaseInsertOutcomeUnknownError } from '@/api/databaseInsertOutcome'
 import { DatabaseRowWriteOutcomeUnknownError, type DatabaseRowWriteOperation } from '@/api/databaseRowWriteOutcome'
 import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWriteMode, resolveDatabaseValue } from '@/domain/database/valueConversion'
+import { databaseColumnContract } from '@/domain/database/columnContract'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
 import DatabaseCellEditor from '@/components/DatabaseCellEditor.vue'
@@ -55,7 +56,7 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useListPreference } from '@/composables/useListPreference'
-import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
@@ -111,6 +112,13 @@ const mode = ref<TableMode>('data')
 const tableRows = ref<DatabaseRows | null>(null)
 // 可见行归属于最后一次成功读取的目标；路由已变但旧 DOM 尚未重绘时不能借用旧行。
 const loadedRowsTargetKey = ref<string | null>(null)
+const acceptedRowsContract = ref<{ targetKey: string; columns: string | null } | null>(null)
+// 结构保护与写结果未知各自独立；普通刷新、关闭草稿、切换后返回均不能解锁。
+const schemaDriftTargets = ref(new Set<string>())
+const schemaReloadPending = ref(false)
+const schemaReloadError = ref<DatabaseErrorState | null>(null)
+let schemaReloadSequence = 0
+let schemaReloadController: AbortController | null = null
 const rowsLoading = ref(false)
 const rowsInitialized = ref(false)
 const errorState = ref<DatabaseErrorState | null>(null)
@@ -120,6 +128,8 @@ const sortDirection = ref('')
 const rowDialogOpen = ref(false)
 const rowDialogMode = ref<RowDialogMode>('insert')
 const rowForm = ref<Record<string, string>>({})
+// 草稿保留打开时的编辑合同，不能被共享目录的后续读取静默重解释。
+const rowDraftColumns = ref<DatabaseColumn[]>([])
 const rowNullFields = ref<Record<string, boolean>>({})
 const originalKeys = ref<Record<string, DatabaseValue>>({})
 const mutationPending = ref(false)
@@ -164,6 +174,14 @@ const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
 // schema / 表名可合法包含分隔符，使用元组编码避免不同目标共享草稿归属。
 const routeKey = computed(() => JSON.stringify([sourceId.value, schema.value, tableName.value]))
+const columnsContract = computed(() => databaseColumnContract(columns.value))
+const rowsContractMismatch = computed(() => acceptedRowsContract.value?.targetKey === routeKey.value
+  && (columnsContract.value === null || acceptedRowsContract.value.columns !== columnsContract.value))
+const draftContractMismatch = computed(() => rowDialogOpen.value && rowDraftTargetKey.value === routeKey.value
+  && (columnsContract.value === null || databaseColumnContract(rowDraftColumns.value) !== columnsContract.value))
+const schemaDrift = computed(() => schemaDriftTargets.value.has(routeKey.value) || rowsContractMismatch.value || draftContractMismatch.value)
+const rowSchemaReady = computed(() => !schemaDrift.value && !schemaReloadPending.value
+  && loadedRowsTargetKey.value === routeKey.value && columnsContract.value !== null)
 const insertTargetKey = routeKey
 const insertStatus = computed(() => insertAttempts.value.get(insertTargetKey.value))
 const insertPending = computed(() => insertStatus.value === 'pending')
@@ -176,8 +194,8 @@ const rowDraftPending = computed(() => rowDialogMode.value === 'insert'
   : rowWritePending.value && rowWriteAttempt.value?.operation === 'update' && rowWriteDraftGeneration.value === rowDraftGeneration.value)
 const stablePagination = computed(() => tableRows.value?.ordering?.stable !== false)
 const isView = computed(() => table.value?.type.toLowerCase() === 'view')
-const canInsertRows = computed(() => Boolean(table.value) && !isView.value)
-const canEditRows = computed(() => Boolean(table.value) && !isView.value && primaryKeyColumns.value.length > 0)
+const canInsertRows = computed(() => Boolean(table.value) && !isView.value && rowSchemaReady.value)
+const canEditRows = computed(() => canInsertRows.value && primaryKeyColumns.value.length > 0)
 const stats = computed<WorkspaceStat[]>(() => [
   { label: '数据行', value: formatNumber(table.value?.rowCount), tone: 'success' },
   { label: '表大小', value: formatBytes(table.value?.sizeBytes), tone: 'warning' },
@@ -244,6 +262,11 @@ async function initialize() {
 }
 
 function resetRouteState() {
+  schemaReloadSequence += 1
+  schemaReloadController?.abort()
+  schemaReloadController = null
+  schemaReloadPending.value = false
+  schemaReloadError.value = null
   interruptInsert()
   rowWriteController?.abort()
   rowWriteController = null
@@ -264,6 +287,7 @@ function resetRouteState() {
   mutationController = null
   tableRows.value = null
   loadedRowsTargetKey.value = null
+  acceptedRowsContract.value = null
   rowsLoading.value = false
   rowsInitialized.value = false
   errorState.value = null
@@ -288,13 +312,13 @@ function connection() {
   return databaseStore.connection(sourceId.value)
 }
 
-async function refreshRows(reportError = true, requestedOffset = offset.value, session?: SessionContext): Promise<RowsRefreshOutcome> {
-  if (!table.value) return { status: 'stale' }
+async function refreshRows(reportError = true, requestedOffset = offset.value, session = captureSession(), schemaReadSequence?: number): Promise<RowsRefreshOutcome> {
+  if (!table.value || schemaReloadPending.value && schemaReadSequence !== schemaReloadSequence) return { status: 'stale' }
   const sequence = ++rowsSequence
   const requestKey = routeKey.value
   rowsController?.abort()
   const controller = new AbortController()
-  const signal = session ? AbortSignal.any([controller.signal, session.signal]) : controller.signal
+  const signal = AbortSignal.any([controller.signal, session.signal])
   rowsController = controller
   rowsLoading.value = true
   clearError()
@@ -308,9 +332,11 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
     }, signal)
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || session && !isCurrentSession(session.generation)) return { status: 'stale' }
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || !isCurrentSession(session.generation)) return { status: 'stale' }
+    // 先核对最新目录合同，再授予行编辑归属；不接管、不覆盖已经打开的草稿。
+    acceptedRowsContract.value = { targetKey: requestKey, columns: databaseColumnContract(result.table?.columns) }
     tableRows.value = result
-    loadedRowsTargetKey.value = requestKey
+    loadedRowsTargetKey.value = rowsContractMismatch.value ? null : requestKey
     offset.value = requestedOffset
     if (reportError) {
       queryRefreshError.value = null
@@ -319,7 +345,7 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
     }
     return { status: 'success' }
   } catch (error) {
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || session && !isCurrentSession(session.generation) || isAbortError(error)) return { status: 'stale' }
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || !isCurrentSession(session.generation) || isAbortError(error)) return { status: 'stale' }
     const failure = toErrorState(error, '表数据读取失败。')
     if (reportError) errorState.value = failure
     return { status: 'failed', error: failure }
@@ -327,6 +353,56 @@ async function refreshRows(reportError = true, requestedOffset = offset.value, s
     if (sequence === rowsSequence) {
       rowsLoading.value = false
       rowsInitialized.value = true
+    }
+  }
+}
+
+async function reloadTableSchema() {
+  if (!schemaDrift.value || schemaReloadPending.value || rowDialogOpen.value || dangerOpen.value || mutationPending.value
+    || dangerBusy.value || queryPending.value || insertPending.value || rowWritePending.value) return
+  const key = routeKey.value
+  const requestedSource = sourceId.value
+  const routeGeneration = routeSequence
+  const sequence = ++schemaReloadSequence
+  const session = captureSession()
+  const controller = new AbortController()
+  const signal = AbortSignal.any([controller.signal, session.signal])
+  const ownsRead = () => sequence === schemaReloadSequence && routeGeneration === routeSequence
+    && key === routeKey.value && !signal.aborted && isCurrentSession(session.generation)
+  schemaReloadController = controller
+  schemaReloadPending.value = true
+  schemaReloadError.value = null
+  // 在目录 await 前终止旧只读结果的归属；不会中止任何已经发出的写入。
+  rowsSequence += 1
+  rowsController?.abort()
+  rowsLoading.value = false
+  loadedRowsTargetKey.value = null
+  try {
+    await databaseStore.loadCatalog(requestedSource, signal)
+    if (!ownsRead()) return
+    if (!table.value) {
+      schemaDriftTargets.value.add(key)
+      schemaReloadError.value = { code: 'database_not_found', message: '当前目录中未找到此表。', nextStep: '返回数据源详情核对表名与结构。' }
+      return
+    }
+    const catalogContract = columnsContract.value
+    if (sortColumn.value && !columns.value.some((column) => column.name === sortColumn.value)) {
+      sortColumn.value = ''
+      sortDirection.value = ''
+    }
+    const refresh = await refreshRows(false, 0, session, sequence)
+    if (!ownsRead()) return
+    if (refresh.status === 'failed') schemaReloadError.value = refresh.error
+    if (refresh.status === 'success' && catalogContract !== null && columnsContract.value === catalogContract
+      && acceptedRowsContract.value?.targetKey === key && acceptedRowsContract.value.columns === catalogContract) {
+      schemaDriftTargets.value.delete(key)
+    }
+  } catch (error) {
+    if (ownsRead() && !isAbortError(error)) schemaReloadError.value = toErrorState(error, '表结构重新读取失败。')
+  } finally {
+    if (sequence === schemaReloadSequence) {
+      schemaReloadPending.value = false
+      if (schemaReloadController === controller) schemaReloadController = null
     }
   }
 }
@@ -357,6 +433,7 @@ function openInsert() {
   rowDraftTargetKey.value = routeKey.value
   rowDraftGeneration.value += 1
   rowDialogMode.value = 'insert'
+  rowDraftColumns.value = columns.value.map((column) => ({ ...column }))
   rowForm.value = Object.fromEntries(columns.value.map((column) => [column.name, '']))
   rowNullFields.value = Object.fromEntries(columns.value.map((column) => [column.name, false]))
   originalKeys.value = {}
@@ -367,6 +444,7 @@ function clearRowDraft() {
   rowDraftGeneration.value += 1
   rowDraftTargetKey.value = null
   rowForm.value = {}
+  rowDraftColumns.value = []
   rowNullFields.value = {}
   originalKeys.value = {}
 }
@@ -376,6 +454,7 @@ function openEdit(row: Record<string, DatabaseValue>) {
   rowDraftTargetKey.value = routeKey.value
   rowDraftGeneration.value += 1
   rowDialogMode.value = 'edit'
+  rowDraftColumns.value = columns.value.map((column) => ({ ...column }))
   rowForm.value = Object.fromEntries(columns.value.map((column) => [
     column.name,
     databaseEditorValue(row[column.name], column),
@@ -389,7 +468,7 @@ function openEdit(row: Record<string, DatabaseValue>) {
 }
 
 function rowValues(dialogMode: RowDialogMode) {
-  return Object.fromEntries(columns.value.flatMap((column) => {
+  return Object.fromEntries(rowDraftColumns.value.flatMap((column) => {
     const rawValue = rowForm.value[column.name] ?? ''
     const nullSelected = rowNullFields.value[column.name] === true
     const writeMode = databaseWriteMode(column)
@@ -410,7 +489,7 @@ function interruptInsert() {
 }
 
 async function submitInsert() {
-  if (!table.value || insertStatus.value) return
+  if (!table.value || !canInsertRows.value || !rowDialogOpen.value || rowDraftTargetKey.value !== routeKey.value || insertStatus.value) return
   const target = Object.freeze({ sourceId: sourceId.value, schema: table.value.schema, table: table.value.name })
   const key = insertTargetKey.value
   const routeGeneration = routeSequence
@@ -471,7 +550,7 @@ async function submitRow() {
 }
 
 async function submitRowWrite(operation: DatabaseRowWriteOperation) {
-  if (!table.value || rowWriteAttempt.value || mutationPending.value || dangerBusy.value) return
+  if (!table.value || !canEditRows.value || rowWriteAttempt.value || mutationPending.value || dangerBusy.value) return
   const target = Object.freeze({ sourceId: sourceId.value, schema: table.value.schema, table: table.value.name })
   const key = JSON.stringify([target.sourceId, target.schema, target.table])
   const routeGeneration = routeSequence
@@ -736,6 +815,11 @@ function clearError() {
   errorState.value = null
 }
 
+watch([rowsContractMismatch, draftContractMismatch], ([rowsChanged, draftChanged]) => {
+  if (!rowsChanged && !draftChanged) return
+  schemaDriftTargets.value.add(routeKey.value)
+  if (dangerOpen.value && dangerAction.value === 'delete-row' && !dangerBusy.value) dangerOpen.value = false
+}, { flush: 'sync' })
 watch(routeKey, () => { void initialize() }, { immediate: true })
 watch(rowDialogOpen, (open) => { if (!open) clearRowDraft() }, { flush: 'sync' })
 watch([rowForm, rowNullFields], () => { rowDraftRevision.value += 1 }, { deep: true, flush: 'sync' })
@@ -754,6 +838,9 @@ watch(pageSize, (next, previous) => {
   void refreshRows()
 })
 onBeforeUnmount(() => {
+  schemaReloadSequence += 1
+  schemaReloadController?.abort()
+  schemaReloadController = null
   interruptInsert()
   rowWriteController?.abort()
   rowWriteController = null
@@ -781,6 +868,13 @@ onBeforeUnmount(() => {
     </WorkspaceHeader>
 
     <DatabaseErrorPanel v-if="errorState" title="数据表操作失败" :error="errorState" />
+    <div v-if="schemaDrift" class="insert-outcome-warning" role="alert">
+      <strong>表结构已变化，新增、编辑和删除已暂停。</strong>
+      <span>读取到的字段信息与编辑器不一致。请先关闭草稿或确认框，再重新读取表结构；普通刷新不会解除保护。</span>
+      <span v-if="schemaReloadError">重新读取未完成：{{ schemaReloadError.message }}（代码 {{ schemaReloadError.code }}）</span>
+      <ElButton :loading="schemaReloadPending" :disabled="rowDialogOpen || dangerOpen || mutationPending || dangerBusy || queryPending || insertPending || rowWritePending" @click="reloadTableSchema"><RefreshCw :size="15" />重新读取表结构</ElButton>
+      <small>重新读取不会解除写结果未确认的保护。</small>
+    </div>
     <div v-if="insertUnknown" class="insert-outcome-warning" role="alert">
       <strong>新增结果未确认，可能已生效。</strong>
       <span>已暂停当前目标的再次新增。草稿仍可查看；刷新仅重新读取数据，不能证明此次新增成功或失败，也不会解除保护。</span>
@@ -928,16 +1022,17 @@ onBeforeUnmount(() => {
 
     <ElDialog v-model="rowDialogOpen" :title="rowDialogMode === 'insert' ? '新增数据行' : '编辑数据行'" width="min(760px, calc(100vw - 28px))">
       <div class="row-dialog-context"><component :is="tableTypeIcon(table.type)" :size="18" /><span><strong>{{ table.name }}</strong><small>保存后将直接写入数据库</small></span></div>
+      <div v-if="schemaDrift" class="insert-outcome-warning" role="alert"><strong>表结构已变化，草稿不能提交。</strong><span>如需保留，请先复制草稿；关闭后重新读取表结构，再建立新草稿。</span></div>
       <div v-if="rowDialogMode === 'insert' && insertUnknown" class="insert-outcome-warning" role="alert"><strong>新增结果未确认，可能已生效。</strong><span>当前目标已暂停再次新增。请先只读核对数据库状态，刷新不会解除保护。</span></div>
       <div v-else-if="rowDialogMode === 'insert' && insertPending" class="object-warning" role="status">当前目标的新增请求正在等待结果，请勿重复提交。</div>
       <div v-if="rowDialogMode === 'edit' && rowWriteUnknown" class="insert-outcome-warning" role="alert"><strong>行修改结果未确认，可能已生效。</strong><span>当前表所有行的编辑与删除已暂停。只读刷新不会解除保护。</span></div>
       <ElForm class="row-form" label-position="top">
-        <ElFormItem v-for="column in columns" :key="column.name">
+        <ElFormItem v-for="column in rowDraftColumns" :key="column.name">
           <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable && !isBooleanColumn(column)" v-model="rowNullFields[column.name]" :disabled="rowDraftPending" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
           <DatabaseCellEditor :model-value="rowForm[column.name] ?? ''" :null-selected="rowNullFields[column.name] === true" :column="column" :disabled="rowDraftPending || rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" @update:model-value="rowForm[column.name] = $event" @update:null-selected="rowNullFields[column.name] = $event" />
         </ElFormItem>
       </ElForm>
-      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' ? insertUnknown : dangerBusy || rowWriteUnknown" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
+      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="!canInsertRows || (rowDialogMode === 'insert' ? insertUnknown : dangerBusy || rowWriteUnknown)" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
     </ElDialog>
 
     <ConfirmDangerDialog
