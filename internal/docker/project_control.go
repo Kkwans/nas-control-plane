@@ -33,6 +33,8 @@ func (r ProjectActionRequest) Normalize() (ProjectActionRequest, error) {
 	if len(r.ContainerIDs) == 0 {
 		return ProjectActionRequest{}, coded("DOCKER_PROJECT_ACTION_INVALID", errors.New("container collection is required"))
 	}
+	// 规范化只修改本次请求的快照，不能回写调用者的切片。
+	r.ContainerIDs = append([]string(nil), r.ContainerIDs...)
 	seen := make(map[string]struct{}, len(r.ContainerIDs))
 	for index, value := range r.ContainerIDs {
 		containerID := strings.TrimSpace(value)
@@ -45,9 +47,11 @@ func (r ProjectActionRequest) Normalize() (ProjectActionRequest, error) {
 		seen[containerID] = struct{}{}
 		r.ContainerIDs[index] = containerID
 	}
-	if _, err := ParseContainerAction(string(r.Action)); err != nil {
+	action, err := ParseContainerAction(string(r.Action))
+	if err != nil {
 		return ProjectActionRequest{}, coded("DOCKER_PROJECT_ACTION_INVALID", err)
 	}
+	r.Action = action
 	return r, nil
 }
 

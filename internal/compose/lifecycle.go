@@ -46,6 +46,7 @@ func (r LifecycleRequest) Normalize() (LifecycleRequest, error) {
 	}
 	r.WorkingDirectory = workingDirectory
 	seen := make(map[string]struct{}, len(r.ConfigFiles))
+	configFiles := make([]string, len(r.ConfigFiles))
 	for index, value := range r.ConfigFiles {
 		configPath, err := validateConfigPath(workingDirectory, value)
 		if err != nil {
@@ -55,11 +56,14 @@ func (r LifecycleRequest) Normalize() (LifecycleRequest, error) {
 			return LifecycleRequest{}, coded("COMPOSE_LIFECYCLE_INVALID", errors.New("compose config files contain duplicates"))
 		}
 		seen[configPath] = struct{}{}
-		r.ConfigFiles[index] = configPath
+		configFiles[index] = configPath
 	}
-	if _, err := ParseLifecycleAction(string(r.Action)); err != nil {
+	action, err := ParseLifecycleAction(string(r.Action))
+	if err != nil {
 		return LifecycleRequest{}, err
 	}
+	r.ConfigFiles = configFiles
+	r.Action = action
 	return r, nil
 }
 

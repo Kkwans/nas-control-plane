@@ -161,3 +161,11 @@ NAS实机、真实PG/MySQL与原生多PTY部署边界未改变，不把隔离CI�
 详见[显式证书校验 TLS 方案](NCP-2026-10-14-database-tls.md)。T0纯策略编译器已实现并通过包内测试/race、Go构建/vet，尚未接入运行路径，不能视为用户可用TLS。接续顺序为每连接严格connector、版本化RPC与凭据保存防降级、HTTP/OpenAPI/表单闭环；旧请求默认行为保留，CA与服务器身份只接受完整校验，不提供跳过校验。旧Agent忽略新增字段、回滚密文以及并发保存/轮换覆盖必须先失败关闭，再开放入口。真实握手/部署不在本次隔离实现的完成声明内。
 
 最近已交付模块：连接诊断与保存未知结果151258c、RPC稳定码fb3007a、读取身份556216e、镜像重试完成刷新b66ab09。db5da8c完整CI已通过3266单元/407浏览器，覆盖新增读取身份及重试动线；不等同于NAS实机验收。
+
+## 生命周期请求规范化（2026-10-14 17:52 UTC）
+
+基于23fef4a的纯fake复现表明，Docker单容器与独立项目直接调用时，`" START "`、`" STOP "`、`" ReStart "`通过宽松Parse校验，却因派发仍使用原值而零次执行动作、仅检查状态并返回成功；项目Normalize还会在成功或后续校验失败时改写调用者的容器ID切片。Compose生命周期存在同类原值派发问题，作为同一规范化模块修复。HTTP与Agent RPC入口原本已解析动作，不能把此问题夸大为现有浏览器正常操作漏执行。
+
+修复保留已有大小写和首尾空白兼容，将规范动作同时用于派发与结果，项目/Compose的Normalize拥有独立切片；非法输入仍在副作用之前拒绝。两个项目RPC decoder显式返回Normalize结果，保证自定义provider继续收到规范容器ID、工作目录及配置路径，不再依赖原地修改的副作用。没有改变状态匹配语义、公开HTTP字段、重试策略或部署配置；“命令完成但读回状态不符”的结果反馈仍留独立切片。
+
+Docker新增断言使用基线生产文件overlay先复现失败，再在修复后通过：`go test ./internal/docker -run '^Test(ContainerController|ProjectController|ProjectAction)' -race -count=20`；纯RPC decoder/service通过`go test ./internal/agentsocket -run '^Test(Project|Compose)Action(Decoder|Service)' -race -count=20`。相关Go vet、`go build ./cmd/...`与diff检查通过；未执行含监听器的整包测试、浏览器、真实Docker/Compose、NAS或部署。提交与远端CI由主任务接续核验。

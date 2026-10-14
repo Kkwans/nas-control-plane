@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"sync"
 	"testing"
@@ -113,6 +114,94 @@ func TestProjectActionRequestRejectsComposeKindAndDuplicateIDs(t *testing.T) {
 		if ErrorCode(request.Validate()) != "DOCKER_PROJECT_ACTION_INVALID" {
 			t.Fatalf("request %#v was accepted", request)
 		}
+	}
+}
+
+func TestProjectControllerNormalizesActionBeforeDispatch(t *testing.T) {
+	for _, test := range []struct {
+		input ContainerAction
+		want  ContainerAction
+	}{
+		{" START ", ContainerActionStart},
+		{"\tStop\n", ContainerActionStop},
+		{" ReStart ", ContainerActionRestart},
+	} {
+		t.Run(string(test.input), func(t *testing.T) {
+			request := ProjectActionRequest{ProjectID: "standalone", ContainerIDs: []string{" abc123 "}, Action: test.input}
+			gateway := &fakeContainerControlGateway{snapshot: ContainerSnapshot{ID: "abc123", Running: test.want != ContainerActionStop}}
+			result, err := NewProjectController(NewContainerController(gateway)).Control(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Control() error = %v", err)
+			}
+			if len(gateway.actions) != 1 || gateway.actions[0] != string(test.want) || gateway.inspectCalls != 1 {
+				t.Fatalf("actions = %#v, inspect calls = %d", gateway.actions, gateway.inspectCalls)
+			}
+			if !result.Completed || result.Action != test.want || len(result.Containers) != 1 || result.Containers[0].Action != test.want || !result.Containers[0].Success {
+				t.Fatalf("result = %#v", result)
+			}
+			if request.Action != test.input || request.ContainerIDs[0] != " abc123 " {
+				t.Fatalf("caller request changed: %#v", request)
+			}
+		})
+	}
+}
+
+func TestProjectActionNormalizeOwnsContainerIDsOnSuccessAndFailure(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		ids    []string
+		action ContainerAction
+		valid  bool
+	}{
+		{"success", []string{" first ", " second "}, " START ", true},
+		{"empty item", []string{" first ", " "}, ContainerActionStart, false},
+		{"duplicate item", []string{" first ", "first"}, ContainerActionStart, false},
+		{"invalid action", []string{" first ", " second "}, " stop;start ", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := append([]string(nil), test.ids...)
+			request := ProjectActionRequest{ProjectID: "standalone", ContainerIDs: test.ids, Action: test.action}
+			normalized, err := request.Normalize()
+			if (err == nil) != test.valid {
+				t.Fatalf("Normalize() error = %v, want valid = %t", err, test.valid)
+			}
+			if !reflect.DeepEqual(test.ids, original) {
+				t.Fatalf("Normalize() changed caller IDs: %#v, want %#v", test.ids, original)
+			}
+			if err != nil {
+				if ErrorCode(err) != "DOCKER_PROJECT_ACTION_INVALID" {
+					t.Fatalf("error code = %q", ErrorCode(err))
+				}
+				return
+			}
+			if normalized.Action != ContainerActionStart || !reflect.DeepEqual(normalized.ContainerIDs, []string{"first", "second"}) {
+				t.Fatalf("normalized request = %#v", normalized)
+			}
+			normalized.ContainerIDs[0] = "changed normalized"
+			test.ids[1] = "changed original"
+			if test.ids[0] != original[0] || normalized.ContainerIDs[1] != "second" {
+				t.Fatalf("normalized and caller IDs still alias: %#v / %#v", normalized.ContainerIDs, test.ids)
+			}
+		})
+	}
+}
+
+func TestProjectActionNormalizeCanShareReadOnlyRequest(t *testing.T) {
+	request := ProjectActionRequest{ProjectID: "standalone", ContainerIDs: []string{" first ", " second "}, Action: " START "}
+	var workers sync.WaitGroup
+	for range 16 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			normalized, err := request.Normalize()
+			if err != nil || normalized.Action != ContainerActionStart || !reflect.DeepEqual(normalized.ContainerIDs, []string{"first", "second"}) {
+				t.Errorf("Normalize() = %#v, error = %v", normalized, err)
+			}
+		}()
+	}
+	workers.Wait()
+	if !reflect.DeepEqual(request.ContainerIDs, []string{" first ", " second "}) {
+		t.Fatalf("shared caller request changed: %#v", request)
 	}
 }
 
