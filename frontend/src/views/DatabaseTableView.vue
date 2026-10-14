@@ -438,6 +438,8 @@ async function submitRow() {
     await submitInsert()
     return
   }
+  // UPDATE 与危险确认共享请求归属；竞争操作不能中止先发写入或抢占序号。
+  if (dangerBusy.value) return
   const sequence = ++mutationSequence
   const requestKey = routeKey.value
   const draftGeneration = rowDraftGeneration.value
@@ -461,7 +463,7 @@ async function submitRow() {
 }
 
 async function removeRow(row: Record<string, DatabaseValue>) {
-  if (!table.value || !canEditRows.value || queryPending.value || dangerBusy.value || dangerOpen.value) return
+  if (!table.value || !canEditRows.value || mutationPending.value || queryPending.value || dangerBusy.value || dangerOpen.value) return
   pendingRow.value = row
   pendingQuery.value = null
   dangerAction.value = 'delete-row'
@@ -503,7 +505,7 @@ async function executeSQL(snapshot: SQLExecutionSnapshot) {
 }
 
 async function confirmDanger() {
-  if (!table.value || !dangerOpen.value || dangerBusy.value || queryPending.value) return
+  if (!table.value || !dangerOpen.value || mutationPending.value || dangerBusy.value || queryPending.value) return
   const action = dangerAction.value
   const snapshot = pendingQuery.value
   const sequence = ++mutationSequence
@@ -744,7 +746,7 @@ onBeforeUnmount(() => {
             <template #default="{ row }">
               <div class="row-actions">
                 <button type="button" :disabled="!canEditRows" aria-label="编辑当前行" @click.stop="openEdit(row)"><Pencil :size="14" />编辑</button>
-                <button class="danger" type="button" :disabled="!canEditRows" aria-label="删除当前行" @click.stop="removeRow(row)"><Trash2 :size="14" />删除</button>
+                <button class="danger" type="button" :disabled="!canEditRows || mutationPending || queryPending || dangerBusy || dangerOpen" aria-label="删除当前行" @click.stop="removeRow(row)"><Trash2 :size="14" />删除</button>
               </div>
             </template>
           </ElTableColumn>
@@ -829,7 +831,7 @@ onBeforeUnmount(() => {
           <DatabaseCellEditor :model-value="rowForm[column.name] ?? ''" :null-selected="rowNullFields[column.name] === true" :column="column" :disabled="rowDraftPending || rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" @update:model-value="rowForm[column.name] = $event" @update:null-selected="rowNullFields[column.name] = $event" />
         </ElFormItem>
       </ElForm>
-      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' && insertUnknown" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
+      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' ? insertUnknown : dangerBusy" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
     </ElDialog>
 
     <ConfirmDangerDialog
@@ -839,7 +841,7 @@ onBeforeUnmount(() => {
       :impact="dangerImpact"
       :retained="dangerRetained"
       :action-label="dangerAction === 'sql' ? '确认执行' : '永久删除'"
-      :busy="dangerBusy || queryPending"
+      :busy="mutationPending || dangerBusy || queryPending"
       @confirm="confirmDanger"
     >
       <template v-if="dangerAction === 'sql' && pendingQuery" #details>
