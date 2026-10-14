@@ -192,6 +192,7 @@ async function captureState(page: Page) {
       '.row-dialog-context', '.row-dialog-context strong', '.row-dialog-context small',
       '.insert-outcome-warning', '.insert-outcome-warning strong', '.insert-outcome-warning span',
       '.row-form', '.form-label', '.database-cell-editor__hint', '.row-form input',
+      '.row-form .database-cell-editor input', '.row-form .el-switch',
       '.el-dialog__footer', '.el-dialog__footer button', '.el-dialog__footer button > span',
     ]
     return {
@@ -202,7 +203,14 @@ async function captureState(page: Page) {
       semantic: {
         notice: panel.querySelector('.insert-outcome-warning')?.textContent,
         pageNotice: document.querySelector('.table-workbench-page > .insert-outcome-warning')?.textContent,
-        fields: [...panel.querySelectorAll<HTMLInputElement>('.row-form input')].map((input) => ({ name: input.getAttribute('aria-label'), value: input.value, disabled: input.disabled })),
+        fields: [...panel.querySelectorAll<HTMLInputElement>('.row-form .database-cell-editor input')].map((input) => ({ name: input.getAttribute('aria-label'), value: input.value, disabled: input.disabled })),
+        switches: [...panel.querySelectorAll<HTMLElement>('.row-form .el-switch')].map((wrapper) => {
+          const input = wrapper.querySelector<HTMLInputElement>('input')
+          return {
+            field: wrapper.closest('.el-form-item')?.querySelector('.database-cell-editor input')?.getAttribute('aria-label'),
+            role: input?.getAttribute('role'), checked: input?.checked, ariaChecked: input?.getAttribute('aria-checked'), disabled: input?.disabled,
+          }
+        }),
         actions: [...panel.querySelectorAll<HTMLButtonElement>('.el-dialog__footer button')].map((button) => ({ text: button.textContent?.trim(), disabled: button.disabled })),
         toasts: [...document.querySelectorAll('.el-message')].map((message) => message.textContent),
       },
@@ -219,7 +227,9 @@ async function captureState(page: Page) {
         }
         const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
         return {
-          selector, index, text: element.textContent?.trim(), bounds: bounds.toJSON(),
+          selector, index, tag: element.tagName, role: element.getAttribute('role'),
+          inputType: element instanceof HTMLInputElement ? element.type : null,
+          text: element.textContent?.trim(), bounds: bounds.toJSON(),
           lines: lines.map((line) => line.toJSON()), clips: clips.map((clip) => clip.toJSON()),
           scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, scrollLeft: element.scrollLeft,
           visible: bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
@@ -272,13 +282,20 @@ async function capture(page: Page, info: TestInfo, api: Fixture, stateName: stri
   const required = [
     '.el-dialog__title', '.el-dialog__headerbtn', '.row-dialog-context strong', '.row-dialog-context small',
     '.insert-outcome-warning', '.insert-outcome-warning strong', '.insert-outcome-warning span',
-    '.form-label', '.database-cell-editor__hint', '.row-form input', '.el-dialog__footer button', '.el-dialog__footer button > span',
+    '.form-label', '.database-cell-editor__hint', '.row-form .database-cell-editor input', '.row-form .el-switch',
+    '.el-dialog__footer button', '.el-dialog__footer button > span',
   ]
+  expect.soft(beforeCapture.semantic.fields).toEqual(Object.entries(currentValues).map(([name, value]) => ({ name, value, disabled: false })))
+  expect.soft(beforeCapture.semantic.switches).toEqual([{ field: 'value', role: 'switch', checked: false, ariaChecked: 'false', disabled: false }])
+  // CI 原始证据确认 ElSwitch 的语义 checkbox 为 0×0；保留全部 input 诊断，
+  // 几何分别检查三个编辑框和实际接收点击的可见 switch 外壳，不能把隐藏 checkbox 当成编辑框。
+  expect.soft(beforeCapture.controls.filter((item) => item.selector === '.row-form .database-cell-editor input')).toHaveLength(3)
+  expect.soft(beforeCapture.controls.filter((item) => item.selector === '.row-form .el-switch')).toHaveLength(1)
   for (const control of beforeCapture.controls.filter((item) => required.includes(item.selector))) {
     expect.soft(control.visible && control.inViewport, JSON.stringify(control)).toBe(true)
     // 长输入值可在输入控件内正常横向滚动；提示和操作文案必须完整可读。
-    if (control.selector !== '.row-form input') expect.soft(control.textContained, JSON.stringify(control)).toBe(true)
-    if (['.el-dialog__headerbtn', '.el-dialog__footer button', '.row-form input'].includes(control.selector)) expect.soft(control.centerHit, JSON.stringify(control)).toBe(true)
+    if (control.selector !== '.row-form .database-cell-editor input') expect.soft(control.textContained, JSON.stringify(control)).toBe(true)
+    if (['.el-dialog__headerbtn', '.el-dialog__footer button', '.row-form .database-cell-editor input', '.row-form .el-switch'].includes(control.selector)) expect.soft(control.centerHit, JSON.stringify(control)).toBe(true)
   }
   expect.soft(axe.violations, JSON.stringify(axe.violations, null, 2)).toEqual([])
 }
