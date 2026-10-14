@@ -1,3 +1,4 @@
+import { decodeContainerActionReceipt, decodeStandaloneActionReceipt, requestDockerActionReceipt } from './dockerActionOutcome'
 import { captureSession } from '@/session/sessionLifecycle'
 import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
@@ -290,12 +291,13 @@ export async function requestContainerAction(
   action: ContainerAction,
   fetcher: typeof fetch = fetch,
 ): Promise<ContainerActionResult> {
-  return requestJson(
-    `/api/v1/docker/containers/${encodeURIComponent(containerId)}/actions/${action}`,
+  const intent = { containerId, action }
+  return requestDockerActionReceipt(
+    `/api/v1/docker/containers/${encodeURIComponent(intent.containerId)}/actions/${intent.action}`,
     { method: 'POST' },
-    isContainerActionResult,
+    'container',
+    (payload) => decodeContainerActionReceipt(payload, intent),
     fetcher,
-    'DOCKER_CONTAINER_ACTION_RESPONSE_INVALID',
   )
 }
 
@@ -335,21 +337,18 @@ export async function requestDockerProjectAction(
       'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
     )
   }
-  return requestJson(
-    `/api/v1/docker/projects/${encodeURIComponent(project.id)}/actions/${action}`,
+  // 提交前复制标识和目标集合，等待响应时调用者的变化不能改变回执归属。
+  const intent = { projectId: project.id, action, containerIds: [...(project.containerIds ?? [])] }
+  return requestDockerActionReceipt(
+    `/api/v1/docker/projects/${encodeURIComponent(intent.projectId)}/actions/${intent.action}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        projectId: project.id,
-        kind: 'standalone',
-        containerIds: project.containerIds ?? [],
-        action,
-      }),
+      body: JSON.stringify({ projectId: intent.projectId, kind: 'standalone', containerIds: intent.containerIds, action: intent.action }),
     },
-    isDockerProjectActionResult,
+    'standalone',
+    (payload) => decodeStandaloneActionReceipt(payload, intent),
     fetcher,
-    'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
   )
 }
 
@@ -629,28 +628,6 @@ function isContainerAction(value: unknown): value is ContainerAction {
   return value === 'start' || value === 'stop' || value === 'restart'
 }
 
-function isDockerProjectActionResult(value: unknown): value is DockerProjectActionResult {
-  return (
-    isRecord(value) &&
-    typeof value.projectId === 'string' &&
-    (value.kind === 'standalone' || value.kind === 'compose') &&
-    isContainerAction(value.action) &&
-    typeof value.state === 'string' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.containers) &&
-    value.containers.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.containerId === 'string' &&
-        typeof item.name === 'string' &&
-        isContainerAction(item.action) &&
-        typeof item.state === 'string' &&
-        typeof item.success === 'boolean' &&
-        (item.errorCode === undefined || typeof item.errorCode === 'string'),
-    )
-  )
-}
-
 function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResult {
   return (
     isRecord(value) &&
@@ -693,16 +670,6 @@ function isDockerResources(value: unknown): value is DockerResources {
 
 function isServiceListResponse(value: unknown): value is ServiceListResponse {
   return isRecord(value) && typeof value.collectedAt === 'string' && Array.isArray(value.services)
-}
-
-function isContainerActionResult(value: unknown): value is ContainerActionResult {
-  return (
-    isRecord(value) &&
-    typeof value.containerId === 'string' &&
-    typeof value.name === 'string' &&
-    (value.action === 'start' || value.action === 'stop' || value.action === 'restart') &&
-    typeof value.state === 'string'
-  )
 }
 
 function isContainerDetails(value: unknown): value is ContainerDetails {

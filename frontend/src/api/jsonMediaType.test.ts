@@ -5,6 +5,7 @@ import { bootstrapRoot, loginRoot, logoutRoot, requestAuthStatus } from './auth'
 import * as control from './control'
 import * as database from './database'
 import * as docker from './docker'
+import { DockerActionOutcomeUnknownError } from './dockerActionOutcome'
 import * as system from './systemInfo'
 import { NcpApiError } from './systemTransport'
 import { UserWriteOutcomeUnknownError } from './userWriteOutcome'
@@ -170,6 +171,10 @@ describe('JSON 请求 MIME 与大小错误契约', () => {
       // 服务端 DELETE 账号不经过 JSON MIME 检查；意外 415 不能作为已证明未执行。
       expect(error).toBeInstanceOf(UserWriteOutcomeUnknownError)
       expect(error).toMatchObject({ code: 'USER_WRITE_OUTCOME_UNKNOWN', operation: 'delete', requestId: undefined })
+    } else if (family === 'docker' && method === 'POST' && path.includes('/containers/') && path.includes('/actions/')) {
+      // 单容器动作不解析 JSON；意外 415 无法证明命令未执行。
+      expect(error).toBeInstanceOf(DockerActionOutcomeUnknownError)
+      expect(error).toMatchObject({ code: 'DOCKER_CONTAINER_ACTION_OUTCOME_UNKNOWN', message: new DockerActionOutcomeUnknownError('container').message, requestId: undefined })
     } else {
       expect(error).toMatchObject(mediaError)
     }
