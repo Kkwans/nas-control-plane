@@ -1,0 +1,172 @@
+[
+  {
+    "name": "legacy_unknown_negative",
+    "http": {
+      "columns": [],
+      "rows": [],
+      "rowsAffected": -1,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 1
+    },
+    "accepted": true
+  },
+  {
+    "name": "legacy_unsafe_count",
+    "http": {
+      "columns": [],
+      "rows": [],
+      "rowsAffected": 9007199254740992,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 1
+    },
+    "accepted": true
+  },
+  {
+    "name": "all_zero_nil_slices",
+    "http": {
+      "columns": null,
+      "rows": null,
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "known_safe_maximum",
+    "http": {
+      "columns": [],
+      "rows": [],
+      "rowsAffected": 9007199254740991,
+      "rowsAffectedKnown": true,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "required_wire_members_absent_defaulted_by_server",
+    "http": {
+      "columns": null,
+      "rows": null,
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "null_optional_values_defaulted_by_server",
+    "http": {
+      "columns": [],
+      "rows": [],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "signed_old_duration_preserved_by_server",
+    "http": {
+      "columns": [],
+      "rows": [],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": -1
+    },
+    "accepted": false
+  },
+  {
+    "name": "duplicate_empty_special_column_names",
+    "http": {
+      "columns": [
+        "",
+        "x",
+        "x",
+        "__proto__",
+        "constructor",
+        "a.b"
+      ],
+      "rows": [
+        [
+          1,
+          2,
+          3,
+          "safe",
+          "text",
+          true
+        ]
+      ],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "scalar_text_finite_values",
+    "http": {
+      "columns": [
+        "null",
+        "bool",
+        "float",
+        "large",
+        "decimal"
+      ],
+      "rows": [
+        [
+          null,
+          true,
+          1.25,
+          "9007199254740993",
+          "1.234567890123456789002500"
+        ]
+      ],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "nonfinite_wire_number_becomes_string",
+    "http": {
+      "columns": [
+        "n"
+      ],
+      "rows": [
+        [
+          "Infinity"
+        ]
+      ],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": true
+  },
+  {
+    "name": "nullable_row_passes_typed_server",
+    "http": {
+      "columns": [],
+      "rows": [
+        null
+      ],
+      "rowsAffected": 0,
+      "rowsAffectedKnown": false,
+      "truncated": false,
+      "durationMs": 0
+    },
+    "accepted": false
+  }
+]

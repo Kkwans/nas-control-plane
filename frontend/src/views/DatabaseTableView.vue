@@ -46,6 +46,7 @@ import {
 import { NcpApiError } from '@/api/system'
 import { DatabaseInsertOutcomeUnknownError } from '@/api/databaseInsertOutcome'
 import { DatabaseRowWriteOutcomeUnknownError, type DatabaseRowWriteOperation } from '@/api/databaseRowWriteOutcome'
+import { isDatabaseQueryOutcomeUnknownError, isDatabaseQueryPreDispatchRejectedError } from '@/api/databaseQueryOutcome'
 import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWriteMode, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { databaseColumnContract } from '@/domain/database/columnContract'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
@@ -72,8 +73,14 @@ interface SQLEditorScope {
 interface SQLExecutionSnapshot {
   scope: SQLEditorScope
   connection: DatabaseConnection
+  targetLabel: string
   sql: string
   resultMode: DatabaseQueryResultMode
+  requiresUnknownConfirmation: boolean
+}
+
+interface SQLQueryErrorState extends DatabaseErrorState {
+  status: 'unknown' | 'rejected' | 'local'
 }
 
 const resultModeLabels: Record<DatabaseQueryResultMode, string> = {
@@ -163,8 +170,14 @@ const sql = ref('')
 const resultMode = ref<DatabaseQueryResultMode>('auto')
 const queryResult = ref<QueryResult | null>(null)
 const queryPending = ref(false)
-const queryError = ref<DatabaseErrorState | null>(null)
+const queryError = ref<SQLQueryErrorState | null>(null)
 const queryRefreshError = ref<DatabaseErrorState | null>(null)
+// 仅保留本页、当前会话的目标标记，不保存 SQL、凭据或原始错误；读取和新成功不能解除旧未知。
+const sqlUnknownTargets = ref(new Set<string>())
+let sqlUnknownSessionGeneration: number | null = null
+let releaseSQLUnknownSession: (() => void) | null = null
+// 观察取消时只记录原目标；有效结果已收到后的行刷新不再属于 SQL 结果未知。
+let queryObservation: { scope: SQLEditorScope } | null = null
 const dangerOpen = ref(false)
 const dangerBusy = ref(false)
 const dangerAction = ref<'delete-row' | 'sql'>('delete-row')
@@ -187,6 +200,7 @@ const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
 // schema / 表名可合法包含分隔符，使用元组编码避免不同目标共享草稿归属。
 const routeKey = computed(() => JSON.stringify([sourceId.value, schema.value, tableName.value]))
+const sqlUnknown = computed(() => sqlUnknownTargets.value.has(routeKey.value))
 const columnsContract = computed(() => databaseColumnContract(columns.value))
 const rowsContractMismatch = computed(() => acceptedRowsContract.value?.targetKey === routeKey.value
   && (columnsContract.value === null || acceptedRowsContract.value.columns !== columnsContract.value))
@@ -242,9 +256,15 @@ const queryTruncationSummary = computed(() => {
   return `${reason}${retained}截断不限制写入范围，也不代表写入未生效或已回滚。`
 })
 const queryEmptyText = computed(() => queryResult.value?.truncated ? '完整结果行未能展示。' : '无返回行')
-const dangerTitle = computed(() => dangerAction.value === 'sql' ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.title ?? '确认执行 SQL') : '确认删除数据行')
+const queryErrorTitle = computed(() => queryError.value?.status === 'unknown' ? '结果未确认，可能部分或全部生效'
+  : queryError.value?.status === 'rejected' ? 'SQL 未提交执行' : 'SQL 请求未发送')
+const dangerTitle = computed(() => dangerAction.value === 'sql'
+  ? pendingQuery.value?.requiresUnknownConfirmation ? '确认再次执行 SQL' : (classifySqlRisk(pendingQuery.value?.sql ?? '')?.title ?? '确认执行 SQL')
+  : '确认删除数据行')
 const dangerDescription = computed(() => dangerAction.value === 'sql'
-  ? (classifySqlRisk(pendingQuery.value?.sql ?? '')?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
+  ? pendingQuery.value?.requiresUnknownConfirmation
+    ? '此前 SQL 结果未确认，可能部分或全部生效。再次执行可能重复生效；即使本次以 SELECT 开头或选择返回行模式，也不能据此保证只读。请独立核对后，确认下面冻结的目标、SQL 原文和结果模式。'
+    : (classifySqlRisk(pendingQuery.value?.sql ?? '')?.confirmation ?? '请确认 SQL 的目标数据库和影响范围。')
   : '将永久删除当前数据行并立即写入数据库；删除本身无法在控制面撤销。')
 const dangerImpact = computed(() => dangerAction.value === 'sql'
   ? [`结果模式：${resultModeLabels[pendingQuery.value?.resultMode ?? 'auto']}`, '可能影响多行数据、其他表或数据库结构；返回行模式也会执行写操作']
@@ -254,6 +274,14 @@ const dangerRetained = computed(() => dangerAction.value === 'sql' ? [] : ['其�
 async function initialize() {
   const sequence = ++routeSequence
   const session = captureSession()
+  if (sqlUnknownSessionGeneration !== session.generation) {
+    sqlUnknownTargets.value.clear()
+    sqlUnknownSessionGeneration = session.generation
+    releaseSQLUnknownSession?.()
+    const clearUnknown = () => sqlUnknownTargets.value.clear()
+    session.signal.addEventListener('abort', clearUnknown, { once: true })
+    releaseSQLUnknownSession = () => session.signal.removeEventListener('abort', clearUnknown)
+  }
   const requestKey = routeKey.value
   resetRouteState()
   initializeController?.abort()
@@ -343,6 +371,14 @@ function ownsSQLScope(scope: SQLEditorScope) {
 }
 
 function invalidateSQLScope() {
+  const scope = sqlEditorScope
+  if (scope?.session.signal.aborted || scope && !isCurrentSession(scope.session.generation)) {
+    sqlUnknownTargets.value.clear()
+  } else if (scope && queryObservation?.scope === scope) {
+    // 中止客户端观察不证明 SQL 未执行；同页切回原目标仍必须重新确认风险。
+    sqlUnknownTargets.value.add(scope.targetKey)
+  }
+  queryObservation = null
   releaseSQLEditorScope?.()
   releaseSQLEditorScope = null
   sqlEditorScope = null
@@ -695,8 +731,9 @@ async function removeRow(row: Record<string, DatabaseValue>) {
   dangerOpen.value = true
 }
 
-async function executeSQL(snapshot: SQLExecutionSnapshot) {
-  if (queryPending.value || !ownsSQLScope(snapshot.scope)) return false
+async function executeSQL(snapshot: SQLExecutionSnapshot, confirmedUnknown = false) {
+  if (queryPending.value || !ownsSQLScope(snapshot.scope)
+    || sqlUnknownTargets.value.has(snapshot.scope.targetKey) && !(confirmedUnknown && snapshot.requiresUnknownConfirmation)) return false
   const sequence = ++querySequence
   queryController?.abort()
   const controller = new AbortController()
@@ -708,23 +745,34 @@ async function executeSQL(snapshot: SQLExecutionSnapshot) {
   queryResult.value = null
   queryError.value = null
   queryRefreshError.value = null
+  const observation = { scope: snapshot.scope }
+  queryObservation = observation
   try {
     const result = await executeDatabaseSQL({
       ...snapshot.connection,
       sql: snapshot.sql,
       ...(snapshot.resultMode === 'auto' ? {} : { resultMode: snapshot.resultMode }),
     }, signal)
+    if (queryObservation === observation) queryObservation = null
     if (!ownsExecution()) return false
     queryResult.value = result
     // 返回行不代表只读；SQL 成功后只刷新数据，绝不重放 SQL。
-    const refresh = await refreshRows(false, offset.value, session)
-    if (!ownsExecution()) return false
-    if (refresh.status === 'failed') queryRefreshError.value = refresh.error
+    try {
+      const refresh = await refreshRows(false, offset.value, session)
+      if (!ownsExecution()) return false
+      if (refresh.status === 'failed') queryRefreshError.value = refresh.error
+    } catch {
+      // 读取的坏错误响应或本地展示异常不能推翻已经验证的 SQL 完成结果。
+      if (!ownsExecution()) return false
+      queryRefreshError.value = { code: 'DATABASE_ROWS_REFRESH_FAILED', message: '表数据刷新未完成。', nextStep: '请只重新读取表数据，勿为刷新而重跑 SQL。' }
+    }
     return true
   } catch (error) {
-    if (!ownsExecution() || isAbortError(error)) return false
+    if (queryObservation === observation) queryObservation = null
+    if (!ownsExecution()) return false
     queryResult.value = null
     queryError.value = toQueryErrorState(error)
+    if (queryError.value.status === 'unknown') sqlUnknownTargets.value.add(snapshot.scope.targetKey)
     return false
   } finally {
     if (queryController === controller) queryController = null
@@ -748,7 +796,7 @@ async function confirmDanger() {
   mutationController?.abort()
   dangerBusy.value = true
   try {
-    const succeeded = await executeSQL(snapshot)
+    const succeeded = await executeSQL(snapshot, true)
     if (succeeded && ownsExecution()) ElMessage.success('SQL 执行完成')
   } finally {
     if (ownsExecution()) dangerBusy.value = false
@@ -763,18 +811,28 @@ async function confirmDanger() {
 async function runSQL() {
   const scope = sqlEditorScope
   if (!scope || !ownsSQLScope(scope) || !sql.value.trim() || queryPending.value || dangerBusy.value || dangerOpen.value) return
-  const currentConnection = connection()
-  // 凭据仅属于这次确认/执行；后续编辑连接不能悄悄改变已确认 SQL 的目标数据库。
-  const snapshot = Object.freeze({
-    scope,
-    connection: Object.freeze({
-      ...currentConnection,
-      ...(currentConnection.credentials ? { credentials: Object.freeze({ ...currentConnection.credentials }) } : {}),
-    }),
-    sql: sql.value,
-    resultMode: resultMode.value,
-  })
-  if (sqlRisk.value) {
+  let snapshot: SQLExecutionSnapshot
+  try {
+    const currentConnection = connection()
+    // 凭据仅属于这次确认/执行；后续编辑连接不能悄悄改变已确认 SQL 的目标数据库。
+    snapshot = Object.freeze({
+      scope,
+      connection: Object.freeze({
+        ...currentConnection,
+        ...(currentConnection.credentials ? { credentials: Object.freeze({ ...currentConnection.credentials }) } : {}),
+      }),
+      targetLabel: `${source.value?.name ?? sourceId.value} / ${schema.value || '未提供 schema'} / ${tableName.value}`,
+      sql: sql.value,
+      resultMode: resultMode.value,
+      requiresUnknownConfirmation: sqlUnknown.value,
+    })
+  } catch {
+    queryResult.value = null
+    queryRefreshError.value = null
+    queryError.value = toQueryErrorState(undefined)
+    return
+  }
+  if (sqlRisk.value || snapshot.requiresUnknownConfirmation) {
     dangerGeneration.value += 1
     pendingQuery.value = snapshot
     pendingRow.value = null
@@ -854,21 +912,27 @@ function toErrorState(error: unknown, fallback: string): DatabaseErrorState {
   }
 }
 
-function toQueryErrorState(error: unknown): DatabaseErrorState {
-  const code = errorCode(error)
-  if (code === 'result_mode_unsupported') {
-    return { code, message: '当前 Agent 不支持结果模式，请先升级 Agent。', nextStep: 'SQL 未提交执行；升级 Agent 后再主动执行。' }
+function toQueryErrorState(error: unknown): SQLQueryErrorState {
+  if (isDatabaseQueryOutcomeUnknownError(error)) {
+    return {
+      status: 'unknown', code: error.diagnosticCode ?? error.code,
+      message: error.diagnosticCode === 'result_too_large'
+        ? 'SQL 结果超过 1 MiB 响应预算，无法展示；执行结果仍未确认，可能部分或全部生效。'
+        : '无法确认本次 SQL 的执行结果；它可能部分或全部生效。',
+      nextStep: '请先只读核对数据库状态；再次执行可能重复生效，每次主动执行都需重新确认风险。',
+    }
   }
-  if (code === 'DATABASE_INPUT_INVALID') {
-    return { code, message: 'SQL 请求未通过服务端校验。', nextStep: 'SQL 未提交执行；请核对请求格式及 Server 是否支持所选结果模式。' }
+  if (isDatabaseQueryPreDispatchRejectedError(error)) {
+    return {
+      status: 'rejected', code: error.code, message: error.message,
+      nextStep: '本次请求在 SQL 派发前被拒绝；请修正请求或连接状态后主动执行。',
+    }
   }
-  if (code === 'result_too_large') {
-    return { code, message: 'SQL 结果超过 1 MiB 响应预算，无法展示。', nextStep: '写操作可能已生效；请先核对数据库状态，再决定是否重试。读取时可减少返回列或预览大字段的部分内容。' }
+  // 专用 API 保证普通异常仅来自 fetch 前的本地构造，不能显示其中的 SQL/凭据/原始诊断。
+  return {
+    status: 'local', code: 'DATABASE_QUERY_NOT_SENT', message: '本地请求准备未完成，SQL 请求未发送。',
+    nextStep: '请检查当前连接与请求内容后主动执行；错误提示不会显示 SQL 或凭据。',
   }
-  const message = code === 'timeout' ? 'SQL 执行超时。'
-    : code === 'DATABASE_OPERATION_FAILED' ? '未能确认 SQL 执行结果。'
-      : errorMessage(error, 'SQL 执行失败。')
-  return { code, message, nextStep: '写操作可能已生效；请先核对数据库状态，再决定是否重试。' }
 }
 
 function setError(error: unknown, fallback: string) {
@@ -909,6 +973,9 @@ watch(pageSize, (next, previous) => {
 })
 onBeforeUnmount(() => {
   invalidateSQLScope()
+  sqlUnknownTargets.value.clear()
+  releaseSQLUnknownSession?.()
+  releaseSQLUnknownSession = null
   schemaReloadSequence += 1
   schemaReloadController?.abort()
   schemaReloadController = null
@@ -966,6 +1033,12 @@ onBeforeUnmount(() => {
       <strong>{{ rowWriteRefreshError.operation === 'update' ? '更新' : '删除' }}请求已执行，表数据刷新失败。</strong>
       <span>{{ rowWriteRefreshError.error.message }} 请只刷新表数据，勿重复修改或删除。</span>
       <small>代码 {{ rowWriteRefreshError.error.code }}</small>
+    </div>
+
+    <div v-if="sqlUnknown" class="insert-outcome-warning sql-outcome-warning" role="alert">
+      <strong>此前 SQL 结果未确认，可能部分或全部生效。</strong>
+      <span>可继续编辑和复制 SQL；后续每次主动执行都需重新确认风险。只读刷新或后续 SQL 成功，均不能确认此前请求的结果。</span>
+      <small>请独立核对数据库状态，再次执行可能重复生效。此提示仅保留在当前页面实例及会话内；完整重载或离开此页面后不再保留，不提供跨页面幂等保障。</small>
     </div>
 
     <div class="table-connection-note" role="note">
@@ -1070,13 +1143,13 @@ onBeforeUnmount(() => {
       <div class="sql-mode-note" role="note">新版 Agent 的自动模式可识别 SQLite/PostgreSQL 部分无 RETURNING 的 CTE 写入，复杂语法仍可能无法识别。RETURNING 请选“返回行”；需要明确获取无返回行写入的驱动计数时请选择“执行”。返回行模式也会执行写操作；500 行与 1 MiB 仅限制展示结果，不限制写入范围。</div>
       <div class="sql-editor"><SqlEditor v-model="sql" :disabled="queryPending" @execute="runSQL" /></div>
       <div class="query-result">
-        <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryError ? '执行失败' : queryPending ? '正在执行' : '等待执行' }}</span></header>
+        <header><strong>{{ queryResultTitle }}</strong><span v-if="queryResult">{{ queryResult.durationMs }} ms<template v-if="queryResult.truncated"> / 返回结果已截断</template></span><span v-else>{{ queryError ? queryErrorTitle : queryPending ? '正在执行' : '等待执行' }}</span></header>
         <div v-if="queryRefreshError" class="query-refresh-warning" role="alert"><strong>SQL 已执行，表数据刷新失败。</strong><span>{{ queryRefreshError.message }} 请在“表数据”中重新读取，勿为刷新而重跑 SQL。</span><small>代码 {{ queryRefreshError.code }}</small></div>
         <div v-if="queryTruncationSummary" class="query-truncation-warning" role="status">{{ queryTruncationSummary }}</div>
         <div v-if="queryResult?.columns.length" class="query-affected-summary">{{ affectedSummary }}</div>
         <div v-if="queryError" class="query-message query-message--error">
           <CircleAlert :size="22" />
-          <div class="query-message__body"><strong>执行失败</strong><span>{{ queryError.message }}</span><small>下一步：{{ queryError.nextStep }}</small></div>
+          <div class="query-message__body"><strong>{{ queryErrorTitle }}</strong><span>{{ queryError.message }}</span><small>下一步：{{ queryError.nextStep }}</small></div>
           <code>代码 {{ queryError.code }}</code>
         </div>
         <div v-else-if="queryResult?.columns.length" class="query-table" role="region" :aria-label="`${table.name} SQL 查询结果`">
@@ -1112,12 +1185,13 @@ onBeforeUnmount(() => {
       :description="dangerDescription"
       :impact="dangerImpact"
       :retained="dangerRetained"
-      :action-label="dangerAction === 'sql' ? '确认执行' : '永久删除'"
+      :action-label="dangerAction === 'sql' ? pendingQuery?.requiresUnknownConfirmation ? '确认风险并执行' : '确认执行' : '永久删除'"
       :busy="mutationPending || dangerBusy || queryPending"
       @confirm="confirmDanger"
     >
       <template v-if="dangerAction === 'sql' && pendingQuery" #details>
         <section class="sql-confirmation-snapshot" aria-label="待执行 SQL 快照">
+          <span>目标：{{ pendingQuery.targetLabel }}</span>
           <strong>待执行 SQL（原文）</strong>
           <pre class="sql-confirmation-preview">{{ pendingQuery.sql }}</pre>
         </section>

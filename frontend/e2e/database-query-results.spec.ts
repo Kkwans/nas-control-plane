@@ -314,7 +314,7 @@ for (const width of [320, 390]) {
     await page.route('**/api/v1/databases/query', async (route) => {
       queryRequests += 1
       if (queryRequests === 3) {
-        return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture result too large' }) })
+        return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture result too large', requestId: 'fixture-sql-result-too-large' }) })
       }
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         columns: ['id', 'amount'],
@@ -358,7 +358,7 @@ for (const width of [320, 390]) {
     await execute.click()
     const error = page.locator('.query-message--error')
     await expect(error).toContainText('SQL 结果超过 1 MiB 响应预算')
-    await expect(error).toContainText('写操作可能已生效')
+    await expect(error).toContainText('可能部分或全部生效')
     await expect(error).toContainText('result_too_large')
     await expect(error).not.toContainText('Agent')
     await expect(error).not.toContainText('SQL 未提交执行')
@@ -369,6 +369,15 @@ for (const width of [320, 390]) {
     await expectWorkbenchFits(page, width)
     await expectUnclippedText(error)
     await capture(page, testInfo, `fixture-sql-result-too-large-${width}-font-18`)
+
+    await execute.click()
+    const confirmation = page.getByRole('dialog')
+    await expect(confirmation).toContainText('确认再次执行 SQL')
+    await expect(confirmation).toContainText('再次执行可能重复生效')
+    expect(queryRequests).toBe(3)
+    await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(page.locator('.sql-outcome-warning')).toBeVisible()
+    expect(queryRequests).toBe(3)
   })
 }
 

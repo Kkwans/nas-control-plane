@@ -1,6 +1,7 @@
 import { NcpApiError } from './system'
 import { requestDatabaseInsert } from './databaseInsertOutcome'
 import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
+import { requestDatabaseQuery } from './databaseQueryOutcome'
 import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
@@ -141,7 +142,9 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
 }
 
 export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string; resultMode?: DatabaseQueryResultMode }, signal?: AbortSignal): Promise<QueryResult> {
-  return request<QueryResult>('/api/v1/databases/query', input, signal)
+  // 序列化在发送边界之前完成，本地失败仍然是零派发。
+  const body = JSON.stringify(input)
+  return requestDatabaseQuery(body, signal)
 }
 
 export async function insertDatabaseRow(input: DatabaseConnection & {

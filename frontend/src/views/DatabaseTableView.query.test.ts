@@ -4,6 +4,7 @@ import { createApp, h, nextTick, reactive, type App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DatabaseRows, DatabaseSource, DatabaseTable, QueryResult } from '@/api/database'
 import { NcpApiError } from '@/api/system'
+import { DatabaseQueryOutcomeUnknownError, DatabaseQueryPreDispatchRejectedError } from '@/api/databaseQueryOutcome'
 import DatabaseTableView from './DatabaseTableView.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -118,7 +119,7 @@ async function selectMode(mode: 'auto' | 'rows' | 'exec') {
 function executeButton() { return host.querySelector<HTMLButtonElement>('.sql-toolbar__actions button')! }
 function shortcut() { host.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true })) }
 function dialog() { return host.querySelector<HTMLElement>('[role="dialog"]') }
-async function confirm() { button('确认执行', dialog()!).click(); await settle() }
+async function confirm() { button(dialog()!.textContent!.includes('确认风险并执行') ? '确认风险并执行' : '确认执行', dialog()!).click(); await settle() }
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -265,7 +266,7 @@ describe('SQL 结果字节预算', () => {
     expect(host.querySelector('.query-table [data-empty-text]')?.getAttribute('data-empty-text')).toBe('无返回行')
   })
 
-  it('结果头状态跟随等待、执行、超预算失败和下一次成功', async () => {
+  it('结果头状态跟随等待、执行、超预算未知和新确认后的成功', async () => {
     const first = deferred<QueryResult>()
     const second = deferred<QueryResult>()
     mocks.execute.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
@@ -276,15 +277,18 @@ describe('SQL 结果字节预算', () => {
     executeButton().click()
     await settle()
     expect(headerStatus()).toBe('正在执行')
-    first.reject(new NcpApiError('result_too_large', '超预算'))
+    first.reject(new DatabaseQueryOutcomeUnknownError('result_too_large'))
     await settle()
-    expect(headerStatus()).toBe('执行失败')
+    expect(headerStatus()).toBe('结果未确认，可能部分或全部生效')
     expect(host.querySelector('.query-message--error')?.textContent).toContain('result_too_large')
     expect(host.querySelector('.query-table')).toBeNull()
     expect(mocks.execute).toHaveBeenCalledTimes(1)
 
     executeButton().click()
     await settle()
+    expect(mocks.execute).toHaveBeenCalledTimes(1)
+    expect(dialog()?.textContent).toContain('再次执行可能重复生效')
+    await confirm()
     expect(headerStatus()).toBe('正在执行')
     expect(host.querySelector('.query-message--error')).toBeNull()
     second.resolve(result({ columns: ['id'], rows: [['9007199254740993']], durationMs: 7 }))
@@ -296,13 +300,13 @@ describe('SQL 结果字节预算', () => {
   })
 
   it('结果超预算错误不会冒充 Agent 断连、未执行或自动重试', async () => {
-    mocks.execute.mockRejectedValue(new NcpApiError('result_too_large', '超预算'))
+    mocks.execute.mockRejectedValue(new DatabaseQueryOutcomeUnknownError('result_too_large'))
     await mount()
     executeButton().click()
     await settle()
     const error = host.querySelector('.query-message--error')?.textContent
     expect(error).toContain('SQL 结果超过 1 MiB 响应预算')
-    expect(error).toContain('写操作可能已生效')
+    expect(error).toContain('可能部分或全部生效')
     expect(error).toContain('result_too_large')
     expect(error).not.toMatch(/Agent|SQL 未提交执行|已回滚/)
     expect(mocks.execute).toHaveBeenCalledTimes(1)
@@ -657,9 +661,9 @@ describe('SQL 确认、并发与路由归属', () => {
   })
 })
 
-describe('SQL 失败没有自动重放', () => {
+describe('SQL 未确认或前置拒绝没有自动重放', () => {
   it.each(['timeout', 'result_mode_unsupported'])('危险 SQL 的 %s 关闭原确认框，先展示错误再允许重新发起', async (code) => {
-    mocks.execute.mockRejectedValue(new NcpApiError(code, '拒绝'))
+    mocks.execute.mockRejectedValue(new DatabaseQueryOutcomeUnknownError(code))
     await mount()
     await editSQL('DELETE FROM sample')
     await selectMode('exec')
@@ -675,8 +679,8 @@ describe('SQL 失败没有自动重放', () => {
     expect(mocks.execute).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['result_mode_unsupported', 'DATABASE_INPUT_INVALID'])('%s 明确报告执行前拒绝，不降级重放', async (code) => {
-    mocks.execute.mockRejectedValue(new NcpApiError(code, '拒绝'))
+  it('API 已核验的 DATABASE_INPUT_INVALID 明确报告执行前拒绝，不降级重放', async () => {
+    mocks.execute.mockRejectedValue(new DatabaseQueryPreDispatchRejectedError('DATABASE_INPUT_INVALID'))
     await mount()
     await selectMode('rows')
     executeButton().click()
@@ -685,19 +689,19 @@ describe('SQL 失败没有自动重放', () => {
     expect(mocks.execute.mock.calls[0]![0].resultMode).toBe('rows')
     expect(mocks.rows).toHaveBeenCalledTimes(1)
     expect(host.querySelector('.query-message--error')?.textContent).toContain('SQL 未提交执行')
-    if (code === 'result_mode_unsupported') expect(host.textContent).toContain('当前 Agent 不支持结果模式，请先升级 Agent')
+    expect(host.querySelector('.sql-outcome-warning')).toBeNull()
   })
 
-  it.each(['sql_invalid', 'timeout', 'constraint_failed', 'result_too_large', 'DATABASE_OPERATION_FAILED'])('%s 提醒可能已有写入，不建议盲目重试', async (code) => {
-    mocks.execute.mockRejectedValue(new NcpApiError(code, '数据库错误'))
+  it.each(['sql_invalid', 'timeout', 'constraint_failed', 'result_too_large', 'DATABASE_OPERATION_FAILED', 'result_mode_unsupported'])('%s 提醒可能已有写入，不建议盲目重试', async (code) => {
+    mocks.execute.mockRejectedValue(new DatabaseQueryOutcomeUnknownError(code))
     await mount()
     executeButton().click()
     await settle()
     expect(mocks.execute).toHaveBeenCalledTimes(1)
     expect(mocks.rows).toHaveBeenCalledTimes(1)
-    expect(host.querySelector('.query-message--error')?.textContent).toContain('写操作可能已生效；请先核对数据库状态，再决定是否重试')
+    expect(host.querySelector('.query-message--error')?.textContent).toContain('请先只读核对数据库状态；再次执行可能重复生效')
     expect(host.querySelector('.query-message--error')?.textContent).not.toContain('稍后重试')
-    expect(host.querySelector('.query-result header > span')?.textContent).toBe('执行失败')
+    expect(host.querySelector('.query-result header > span')?.textContent).toBe('结果未确认，可能部分或全部生效')
     expect(host.querySelector('.query-table')).toBeNull()
   })
 })
