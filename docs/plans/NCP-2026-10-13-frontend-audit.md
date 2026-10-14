@@ -361,3 +361,17 @@ UPDATE/DELETE新增九项浏览器fixture：390/1440提交后断网或损坏200�
 独立实组件jsdom诊断另发现既有DatabaseCellEditor问题：disabled=true但布尔字段已选NULL时，下拉仍被启用，因组件把NULL可选择性与全局写入锁合并处理。该两例诊断仅复现，不计入本片修复；应在结构片发布后独立分离NULL显示限制与在途/主键硬锁，并补真实组件回归。
 
 结构漂移精确四源码/测试文件快照完成（00:45 UTC）：完整2223单元/99文件、全量lint、Vue类型、生产构建、dist权限规范化及540KiB包预算均退出成功；最大chunk仍518.0KiB。独立审查无阻断。同期前一UPDATE/DELETE产品提交848101c的精确CI38490656726完整通过2178单元/384浏览器及Go/Compose；新增九项浏览器6ce5852仍须单独验收，不能拿384计数替代新用例。
+
+## 行修改浏览器暴露的可访问性问题（2026-10-14 00:47 UTC）
+
+6ce5852精确CI38491142322为389浏览器通过/四采集用例失败，Go/Compose通过。官方8,058,414字节ZIP的digest/CRC/路径、309源码hash与八PNG hash已验证；八图逐一实看，主任务另复看390px UPDATE草稿与表格。八组状态和请求稳定且均仅一次写入，draft阶段一次只读、table阶段两次；修改后数据和删除后余下一行均符合内存fixture。测试失败仍须修复，不能因写入语义通过就宣称验收完成。
+
+完整axe在390px草稿态报告底层表格滚动容器不可键盘聚焦，1440px草稿态无violation；表格态刷新按钮14px蓝字#3474d4与#eaf2fd背景对比度4.05，低于4.5，390px另有滚动聚焦问题。均保留四类incomplete。拟使用已安装Element Plus支持的真实scrollbar焦点属性与局部刷新按钮颜色修复，不隐藏背景、不删axe规则、不把tabindex放到无关祖先冒充可滚动容器。
+
+另有独立采集错误：关闭编辑窗后DOM保留隐藏dialog，table面板作为祖先收集了其三个空input，导致期望表格态无可见字段失败。采集需将实际可见表格语义与所有保留DOM诊断分开；保留原始隐藏input信息，不改产品DOM来迎合测试。修正后重新跑精确CI并获取替代八图。
+
+最小实现方案（00:47 UTC）：已安装Element Plus 2.14.3确认ElTable的scrollbar-tabindex直接传递到真正.el-scrollbar__wrap。数据/结构/SQL结果表均使用该受支持属性设0，保留既有命名区域上下文并为实际滚动wrapper添加内描边focus-visible；不额外制造Tab无用停靠点。局部.database-header-action仅覆盖hover/active文字色为既有--ncp-primary-strong（#255da9），保留按钮背景、焦点和disabled样式。用真实Element Plus的jsdom检查实际wrapper的tabindex/聚焦及区域名称，静态编译样式验证颜色；浏览器像素和axe仍以新CI为准。
+
+可访问性修复验证（00:52 UTC）：真实Element Plus六项测试确认三个表的tabindex落在实际滚动wrapper，区域本身没有伪造tabindex；空表与所有行操作禁用时依然可聚焦。组件script setup未变。静态色值对比由4.05提升至5.79，仍须实际计算样式/axe复验。隐藏dialog采集已分离可见语义和rawDiagnostics，保留所有input值、disabled/checked、ARIA、可见性和边界，不删除DOM或过滤axe。
+
+主任务三文件精确快照完整2229单元/100文件、全量lint、Vue及专项E2E严格类型、生产构建、dist权限与包预算全部退出成功；最大chunk518.0KiB。八图替代验收待新CI，旧四失败不作通过处理。

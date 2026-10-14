@@ -930,12 +930,12 @@ onBeforeUnmount(() => {
       <div v-else-if="!primaryKeyColumns.length" class="object-warning">当前表没有主键，为避免误改多行，编辑和删除已停用；同时禁用跨页浏览，首批数据仅供查看。</div>
       <div v-if="tableRows && !stablePagination" class="object-warning">当前表缺少稳定分页键，仅显示首批数据；如需完整浏览，请在 SQL Workbench 中使用自定义排序查询。</div>
       <div class="data-table-hint"><span>表数据</span><small>左右滑动查看字段，编号和行操作已固定</small></div>
-      <div class="data-table">
+      <div class="data-table" role="region" :aria-label="`${table.name} 表数据`">
         <div v-if="rowsLoading && !rowsInitialized" class="data-table-skeleton">
           <div class="data-table-skeleton__head"><i v-for="cell in Math.min(columns.length + 2, 8)" :key="cell" class="ncp-skeleton"></i></div>
           <div v-for="row in 9" :key="row" class="data-table-skeleton__row"><i v-for="cell in Math.min(columns.length + 2, 8)" :key="cell" class="ncp-skeleton"></i></div>
         </div>
-        <ElTable v-else v-loading="rowsLoading" :data="tableRows?.rows ?? []" height="100%" border stripe highlight-current-row @sort-change="onSortChange">
+        <ElTable v-else v-loading="rowsLoading" :data="tableRows?.rows ?? []" height="100%" :scrollbar-tabindex="0" border stripe highlight-current-row @sort-change="onSortChange">
           <ElTableColumn type="index" label="#" width="56" fixed="left" align="center" />
           <ElTableColumn v-for="column in columns" :key="column.name" :prop="column.name" :min-width="column.primaryKey ? 120 : Math.min(360, Math.max(160, column.name.length * 12 + 72))" sortable="custom" :sort-orders="['ascending', 'descending', null]" show-overflow-tooltip>
             <template #header><span class="column-heading"><KeyRound v-if="column.primaryKey" :size="12" />{{ column.name }}</span></template>
@@ -969,8 +969,8 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-else-if="mode === 'structure'" class="structure-workbench panel">
-      <ElTable :data="columns" height="100%" border stripe>
+    <section v-else-if="mode === 'structure'" class="structure-workbench panel" role="region" :aria-label="`${table.name} 表结构`">
+      <ElTable :data="columns" height="100%" :scrollbar-tabindex="0" border stripe>
         <ElTableColumn prop="position" label="#" width="62" align="center" />
         <ElTableColumn prop="name" label="字段名" min-width="180"><template #default="{ row }"><span class="structure-name"><KeyRound v-if="row.primaryKey" :size="13" />{{ row.name }}</span></template></ElTableColumn>
         <ElTableColumn prop="dataType" label="数据类型" min-width="170" align="center" />
@@ -1008,8 +1008,8 @@ onBeforeUnmount(() => {
           <div class="query-message__body"><strong>执行失败</strong><span>{{ queryError.message }}</span><small>下一步：{{ queryError.nextStep }}</small></div>
           <code>代码 {{ queryError.code }}</code>
         </div>
-        <div v-else-if="queryResult?.columns.length" class="query-table">
-          <ElTable :data="queryRows" :empty-text="queryEmptyText" height="100%" border stripe>
+        <div v-else-if="queryResult?.columns.length" class="query-table" role="region" :aria-label="`${table.name} SQL 查询结果`">
+          <ElTable :data="queryRows" :empty-text="queryEmptyText" height="100%" :scrollbar-tabindex="0" border stripe>
             <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="150" show-overflow-tooltip>
               <template #default="{ row }"><span v-if="row[column] === null" class="null-value">NULL</span><span v-else class="cell-value">{{ displayValue(column, row[column]) }}</span></template>
             </ElTableColumn>
@@ -1116,6 +1116,8 @@ onBeforeUnmount(() => {
 }
 
 .database-header-action {
+  --el-button-hover-text-color: var(--ncp-primary-strong);
+  --el-button-active-text-color: var(--ncp-primary-strong);
   min-height: var(--ncp-control-height);
 }
 
@@ -1268,6 +1270,13 @@ onBeforeUnmount(() => {
   --el-table-header-bg-color: var(--ncp-table-head);
   --el-table-row-hover-bg-color: var(--ncp-table-row-hover);
   font-size: .78rem;
+}
+
+.data-table :deep(.el-scrollbar__wrap:focus-visible),
+.structure-workbench :deep(.el-scrollbar__wrap:focus-visible),
+.query-table :deep(.el-scrollbar__wrap:focus-visible) {
+  outline: 2px solid var(--ncp-primary);
+  outline-offset: -2px;
 }
 
 .data-table :deep(.el-table__header th.el-table__cell) {

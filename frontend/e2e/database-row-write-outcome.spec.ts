@@ -237,6 +237,27 @@ async function captureState(page: Page, view: CaptureView) {
       ':scope > .insert-outcome-warning span', ':scope > .insert-outcome-warning small',
       '.data-toolbar button', '.row-actions button',
     ]
+    function visible(element: HTMLElement) {
+      const bounds = element.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return false
+      for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return false
+      }
+      return true
+    }
+    function diagnostic(element: HTMLElement) {
+      return { visible: visible(element), bounds: element.getBoundingClientRect().toJSON(), ariaHidden: element.closest('[aria-hidden="true"]') !== null }
+    }
+    const fields = [...panel.querySelectorAll<HTMLInputElement>('.row-form .database-cell-editor input')]
+    const switches = [...panel.querySelectorAll<HTMLElement>('.row-form .el-switch')]
+    const actions = [...panel.querySelectorAll<HTMLButtonElement>('.el-dialog__footer button')]
+    const describeField = (input: HTMLInputElement) => ({ name: input.getAttribute('aria-label'), value: input.value, disabled: input.disabled })
+    const describeSwitch = (wrapper: HTMLElement) => {
+      const input = wrapper.querySelector<HTMLInputElement>('input')
+      return { field: wrapper.closest('.el-form-item')?.querySelector('.database-cell-editor input')?.getAttribute('aria-label'), role: input?.getAttribute('role'), checked: input?.checked, ariaChecked: input?.getAttribute('aria-checked'), disabled: input?.disabled }
+    }
+    const describeAction = (button: HTMLButtonElement) => ({ text: button.textContent?.trim(), disabled: button.disabled })
     return {
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
       root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, scrollHeight: document.documentElement.scrollHeight },
@@ -245,15 +266,23 @@ async function captureState(page: Page, view: CaptureView) {
       semantic: {
         notice: panel.querySelector('.insert-outcome-warning')?.textContent,
         pageNotice: document.querySelector('.table-workbench-page > .insert-outcome-warning')?.textContent,
-        fields: [...panel.querySelectorAll<HTMLInputElement>('.row-form .database-cell-editor input')].map((input) => ({ name: input.getAttribute('aria-label'), value: input.value, disabled: input.disabled })),
-        switches: [...panel.querySelectorAll<HTMLElement>('.row-form .el-switch')].map((wrapper) => {
-          const input = wrapper.querySelector<HTMLInputElement>('input')
-          return { field: wrapper.closest('.el-form-item')?.querySelector('.database-cell-editor input')?.getAttribute('aria-label'), role: input?.getAttribute('role'), checked: input?.checked, ariaChecked: input?.getAttribute('aria-checked'), disabled: input?.disabled }
-        }),
-        actions: [...panel.querySelectorAll<HTMLButtonElement>('.el-dialog__footer button')].map((button) => ({ text: button.textContent?.trim(), disabled: button.disabled })),
+        fields: fields.filter(visible).map(describeField),
+        switches: switches.filter(visible).map(describeSwitch),
+        actions: actions.filter(visible).map(describeAction),
         rowActions: [...document.querySelectorAll<HTMLButtonElement>('.row-actions button')].map((button) => ({ label: button.getAttribute('aria-label'), disabled: button.disabled })),
         renderedRows: [...document.querySelectorAll('.data-table .el-table__body tr')].map((row) => row.textContent),
         toasts: [...document.querySelectorAll('.el-message')].map((message) => message.textContent),
+      },
+      // ElDialog 关闭后可保留在表页面的 DOM 下。可见语义与原始保留节点分开记录，
+      // 不能把隐藏的空草稿误认为仍在展示，也不能过滤掉其值、状态或几何诊断。
+      rawDiagnostics: {
+        fields: fields.map((input) => ({ ...describeField(input), ...diagnostic(input) })),
+        switches: switches.map((wrapper) => ({ ...describeSwitch(wrapper), ...diagnostic(wrapper) })),
+        actions: actions.map((button) => ({ ...describeAction(button), ...diagnostic(button) })),
+        inputs: [...panel.querySelectorAll<HTMLInputElement>('.row-form input')].map((input) => ({
+          ...describeField(input), type: input.type, role: input.getAttribute('role'), checked: input.checked,
+          ariaChecked: input.getAttribute('aria-checked'), ...diagnostic(input),
+        })),
       },
       controls: selectors.flatMap((selector) => [...panel.querySelectorAll<HTMLElement>(selector)].map((element, index) => {
         const bounds = element.getBoundingClientRect()
@@ -332,6 +361,9 @@ async function capture(page: Page, info: TestInfo, api: Fixture, gate: Gate, vie
     expect.soft(beforeCapture.controls.filter((item) => item.selector === '.row-form .el-switch')).toHaveLength(1)
   } else {
     expect.soft(beforeCapture.semantic.fields).toEqual([])
+    expect.soft(beforeCapture.semantic.switches).toEqual([])
+    expect.soft(beforeCapture.semantic.actions).toEqual([])
+    expect.soft(beforeCapture.rawDiagnostics.fields.every((field) => !field.visible && field.value === '')).toBe(true)
     expect.soft(beforeCapture.controls.filter((item) => item.selector.startsWith(':scope > .insert-outcome-warning'))).toHaveLength(4)
   }
   // ElSwitch 的原生 checkbox 可能为 0×0；保留所有 input 诊断，几何只检查可见编辑框和 switch 外壳。
