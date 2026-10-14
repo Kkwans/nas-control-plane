@@ -1,6 +1,6 @@
 # NCP 接手以来的累计改动
 
-检查点：2026-10-14 05:42 UTC，分支 `dot/ncp-modernization`。比较范围：[接手基线 5b81557](https://github.com/Kkwans/nas-control-plane/commit/5b81557068a9a44cae3b06ac6207438a399e8ef7) → [当前代码 43d1742](https://github.com/Kkwans/nas-control-plane/commit/43d1742995ed75e27a4e25cf2e0c281cc96f2dae)。
+检查点：2026-10-14 21:14 UTC，分支 `dot/ncp-modernization`。比较范围：[接手基线 5b81557](https://github.com/Kkwans/nas-control-plane/commit/5b81557068a9a44cae3b06ac6207438a399e8ef7) → [已推送代码 a72ba8b](https://github.com/Kkwans/nas-control-plane/commit/a72ba8bd29fdb0d6239ba46251f98ce4f14bd808)。
 
 接手时，Docker、Compose、数据库、终端、站点等模块已经存在。本轮保留原有架构，增加日常管理能力，重点修复操作结果不可信、迟到请求覆盖新页面、断连后重复写入和资源回收问题。
 
@@ -48,9 +48,48 @@
 
 依据：[DNS 确认](https://github.com/Kkwans/nas-control-plane/commit/744d39d782e0684a9d96380cbfad2ff21afa8974)、[账号写入](https://github.com/Kkwans/nas-control-plane/commit/9baa9f5f0148b1ce1f0c0918706deeec70c2c113)、[设置归属](https://github.com/Kkwans/nas-control-plane/commit/b88214f62a7512c0bf376a5202f07ba0a53b03ea)、[移动导航](https://github.com/Kkwans/nas-control-plane/commit/00c5f8ff466bd796cc47a4c516493e81d2364170)、[SQL 编辑器](https://github.com/Kkwans/nas-control-plane/commit/f2cce02d7be1760d666e99689b5ed8d9d81abb5c)。
 
+## 上次报告之后：已推送的新增与修复
+
+以下为 43d1742 之后的增量，已包含在上述累计范围内。
+
+### 数据库连接与证书校验 TLS
+
+- **新增完整代码链路**：MySQL/PostgreSQL 可显式设置 verify-full，选择 Agent 系统根证书或自定义 PEM CA，并填写独立服务器验证名。策略贯通界面、严格 HTTP 校验、加密凭据保存、Agent RPC 与连接器；旧 Agent 不支持时明确失败，不移除 TLS 自动重试。
+- **保护保存与重试边界**：凭据版本快照与条件写入阻止迟到连接覆盖新凭据；冲突保留草稿并要求明确重试。已保存严格策略不会因省略字段静默降级，取消界面编辑也不等于关闭已保存策略。
+- **修复连接与数据归属**：区分连接诊断、凭据保存未知、已确认后目录失败；校验目录和行数据的源、表身份，保留稳定 RPC 错误码并清理远端错误详情。补齐连接诊断对比度及 TLS 键盘路径。
+- **验证边界**：设置入口和请求内容不能证明服务器已应用 TLS，界面仍保留“状态未确认”；尚未进行真实 PostgreSQL/MySQL TLS 握手验收。
+
+依据：[凭据并发保护](https://github.com/Kkwans/nas-control-plane/commit/c8a9de2864c0612a16a9e2e8d5038a3011a810e0)、[数据身份校验](https://github.com/Kkwans/nas-control-plane/commit/556216ee2c4af9a5b9a28a46e6eb67dbbf0205d3)、[TLS 后端与协议](https://github.com/Kkwans/nas-control-plane/commit/0263c2f61be4975fbcc8492238abe278ad558e32)、[TLS 表单与 HTTP](https://github.com/Kkwans/nas-control-plane/commit/23fef4aee21c5f51ea029e803558b6f08e57d638)、[诊断与键盘修复](https://github.com/Kkwans/nas-control-plane/commit/beb86a989d66026db67741bcf9bdfcde859657a7)。
+
+### Docker 操作回执与目录浏览
+
+- **修复生命周期结果核验**：严格绑定动作和容器/项目目标，只接受匹配的成功回执；命令回执与读回运行状态分别呈现。结果未知时保留风险提示，只读刷新不能抹去，确认等待期间阻止重复派发。
+- **修复镜像重试刷新**：重新下载完成后可靠刷新本地镜像清单，并补充权限撤销与迟到请求隔离的浏览器覆盖。
+- **修复可访问性与窄屏**：操作提示归入主内容地标，告警关闭按钮不再收缩换行。浏览器覆盖未知回执、状态不符及明确确认路径；提示浮层定位在后续 883eb7d 的实际截图和几何复核中已关闭。
+- **Linux 目录浏览不再逐项打开文件探测权限**，避免 FIFO、设备等特殊文件因探测产生打开副作用。可读性仍只是瞬时权限提示，不保证后续读取或挂载成功，也不代表所有文件系统调用都能取消；非 Linux 保留原行为。
+
+依据：[镜像刷新](https://github.com/Kkwans/nas-control-plane/commit/b66ab09a6f723d601901372b48af5496e4cdf674)、[严格操作回执](https://github.com/Kkwans/nas-control-plane/commit/be18a45d64512c4169fb44a1d93cb17e990a41e1)、[浏览器动线](https://github.com/Kkwans/nas-control-plane/commit/18e4bb8146ddeb5a03b513536f0a54ea2c0192f8)、[提示与窄屏修复](https://github.com/Kkwans/nas-control-plane/commit/78df508dcd64b8529ef870d7ad252a4ba7e59929)、[Linux 权限探测](https://github.com/Kkwans/nas-control-plane/commit/2e0b7c02330235009174b270b4c8b9024b4b7c22)。
+
+## 创建容器：已推送的精确输入修复
+
+- [a659a8d](https://github.com/Kkwans/nas-control-plane/commit/a659a8d832d9421a76d2cfe0ab95c7a3623ad2c4)：使用镜像默认命令时，在 RPC 中省略 command，避免空参数数组被旧解码器拒绝。
+- [ad56e93](https://github.com/Kkwans/nas-control-plane/commit/ad56e93303637e198f312815a351d1ef8c527257)：挂载与目录浏览保留路径名称中的空白，防止选中的目录被静默换成另一条路径；卷名维持原规范化。
+- [ffba19d](https://github.com/Kkwans/nas-control-plane/commit/ffba19df5a5fd334050ad57e70adf0f5dd942567)：设备映射同样保留精确路径，拒绝原始非法路径和重复目标，保持设备权限字段原规则。
+- [883eb7d](https://github.com/Kkwans/nas-control-plane/commit/883eb7d8bb79a3e86f45846a08031bc3a4185e35)：逐行启动参数保留非空行原值，确认预览使用 JSON 数组区分参数边界；全空白仍采用镜像默认命令，空行处理有明确说明。
+- [cd40c15](https://github.com/Kkwans/nas-control-plane/commit/cd40c15c5c5701599edde66f5f633f966a1aa0cc)：操作等待期间关闭旧位置提示，允许重新悬停定位；浏览器回归增加按钮与提示间距、居中及三阶段几何检查。883eb7d 的实际 CI 图片显示，桌面提示与按钮间距约 12px、中心差小于 0.5px，原有明显错位不再出现。
+
+另以 [bfe7ed5](https://github.com/Kkwans/nas-control-plane/commit/bfe7ed58bcf4bec3b166b1acca483768c1de8a6d) 保留参数预览中的连续空格，新增四项 390/1440 创建确认与精确输入浏览器用例；其 [CI 38638232519](https://github.com/Kkwans/nas-control-plane/actions/runs/38638232519) 仍在运行，不能据用例枚举声称已验收。
+
+[a72ba8b](https://github.com/Kkwans/nas-control-plane/commit/a72ba8bd29fdb0d6239ba46251f98ce4f14bd808) 另将提交后的精确请求、201 回执与观察记录持久化到 CI 产物，并与确认前截图证据明确区分；真实运行结果仍待 CI。
+
+本地已通过 3547 项前端测试（124 文件）、lint、类型检查、构建及包预算，相关 Go race、全树编译和 vet 通过。源码已推送；883eb7d 已获完整 CI 通过，bfe7ed5 的新增预览样式和四项浏览器用例仍待独立结果。没有访问真实设备、Docker 或 NAS。
+
 ## 验证状态与尚未完成的部分
 
-- 最新 **43d1742** 的 [CI 38517205338](https://github.com/Kkwans/nas-control-plane/actions/runs/38517205338) 已完整通过：3013 项前端单元、400 项浏览器用例及 Go/Compose 检查；前一代码版本 **f2cce02** 的 [CI 38515767652](https://github.com/Kkwans/nas-control-plane/actions/runs/38515767652) 亦全绿。
-- **f2cce02** 的 SQL 四张截图覆盖 390/1440px 未确认结果及再次执行确认；源码与图片哈希已核对，完整 axe 扫描零违规，但保留两类 incomplete，不能据此声称全面无障碍合格，也不覆盖 43d1742 新增的模式说明。
-- 浏览器使用隔离 API 数据；部分集成使用临时 SQLite、文件和受控子进程。真实 NAS、Docker、PostgreSQL/MySQL及原生多会话尚未验收。**代码已提交，不代表部署或发布；本轮没有部署或发布。**
-- 下一步先闭环最新 CI，继续可隔离验证的开发；实机验收留待另行授权。仍需推进 Agent 专用访问身份、数据库 TLS 策略及更完整的跨引擎 SQL 自动识别；慢操作统一任务化、跨页面幂等回执和一致性备份恢复仍待实现。现有页面防重复保护不能替代服务端幂等，Compose 内容核对也不能证明应用运行健康。
+- **883eb7d** 的 [CI 38636791987](https://github.com/Kkwans/nas-control-plane/actions/runs/38636791987) 全部适用检查通过：3546 项单元（124 文件）、417 项浏览器用例，Go/Compose 成功，发布跳过。
+
+- 已推送 **78df508** 的 [CI 38624509376](https://github.com/Kkwans/nas-control-plane/actions/runs/38624509376) 全部适用检查通过：3521 项前端单元（121 文件）、417 项浏览器用例，以及 Go/Compose 检查；Release 步骤跳过，不能称为已发布。
+- TLS 界面修复 **beb86a9** 的 [CI 38612535338](https://github.com/Kkwans/nas-control-plane/actions/runs/38612535338) 已通过：3411 项前端单元（119 文件）、413 项浏览器用例及 Go/Compose 检查。
+- Docker 八张 PNG 对应的完整 axe 扫描零违规，但仍有三类 incomplete；883eb7d 的八组截图、完整 axe、352 项源码哈希及 PNG 哈希已逐项复核，三阶段几何一致，桌面提示定位与 390px 关闭按钮均符合本轮限定检查；不据此声称全面无障碍或视觉验收合格。此前 SQL 四张截图属于 f2cce02 检查点，不替代后续改动验收。
+- 浏览器使用隔离 API 数据；部分集成使用临时 SQLite、文件和受控子进程。真实 NAS、Docker、PostgreSQL/MySQL TLS 握手及原生多会话尚未验收。**代码已推送不代表部署或发布；本轮没有部署或发布。**
+- 下一步先核验新创建输入用例的 CI 和参数预览实际布局，再继续可隔离验证的开发。Agent 专用访问身份、更完整的跨引擎 SQL 自动识别、慢操作统一任务化、跨页面幂等回执及一致性备份恢复仍待推进。数据库 TLS 已从方案推进到完整代码链路，真实握手验收仍待完成。现有页面防重复保护不能替代服务端幂等，Compose 内容核对也不能证明应用运行健康。
