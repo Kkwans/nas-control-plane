@@ -37,6 +37,7 @@ import {
   loadDatabaseRows,
   updateDatabaseRow,
   type DatabaseColumn,
+  type DatabaseConnection,
   type DatabaseQueryResultMode,
   type DatabaseRows,
   type DatabaseValue,
@@ -56,13 +57,21 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useListPreference } from '@/composables/useListPreference'
-import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
 type RowsRefreshOutcome = { status: 'success' | 'stale' } | { status: 'failed'; error: DatabaseErrorState }
 
+interface SQLEditorScope {
+  targetKey: string
+  routeGeneration: number
+  session: SessionContext
+}
+
 interface SQLExecutionSnapshot {
+  scope: SQLEditorScope
+  connection: DatabaseConnection
   sql: string
   resultMode: DatabaseQueryResultMode
 }
@@ -161,6 +170,7 @@ const dangerBusy = ref(false)
 const dangerAction = ref<'delete-row' | 'sql'>('delete-row')
 const pendingRow = ref<Record<string, DatabaseValue> | null>(null)
 const pendingQuery = ref<SQLExecutionSnapshot | null>(null)
+const routeRevision = ref(0)
 let routeSequence = 0
 let rowsSequence = 0
 let querySequence = 0
@@ -169,6 +179,9 @@ let rowsController: AbortController | null = null
 let initializeController: AbortController | null = null
 let queryController: AbortController | null = null
 let mutationController: AbortController | null = null
+// SQL 编辑器归属不依赖行读取是否成功，也不能借用下一会话或尚未重绘的新路由。
+let sqlEditorScope: SQLEditorScope | null = null
+let releaseSQLEditorScope: (() => void) | null = null
 
 const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
@@ -238,30 +251,40 @@ const dangerRetained = computed(() => dangerAction.value === 'sql' ? [] : ['其�
 
 async function initialize() {
   const sequence = ++routeSequence
+  const session = captureSession()
+  const requestKey = routeKey.value
   resetRouteState()
   initializeController?.abort()
   const localController = new AbortController()
+  const signal = AbortSignal.any([localController.signal, session.signal])
+  const ownsInitialization = () => sequence === routeSequence && requestKey === routeKey.value
+    && !signal.aborted && isCurrentSession(session.generation)
   initializeController = localController
   try {
     if (!databaseStore.sources.length) await databaseStore.refreshDiscovery()
-    if (sequence !== routeSequence) return
-    if (!catalog.value && source.value && !source.value.requiresLogin) await databaseStore.loadCatalog(sourceId.value, localController.signal)
+    if (!ownsInitialization()) return
+    if (!catalog.value && source.value && !source.value.requiresLogin) await databaseStore.loadCatalog(sourceId.value, signal)
   } catch (error) {
-    if (sequence !== routeSequence || isAbortError(error)) return
+    if (!ownsInitialization() || isAbortError(error)) return
     setError(error, '数据库对象目录读取失败。')
     return
   }
-  if (sequence !== routeSequence) return
+  if (!ownsInitialization()) return
   if (!catalog.value && source.value?.requiresLogin) {
     await router.replace({ name: 'database-detail', params: { sourceId: sourceId.value }, query: { sourceName: source.value.name } })
     return
   }
   if (!table.value) return
+  sqlEditorScope = Object.freeze({ targetKey: requestKey, routeGeneration: sequence, session })
+  const revoke = () => invalidateSQLScope()
+  session.signal.addEventListener('abort', revoke, { once: true })
+  releaseSQLEditorScope = () => session.signal.removeEventListener('abort', revoke)
   sql.value = `SELECT * FROM ${sqlTableName()} LIMIT ${pageSize.value}`
-  await refreshRows()
+  await refreshRows(true, offset.value, session)
 }
 
 function resetRouteState() {
+  invalidateSQLScope()
   schemaReloadSequence += 1
   schemaReloadController?.abort()
   schemaReloadController = null
@@ -310,6 +333,31 @@ function resetRouteState() {
 
 function connection() {
   return databaseStore.connection(sourceId.value)
+}
+
+function ownsSQLScope(scope: SQLEditorScope) {
+  return scope === sqlEditorScope && scope.targetKey === routeKey.value && scope.routeGeneration === routeSequence
+    && !scope.session.signal.aborted && isCurrentSession(scope.session.generation)
+}
+
+function invalidateSQLScope() {
+  releaseSQLEditorScope?.()
+  releaseSQLEditorScope = null
+  sqlEditorScope = null
+  querySequence += 1
+  // 仅撤销客户端观察；中止信号不表示已经派发的 SQL 未执行或已经回滚。
+  queryController?.abort()
+  queryController = null
+  queryPending.value = false
+  queryResult.value = null
+  queryError.value = null
+  queryRefreshError.value = null
+  pendingQuery.value = null
+  sql.value = ''
+  if (dangerAction.value === 'sql') {
+    dangerOpen.value = false
+    dangerBusy.value = false
+  }
 }
 
 async function refreshRows(reportError = true, requestedOffset = offset.value, session = captureSession(), schemaReadSequence?: number): Promise<RowsRefreshOutcome> {
@@ -646,11 +694,13 @@ async function removeRow(row: Record<string, DatabaseValue>) {
 }
 
 async function executeSQL(snapshot: SQLExecutionSnapshot) {
-  if (queryPending.value) return false
+  if (queryPending.value || !ownsSQLScope(snapshot.scope)) return false
   const sequence = ++querySequence
-  const requestKey = routeKey.value
   queryController?.abort()
   const controller = new AbortController()
+  const session = snapshot.scope.session
+  const signal = AbortSignal.any([controller.signal, session.signal])
+  const ownsExecution = () => sequence === querySequence && ownsSQLScope(snapshot.scope) && !signal.aborted
   queryController = controller
   queryPending.value = true
   queryResult.value = null
@@ -658,24 +708,25 @@ async function executeSQL(snapshot: SQLExecutionSnapshot) {
   queryRefreshError.value = null
   try {
     const result = await executeDatabaseSQL({
-      ...connection(),
+      ...snapshot.connection,
       sql: snapshot.sql,
       ...(snapshot.resultMode === 'auto' ? {} : { resultMode: snapshot.resultMode }),
-    }, controller.signal)
-    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted) return false
+    }, signal)
+    if (!ownsExecution()) return false
     queryResult.value = result
     // 返回行不代表只读；SQL 成功后只刷新数据，绝不重放 SQL。
-    const refresh = await refreshRows(false)
-    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted) return false
+    const refresh = await refreshRows(false, offset.value, session)
+    if (!ownsExecution()) return false
     if (refresh.status === 'failed') queryRefreshError.value = refresh.error
     return true
   } catch (error) {
-    if (sequence !== querySequence || routeKey.value !== requestKey || controller.signal.aborted || isAbortError(error)) return false
+    if (!ownsExecution() || isAbortError(error)) return false
     queryResult.value = null
     queryError.value = toQueryErrorState(error)
     return false
   } finally {
-    if (sequence === querySequence) queryPending.value = false
+    if (queryController === controller) queryController = null
+    if (ownsExecution()) queryPending.value = false
   }
 }
 
@@ -688,18 +739,18 @@ async function confirmDanger() {
   }
   // SQL 保持独立明确执行的合同，不作为行修改未知结果的自动核对或重放。
   const snapshot = pendingQuery.value
-  if (!snapshot) return
+  if (!snapshot || !ownsSQLScope(snapshot.scope)) return
   const sequence = ++mutationSequence
-  const requestKey = routeKey.value
   const confirmationGeneration = dangerGeneration.value
+  const ownsExecution = () => sequence === mutationSequence && ownsSQLScope(snapshot.scope)
   mutationController?.abort()
   dangerBusy.value = true
   try {
     const succeeded = await executeSQL(snapshot)
-    if (succeeded && sequence === mutationSequence && routeKey.value === requestKey) ElMessage.success('SQL 执行完成')
+    if (succeeded && ownsExecution()) ElMessage.success('SQL 执行完成')
   } finally {
-    if (sequence === mutationSequence) dangerBusy.value = false
-    if (sequence === mutationSequence && routeKey.value === requestKey && confirmationGeneration === dangerGeneration.value) {
+    if (ownsExecution()) dangerBusy.value = false
+    if (ownsExecution() && confirmationGeneration === dangerGeneration.value) {
       dangerOpen.value = false
       pendingRow.value = null
       pendingQuery.value = null
@@ -708,8 +759,19 @@ async function confirmDanger() {
 }
 
 async function runSQL() {
-  if (!sql.value.trim() || queryPending.value || dangerBusy.value || dangerOpen.value) return
-  const snapshot = { sql: sql.value, resultMode: resultMode.value }
+  const scope = sqlEditorScope
+  if (!scope || !ownsSQLScope(scope) || !sql.value.trim() || queryPending.value || dangerBusy.value || dangerOpen.value) return
+  const currentConnection = connection()
+  // 凭据仅属于这次确认/执行；后续编辑连接不能悄悄改变已确认 SQL 的目标数据库。
+  const snapshot = Object.freeze({
+    scope,
+    connection: Object.freeze({
+      ...currentConnection,
+      ...(currentConnection.credentials ? { credentials: Object.freeze({ ...currentConnection.credentials }) } : {}),
+    }),
+    sql: sql.value,
+    resultMode: resultMode.value,
+  })
   if (sqlRisk.value) {
     dangerGeneration.value += 1
     pendingQuery.value = snapshot
@@ -820,7 +882,13 @@ watch([rowsContractMismatch, draftContractMismatch], ([rowsChanged, draftChanged
   schemaDriftTargets.value.add(routeKey.value)
   if (dangerOpen.value && dangerAction.value === 'delete-row' && !dangerBusy.value) dangerOpen.value = false
 }, { flush: 'sync' })
-watch(routeKey, () => { void initialize() }, { immediate: true })
+// 同 tick 的旧按钮事件（包括离开后立刻返回）必须先失去 SQL 派发权。
+watch(routeKey, () => {
+  invalidateSQLScope()
+  routeRevision.value += 1
+}, { flush: 'sync' })
+// 即使同 tick 离开再返回原目标，也在重绘前重建有效编辑器，不能永久失去执行入口。
+watch(routeRevision, () => { void initialize() }, { immediate: true })
 watch(rowDialogOpen, (open) => { if (!open) clearRowDraft() }, { flush: 'sync' })
 watch([rowForm, rowNullFields], () => { rowDraftRevision.value += 1 }, { deep: true, flush: 'sync' })
 watch(dangerOpen, (open) => {
@@ -838,6 +906,7 @@ watch(pageSize, (next, previous) => {
   void refreshRows()
 })
 onBeforeUnmount(() => {
+  invalidateSQLScope()
   schemaReloadSequence += 1
   schemaReloadController?.abort()
   schemaReloadController = null
