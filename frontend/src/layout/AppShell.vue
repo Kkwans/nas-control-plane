@@ -300,14 +300,14 @@ onBeforeUnmount(() => {
           >
             <Menu :size="21" />
           </button>
-          <div class="topbar__location" aria-label="当前位置">
+          <nav class="topbar__location" aria-label="当前位置">
             <Server :size="17" aria-hidden="true" /><span>{{ deviceName }}</span>
             <template v-for="item in breadcrumbs" :key="`${item.label}-${item.to ?? ''}`">
               <ChevronRight :size="14" aria-hidden="true" />
               <RouterLink v-if="item.to" :to="item.to">{{ item.label }}</RouterLink>
-              <strong v-else>{{ item.label }}</strong>
+              <strong v-else aria-current="page">{{ item.label }}</strong>
             </template>
-          </div>
+          </nav>
         </div>
         <div class="topbar__actions">
           <button ref="taskButton" class="refresh-button task-center-button" type="button" aria-label="任务" aria-haspopup="dialog" :aria-expanded="tasksOpen" @click="openTasks"><ListChecks :size="18" aria-hidden="true" /><span>任务</span></button>

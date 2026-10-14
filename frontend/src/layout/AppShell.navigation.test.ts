@@ -14,7 +14,12 @@ async function mount(mobile = true, path = '/') {
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (this: HTMLElement) {
     return (this.classList.contains('sidebar-collapse') ? [] : [{}]) as unknown as DOMRectList
   })
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { render: () => null } }] })
+  const component = { render: () => null }
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/databases/:sourceId/tables/:table', component },
+    { path: '/databases/:sourceId', component },
+    { path: '/:pathMatch(.*)*', component },
+  ] })
   await router.push(path); await router.isReady()
   host = document.createElement('div'); document.body.append(host)
   app = createApp({ render: () => h(AppShell, {
@@ -38,6 +43,38 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals()
 })
 describe('AppShell 移动导航', () => {
+  it('当前位置使用具名导航地标，并标注普通页面的当前项', async () => {
+    await mount(false)
+    const breadcrumb = find('nav.topbar__location[aria-label="当前位置"]')
+    expect(breadcrumb).not.toBeNull()
+    expect(breadcrumb.querySelectorAll('[aria-current="page"]')).toHaveLength(1)
+    expect(breadcrumb.querySelector('strong[aria-current="page"]')?.textContent).toBe('NAS 管理面板')
+    expect(breadcrumb.hasAttribute('tabindex')).toBe(false)
+  })
+  it('数据库面包屑保留祖先链接，路由切换更新唯一当前项', async () => {
+    const router = await mount(false, '/databases/sqlite-main/tables/settings?sourceName=fixture-db&tableName=设置表')
+    const breadcrumb = find('nav.topbar__location[aria-label="当前位置"]')
+    expect(breadcrumb).not.toBeNull()
+    const links = Array.from(breadcrumb.querySelectorAll('a'))
+    expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
+      ['数据库', '/databases'], ['fixture-db', '/databases/sqlite-main?sourceName=fixture-db'],
+    ])
+    expect(links.every((link) => !link.hasAttribute('aria-current'))).toBe(true)
+    expect(breadcrumb.querySelectorAll('[aria-current="page"]')).toHaveLength(1)
+    expect(breadcrumb.querySelector('strong[aria-current="page"]')?.textContent).toBe('设置表')
+    links[1]!.focus()
+    expect(document.activeElement).toBe(links[1])
+    const navigated = new Promise<void>((resolve) => {
+      const stop = router.afterEach(() => { stop(); resolve() })
+    })
+    links[1]!.click(); await navigated; await nextTick()
+    expect(router.currentRoute.value.fullPath).toBe('/databases/sqlite-main?sourceName=fixture-db')
+    expect(breadcrumb.querySelectorAll('a')).toHaveLength(1)
+    expect(breadcrumb.querySelectorAll('[aria-current="page"]')).toHaveLength(1)
+    expect(breadcrumb.querySelector('strong[aria-current="page"]')?.textContent).toBe('fixture-db')
+    // 桌面面包屑链接转为文本后移出焦点，不触发移动菜单的焦点恢复。
+    expect(document.activeElement).toBe(document.body)
+  })
   it('关闭时 inert，打开后隔离背景，双向循环并通过 Escape 返回按钮', async () => {
     await mount()
     expect(find('.app-sidebar').hasAttribute('inert')).toBe(true)
