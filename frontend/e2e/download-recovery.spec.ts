@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { installMockApi } from './mockApi'
 
-// 仅测试 HTTP/SSE fixture；所有变更默认拒绝，唯一例外是显式点击 Hub 后的一次模拟拉取。
+// 仅测试 HTTP/SSE fixture；所有变更默认拒绝，显式点击仅放行一次对应的模拟请求。
 const timestamp = '2026-10-13T08:00:00Z'
 const responsiveWidths = [390, 768, 820, 821, 1024, 1200, 1280, 1440]
 const longReference = `registry.example.test/team/${'unbrokendownloadreference'.repeat(6)}:release-2026-10-13`
@@ -437,4 +437,168 @@ test('真实 Hub 创建路径只有一个观察者，断流与读取恢复不会
   await expect.poll(() => streams(page)).toEqual({ created: 1, active: 0 })
   expect(state.mutations).toEqual(['POST /api/v1/docker/images/pull'])
   expect(state.blocked).toEqual([])
+})
+
+const failedRetryJob = job({ id: 'download-retry-failed', status: 'failed', message: '旧下载失败', cancellable: false })
+const queuedRetryJob = job({ id: 'download-retry-created', status: 'queued', message: '重试下载已排队', progress: 0, downloadedBytes: 0, speedBytes: 0 })
+const completedRetryJob = job({
+  id: queuedRetryJob.id, status: 'completed', artifactState: 'present', message: '重试下载已完成',
+  progress: 100, downloadedBytes: 100, speedBytes: 0, cancellable: false, updatedAt: '2026-10-13T08:02:00Z',
+})
+const retryPath = `/api/v1/jobs/${failedRetryJob.id}/retry`
+const retryRow = (page: Page, snapshot: Snapshot) => rowOf(page, snapshot.reference).filter({ has: page.getByText(snapshot.message, { exact: true }) })
+
+// 重试验收只允许一次明确点击对应的 POST；所有未知 API、外部主机和 WebSocket 失败关闭。
+// 本地镜像在测试发布完成快照后才出现，不能借助通用 fixture 的预置镜像掩盖刷新遗漏。
+async function retryCompletionFixture(page: Page, baseURL: string) {
+  const origin = new URL(baseURL).origin
+  expect(new URL(origin).hostname).toBe('127.0.0.1')
+  await installMockApi(page, { manualRealtime: true })
+  let jobs = [failedRetryJob]
+  let imageAvailable = false
+  let imageReads = 0
+  let permitted: { response: Snapshot; release: Promise<void> } | undefined
+  const writes: string[] = []
+  const denied: string[] = []
+  const reads = new Set([
+    '/api/v1/auth/status', '/api/v1/preferences', '/api/v1/system/capabilities',
+    '/api/v1/system/summary', '/api/v1/docker/inventory', '/api/v1/sites', '/api/v1/sites/ignored',
+    '/api/v1/preferences/lists/docker.projects', '/api/v1/preferences/lists/docker.containers',
+    '/api/v1/preferences/lists/docker.images.local', '/api/v1/preferences/lists/docker.image-downloads',
+  ])
+  await page.routeWebSocket('**/*', (socket) => { denied.push(`WebSocket ${socket.url()}`); socket.close() })
+  await page.route('**/*', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+    const target = `${method} ${url.pathname}`
+    if (url.origin === origin && method === 'GET' && !url.pathname.startsWith('/api/')) return route.fallback()
+    if (method !== 'GET') writes.push(target)
+    if (url.origin === origin) {
+      if (method === 'POST' && url.pathname === retryPath && !url.search && permitted) {
+        const submission = permitted
+        permitted = undefined
+        expect(request.postData()).toBeNull()
+        await submission.release
+        return route.fulfill({ status: 202, json: submission.response })
+      }
+      if (method === 'GET' && url.pathname === '/api/v1/jobs') {
+        expect([...url.searchParams]).toEqual([['type', 'docker-image-pull']])
+        return route.fulfill({ json: { jobs } })
+      }
+      if (method === 'GET' && url.pathname === '/api/v1/docker/images' && !url.search) {
+        imageReads += 1
+        return route.fulfill({ json: { collectedAt: timestamp, images: imageAvailable ? [{
+          id: 'sha256:retry-completed-fixture', repoTags: [completedRetryJob.reference], repoDigests: [],
+          sizeBytes: 100, createdAt: timestamp, containers: 0,
+        }] : [] } })
+      }
+      if (method === 'GET' && reads.has(url.pathname)) return route.fallback()
+    }
+    denied.push(`${method} ${request.url()}`)
+    return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED', message: '未许可请求已拒绝' } })
+  })
+  return {
+    get imageReads() { return imageReads },
+    setJobs(next: Snapshot[]) { jobs = next },
+    publishImage() { imageAvailable = true },
+    allowOneRetry(response = queuedRetryJob, hold = false) {
+      expect(permitted, '不能覆盖尚未消费的一次性重试许可').toBeUndefined()
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      permitted = { response, release: gate }
+      if (!hold) release()
+      return release
+    },
+    writes,
+    expectClean() {
+      expect(writes).toEqual([`POST ${retryPath}`])
+      expect(denied).toEqual([])
+      expect(permitted, '一次性重试许可必须已消费').toBeUndefined()
+    },
+  }
+}
+
+async function openRetryDownloads(page: Page) {
+  await openImages(page)
+  await expect(page.getByText('没有匹配的本地镜像', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /^下载任务/ }).click()
+  await expect(retryRow(page, failedRetryJob).locator('.job-state')).toHaveText('失败')
+}
+
+async function expectRetriedImageVisible(page: Page) {
+  await retryRow(page, completedRetryJob).getByRole('button', { name: '查看本地镜像', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '搜索本地镜像', exact: true })).toHaveValue(completedRetryJob.reference)
+  await expect(page.locator('.resource-row .resource-name strong')).toHaveText(completedRetryJob.reference)
+  await expect(page.getByRole('button', { name: `从镜像 ${completedRetryJob.reference} 创建容器`, exact: true })).toBeVisible()
+  await expect(page.getByText('没有匹配的本地镜像', { exact: true })).toHaveCount(0)
+}
+
+test.describe('重新下载完成后刷新本地镜像', () => {
+  test.use({ serviceWorkers: 'block' })
+
+  test('持久化未确认时不刷新，SSE 完成后只刷新一次且可查看新镜像', async ({ page, baseURL }) => {
+    const state = await retryCompletionFixture(page, baseURL!)
+    await openRetryDownloads(page)
+    expect(state.imageReads).toBe(1)
+    state.allowOneRetry()
+    await retryRow(page, failedRetryJob).getByRole('button', { name: '重新下载', exact: true }).click()
+    await expect(retryRow(page, queuedRetryJob).locator('.job-state')).toHaveText('排队中')
+    await expect.poll(() => streams(page)).toEqual({ created: 1, active: 1 })
+
+    const pending = job({ ...completedRetryJob, persistenceStatus: 'pending', message: '重试下载结果保存中', updatedAt: '2026-10-13T08:01:00Z' })
+    await emit(page, pending)
+    await expect(retryRow(page, pending).locator('.job-state')).toHaveText('结果保存中')
+    await expect(retryRow(page, pending).getByRole('button', { name: '查看本地镜像', exact: true })).toHaveCount(0)
+    await expect(page.getByText(`镜像 ${completedRetryJob.reference} 已拉取`, { exact: true })).toHaveCount(0)
+    expect(state.imageReads).toBe(1)
+    await expect.poll(() => streams(page)).toEqual({ created: 1, active: 1 })
+
+    state.publishImage()
+    state.setJobs([completedRetryJob, failedRetryJob])
+    await emit(page, completedRetryJob)
+    await expect(retryRow(page, completedRetryJob).locator('.job-state')).toHaveText('已完成')
+    await expect(page.getByText(`镜像 ${completedRetryJob.reference} 已拉取`, { exact: true })).toHaveCount(1)
+    await expect.poll(() => state.imageReads).toBe(2)
+    await expect.poll(() => streams(page)).toEqual({ created: 1, active: 0 })
+    await refresh(page).click()
+    await expect(refresh(page)).toBeEnabled()
+    await expect(retryRow(page, failedRetryJob).locator('.job-state')).toHaveText('失败')
+    await expectRetriedImageVisible(page)
+    await page.clock.fastForward(15_000)
+    await expect.poll(() => streams(page)).toEqual({ created: 1, active: 0 })
+    expect(state.imageReads).toBe(2)
+    state.expectClean()
+  })
+
+  test('GET 先取得重试任务终态时，迟到的 POST 仍刷新一次且不重新开流', async ({ page, baseURL }) => {
+    const state = await retryCompletionFixture(page, baseURL!)
+    await openRetryDownloads(page)
+    const release = state.allowOneRetry(queuedRetryJob, true)
+    try {
+      await retryRow(page, failedRetryJob).getByRole('button', { name: '重新下载', exact: true }).click()
+      await expect.poll(() => state.writes).toEqual([`POST ${retryPath}`])
+      await expect(retryRow(page, failedRetryJob).getByRole('button', { name: '重新下载', exact: true })).toBeDisabled()
+      state.publishImage()
+      state.setJobs([completedRetryJob, failedRetryJob])
+      await refresh(page).click()
+      await expect(retryRow(page, completedRetryJob).locator('.job-state')).toHaveText('已完成')
+      expect(state.imageReads).toBe(1)
+      await expect(page.getByText(`镜像 ${completedRetryJob.reference} 已拉取`, { exact: true })).toHaveCount(0)
+
+      release()
+      await expect(retryRow(page, failedRetryJob).getByRole('button', { name: '重新下载', exact: true })).toBeEnabled()
+      await expect.poll(() => state.imageReads).toBe(2)
+      await expect(retryRow(page, completedRetryJob).locator('.job-state')).toHaveText('已完成')
+      await expect(page.getByText(`镜像 ${completedRetryJob.reference} 已拉取`, { exact: true })).toHaveCount(1)
+      await expect.poll(() => streams(page)).toEqual({ created: 0, active: 0 })
+      await refresh(page).click()
+      await expect(refresh(page)).toBeEnabled()
+      await expectRetriedImageVisible(page)
+      await page.clock.fastForward(15_000)
+      await expect.poll(() => streams(page)).toEqual({ created: 0, active: 0 })
+      expect(state.imageReads).toBe(2)
+      state.expectClean()
+    } finally { release() }
+  })
 })

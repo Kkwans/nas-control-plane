@@ -253,10 +253,12 @@ for (const mismatch of ['table', 'schema'] as const) {
     await refresh(page).click()
     await gate.received.promise
     // 合法旧行在刷新中仍可键盘打开；错误响应到达后必须撤销这个已有草稿的提交权。
+    await expect(edit(page)).toBeEnabled()
     await edit(page).press('Enter')
     await expect(dialog(page)).toBeVisible()
     const label = dialog(page).getByRole('textbox', { name: 'label', exact: true })
     await label.fill('fixture-retained-unsent-draft')
+    await expect(save(page)).toBeEnabled()
     await api.releaseRows(gate)
     await expectBadRows(page)
     await expect(page.locator('.data-table')).toContainText(originalRow.label)
