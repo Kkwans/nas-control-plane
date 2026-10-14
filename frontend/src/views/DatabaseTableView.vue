@@ -214,10 +214,12 @@ const stats = computed<WorkspaceStat[]>(() => [
   { label: '表大小', value: formatBytes(table.value?.sizeBytes), tone: 'warning' },
   { label: '字段', value: columns.value.length },
 ])
+// SQL 列名只作标签；重复、空白或带点的别名不能作为取值键。
+const queryColumns = computed(() => queryResult.value?.columns.map((label, index) => ({ key: `column_${index}`, label })) ?? [])
 const queryRows = computed(() => {
   if (!queryResult.value) return []
   return queryResult.value.rows.map((row) =>
-    Object.fromEntries(queryResult.value!.columns.map((column, index) => [column, row[index]])))
+    Object.fromEntries(queryColumns.value.map((column, index) => [column.key, row[index]])))
 })
 const sqlRisk = computed(() => classifySqlRisk(sql.value))
 const affectedSummary = computed(() => queryResult.value?.rowsAffectedKnown === true
@@ -1079,8 +1081,8 @@ onBeforeUnmount(() => {
         </div>
         <div v-else-if="queryResult?.columns.length" class="query-table" role="region" :aria-label="`${table.name} SQL 查询结果`">
           <ElTable :data="queryRows" :empty-text="queryEmptyText" height="100%" :scrollbar-tabindex="0" border stripe>
-            <ElTableColumn v-for="column in queryResult.columns" :key="column" :prop="column" :label="column" min-width="150" show-overflow-tooltip>
-              <template #default="{ row }"><span v-if="row[column] === null" class="null-value">NULL</span><span v-else class="cell-value">{{ displayValue(column, row[column]) }}</span></template>
+            <ElTableColumn v-for="column in queryColumns" :key="column.key" :prop="column.key" :label="column.label" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }"><span v-if="row[column.key] === null" class="null-value">NULL</span><span v-else class="cell-value">{{ displayValue(column.label, row[column.key]) }}</span></template>
             </ElTableColumn>
           </ElTable>
         </div>

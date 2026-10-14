@@ -173,7 +173,7 @@ describe('SQL 结果模式与计数', () => {
     expect(host.querySelector('.query-result')?.textContent).toContain('返回结果已截断')
     expect(host.querySelector('.query-result')?.textContent).toContain('数据库未提供可用的影响行数')
     expect(host.querySelector('.query-result')?.textContent).not.toContain('影响 1 行')
-    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"n":2}]')
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"column_0":2}]')
     expect(host.textContent).toContain('500 行与 1 MiB 仅限制展示结果，不限制写入范围')
   })
 
@@ -225,7 +225,7 @@ describe('SQL 结果字节预算', () => {
     expect(warning?.textContent).toContain(expected)
     expect(warning?.textContent).toContain('仅展示前 1 行完整结果，单元内容未被裁剪')
     expect(warning?.textContent).toContain('不代表写入未生效或已回滚')
-    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe(JSON.stringify([{ id: values[0], amount: values[1] }]))
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe(JSON.stringify([{ column_0: values[0], column_1: values[1] }]))
     expect(host.querySelector('.query-result')?.textContent).not.toContain('影响 1 行')
     if (reason === undefined) expect(warning?.textContent).not.toMatch(/1 MiB|500 行/)
     expect(mocks.execute).toHaveBeenCalledTimes(1)
@@ -611,7 +611,7 @@ describe('SQL 确认、并发与路由归属', () => {
     expect(mocks.rows).toHaveBeenCalledTimes(2)
     current.resolve(result({ columns: ['current'], rows: [[2]] }))
     await settle()
-    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"current":2}]')
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"column_0":2}]')
     expect(mocks.rows).toHaveBeenCalledTimes(3)
   })
 

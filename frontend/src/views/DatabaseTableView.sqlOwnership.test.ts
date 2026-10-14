@@ -368,7 +368,7 @@ describe('SQL 会话失效归属', () => {
     expect(rowsCalls()).toHaveLength(2)
     expect(mocks.success).not.toHaveBeenCalled()
     current.resolve(json(result({ columns: ['current'], rows: [[9]] }))); await settle()
-    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"current":9}]')
+    expect(host.querySelector('.query-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"column_0":9}]')
     expect(rowsCalls()).toHaveLength(3)
     expect(mocks.success).toHaveBeenCalledTimes(1)
   })
