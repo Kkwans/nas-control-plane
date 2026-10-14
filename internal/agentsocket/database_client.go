@@ -111,11 +111,11 @@ func mutateDatabase(ctx context.Context, socketPath string, request any, call fu
 
 func callDatabase(ctx context.Context, socketPath string, request, result any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) error {
 	if err := ctx.Err(); err != nil {
-		return coded(string(ncpdatabase.CodeTimeout), errors.New(string(ncpdatabase.CodeTimeout)))
+		return databaseRPCError(err)
 	}
 	connection, err := dialSocket(socketPath)
 	if err != nil {
-		return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
+		return databaseCodedError(ncpdatabase.CodeAgentUnavailable, nil)
 	}
 	defer connection.Close()
 	return callDatabaseClient(NewAgentDatabaseServiceClient(connection), request, result, call)
@@ -183,17 +183,32 @@ func databaseRPCError(err error) error {
 		return nil
 	}
 	status := grpcstatus.Convert(err)
-	if status.Code() == codes.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return coded(string(ncpdatabase.CodeTimeout), errors.New(string(ncpdatabase.CodeTimeout)))
+	// 仅保留安全的 Context 哨兵，不能将原始 gRPC 消息或详情留在错误链中。
+	if errors.Is(err, context.DeadlineExceeded) {
+		return databaseCodedError(ncpdatabase.CodeTimeout, context.DeadlineExceeded)
+	}
+	if errors.Is(err, context.Canceled) {
+		return databaseCodedError(ncpdatabase.CodeTimeout, context.Canceled)
+	}
+	if status.Code() == codes.DeadlineExceeded {
+		return databaseCodedError(ncpdatabase.CodeTimeout, context.DeadlineExceeded)
+	}
+	if status.Code() == codes.Canceled {
+		return databaseCodedError(ncpdatabase.CodeTimeout, context.Canceled)
 	}
 	// 旧 Agent 的默认 gRPC 4 MiB 接收限制同样表示结果过大，不能误报 Agent 断连。
 	if status.Code() == codes.ResourceExhausted {
-		return coded(string(ncpdatabase.CodeResultTooLarge), errors.New(string(ncpdatabase.CodeResultTooLarge)))
+		return databaseCodedError(ncpdatabase.CodeResultTooLarge, nil)
 	}
 	if code := ncpdatabase.CodeFromString(status.Message()); code != "" {
-		return coded(string(code), errors.New(string(code)))
+		return databaseCodedError(code, nil)
 	}
-	return coded(string(ncpdatabase.CodeAgentUnavailable), errors.New(string(ncpdatabase.CodeAgentUnavailable)))
+	return databaseCodedError(ncpdatabase.CodeAgentUnavailable, nil)
+}
+
+func databaseCodedError(code ncpdatabase.ErrorCode, cause error) error {
+	// 兼容 agentsocket.ErrorCode，并让连接协调器通过类型保留稳定码，无需重判文本。
+	return coded(string(code), &ncpdatabase.DatabaseError{Code: code, Cause: cause})
 }
 
 // 默认传输上限只约束线格式；密集小值在 AsMap 中会膨胀为接口/容器树。
