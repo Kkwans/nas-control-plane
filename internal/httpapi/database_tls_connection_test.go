@@ -250,3 +250,85 @@ func TestDatabaseTLSHTTPTestOnlyInheritsSavedPolicyWithoutWriting(t *testing.T) 
 		})
 	}
 }
+
+// 通过真实协调器和临时 SQLite 覆盖公开输入；网络边界全部由 fake 提供。
+func TestDatabaseTLSHTTPExplicitPolicyUsesProtectedCoordinatorAllEndpoints(t *testing.T) {
+	for _, endpoint := range tlsHTTPEndpoints() {
+		t.Run(endpoint.path, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := ncpdatabase.OpenSQLiteCredentialStore(filepath.Join(t.TempDir(), "credentials.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			counted := &connectHTTPStore{CredentialStore: store}
+			keys, err := ncpdatabase.NewMemoryKeyProvider(1, bytes.Repeat([]byte{0x29}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			vault, err := ncpdatabase.NewCredentialVault(counted, keys)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var observed ncpdatabase.Connection
+			tests := 0
+			coordinator, err := ncpdatabase.NewConnectionCoordinator(vault, connectHTTPTester(func(_ context.Context, connection ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
+				tests++
+				observed = ncpdatabase.Connection{SourceID: connection.SourceID, Credentials: ncpdatabase.CloneCredentials(connection.Credentials)}
+				return ncpdatabase.ConnectionDiagnostic{Connected: true, Code: "connected"}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent := &tlsHTTPAgent{}
+			api := &handler{databaseAgent: agent, databaseConnections: coordinator}
+			want := ncpdatabase.Credentials{Username: "manual-user", TLS: &ncpdatabase.TLSPolicy{Mode: ncpdatabase.TLSVerifyFull, ServerName: "synthetic.invalid"}}
+			response := tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture","credentials":{"username":"manual-user","password":"","tls":{"mode":"verify-full","serverName":"synthetic.invalid"}}`+endpoint.extra+`}`)
+			if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+				t.Fatalf("strict protected request failed: %d %s", response.Code, response.Body)
+			}
+			if agent.discoverCalls != 1 || agent.testCalls != 0 {
+				t.Fatal("strict request bypassed protected coordinator")
+			}
+			if endpoint.path == "connect" || endpoint.path == "test-connection" {
+				if tests != 1 || agent.operationCalls != 0 || !reflect.DeepEqual(observed.Credentials, want) {
+					t.Fatal("strict test did not receive the prepared policy and manual identity")
+				}
+			} else if tests != 0 || agent.operationCalls != 1 || !reflect.DeepEqual(agent.connection.Credentials, want) {
+				t.Fatal("strict operation lost the prepared policy or ran an extra test")
+			}
+			snapshot, err := store.ReadCredentialSnapshot(ctx, "fixture")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if endpoint.path == "connect" {
+				var envelope struct {
+					Version int `json:"version"`
+				}
+				if err := json.Unmarshal(snapshot.Record.Ciphertext, &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if counted.writes != 1 || counted.committed != 1 || envelope.Version != 2 {
+					t.Fatal("connect did not save exactly one v2 strict credential")
+				}
+				source := ncpdatabase.Source{ID: "fixture", Driver: ncpdatabase.DriverPostgreSQL, Host: "synthetic.invalid", Port: 5432, DefaultDatabase: "fixture"}
+				saved, found, err := vault.Resolve(ctx, source)
+				if err != nil || !found || !reflect.DeepEqual(saved, want) {
+					t.Fatalf("saved strict credential did not round trip: %v", err)
+				}
+				// 省略整个凭据对象的后续连接仍继承 v2，不产生 legacy 重试。
+				response = tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture"}`)
+				if response.Code != http.StatusOK || tests != 2 || !reflect.DeepEqual(observed.Credentials, want) || counted.writes != 1 {
+					t.Fatal("automatic connect lost the saved strict policy or rewrote credentials")
+				}
+			} else if snapshot.Baseline.Exists || counted.writes != 0 || counted.committed != 0 {
+				t.Fatal("test-only or resolution saved credentials")
+			}
+			beforeTests, beforeOperations, beforeWrites := tests, agent.operationCalls, counted.writes
+			response = tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture","credentials":{"tls":{"mode":"verify-full"}}`+endpoint.extra+`}`)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"credentials_required"`) || tests != beforeTests || agent.operationCalls != beforeOperations || counted.writes != beforeWrites {
+				t.Fatalf("TLS-only input borrowed a saved identity or executed: %d %s", response.Code, response.Body)
+			}
+		})
+	}
+}

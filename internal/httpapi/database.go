@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
@@ -180,8 +179,8 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 		}
 		return false
 	}
-	// T2 只开放内部 vault/RPC 策略；HTTP 输入必须等完整公开合同一起发布。
-	if present, err := databaseBodyHasTLSKey(data); err != nil || present {
+	// 在强类型解码丢失重复键或 null 信息前校验公开 TLS 合同。
+	if err := validateDatabaseTLSInput(data); err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
 		return false
 	}
@@ -201,66 +200,6 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 		return false
 	}
 	return true
-}
-
-// 顺序读取所有对象成员，不能用 map 丢弃重复 credentials 或 tls 键。
-// EqualFold 与 JSON struct 字段匹配一样包含大小写兼容；只查看根级凭据，
-// 不把 SQL 字符串、行数据的键或值误认成连接策略。
-func databaseBodyHasTLSKey(data []byte) (bool, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	token, err := decoder.Token()
-	if err != nil {
-		return false, err
-	}
-	if token != json.Delim('{') {
-		return false, nil // 其他结构仍由正常的强类型解码器处理。
-	}
-	for decoder.More() {
-		key, err := decoder.Token()
-		if err != nil {
-			return false, err
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return false, err
-		}
-		if name, ok := key.(string); ok && strings.EqualFold(name, "credentials") {
-			present, err := databaseCredentialsHaveTLSKey(value)
-			if err != nil || present {
-				return present, err
-			}
-		}
-	}
-	_, err = decoder.Token()
-	return false, err
-}
-
-func databaseCredentialsHaveTLSKey(data []byte) (bool, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	token, err := decoder.Token()
-	if err != nil {
-		return false, err
-	}
-	if token != json.Delim('{') {
-		return false, nil
-	}
-	for decoder.More() {
-		key, err := decoder.Token()
-		if err != nil {
-			return false, err
-		}
-		if name, ok := key.(string); ok && strings.EqualFold(name, "tls") {
-			return true, nil // 包括 null、空策略、重复键与非标准大小写。
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return false, err
-		}
-	}
-	_, err = decoder.Token()
-	return false, err
 }
 
 func databaseErrorCode(err error) ncpdatabase.ErrorCode {

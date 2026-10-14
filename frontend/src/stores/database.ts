@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 
 import { requestDatabaseProjectPreferences, updateDatabaseProjectPreference } from '@/api/control'
@@ -11,6 +11,8 @@ import {
   type DatabaseCredentials,
   type DatabaseSource,
 } from '@/api/database'
+import { cloneDatabaseCredentials, databaseSourceBinding } from '@/domain/database/connectionDraft'
+import { NcpApiError } from '@/api/systemTransport'
 import { DatabaseConnectionCatalogError } from '@/api/databaseConnectionResponse'
 import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
@@ -27,6 +29,22 @@ export const useDatabaseStore = defineStore('database', () => {
   const collectedAt = ref('')
   const archivedProjectKeys = ref<string[]>([])
   let discoverySequence = 0
+  const connectionSequences = new Map<string, number>()
+  watch(() => new Map(sources.value.map(item => [item.id, databaseSourceBinding(item)])), (next, previous) => {
+    for (const [id, binding] of previous) {
+      if (next.get(id) === binding) continue
+      connectionSequences.set(id, (connectionSequences.get(id) ?? 0) + 1)
+      delete credentials.value[id]
+      delete catalogs.value[id]
+    }
+  }, { flush: 'sync' })
+
+  function captureConnectionOwner(sourceId: string) {
+    const sequence = (connectionSequences.get(sourceId) ?? 0) + 1
+    connectionSequences.set(sourceId, sequence)
+    const binding = databaseSourceBinding(source(sourceId))
+    return () => connectionSequences.get(sourceId) === sequence && databaseSourceBinding(source(sourceId)) === binding
+  }
 
   const systemCount = computed(() => sources.value.filter((source) => source.category === 'system').length)
   const projectCount = computed(() => sources.value.filter((source) => source.category === 'project').length)
@@ -39,7 +57,7 @@ export const useDatabaseStore = defineStore('database', () => {
   function connection(sourceId: string): DatabaseConnection {
     return {
       sourceId,
-      credentials: credentials.value[sourceId],
+      credentials: credentials.value[sourceId] ? cloneDatabaseCredentials(credentials.value[sourceId]) : undefined,
     }
   }
 
@@ -88,9 +106,10 @@ export const useDatabaseStore = defineStore('database', () => {
 
   async function loadCatalog(sourceId: string, signal?: AbortSignal) {
     const session = captureSession()
-    const requestSignal = signal ?? session.signal
+    const requestSignal = signal ? AbortSignal.any([signal, session.signal]) : session.signal
+    const ownsTarget = captureConnectionOwner(sourceId)
     const catalog = await loadDatabaseCatalog(connection(sourceId), requestSignal)
-    if (requestSignal.aborted || !isCurrentSession(session.generation))
+    if (requestSignal.aborted || !isCurrentSession(session.generation) || !ownsTarget())
       throw new DOMException('Session invalidated', 'AbortError')
     catalogs.value = { ...catalogs.value, [sourceId]: catalog }
     return catalog
@@ -99,28 +118,33 @@ export const useDatabaseStore = defineStore('database', () => {
   async function connect(sourceId: string, input: DatabaseCredentials, signal?: AbortSignal) {
     const session = captureSession()
     const requestSignal = signal ? AbortSignal.any([signal, session.signal]) : session.signal
-    const snapshot = { ...input }
-    const hasCredentials = Object.values(snapshot).some((value) => typeof value === 'string' && value.trim() !== '')
+    const ownsTarget = captureConnectionOwner(sourceId)
+    const snapshot = cloneDatabaseCredentials(input)
+    if (snapshot.tls && (!snapshot.username?.trim() || (!snapshot.database?.trim() && !source(sourceId)?.defaultDatabase?.trim()))) {
+      throw new NcpApiError('credentials_required', '请填写本次连接的用户名和数据库名。')
+    }
+    const hasCredentials = snapshot.tls !== undefined || Object.values(snapshot).some((value) => typeof value === 'string' && value.trim() !== '')
     const connectionInput = hasCredentials ? { sourceId, credentials: snapshot } : { sourceId }
-    const diagnostic = await connectDatabase(connectionInput, requestSignal)
-    if (requestSignal.aborted || !isCurrentSession(session.generation))
+    const diagnostic = await connectDatabase({ ...connectionInput, ...(hasCredentials ? { credentials: cloneDatabaseCredentials(snapshot) } : {}) }, requestSignal)
+    if (requestSignal.aborted || !isCurrentSession(session.generation) || !ownsTarget())
       throw new DOMException('Session invalidated', 'AbortError')
     if (diagnostic.connected !== true) throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
     let catalog: DatabaseCatalog
     try { catalog = await loadDatabaseCatalog(connectionInput, requestSignal) } catch (error) {
-      if (requestSignal.aborted || !isCurrentSession(session.generation) || isAbortError(error))
+      if (requestSignal.aborted || !isCurrentSession(session.generation) || !ownsTarget() || isAbortError(error))
         throw new DOMException('Session invalidated', 'AbortError')
       throw new DatabaseConnectionCatalogError()
     }
-    if (requestSignal.aborted || !isCurrentSession(session.generation))
+    if (requestSignal.aborted || !isCurrentSession(session.generation) || !ownsTarget())
       throw new DOMException('Session invalidated', 'AbortError')
-    credentials.value = { ...credentials.value, [sourceId]: snapshot }
+    credentials.value = { ...credentials.value, [sourceId]: cloneDatabaseCredentials(snapshot) }
     catalogs.value = { ...catalogs.value, [sourceId]: catalog }
     return { catalog, diagnostic }
   }
 
   function resetSessionState() {
     discoverySequence += 1
+    connectionSequences.clear()
     sources.value = []
     catalogs.value = {}
     credentials.value = {}

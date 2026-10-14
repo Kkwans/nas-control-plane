@@ -198,8 +198,9 @@ func (s *connectHTTPStore) CompareAndSwapCredential(ctx context.Context, baselin
 }
 
 func TestDatabaseConnectHTTPConcurrentSavePreservesWinner(t *testing.T) {
-	for _, existing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("existing=%t", existing), func(t *testing.T) {
+	for _, fixture := range []struct{ existing, strict bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		existing := fixture.existing
+		t.Run(fmt.Sprintf("existing=%t/strict=%t", existing, fixture.strict), func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "credentials.db")
 			openStore := func() *ncpdatabase.SQLiteCredentialStore {
@@ -260,8 +261,12 @@ func TestDatabaseConnectHTTPConcurrentSavePreservesWinner(t *testing.T) {
 				metadata *requestMetadata
 			}
 			done := make(chan outcome, 1)
+			policyJSON := ""
+			if fixture.strict {
+				policyJSON = `,"tls":{"mode":"verify-full","serverName":"late.invalid"}`
+			}
 			go func() {
-				response, metadata := databaseConnectRecorder(t, api, `{"sourceId":"fixture","credentials":{"username":"fixture-user","password":"synthetic-late"}}`)
+				response, metadata := databaseConnectRecorder(t, api, `{"sourceId":"fixture","credentials":{"username":"fixture-user","password":"synthetic-late"`+policyJSON+`}}`)
 				done <- outcome{response, metadata}
 			}()
 			select {
@@ -271,6 +276,9 @@ func TestDatabaseConnectHTTPConcurrentSavePreservesWinner(t *testing.T) {
 			}
 			// 两个真实协调器在独立 SQLite 连接上交错；通道固定胜方先保存。
 			winnerCredentials := ncpdatabase.Credentials{Username: "fixture-user", Password: "synthetic-winner"}
+			if fixture.strict {
+				winnerCredentials.TLS = &ncpdatabase.TLSPolicy{Mode: ncpdatabase.TLSVerifyFull, ServerName: "winner.invalid"}
+			}
 			_, saveErr := writer.ManualConnect(ctx, source, winnerCredentials)
 			winner, snapshotErr := otherStore.ReadCredentialSnapshot(ctx, source.ID)
 			close(release)
@@ -284,7 +292,7 @@ func TestDatabaseConnectHTTPConcurrentSavePreservesWinner(t *testing.T) {
 				t.Fatalf("HTTP 409 changed the winning credential row or revision: %v", err)
 			}
 			resolved, found, err := writerVault.Resolve(ctx, source)
-			if err != nil || !found || resolved != winnerCredentials {
+			if err != nil || !found || !reflect.DeepEqual(resolved, winnerCredentials) {
 				t.Fatalf("winning credentials were not retained: %v", err)
 			}
 			if tests != 1 || counted.reads != 1 || counted.writes != 1 || counted.committed != 0 || agent.discoverCalls != 1 || agent.testCalls != 0 {

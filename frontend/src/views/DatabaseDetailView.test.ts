@@ -470,3 +470,261 @@ describe('DatabaseDetailView request ownership', () => {
   })
 
 })
+
+const syntheticPEM = '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n'
+async function inputText(label: string, value: string) {
+  const input = host.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!
+  expect(input).not.toBeNull()
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await settle()
+}
+async function chooseTrust(label: string) {
+  host.querySelector<HTMLElement>('[data-connection-field="trust"] .el-select__wrapper')!.click()
+  await settle()
+  const option = [...document.querySelectorAll<HTMLElement>('.el-select-dropdown__item')].find(item => item.textContent?.includes(label))
+  expect(option).toBeDefined()
+  option!.click()
+  await settle()
+}
+async function startTLS(trust = '自定义 PEM CA') {
+  button('设置证书校验 TLS').click(); await settle()
+  await chooseTrust(trust)
+  if (trust === '自定义 PEM CA') await inputText('CA 证书（PEM）', syntheticPEM)
+}
+
+describe('DatabaseDetailView explicit TLS settings', () => {
+  beforeEach(() => {
+    invalidateSession(); setActivePinia(createPinia()); vi.resetAllMocks()
+    mocks.route = reactive({ params: { sourceId: 'a' } })
+    mocks.connect.mockRejectedValue(new NcpApiError('credentials_required', '需要凭据'))
+    mocks.diagnostic.mockResolvedValue(diagnostic('a'))
+    useDatabaseStore().sources = [source('a')]
+  })
+  afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.unstubAllGlobals() })
+
+  it('发现填充同 ID 时只初始化一次；目标变化重新初始化且展示改名不重连', async () => {
+    const store = useDatabaseStore()
+    store.sources = []
+    mocks.discover.mockResolvedValue({ sources: [source('a')], collectedAt: '2026-10-14T17:00:00Z' })
+    mount(); await settle()
+    expect(mocks.discover).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    expect(mocks.catalog).not.toHaveBeenCalled()
+    store.sources[0]!.name = 'Changed display name'
+    await settle()
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    store.sources[0]!.host = 'replacement'
+    await settle()
+    expect(mocks.discover).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(2)
+  })
+
+  it('完整成功只清理未变化的草稿，再次打开不会回填密码或 CA', async () => {
+    mount(); await settle(); await enterCredentials(); await startTLS()
+    mocks.connect.mockResolvedValue(diagnostic('a'))
+    mocks.catalog.mockResolvedValue({ source: source('a'), tables: [] })
+    await submitConnection()
+    expect(mocks.connect).toHaveBeenCalledTimes(2)
+    expect(mocks.catalog).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('form')).toBeNull()
+    expect(host.querySelector('.connection-pill')?.textContent).toBe('已连接')
+    button('连接设置').click(); await settle()
+    expect([...host.querySelectorAll<HTMLInputElement>('form input')].every(input => input.value === '')).toBe(true)
+    expect(host.querySelector('textarea')).toBeNull()
+    expect(host.textContent).toContain('TLS 状态未确认')
+    expect(host.textContent).not.toContain('TLS 已验证')
+  })
+
+  it('TLS 字段重新挂载后实际 combobox 仍关联即时错误与帮助', async () => {
+    mount(); await settle(); await enterCredentials()
+    for (let iteration = 0; iteration < 2; iteration++) {
+      button('设置证书校验 TLS').click(); await settle()
+      button('测试连接').click(); await settle()
+      const input = host.querySelector<HTMLInputElement>('[data-connection-field="trust"] input[role="combobox"]')!
+      expect(document.activeElement).toBe(input)
+      expect(input.getAttribute('aria-describedby')).toBe('tls-trust-help tls-trust-error')
+      expect(host.querySelectorAll('#tls-trust-error')).toHaveLength(1)
+      expect(host.querySelector('#tls-trust-error')?.textContent).toBe('请选择信任来源')
+      button('撤销本次 TLS 编辑').click(); await settle()
+      expect(host.querySelector('#tls-trust-error')).toBeNull()
+    }
+    expect(mocks.diagnostic).not.toHaveBeenCalled()
+  })
+
+  it.each(['mysql', 'postgresql'] as const)('已有 %s 目录可打开同一表单，保留列表且状态未确认', async driver => {
+    const store = useDatabaseStore()
+    store.sources = [{ ...source('a'), driver }]
+    store.catalogs.a = { source: store.sources[0]!, tables: [] }
+    mount(); await settle()
+    expect(host.querySelector('form')).toBeNull()
+    button('连接设置').click(); await settle()
+    expect(host.querySelector('[aria-label="数据表和视图列表"]')).not.toBeNull()
+    expect(host.querySelector('form')?.textContent).toContain('TLS 状态未确认')
+    expect(host.textContent).toContain('服务端沿用已保存的严格策略')
+    expect(host.textContent).not.toContain('已加密')
+    expect(host.textContent).not.toContain('TLS 已验证')
+    expect(mocks.connect).not.toHaveBeenCalled()
+  })
+
+  it('SQLite 没有 TLS 或连接设置入口', async () => {
+    const store = useDatabaseStore()
+    store.sources = [{ ...source('a'), driver: 'sqlite', requiresLogin: false }]
+    store.catalogs.a = { source: store.sources[0]!, tables: [] }
+    mount(); await settle()
+    expect(host.textContent).not.toContain('设置证书校验 TLS')
+    expect([...host.querySelectorAll('button')].some(item => item.textContent === '连接设置')).toBe(false)
+  })
+
+  it('显式系统根测试只发 verify-full，不复制保存 CA 或密码，也不宣称安全证明', async () => {
+    useDatabaseStore().credentials.a = { username: 'saved', password: 'saved-synthetic', tls: { mode: 'verify-full', caPEM: 'saved-ca', serverName: 'saved.example' } }
+    mount(); await settle()
+    await enterCredentials(['alice', 'typed-synthetic', 'fixture'])
+    await inputText('密码', '')
+    await startTLS('Root Agent 系统根证书')
+    button('测试连接').click(); await settle()
+    expect(mocks.diagnostic).toHaveBeenCalledWith({ sourceId: 'a', credentials: { username: 'alice', password: '', database: 'fixture', tls: { mode: 'verify-full' } } }, expect.any(AbortSignal))
+    expect(host.textContent).toContain('连接诊断通过')
+    expect(host.textContent).toContain('TLS 状态未确认')
+    expect(host.textContent).not.toContain('saved-')
+    expect(host.textContent).not.toContain('已加密')
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('自定义和系统切换清除 CA；撤销只省略本次策略并将焦点返回入口', async () => {
+    mount(); await settle(); await enterCredentials()
+    await startTLS()
+    await inputText('服务器名（可选）', 'DB.Example.')
+    button('测试连接').click(); await settle()
+    expect(mocks.diagnostic.mock.calls[0]![0].credentials.tls).toEqual({ mode: 'verify-full', caPEM: syntheticPEM, serverName: 'DB.Example.' })
+    await chooseTrust('Root Agent 系统根证书')
+    button('测试连接').click(); await settle()
+    expect(mocks.diagnostic.mock.calls[1]![0].credentials.tls).toEqual({ mode: 'verify-full', serverName: 'DB.Example.' })
+    await chooseTrust('自定义 PEM CA')
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('')
+    button('撤销本次 TLS 编辑').click(); await settle()
+    expect(document.activeElement).toBe(button('设置证书校验 TLS'))
+    button('测试连接').click(); await settle()
+    expect(mocks.diagnostic.mock.calls[2]![0].credentials).not.toHaveProperty('tls')
+    expect(host.querySelector('textarea')).toBeNull()
+    expect(host.textContent).toContain('沿用已保存的严格策略')
+  })
+
+  it('未选根来源和无效 CA 都零派发；错误关联字段并聚焦首错', async () => {
+    mount(); await settle(); await enterCredentials()
+    button('设置证书校验 TLS').click(); await settle()
+    button('测试连接').click(); await settle()
+    expect(host.querySelector('[data-connection-field="trust"]')!.contains(document.activeElement)).toBe(true)
+    expect(document.activeElement?.getAttribute('aria-describedby')).toBe('tls-trust-help tls-trust-error')
+    expect(document.activeElement?.getAttribute('aria-invalid')).toBe('true')
+    expect(host.querySelector('#tls-trust-error')?.textContent).toBe('请选择信任来源')
+    expect(mocks.diagnostic).not.toHaveBeenCalled()
+    await chooseTrust('自定义 PEM CA')
+    await inputText('CA 证书（PEM）', '界'.repeat(21846))
+    button('测试连接').click(); await settle()
+    const textarea = host.querySelector('textarea')!
+    expect(document.activeElement).toBe(textarea)
+    expect(textarea.getAttribute('aria-invalid')).toBe('true')
+    expect(textarea.getAttribute('aria-describedby')).toContain('tls-ca-error')
+    expect(host.querySelector('#tls-ca-error')?.textContent).toBe('CA 内容超过 64 KiB')
+    expect(mocks.diagnostic).not.toHaveBeenCalled()
+    await inputText('CA 证书（PEM）', syntheticPEM)
+    await inputText('服务器名（可选）', ' db.example')
+    button('测试连接').click(); await settle()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('服务器名（可选）')
+    expect(host.textContent).toContain('服务器名格式无效')
+    expect(mocks.diagnostic).not.toHaveBeenCalled()
+  })
+
+  it('TLS-only 需要本次用户名和有效数据库，不从保存凭据补全', async () => {
+    useDatabaseStore().credentials.a = { username: 'saved', password: 'saved-synthetic', database: 'saved' }
+    mount(); await settle(); await startTLS('Root Agent 系统根证书')
+    button('测试连接').click(); await settle()
+    expect(mocks.diagnostic).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('请输入本次连接的用户名')
+    expect(host.textContent).toContain('请输入数据库名')
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('用户名')
+  })
+
+  it('测试期间可以编辑，禁用重复派发，迟到响应只表示上次提交', async () => {
+    const pending = deferred<DatabaseConnectionDiagnostic>()
+    mocks.diagnostic.mockReturnValue(pending.promise)
+    mount(); await settle(); await enterCredentials(); await startTLS()
+    button('测试连接').click(); await settle()
+    expect(button('测试连接').disabled).toBe(true)
+    expect(button('连接并读取数据表').disabled).toBe(true)
+    await inputText('服务器名（可选）', 'new.example')
+    await inputText('CA 证书（PEM）', syntheticPEM + '\n')
+    await submitConnection()
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+    pending.resolve(diagnostic('a')); await settle()
+    expect(mocks.diagnostic.mock.calls[0]![0].credentials.tls).toEqual({ mode: 'verify-full', caPEM: syntheticPEM })
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe(syntheticPEM + '\n')
+    expect(host.textContent).toContain('上次提交结果')
+    expect(host.textContent).not.toContain('连接诊断通过')
+    expect(host.querySelector('.diagnostic-result--success')).toBeNull()
+  })
+
+  it('connect 与 catalog 使用冻结草稿，迟到完整成功不清空新输入', async () => {
+    mount(); await settle(); await enterCredentials(); await startTLS()
+    const pending = deferred<DatabaseConnectionDiagnostic>()
+    mocks.connect.mockReturnValue(pending.promise)
+    mocks.catalog.mockResolvedValue({ source: source('a'), tables: [] })
+    await submitConnection()
+    await inputText('服务器名（可选）', 'new.example')
+    await inputText('数据库名', 'new_database')
+    await inputText('CA 证书（PEM）', syntheticPEM + '\n')
+    pending.resolve(diagnostic('a')); await settle()
+    const frozen = { sourceId: 'a', credentials: { username: 'alice', password: 'secret', database: 'catalog_a', tls: { mode: 'verify-full', caPEM: syntheticPEM } } }
+    expect(mocks.connect.mock.calls[1]![0]).toEqual(frozen)
+    expect(mocks.catalog.mock.calls[0]![0]).toEqual(frozen)
+    expect(host.querySelector('[aria-label="数据表和视图列表"]')).not.toBeNull()
+    expect(host.querySelector('form')).not.toBeNull()
+    expect(host.querySelector<HTMLInputElement>('[aria-label="数据库名"]')!.value).toBe('new_database')
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe(syntheticPEM + '\n')
+    expect(host.textContent).toContain('上次提交结果')
+  })
+
+  it('相同 ID 换目标立即清草稿、密码和诊断并废弃旧请求', async () => {
+    const pending = deferred<DatabaseConnectionDiagnostic>()
+    mocks.diagnostic.mockReturnValue(pending.promise)
+    mount(); await settle(); await enterCredentials(); await startTLS()
+    button('测试连接').click(); await settle()
+    const signal = mocks.diagnostic.mock.calls[0]![1] as AbortSignal
+    useDatabaseStore().sources[0]!.host = 'replacement'
+    await settle()
+    expect(signal.aborted).toBe(true)
+    expect(host.querySelector('textarea')).toBeNull()
+    expect(host.querySelector<HTMLInputElement>('[aria-label="密码"]')!.value).toBe('')
+    pending.resolve(diagnostic('a')); await settle()
+    expect(host.querySelector('.diagnostic-result')).toBeNull()
+    expect(host.textContent).not.toContain('连接诊断通过')
+  })
+
+  it.each(['conflict', 'unknown', 'catalog'] as const)('已有目录不会遮盖 %s，保留本次 TLS 草稿和旧缓存', async outcome => {
+    const store = useDatabaseStore()
+    store.catalogs.a = { source: source('a'), tables: [] }
+    store.credentials.a = { username: 'old', tls: { mode: 'verify-full' } }
+    mount(); await settle(); button('连接设置').click(); await settle()
+    await inputText('用户名', 'alice'); await inputText('数据库名', 'fixture'); await startTLS()
+    if (outcome === 'conflict') mocks.connect.mockRejectedValue(new NcpApiError('credential_conflict', 'private'))
+    else if (outcome === 'unknown') mocks.connect.mockRejectedValue(new DatabaseConnectionOutcomeUnknownError())
+    else { mocks.connect.mockResolvedValue(diagnostic('a')); mocks.catalog.mockRejectedValue(new Error('private')) }
+    await submitConnection()
+    const expected = outcome === 'conflict' ? '连接凭据未保存' : outcome === 'unknown' ? '连接结果未确认' : '目录读取失败'
+    expect(host.querySelector('.connection-pill')?.textContent).toBe(expected)
+    expect(host.querySelector('[aria-label="数据表和视图列表"]')).not.toBeNull()
+    expect(host.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe(syntheticPEM)
+    expect(store.credentials.a).toEqual({ username: 'old', tls: { mode: 'verify-full' } })
+    expect(host.textContent).not.toContain('private')
+    expect(mocks.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('未知服务端错误消息不反射 CA 或密码', async () => {
+    mocks.diagnostic.mockRejectedValue(new NcpApiError('future_failure', 'reflected-synthetic-ca password=synthetic'))
+    mount(); await settle(); button('测试连接').click(); await settle()
+    expect(host.textContent).toContain('连接诊断失败，请稍后重试。')
+    expect(host.textContent).not.toContain('reflected-synthetic')
+    expect(host.textContent).not.toContain('password=')
+  })
+})

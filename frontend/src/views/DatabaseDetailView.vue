@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   ArrowLeft,
@@ -22,6 +22,8 @@ import { NcpApiError } from '@/api/system'
 import { testDatabaseConnection } from '@/api/database'
 import type { DatabaseConnectionDiagnostic, DatabaseCredentials, DatabaseSource, DatabaseTable } from '@/api/database'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
+import NcpSelect from '@/components/NcpSelect.vue'
+import { buildDatabaseConnectionDraft, cloneDatabaseCredentials, databaseSourceBinding, emptyDatabaseTLSDraft, type DatabaseConnectionErrors, type DatabaseConnectionField } from '@/domain/database/connectionDraft'
 import ResourceState from '@/components/ResourceState.vue'
 import { createRequestSequenceGate } from '@/domain/requestSequence'
 import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
@@ -70,6 +72,33 @@ const errorState = ref<DatabaseErrorState | null>(null)
 const errorOperation = ref<'discovery' | 'catalog' | 'connection' | 'diagnostic' | null>(null)
 const credentialDraft = ref<DatabaseCredentials>({})
 const diagnostic = ref<ConnectionDiagnostic | null>(null)
+const diagnosticRevision = ref<number | null>(null)
+const draftRevision = ref(0)
+const tlsDraft = ref(emptyDatabaseTLSDraft())
+const fieldErrors = ref<DatabaseConnectionErrors>({})
+const settingsOpen = ref(false)
+const tlsEntry = ref<InstanceType<typeof ElButton>>()
+const formElement = ref<InstanceType<typeof ElForm>>()
+const sourceBinding = computed(() => databaseSourceBinding(source.value))
+const busy = computed(() => loading.value || diagnosticLoading.value)
+const networkSource = computed(() => source.value?.driver === 'mysql' || source.value?.driver === 'postgresql')
+const showSettings = computed(() => networkSource.value && (settingsOpen.value || (!catalog.value && !loading.value)))
+const diagnosticIsCurrent = computed(() => diagnosticRevision.value === draftRevision.value)
+const trustOptions = [{ value: 'system', label: 'Root Agent 系统根证书' }, { value: 'custom', label: '自定义 PEM CA' }]
+watch([credentialDraft, tlsDraft], () => {
+  draftRevision.value += 1
+  fieldErrors.value = {}
+}, { deep: true, flush: 'sync' })
+watch(() => tlsDraft.value.trust, () => { tlsDraft.value.caPEM = '' }, { flush: 'sync' })
+// Element Plus 把透传描述放在选择器包装层；将本表单的说明关联到实际聚焦输入。
+// 自有错误文本与字段同一轮渲染，不等待 ElFormItem 的错误插槽防抖。
+watch([formElement, showSettings, () => tlsDraft.value.active, () => tlsDraft.value.trust, () => fieldErrors.value.trust], () => {
+  const input = (formElement.value?.$el as HTMLElement | undefined)?.querySelector<HTMLInputElement>('[data-connection-field="trust"] input[role="combobox"]')
+  if (!input) return
+  input.setAttribute('aria-describedby', fieldErrors.value.trust ? 'tls-trust-help tls-trust-error' : 'tls-trust-help')
+  input.setAttribute('aria-invalid', String(Boolean(fieldErrors.value.trust)))
+}, { flush: 'post' })
+
 const connectionCredentialConflict = computed(() => errorOperation.value === 'connection' && errorState.value?.code === 'credential_conflict')
 const connectionOutcomeUnknown = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
 const connectionCatalogFailed = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_CATALOG_FAILED')
@@ -90,15 +119,16 @@ const stats = computed<WorkspaceStat[]>(() => [
   { label: '数据大小', value: formatBytes(sumMetric('sizeBytes')), tone: 'warning' },
 ])
 const connectionState = computed(() => {
-  if (catalog.value) return { label: '已连接', tone: 'success' as StatusTone, detail: '已读取对象目录，可打开数据表或视图。' }
   if (connectionCredentialConflict.value) return { label: '连接凭据未保存', tone: 'warning' as StatusTone, detail: '其他操作已修改保存的凭据，请重新确认后再连接。' }
   if (connectionOutcomeUnknown.value) return { label: '连接结果未确认', tone: 'warning' as StatusTone, detail: '服务端可能已保存凭据，请核对后再决定是否重新连接。' }
   if (connectionCatalogFailed.value) return { label: '目录读取失败', tone: 'warning' as StatusTone, detail: '连接已确认，尚未读取到可靠的对象目录。' }
   if (diagnosticResponseInvalid.value) return { label: '诊断结果未确认', tone: 'warning' as StatusTone, detail: '未收到有效的连接诊断结果。' }
+  if (errorState.value) return { label: '本次操作失败', tone: 'warning' as StatusTone, detail: '请查看本次操作的错误信息；已有目录仅供参考。' }
+  if (catalog.value) return { label: '已连接', tone: 'success' as StatusTone, detail: '已读取对象目录，可打开数据表或视图。' }
   if (source.value?.reachability === 'container-internal' || source.value?.reachability === 'unreachable') {
     return { label: '主机不可达', tone: 'danger' as StatusTone, detail: '该数据库仅在容器内部可见，未发现可由 Root Agent 访问的宿主端口。' }
   }
-  if (diagnostic.value?.connected) return { label: '诊断通过', tone: 'success' as StatusTone, detail: '凭据可用，提交连接后读取对象目录。' }
+  if (diagnostic.value?.connected && diagnosticIsCurrent.value) return { label: '诊断通过', tone: 'success' as StatusTone, detail: '凭据可用，提交连接后读取对象目录。' }
   if (source.value?.status === 'credentials_required' || source.value?.requiresLogin) {
     return { label: '需要凭据', tone: 'warning' as StatusTone, detail: '输入凭据后测试连接或读取对象目录。' }
   }
@@ -117,6 +147,10 @@ function resetLocalState() {
   controller?.abort()
   controller = null
   credentialDraft.value = {}
+  tlsDraft.value = emptyDatabaseTLSDraft()
+  fieldErrors.value = {}
+  settingsOpen.value = false
+  diagnosticRevision.value = null
   diagnostic.value = null
   clearError()
   query.value = ''
@@ -130,6 +164,7 @@ function beginRequest() {
   controller = new AbortController()
   const sequence = requests.begin()
   const targetId = sourceId.value
+  const binding = sourceBinding.value
   const signal = AbortSignal.any([controller.signal, session.signal])
   loading.value = false
   diagnosticLoading.value = false
@@ -138,12 +173,12 @@ function beginRequest() {
     targetId,
     signal,
     current: () => !signal.aborted && requests.isLatest(sequence) &&
-      isCurrentSession(session.generation) && sourceId.value === targetId,
+      isCurrentSession(session.generation) && sourceId.value === targetId && sourceBinding.value === binding,
   }
 }
 
 session.signal.addEventListener('abort', resetLocalState, { once: true })
-watch(sourceId, () => {
+watch([sourceId, sourceBinding], () => {
   resetLocalState()
   void initialize()
 }, { immediate: true, flush: 'sync' })
@@ -153,6 +188,7 @@ onBeforeUnmount(() => {
 })
 
 async function initialize() {
+  if (!isCurrentSession(session.generation)) return
   const request = beginRequest()
   discovering.value = true
   try {
@@ -191,7 +227,7 @@ async function initialize() {
 }
 
 async function reloadCatalog() {
-  if (!source.value) return
+  if (!source.value || busy.value) return
   const request = beginRequest()
   loading.value = true
   try {
@@ -203,10 +239,31 @@ async function reloadCatalog() {
   }
 }
 
+async function submitSnapshot() {
+  if (!source.value || busy.value) return null
+  const result = buildDatabaseConnectionDraft(credentialDraft.value, tlsDraft.value, source.value)
+  fieldErrors.value = result.errors
+  const first = (['username', 'database', 'trust', 'caPEM', 'serverName'] as DatabaseConnectionField[]).find(field => result.errors[field])
+  if (first) {
+    await nextTick()
+    formElement.value?.$el.querySelector(`[data-connection-field="${first}"] input, [data-connection-field="${first}"] textarea`)?.focus()
+    return null
+  }
+  return { credentials: cloneDatabaseCredentials(result.credentials), revision: draftRevision.value, binding: sourceBinding.value }
+}
+
+async function cancelTLSEdit() {
+  tlsDraft.value = emptyDatabaseTLSDraft()
+  await nextTick()
+  tlsEntry.value?.$el.focus()
+}
+
 async function connectDatabase() {
   const target = source.value
-  if (!target) return
-  const credentials = { ...credentialDraft.value }
+  const submitted = await submitSnapshot()
+  if (!target || !submitted || busy.value || submitted.binding !== sourceBinding.value) return
+  const { credentials, revision } = submitted
+  settingsOpen.value = true
   const request = beginRequest()
   loading.value = true
   diagnostic.value = null
@@ -214,11 +271,17 @@ async function connectDatabase() {
     const result = await databaseStore.connect(request.targetId, credentials, request.signal)
     if (request.current()) {
       diagnostic.value = result.diagnostic
-      credentialDraft.value = {}
+      diagnosticRevision.value = revision
+      if (draftRevision.value === revision) {
+        credentialDraft.value = {}
+        tlsDraft.value = emptyDatabaseTLSDraft()
+        settingsOpen.value = false
+      }
     }
   } catch (error) {
     if (!request.current() || isAbortError(error)) return
     diagnostic.value = connectionDiagnosticUnavailable(error) ? null : diagnosticFromError(error, target, credentials)
+    diagnosticRevision.value = revision
     setError(error, '数据库连接失败，请检查登录信息。', 'connection')
   } finally {
     if (request.current()) loading.value = false
@@ -227,8 +290,9 @@ async function connectDatabase() {
 
 async function testConnection() {
   const target = source.value
-  if (!target) return
-  const credentials = { ...credentialDraft.value }
+  const submitted = await submitSnapshot()
+  if (!target || !submitted || busy.value || submitted.binding !== sourceBinding.value) return
+  const { credentials, revision } = submitted
   const request = beginRequest()
   diagnosticLoading.value = true
   diagnostic.value = null
@@ -236,6 +300,7 @@ async function testConnection() {
     const result = await testDatabaseConnection({ sourceId: request.targetId, credentials }, request.signal)
     if (!request.current()) return
     diagnostic.value = result
+    diagnosticRevision.value = revision
     if (!result.connected) {
       const code = result.code || 'unreachable'
       setError(new NcpApiError(code, knownErrorCopy(code) || '连接诊断未通过。'), '连接诊断未通过。', 'diagnostic')
@@ -243,6 +308,7 @@ async function testConnection() {
   } catch (error) {
     if (!request.current() || isAbortError(error)) return
     diagnostic.value = errorCode(error) === 'DATABASE_RESPONSE_INVALID' ? null : diagnosticFromError(error, target, credentials)
+    diagnosticRevision.value = revision
     setError(error, '连接诊断失败，请稍后重试。', 'diagnostic')
   } finally {
     if (request.current()) diagnosticLoading.value = false
@@ -319,7 +385,7 @@ function errorMessage(error: unknown, fallback: string) {
   if (errorOperation.value === 'connection' && code === 'credential_conflict') {
     return '其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。'
   }
-  return knownErrorCopy(code) || (error instanceof NcpApiError ? error.message : fallback)
+  return knownErrorCopy(code) || fallback
 }
 
 function errorNextStep(error: unknown) {
@@ -360,7 +426,8 @@ function clearError() {
     <WorkspaceHeader :title="source.name" :description="`${source.project || '未关联项目'} / ${source.module || '未标注用途'}`" :icon="Database" :stats="stats">
       <template #actions>
         <ElButton tag="a" href="/databases" class="database-header-action"><ArrowLeft :size="16" />返回列表</ElButton>
-        <ElButton v-if="catalog" class="database-header-action" :loading="loading" @click="reloadCatalog"><RefreshCw :size="16" />刷新结构</ElButton>
+        <ElButton v-if="catalog && networkSource" class="database-header-action" :aria-expanded="settingsOpen" aria-controls="database-connection-settings" @click="settingsOpen = !settingsOpen">连接设置</ElButton>
+        <ElButton v-if="catalog" class="database-header-action" :disabled="busy" :loading="loading" @click="reloadCatalog"><RefreshCw :size="16" />刷新结构</ElButton>
       </template>
       <template #tools>
         <ElInput v-if="catalog" v-model="query" class="table-search" clearable placeholder="搜索数据表或视图" aria-label="搜索数据表或视图">
@@ -386,7 +453,7 @@ function clearError() {
       <div><dt>连接位置</dt><dd :title="source.location">{{ source.location || '未提供' }}</dd></div>
     </dl>
 
-    <section v-if="loading && !catalog" class="table-list panel" aria-label="正在读取数据库结构">
+    <section v-if="loading && !catalog && !settingsOpen" class="table-list panel" aria-label="正在读取数据库结构">
       <div class="table-list__head"><span>数据表或视图</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>操作</span></div>
       <div v-for="row in 7" :key="row" class="table-row table-row--skeleton">
         <span><i class="ncp-skeleton"></i><i class="ncp-skeleton"></i></span>
@@ -394,13 +461,13 @@ function clearError() {
       </div>
     </section>
 
-    <section v-else-if="source.requiresLogin && !catalog" class="connection-panel panel">
+    <section v-if="showSettings" id="database-connection-settings" class="connection-panel panel" aria-label="连接设置">
       <div class="connection-intro">
         <span class="connection-intro__icon" aria-hidden="true"><Database :size="24" /></span>
         <div>
           <span class="section-kicker">连接设置</span>
           <h2>输入数据库凭据</h2>
-          <p>先测试连接确认凭据有效，再读取数据库对象目录。诊断结果只返回稳定状态码和安全的连接上下文。</p>
+          <p>手动凭据测试通过后保存；测试连接本身不保存凭据。每次连接并读取数据表都会重新测试。</p>
           <div class="connection-facts">
             <span><small>类型</small><strong>{{ driverLabel(source.driver) }}</strong></span>
             <span><small>位置</small><strong>{{ source.location || '未提供' }}</strong></span>
@@ -408,24 +475,57 @@ function clearError() {
         </div>
       </div>
       <div v-if="sourceReachabilityBlocked" class="connection-unavailable" role="alert">{{ source.reachability === 'container-internal' ? 'DATABASE_URL 使用了容器内部 service hostname，Root Agent 无法从宿主机直接连接。请发布数据库端口或改用 host network。' : '未发现已发布的数据库端口，NCP 不会伪造宿主连接地址。' }}</div>
-      <ElForm v-else class="connection-form" label-position="top" @submit.prevent="connectDatabase">
-        <ElFormItem label="用户名"><ElInput v-model="credentialDraft.username" autocomplete="username" placeholder="输入数据库用户名" /></ElFormItem>
-        <ElFormItem label="密码"><ElInput v-model="credentialDraft.password" type="password" show-password autocomplete="current-password" placeholder="输入数据库密码" /></ElFormItem>
-        <ElFormItem label="数据库名"><ElInput v-model="credentialDraft.database" :placeholder="source.defaultDatabase || '输入数据库名称'" /></ElFormItem>
-        <div class="connection-form__actions">
-          <ElButton class="database-header-action" :loading="diagnosticLoading" @click="testConnection"><CircleAlert :size="16" />测试连接</ElButton>
-          <ElButton type="primary" native-type="submit" :loading="loading"><ArrowRight :size="16" />连接并读取数据表</ElButton>
+      <ElForm v-else ref="formElement" class="connection-form" label-position="top" @submit.prevent="connectDatabase">
+        <ElFormItem label="用户名" :error="fieldErrors.username" :show-message="false" data-connection-field="username">
+          <ElInput v-model="credentialDraft.username" autocomplete="username" aria-label="用户名" :aria-invalid="Boolean(fieldErrors.username)" :aria-describedby="fieldErrors.username ? 'connection-username-error' : undefined" placeholder="输入数据库用户名" />
+          <span v-if="fieldErrors.username" id="connection-username-error" class="field-description field-description--error">{{ fieldErrors.username }}</span>
+        </ElFormItem>
+        <ElFormItem label="密码"><ElInput v-model="credentialDraft.password" type="password" show-password autocomplete="current-password" aria-label="密码" placeholder="输入数据库密码" /></ElFormItem>
+        <ElFormItem label="数据库名" class="connection-form__wide" :error="fieldErrors.database" :show-message="false" data-connection-field="database">
+          <ElInput v-model="credentialDraft.database" :placeholder="source.defaultDatabase || '输入数据库名称'" aria-label="数据库名" :aria-invalid="Boolean(fieldErrors.database)" :aria-describedby="fieldErrors.database ? 'connection-database-error' : undefined" />
+          <span v-if="fieldErrors.database" id="connection-database-error" class="field-description field-description--error">{{ fieldErrors.database }}</span>
+        </ElFormItem>
+        <div class="tls-settings connection-form__wide">
+          <p class="tls-status">TLS 状态未确认</p>
+          <p id="tls-inheritance-help" class="field-description">未提供新的 TLS 设置时，服务端沿用已保存的严格策略；没有已保存策略时，保持原连接行为。</p>
+          <ElButton v-if="!tlsDraft.active" ref="tlsEntry" aria-describedby="tls-inheritance-help" @click="tlsDraft.active = true">设置证书校验 TLS</ElButton>
+          <fieldset v-else class="tls-fields" aria-label="证书校验 TLS">
+            <legend>证书校验 TLS</legend>
+            <p class="tls-mode">verify-full · 校验证书链与服务器身份</p>
+            <p class="field-description">本次明确设置会替换原 TLS 策略；原 CA 不会回填。请填写本次用户名和数据库名，不会借用已保存密码。</p>
+            <ElFormItem label="信任来源" :error="fieldErrors.trust" :show-message="false" data-connection-field="trust">
+              <NcpSelect v-model="tlsDraft.trust" :options="trustOptions" accessible-label="信任来源" placeholder="请选择信任来源" :aria-invalid="Boolean(fieldErrors.trust)" :aria-describedby="fieldErrors.trust ? 'tls-trust-help tls-trust-error' : 'tls-trust-help'" />
+              <span v-if="fieldErrors.trust" id="tls-trust-error" class="field-description field-description--error">{{ fieldErrors.trust }}</span>
+              <span id="tls-trust-help" class="field-description">{{ tlsDraft.trust === 'custom' ? '只信任本次提供的 CA，不与系统根合并。' : tlsDraft.trust === 'system' ? '使用 Root Agent 所在系统的根证书。' : '请明确选择本次连接的信任来源。' }}</span>
+            </ElFormItem>
+            <ElFormItem v-if="tlsDraft.trust === 'custom'" label="CA 证书（PEM）" :error="fieldErrors.caPEM" :show-message="false" data-connection-field="caPEM">
+              <ElInput v-model="tlsDraft.caPEM" type="textarea" :rows="7" resize="vertical" aria-label="CA 证书（PEM）" autocomplete="off" :spellcheck="false" :aria-invalid="Boolean(fieldErrors.caPEM)" :aria-describedby="fieldErrors.caPEM ? 'tls-ca-help tls-ca-error' : 'tls-ca-help'" />
+              <span id="tls-ca-help" class="field-description">最多 64 KiB、32 张 CA 证书；只接受 PEM 内容，不接受路径、网址或私钥。证书内容由 Root Agent 校验。</span>
+              <span v-if="fieldErrors.caPEM" id="tls-ca-error" class="field-description field-description--error">{{ fieldErrors.caPEM }}</span>
+            </ElFormItem>
+            <ElFormItem label="服务器名（可选）" :error="fieldErrors.serverName" :show-message="false" data-connection-field="serverName">
+              <ElInput v-model="tlsDraft.serverName" aria-label="服务器名（可选）" placeholder="db.example.com" autocomplete="off" :spellcheck="false" :aria-invalid="Boolean(fieldErrors.serverName)" :aria-describedby="fieldErrors.serverName ? 'tls-server-name-help tls-server-name-error' : 'tls-server-name-help'" />
+              <span id="tls-server-name-help" class="field-description">默认校验实际连接主机；填写后只改变证书身份校验 / SNI，不改变连接地址。</span>
+              <span v-if="fieldErrors.serverName" id="tls-server-name-error" class="field-description field-description--error">{{ fieldErrors.serverName }}</span>
+            </ElFormItem>
+            <ElButton @click="cancelTLSEdit">撤销本次 TLS 编辑</ElButton>
+            <p class="field-description">撤销后仍沿用服务端已保存策略。</p>
+          </fieldset>
         </div>
-        <div v-if="diagnostic" :class="['diagnostic-result', { 'diagnostic-result--success': diagnostic.connected, 'diagnostic-result--failure': !diagnostic.connected }]" role="status">
-          <CheckCircle2 v-if="diagnostic.connected" :size="18" />
+        <div class="connection-form__actions">
+          <ElButton class="database-header-action" :disabled="busy" :loading="diagnosticLoading" @click="testConnection"><CircleAlert :size="16" />测试连接</ElButton>
+          <ElButton type="primary" native-type="submit" :disabled="busy" :loading="loading"><ArrowRight :size="16" />连接并读取数据表</ElButton>
+        </div>
+        <div v-if="diagnostic" :class="['diagnostic-result', { 'diagnostic-result--success': diagnostic.connected && diagnosticIsCurrent, 'diagnostic-result--failure': !diagnostic.connected && diagnosticIsCurrent, 'diagnostic-result--previous': !diagnosticIsCurrent }]" role="status" aria-live="polite">
+          <CheckCircle2 v-if="diagnostic.connected && diagnosticIsCurrent" :size="18" />
           <CircleAlert v-else :size="18" />
-          <div><strong>{{ diagnostic.connected ? '连接诊断通过' : '连接诊断未通过' }}</strong><span>{{ diagnostic.endpoint || source.location }}<template v-if="diagnostic.database"> / {{ diagnostic.database }}</template></span></div>
+          <div><strong>{{ diagnosticIsCurrent ? (diagnostic.connected ? '连接诊断通过' : '连接诊断未通过') : '上次提交结果' }}</strong><span>{{ diagnostic.endpoint || source.location }}<template v-if="diagnostic.database"> / {{ diagnostic.database }}</template></span></div>
           <code>代码 {{ diagnostic.code || 'unknown' }}</code>
         </div>
       </ElForm>
     </section>
 
-    <template v-else-if="catalog">
+    <template v-if="catalog">
       <section class="table-list panel" aria-label="数据表和视图列表">
         <div class="table-list__head">
           <span>数据表或视图</span><span>类型</span><span>字段</span><span>数据行</span><span>大小</span><span>详情</span>
@@ -505,7 +605,8 @@ function clearError() {
   border-radius: var(--ncp-radius-xs);
   font-family: var(--ncp-font-mono);
   font-size: .67rem;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .source-summary {
@@ -602,7 +703,7 @@ function clearError() {
 
 .connection-panel {
   display: grid;
-  grid-template-columns: minmax(280px, .82fr) minmax(420px, 1.18fr);
+  grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr);
   gap: 28px;
   padding: 24px;
 }
@@ -686,18 +787,69 @@ function clearError() {
 
 .connection-form {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 0;
   gap: 0 14px;
 }
 
-.connection-form :deep(.el-form-item:last-of-type) {
+.connection-form__wide {
   grid-column: 1 / -1;
+}
+
+.tls-settings {
+  min-width: 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--ncp-line);
+}
+
+.tls-fields {
+  min-width: 0;
+  margin: 12px 0 0;
+  padding: 14px;
+  border: 1px solid var(--ncp-line);
+  border-radius: var(--ncp-radius-md);
+}
+
+.tls-fields legend,
+.tls-status,
+.tls-mode {
+  font-size: .875rem;
+  line-height: 1.6;
+  font-weight: 650;
+}
+
+.tls-status,
+.tls-mode { margin: 0 0 8px; }
+
+.field-description {
+  display: block;
+  width: 100%;
+  margin: 6px 0 12px;
+  color: var(--ncp-text-muted);
+  font-size: .8125rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.field-description--error { color: var(--ncp-danger-strong); }
+
+.tls-fields :deep(.el-textarea),
+.tls-fields :deep(.el-select) {
+  min-width: 0;
+  width: 100%;
+}
+
+.tls-fields :deep(.el-form-item__error) {
+  position: static;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .connection-form__actions {
   display: flex;
   grid-column: 1 / -1;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
 }
@@ -712,6 +864,12 @@ function clearError() {
   border: 1px solid var(--ncp-success-border);
   background: var(--ncp-success-soft);
   color: var(--ncp-success-strong);
+}
+
+.diagnostic-result--previous {
+  border: 1px solid var(--ncp-line);
+  background: var(--ncp-neutral-soft);
+  color: var(--ncp-text-muted);
 }
 
 .diagnostic-result--failure {
@@ -1070,7 +1228,7 @@ function clearError() {
     grid-template-columns: 1fr;
   }
 
-  .connection-form :deep(.el-form-item:last-of-type),
+  .connection-form__wide,
   .connection-form__actions,
   .diagnostic-result {
     grid-column: 1;
@@ -1078,7 +1236,7 @@ function clearError() {
 
   .connection-form__actions {
     align-items: stretch;
-    flex-direction: column-reverse;
+    flex-direction: column;
   }
 
   .connection-form__actions :deep(.el-button) {

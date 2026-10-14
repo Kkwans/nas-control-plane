@@ -609,7 +609,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -675,7 +675,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -733,7 +733,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -781,7 +781,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -831,7 +831,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -871,7 +871,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -917,7 +917,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -963,7 +963,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
@@ -2816,14 +2816,33 @@ components:
     DatabaseDriver:
       type: string
       enum: [sqlite, mysql, postgresql]
+    DatabaseTLSPolicy:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      description: 仅支持 MySQL/PostgreSQL 的证书链及服务器身份校验；SQLite 不支持 TLS 策略。每次连接必须严格执行，不提供跳过校验、明文或旧 Agent 回退。输入或连接诊断不构成已应用 TLS 的证明。
+      properties:
+        mode:
+          type: string
+          enum: [verify-full]
+        caPEM:
+          type: string
+          description: 可省略或为空字符串，表示使用 Root Agent 系统根证书；非空时仅信任这些 PEM CA，不合并系统根。必须为非 null 字符串，UTF-8 编码最多 65536 字节（64 KiB），最多 32 张 CERTIFICATE；包括所有空白，不按字符数计算。证书 DER、CA 与签发用途由服务端权威校验；不得包含私钥、未知块或非 PEM 内容。
+        serverName:
+          type: string
+          maxLength: 253
+          description: 可省略或为空字符串，默认验证实际连接目标的主机身份；非空值仅改变证书验证身份与 SNI，不改变连接目标。必须为非 null 字符串；原始输入最多 253 个 ASCII 字节，每个 DNS 标签最多 63 字节，支持 ASCII DNS（允许单个尾点）或无方括号/zone 的原始 IP。不 trim、补全或修复非法身份。
     DatabaseCredentials:
       type: object
+      additionalProperties: false
       properties:
         username: { type: string, maxLength: 256 }
         password: { type: string, format: password, maxLength: 512 }
         token: { type: string, format: password, maxLength: 2048 }
         database: { type: string, maxLength: 256 }
-      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password 或 token。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
+        tls:
+          $ref: '#/components/schemas/DatabaseTLSPolicy'
+      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password、token 或 caPEM。仅设置 TLS 也属于手动请求，不自动取回已保存密码，仍按原有规则要求本次用户名和有效数据库，允许空密码。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
     DatabaseConnection:
       type: object
       required: [sourceId]

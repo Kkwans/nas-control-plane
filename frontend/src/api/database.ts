@@ -30,11 +30,18 @@ export interface DatabaseSource {
   tags: string[]
 }
 
+export interface DatabaseTLSPolicy {
+  mode: 'verify-full'
+  caPEM?: string
+  serverName?: string
+}
+
 export interface DatabaseCredentials {
   username?: string
   password?: string
   token?: string
   database?: string
+  tls?: DatabaseTLSPolicy
 }
 
 export interface DatabaseConnection {

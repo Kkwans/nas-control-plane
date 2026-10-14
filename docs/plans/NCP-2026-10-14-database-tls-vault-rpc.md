@@ -493,3 +493,7 @@ HTTP继续拒绝任意credentials.tls键，含null、重复、转义与Unicode�
 根任务完整database/race、纯RPC/HTTP、完整OpenAPI、全仓Go构建/vet通过；前端3305单元/116文件、全量lint/typecheck/构建/权限/540KiB预算通过。独立复核发现并修正v1手动目标兼容、Location端口绑定、Unicode键、冻结策略和取消优先级问题。T2-B f9f9212已完整CI通过3295单元/409浏览器；本片远端CI须按对应提交另行核验，不能沿用B结果。
 
 仍未开放T3表单/HTTP输入，未安装CA、改变进程环境或操作真实凭据/生产服务；T4真实TLS握手仍未验证。T3详细交互与验收追加在主TLS方案第十二节。
+
+## 15. T3 公开输入门禁切换（2026-10-14 17:38 UTC）
+
+T3与表单/OpenAPI同片将“所有TLS键拒绝”改为“严格验证后允许”。TLS-bearing请求中的credentials与sourceId必须唯一且规范拼写，policy字段唯一、非null字符串；全部八个HTTP入口共享检查，不扫描动态行字段。无TLS旧请求保留原解码兼容，coordinator/test-only/resolver与严格RPC守卫不变。有效策略由真实临时SQLite测试覆盖保存v2、后续省略继承与CAS冲突；不把测试连接当保存，不扩大执行/保存结果保证。界面与验证状态详见主TLS方案第十三节，实际TLS握手仍待T4。

@@ -1,12 +1,21 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 )
@@ -18,6 +27,11 @@ type tlsHTTPAgent struct {
 	insert         ncpdatabase.InsertRequest
 	update         ncpdatabase.UpdateRequest
 	delete         ncpdatabase.DeleteRequest
+}
+
+func (a *tlsHTTPAgent) TestDatabaseConnection(ctx context.Context, socket string, input ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
+	a.connection = input
+	return a.connectHTTPAgent.TestDatabaseConnection(ctx, socket, input)
 }
 
 func (a *tlsHTTPAgent) CatalogDatabase(_ context.Context, _ string, input ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error) {
@@ -78,38 +92,92 @@ func tlsHTTPRecorder(api *handler, endpoint tlsHTTPEndpoint, body string) *httpt
 	return response
 }
 
-// 八个入口共享同一个 bounded raw gate；所有用例只用 Recorder/fake。
-func TestDatabaseTLSHTTPRolloutGateAllEndpoints(t *testing.T) {
+// 八个入口共享同一个 bounded raw 校验；所有用例只用 Recorder/fake。
+func TestDatabaseTLSHTTPRejectsInvalidPolicyBeforeDispatchAllEndpoints(t *testing.T) {
+	invalid := []struct{ name, fields string }{
+		{"null", `"credentials":{"tls":null}`},
+		{"empty", `"credentials":{"tls":{}}`},
+		{"array", `"credentials":{"tls":[]}`},
+		{"boolean", `"credentials":{"tls":false}`},
+		{"number", `"credentials":{"tls":1}`},
+		{"string", `"credentials":{"tls":"verify-full"}`},
+		{"empty mode", `"credentials":{"tls":{"mode":""}}`},
+		{"unknown mode", `"credentials":{"tls":{"mode":"prefer"}}`},
+		{"mode case", `"credentials":{"tls":{"mode":"VERIFY-FULL"}}`},
+		{"missing mode", `"credentials":{"tls":{"serverName":"synthetic.invalid"}}`},
+		{"null mode", `"credentials":{"tls":{"mode":null}}`},
+		{"nonstring mode", `"credentials":{"tls":{"mode":true}}`},
+		{"unknown policy key", `"credentials":{"tls":{"mode":"verify-full","insecureSkipVerify":true}}`},
+		{"duplicate mode", `"credentials":{"tls":{"mode":"verify-full","mode":"verify-full"}}`},
+		{"mode alias", `"credentials":{"tls":{"mode":"verify-full","Mode":"verify-full"}}`},
+		{"escaped duplicate", `"credentials":{"tls":{"mode":"verify-full","\u006dode":"verify-full"}}`},
+		{"null CA", `"credentials":{"tls":{"mode":"verify-full","caPEM":null}}`},
+		{"nonstring CA", `"credentials":{"tls":{"mode":"verify-full","caPEM":[]}}`},
+		{"duplicate CA", `"credentials":{"tls":{"mode":"verify-full","caPEM":"","caPEM":""}}`},
+		{"CA alias", `"credentials":{"tls":{"mode":"verify-full","capem":""}}`},
+		{"null name", `"credentials":{"tls":{"mode":"verify-full","serverName":null}}`},
+		{"nonstring name", `"credentials":{"tls":{"mode":"verify-full","serverName":42}}`},
+		{"duplicate name", `"credentials":{"tls":{"mode":"verify-full","serverName":"","serverName":""}}`},
+		{"unicode name alias", `"credentials":{"tls":{"mode":"verify-full","ſerverName":"synthetic.invalid"}}`},
+		{"credential case", `"Credentials":{"TLS":null}`},
+		{"TLS case", `"credentials":{"TlS":{"mode":"verify-full"}}`},
+		{"unicode credential alias", `"credentialſ":{"tls":{"mode":"verify-full"}}`},
+		{"unicode TLS alias", `"credentials":{"tlſ":{"mode":"verify-full"}}`},
+		{"escaped unicode TLS alias", `"credentials":{"tl\u017f":{"mode":"verify-full"}}`},
+		{"escaped unicode credential alias", `"credential\u017f":{"tls":{"mode":"verify-full"}}`},
+		{"duplicate credentials after TLS", `"credentials":{"tls":{"mode":"verify-full"}},"credentials":{"username":"fixture"}`},
+		{"duplicate credentials before TLS", `"credentials":{"username":"fixture"},"credentials":{"tls":{"mode":"verify-full"}}`},
+		{"duplicate credentials null", `"credentials":{"tls":{"mode":"verify-full"}},"credentials":null`},
+		{"duplicate credentials alias", `"credentials":null,"CREDENTIALS":{"tls":{"mode":"verify-full"}}`},
+		{"duplicate TLS null", `"credentials":{"tls":{"mode":"verify-full"},"tls":null}`},
+		{"duplicate TLS before valid", `"credentials":{"tls":null,"tls":{"mode":"verify-full"}}`},
+		{"duplicate TLS valid", `"credentials":{"tls":{"mode":"verify-full"},"tls":{"mode":"verify-full"}}`},
+		{"duplicate username", `"credentials":{"username":"fixture","tls":{"mode":"verify-full"},"username":"replacement"}`},
+		{"credential field case", `"credentials":{"Username":"fixture","tls":{"mode":"verify-full"}}`},
+		{"unicode credential field alias", `"credentials":{"uſername":"fixture","tls":{"mode":"verify-full"}}`},
+		{"unknown credential", `"credentials":{"other":"fixture","tls":{"mode":"verify-full"}}`},
+		{"null credential string", `"credentials":{"password":null,"tls":{"mode":"verify-full"}}`},
+		{"duplicate source", `"sourceId":"other","credentials":{"tls":{"mode":"verify-full"}}`},
+		{"escaped duplicate source", `"\u0073ourceId":"other","credentials":{"tls":{"mode":"verify-full"}}`},
+		{"source case", `"SourceID":"fixture","credentials":{"tls":{"mode":"verify-full"}}`},
+		{"unicode source alias", `"ſourceId":"fixture","credentials":{"tls":{"mode":"verify-full"}}`},
+	}
+	for _, name := range []string{"*.invalid", " synthetic.invalid", "synthetic.invalid ", "synthetic..invalid", "synthetic.invalid..", "本机.invalid", "[::1]", "fe80::1%eth0", "127.0.0.999", strings.Repeat("a", 64) + ".invalid", strings.Repeat("a.", 127)} {
+		encoded, _ := json.Marshal(name)
+		invalid = append(invalid, struct{ name, fields string }{"bad identity " + name, `"credentials":{"tls":{"mode":"verify-full","serverName":` + string(encoded) + `}}`})
+	}
+	ca := tlsHTTPTestCAPEM(t)
+	for _, fixture := range []struct{ name, ca string }{
+		{"bad PEM", "raw-private-ca-sentinel"},
+		{"over byte budget", ca + strings.Repeat(" ", (64<<10)-len(ca)+1)},
+		{"over certificate budget", strings.Repeat(ca, 33)},
+		{"hidden private key", ca + "-----BEGIN PRIVATE KEY-----\nraw-private-ca-sentinel\n-----END PRIVATE KEY-----\n"},
+	} {
+		encoded, _ := json.Marshal(fixture.ca)
+		invalid = append(invalid, struct{ name, fields string }{fixture.name, `"credentials":{"tls":{"mode":"verify-full","caPEM":` + string(encoded) + `}}`})
+	}
 	for _, endpoint := range tlsHTTPEndpoints() {
 		t.Run(endpoint.path, func(t *testing.T) {
-			for _, field := range []string{
-				`"credentials":{"tls":null}`,
-				`"credentials":{"tls":{}}`,
-				`"credentials":{"tls":{"mode":"verify-full"}}`,
-				`"Credentials":{"TLS":null}`,
-				`"cReDeNtIaLs":{"TlS":false}`,
-				`"credentialſ":{"tlſ":null}`,
-				`"\u0063redentials":{"\u0074\u006c\u0073":null}`,
-				`"credentials":{"tls":null},"credentials":{"username":"fixture"}`,
-				`"credentials":{"tls":{"mode":"verify-full"}},"credentials":null`,
-				`"credentials":null,"CREDENTIALS":{"TLS":null}`,
-				`"credentials":{"tls":{"mode":"verify-full"},"tls":null}`,
-				`"credentials":{"username":"fixture","TLS":null,"username":"replacement"}`,
-			} {
-				t.Run(field, func(t *testing.T) {
+			for _, fixture := range invalid {
+				t.Run(fixture.name, func(t *testing.T) {
 					agent := &tlsHTTPAgent{}
-					coordinator := &connectHTTPCoordinator{}
+					coordinator := &tlsHTTPProtectedCoordinator{}
 					api := &handler{databaseAgent: agent, databaseConnections: coordinator}
-					response := tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture",`+field+endpoint.extra+`}`)
+					response := tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture",`+fixture.fields+endpoint.extra+`}`)
 					var envelope ErrorResponse
 					if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 						t.Fatal(err)
 					}
 					if response.Code != http.StatusBadRequest || envelope.Code != "DATABASE_INPUT_INVALID" {
-						t.Fatalf("gate response = %d %s", response.Code, response.Body)
+						t.Fatalf("input response = %d %s", response.Code, response.Body)
 					}
-					if agent.discoverCalls != 0 || agent.testCalls != 0 || agent.operationCalls != 0 || coordinator.calls != 0 {
-						t.Fatal("TLS input reached discovery, coordinator or Agent")
+					if agent.discoverCalls != 0 || agent.testCalls != 0 || agent.operationCalls != 0 || coordinator.calls != 0 || coordinator.tests != 0 || coordinator.resolves != 0 {
+						t.Fatal("invalid TLS input reached discovery, coordinator or Agent")
+					}
+					for _, secret := range []string{"raw-private-ca-sentinel", "BEGIN", "synthetic.invalid", "replacement"} {
+						if strings.Contains(response.Body.String(), secret) {
+							t.Fatal("input error exposed raw credential or policy input")
+						}
 					}
 				})
 			}
@@ -117,7 +185,80 @@ func TestDatabaseTLSHTTPRolloutGateAllEndpoints(t *testing.T) {
 	}
 }
 
-func TestDatabaseTLSHTTPRolloutGatePreservesDataAndLegacyPaths(t *testing.T) {
+func TestDatabaseTLSHTTPAcceptsValidPolicyAllEndpoints(t *testing.T) {
+	ca := tlsHTTPTestCAPEM(t)
+	for _, policy := range []ncpdatabase.TLSPolicy{
+		{Mode: ncpdatabase.TLSVerifyFull},
+		{Mode: ncpdatabase.TLSVerifyFull, ServerName: "Synthetic.INVALID."},
+		{Mode: ncpdatabase.TLSVerifyFull, CAPEM: ca, ServerName: "2001:db8::1"},
+		{Mode: ncpdatabase.TLSVerifyFull, CAPEM: strings.Repeat(ca, 32)},
+		{Mode: ncpdatabase.TLSVerifyFull, CAPEM: ca + strings.Repeat(" ", (64<<10)-len(ca))},
+	} {
+		encoded, err := json.Marshal(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, endpoint := range tlsHTTPEndpoints() {
+			t.Run(endpoint.path, func(t *testing.T) {
+				agent := &tlsHTTPAgent{}
+				api := &handler{databaseAgent: agent}
+				response := tlsHTTPRecorder(api, endpoint, `{"sourceId":"fixture","credentials":{"username":"fixture","password":"","tls":`+string(encoded)+`}`+endpoint.extra+`}`)
+				wantStatus := http.StatusOK
+				if endpoint.path == "rows/insert" {
+					wantStatus = http.StatusCreated
+				}
+				if response.Code != wantStatus || !reflect.DeepEqual(agent.connection.Credentials.TLS, &policy) {
+					t.Fatalf("valid TLS policy did not reach %s intact: %d %s", endpoint.path, response.Code, response.Body)
+				}
+				if agent.connection.Credentials.Password != "" {
+					t.Fatal("empty password changed")
+				}
+				if strings.Contains(response.Body.String(), "appliedTls") {
+					t.Fatal("policy input must not fabricate TLS application proof")
+				}
+			})
+		}
+	}
+}
+
+func TestDatabaseTLSHTTPInputKeepsLegacyCaseCompatibility(t *testing.T) {
+	for _, fixture := range []struct {
+		name, body string
+		strict     bool
+	}{
+		{"legacy case", `{"SOURCEID":"fixture","CREDENTIALS":{"USERNAME":"fixture"}}`, false},
+		{"legacy unicode", `{"ſourceId":"fixture","credentialſ":{"uſername":"fixture"}}`, false},
+		{"legacy duplicate", `{"sourceId":"old","sourceId":"fixture","credentials":{"username":"old"},"credentials":{"username":"fixture"}}`, false},
+		{"empty optional strings", `{"sourceId":"fixture","credentials":{"username":"fixture","tls":{"mode":"verify-full","caPEM":"","serverName":""}}}`, true},
+		{"escaped canonical fields", `{"\u0073ourceId":"fixture","\u0063redentials":{"username":"fixture","\u0074ls":{"\u006dode":"verify-full"}}}`, true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			agent := &tlsHTTPAgent{}
+			response := tlsHTTPRecorder(&handler{databaseAgent: agent}, tlsHTTPEndpoints()[2], fixture.body)
+			if response.Code != http.StatusOK || agent.operationCalls != 1 || agent.connection.SourceID != "fixture" || agent.connection.Credentials.Username != "fixture" || (agent.connection.Credentials.TLS != nil) != fixture.strict {
+				t.Fatalf("decoder compatibility changed: %d %s", response.Code, response.Body)
+			}
+		})
+	}
+}
+
+func tlsHTTPTestCAPEM(t *testing.T) string {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x3b}, ed25519.SeedSize))
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "synthetic HTTP fixture CA"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		BasicConstraintsValid: true, IsCA: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestDatabaseTLSHTTPInputPreservesDataAndLegacyPaths(t *testing.T) {
 	for _, endpoint := range tlsHTTPEndpoints() {
 		t.Run(endpoint.path, func(t *testing.T) {
 			agent := &tlsHTTPAgent{}
@@ -141,7 +282,7 @@ func TestDatabaseTLSHTTPRolloutGatePreservesDataAndLegacyPaths(t *testing.T) {
 			}
 			if numbers != nil {
 				if number, ok := numbers["id"].(json.Number); !ok || string(number) != "9007199254740993" {
-					t.Fatal("raw gate lost exact UseNumber decoding")
+					t.Fatal("TLS input validation lost exact UseNumber decoding")
 				}
 			}
 			if endpoint.path == "connect" {
