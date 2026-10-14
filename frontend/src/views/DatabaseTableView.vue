@@ -966,10 +966,15 @@ watch(dangerOpen, (open) => {
   }
 }, { flush: 'sync' })
 watch(pageSize, (next, previous) => {
-  if (next === previous) return
+  const scope = sqlEditorScope
+  // 初始化与失效会话不能借用页大小变化重新取得读取或草稿归属。
+  if (next === previous || !scope || !ownsSQLScope(scope)) return
   invalidateRowsPage()
-  sql.value = table.value ? `SELECT * FROM ${sqlTableName()} LIMIT ${next}` : sql.value
-  void refreshRows()
+  // 仅同步未修改的默认查询；用户草稿（包括主动清空）不随列表偏好改写。
+  if (sql.value === `SELECT * FROM ${sqlTableName()} LIMIT ${previous}`) {
+    sql.value = `SELECT * FROM ${sqlTableName()} LIMIT ${next}`
+  }
+  void refreshRows(true, 0, scope.session)
 })
 onBeforeUnmount(() => {
   invalidateSQLScope()
