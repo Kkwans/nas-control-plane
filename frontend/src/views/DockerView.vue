@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
@@ -42,6 +42,8 @@ type DockerViewMode = 'projects' | 'containers' | 'images'
 type DockerContainer = DockerInventory['containers'][number]
 type ProjectActionError = { containerId: string; name: string; message: string; scope?: 'project' | 'container' }
 
+const pageRoot = useTemplateRef<HTMLElement>('pageRoot')
+const tooltipTarget = shallowRef<HTMLElement>()
 const route = useRoute()
 const router = useRouter()
 const systemStore = useSystemStore()
@@ -434,11 +436,15 @@ watch([query, stateFilter, projectPageSize], () => { projectPage.value = 1 })
 watch(projectPageCount, (count) => {
   if (projectPage.value > count) projectPage.value = count
 })
-onMounted(() => void systemStore.refresh({ inventory: true }))
+onMounted(() => {
+  // 提示仍传送到页面主地标内，避免表格裁切及 body 外悬浮内容。
+  tooltipTarget.value = pageRoot.value?.closest<HTMLElement>('main, [role="main"]') ?? pageRoot.value ?? undefined
+  void systemStore.refresh({ inventory: true })
+})
 </script>
 
 <template>
-  <div class="page workspace-page docker-page">
+  <div ref="pageRoot" class="page workspace-page docker-page">
     <WorkspaceHeader title="Docker 管理" description="统一查看项目、容器、镜像和运行状态" :icon="Boxes" :stats="stats">
       <template #filters>
         <SectionTabs v-model="activeView" :tabs="dockerViewTabs" accessible-label="Docker 管理视图" />
@@ -498,7 +504,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
           <span class="mono">{{ project.runningCount }}/{{ project.containerCount }}</span>
           <div class="port-cell">
             <template v-if="portsFor(project.id).length">
-              <ElTooltip v-for="port in portsFor(project.id).slice(0, 3)" :key="port.key" :content="port.webUrl ? `打开已验证站点入口` : `复制端口 ${port.label}`">
+              <ElTooltip :append-to="tooltipTarget" v-for="port in portsFor(project.id).slice(0, 3)" :key="port.key" :content="port.webUrl ? `打开已验证站点入口` : `复制端口 ${port.label}`">
                 <a v-if="port.webUrl" :href="port.webUrl" target="_blank" rel="noreferrer" @click.stop>{{ port.hostPort }}<ExternalLink :size="12" /></a>
                 <span v-else class="port-text" :title="port.label">{{ port.hostPort }}</span>
               </ElTooltip>
@@ -506,20 +512,20 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             </template>
             <span v-else>无公开端口</span>
           </div>
-          <ElTooltip :content="project.workingDirectory || 'Docker 自动发现项目'" placement="top">
+          <ElTooltip :append-to="tooltipTarget" :content="project.workingDirectory || 'Docker 自动发现项目'" placement="top">
             <span class="path-cell">{{ project.workingDirectory || '自动发现' }}</span>
           </ElTooltip>
           <div class="project-actions" @click.stop>
-            <ElTooltip content="启动项目" placement="top">
+            <ElTooltip :append-to="tooltipTarget" content="启动项目" placement="top">
               <ListIconButton :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')" />
             </ElTooltip>
-            <ElTooltip content="停止项目" placement="top">
+            <ElTooltip :append-to="tooltipTarget" content="停止项目" placement="top">
               <ListIconButton :icon="Square" tone="danger" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')" />
             </ElTooltip>
-            <ElTooltip content="重启项目" placement="top">
+            <ElTooltip :append-to="tooltipTarget" content="重启项目" placement="top">
               <ListIconButton :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')" />
             </ElTooltip>
-            <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
+            <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
               <span class="project-action-tooltip-target">
                 <ListIconButton :icon="Trash2" tone="danger" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)" />
               </span>
@@ -555,7 +561,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
             <ActionButton variant="ghost" size="sm" :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" @click="performProjectAction(project, 'start')">启动</ActionButton>
             <ActionButton variant="danger" size="sm" :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" @click="performProjectAction(project, 'stop')">停止</ActionButton>
             <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" @click="performProjectAction(project, 'restart')">重启</ActionButton>
-            <ElTooltip :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
+            <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
               <span class="project-action-tooltip-target project-action-tooltip-target--mobile">
                 <ActionButton variant="danger" size="sm" :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" @click="confirmDeleteProject(project)">删除</ActionButton>
               </span>
@@ -574,6 +580,7 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
       </section>
 
       <DockerContainerPanel
+        :tooltip-append-to="tooltipTarget"
         v-else
         :containers="inventory?.containers ?? []"
         :query="query"
@@ -615,8 +622,8 @@ onMounted(() => void systemStore.refresh({ inventory: true }))
 .state-filter { display: flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: var(--ncp-surface-quiet); }
 .state-filter button { min-height: 36px; padding: 0 12px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .8rem; font-weight: 700; }
 .state-filter button.active { background: #fff; box-shadow: 0 2px 8px rgba(28,45,75,.08); color: var(--ncp-primary-strong); }
-.action-error { display: flex; min-height: 44px; align-items: center; justify-content: space-between; padding: 9px 13px; border: 1px solid rgba(212,81,93,.2); border-radius: 10px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .7rem; }
-.action-error button { min-height: 36px; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.65); color: inherit; font-weight: 700; }
+.action-error { display: flex; gap: 8px; min-height: 44px; align-items: center; justify-content: space-between; padding: 9px 13px; border: 1px solid rgba(212,81,93,.2); border-radius: 10px; background: var(--ncp-danger-soft); color: var(--ncp-danger-strong); font-size: .7rem; }
+.action-error button { flex: 0 0 auto; min-width: 44px; min-height: 44px; white-space: nowrap; padding: 0 10px; border-radius: 8px; background: rgba(255,255,255,.65); color: inherit; font-weight: 700; }
 .resource-state { display: grid; min-height: 220px; place-items: center; align-content: center; gap: 8px; padding: 28px; color: var(--ncp-text-subtle); text-align: center; }
 .resource-state strong { color: var(--ncp-text); font-size: .9rem; }
 .resource-state span { font-size: .75rem; }

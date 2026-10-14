@@ -80,7 +80,12 @@ async function geometry(page: Page) {
   return page.evaluate(() => {
     const element = document.querySelector<HTMLElement>('.action-error')!, box = element.getBoundingClientRect()
     const range = document.createRange(); range.selectNodeContents(element.querySelector('span')!)
+    const close = element.querySelector<HTMLButtonElement>('button')!, closeBox = close.getBoundingClientRect()
+    const closeRange = document.createRange(); closeRange.selectNodeContents(close)
+    const closeLines = [...closeRange.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+    const tooltips = [...document.querySelectorAll<HTMLElement>('[role="tooltip"]')].filter((node) => { const bounds = node.getBoundingClientRect(); return bounds.width > 0 && bounds.height > 0 && getComputedStyle(node).visibility !== 'hidden' && node.getAttribute('aria-hidden') !== 'true' }).map((node) => ({ text: node.textContent, inMain: Boolean(node.closest('main, [role="main"]')) }))
     return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+      close: { bounds: closeBox.toJSON(), lineCount: closeLines.length, noWrap: getComputedStyle(close).whiteSpace === 'nowrap', textContained: closeLines.every((line) => line.left >= closeBox.left - 1 && line.right <= closeBox.right + 1) }, tooltips,
       alert: element.textContent, bounds: box.toJSON(), lines: [...range.getClientRects()].map((line) => line.toJSON()),
       textContained: [...range.getClientRects()].every((line) => line.left >= box.left - 1 && line.right <= box.right + 1), focus: document.activeElement?.getAttribute('aria-label') }
   })
@@ -100,7 +105,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string) 
   await writeFile(statePath, JSON.stringify(metadata, null, 2))
   await info.attach(prefix, { path: png, contentType: 'image/png' }); await info.attach(`${prefix}-axe-state`, { path: statePath, contentType: 'application/json' })
   expect(api.requests).toEqual(requestsBefore); expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
-  for (const sample of [before, after, afterAxe]) { expect(sample.scrollWidth).toBeLessThanOrEqual(sample.clientWidth + 1); expect(sample.textContained).toBe(true) }
+  for (const sample of [before, after, afterAxe]) { expect(sample.scrollWidth).toBeLessThanOrEqual(sample.clientWidth + 1); expect(sample.textContained).toBe(true); expect(sample.close.bounds.width).toBeGreaterThanOrEqual(44); expect(sample.close.bounds.height).toBeGreaterThanOrEqual(44); expect(sample.close.lineCount).toBe(1); expect(sample.close.noWrap).toBe(true); expect(sample.close.textContained).toBe(true); expect(sample.tooltips.every((tooltip) => tooltip.inMain)).toBe(true); if (sample.width === 1440) expect(sample.tooltips.length).toBeGreaterThan(0) }
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
 }
 for (const width of [390, 1440]) for (const standalone of [false, true]) {
@@ -128,6 +133,10 @@ for (const width of [390, 1440]) for (const standalone of [false, true]) {
       expect(api.writes).toHaveLength(index + 1)
       // 覆盖默认五秒刷新周期，观察未知结果不会触发自动写入重试。
       if (mode === 'unknown') await page.waitForTimeout(6000)
+      if (width === 1440) {
+        await action.hover()
+        await expect(page.getByRole('tooltip').filter({ hasText: standalone ? '重启项目' : '重启容器' })).toBeVisible()
+      }
       await capture(page, info, api, `${standalone ? 'project' : 'container'}-${mode}`)
       expect(api.writes).toHaveLength(index + 1)
     }
