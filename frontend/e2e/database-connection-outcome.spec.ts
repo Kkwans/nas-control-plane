@@ -31,7 +31,7 @@ const error = (page: Page) => page.locator('.database-error[role="alert"]')
 type Draft = typeof originalDraft
 type Connection = { sourceId: string; credentials?: Draft }
 type RequestRecord = { method: string; path: string; body?: unknown }
-type Reply = 'credentials-required' | 'malformed-diagnostic' | 'malformed-connect' | 'disconnect' | 'connected' | 'catalog-error' | 'catalog'
+type Reply = 'credentials-required' | 'credential-conflict' | 'malformed-diagnostic' | 'malformed-connect' | 'disconnect' | 'connected' | 'catalog-error' | 'catalog'
 type Permit = { expected: Connection; reply: Reply }
 
 // 所有凭据、主机和目录均为内存 fixture。connect、诊断和 catalog 逐次许可；
@@ -62,6 +62,7 @@ async function fixture(page: Page, baseURL: string) {
         permits.delete(url.pathname)
         expect(body).toEqual(permit.expected)
         if (permit.reply === 'credentials-required') return route.fulfill({ status: 400, json: { code: 'credentials_required', message: 'fixture-only', requestId: 'fixture-initial-connect' } })
+        if (permit.reply === 'credential-conflict') return route.fulfill({ status: 409, json: { code: 'credential_conflict', message: 'fixture-private-diagnostic-must-not-render', requestId: 'fixture-credential-conflict', credentials: { password: 'fixture-private-credential-must-not-render' } } })
         if (permit.reply === 'disconnect') return route.abort('failed')
         if (permit.reply === 'malformed-connect') return route.fulfill({ status: 200, contentType: 'application/json', body: '{' })
         if (permit.reply === 'malformed-diagnostic') return route.fulfill({ json: { ...diagnostic, connected: 'false', code: 'auth_failed', privateDiagnostic: 'fixture-private-diagnostic-must-not-render' } })
@@ -116,11 +117,11 @@ async function keyboardActions(page: Page) {
   await page.keyboard.press('Tab')
   await expect(connect(page)).toBeFocused()
 }
-async function noAutomaticRetry(page: Page, api: Fixture, connections: number, catalogs: number) {
+async function noAutomaticRetry(page: Page, api: Fixture, connections: number, catalogs: number, diagnostics = 1) {
   // 跨过默认五秒刷新周期；时间推进本身不得重新保存凭据或读取目录。
   await page.clock.fastForward(15_000)
   await waitForPageReady(page)
-  api.expectCounts(connections, 1, catalogs)
+  api.expectCounts(connections, diagnostics, catalogs)
 }
 
 async function sourceProvenance() {
@@ -171,7 +172,7 @@ async function captureState(page: Page) {
 }
 
 // 与 SQL outcome 使用相同 CI 配对产物约定；完整 axe，不改样式、不隐藏控件。
-async function capture(page: Page, info: TestInfo, api: Fixture, view: 'connection-unknown' | 'catalog-failed') {
+async function capture(page: Page, info: TestInfo, api: Fixture, view: 'connection-unknown' | 'catalog-failed' | 'credential-conflict') {
   await page.evaluate(() => document.fonts.ready)
   await waitForPageReady(page)
   const initialState = await captureState(page)
@@ -304,6 +305,69 @@ for (const scenario of [{ width: 1440, reply: 'malformed-connect' }, { width: 39
     await noAutomaticRetry(page, api, 4, 2)
     expect(api.requests.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual([
       connectPath, diagnosticPath, connectPath, connectPath, catalogPath, connectPath, catalogPath,
+    ])
+  })
+}
+
+for (const width of [1440, 390]) {
+  test(`${width}px 精确 409 仅说明本次凭据未保存，保留草稿且明确更正重试后才发布目录`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    expect(baseURL).toBeTruthy()
+    await page.setViewportSize({ width, height: 900 })
+    const api = await fixture(page, baseURL!)
+    api.allow(connectPath, { sourceId: source.id }, 'credentials-required')
+    await page.goto(`/databases/${source.id}`, { waitUntil: 'domcontentloaded' })
+    await expect(page.getByRole('heading', { name: source.name, exact: true })).toBeVisible()
+    await expect(connect(page)).toBeEnabled()
+    api.expectCounts(1, 0, 0)
+    await draft(page, originalDraft, true)
+
+    api.allow(connectPath, { sourceId: source.id, credentials: originalDraft }, 'credential-conflict')
+    await connect(page).click()
+    await expect(error(page).locator('strong')).toHaveText('连接凭据未保存')
+    await expect(error(page).locator('code')).toHaveText('代码 credential_conflict')
+    await expect(error(page)).toContainText('其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。')
+    await expect(error(page)).toContainText('核对当前凭据后手动重新连接；不会自动重试。')
+    await expect(page.locator('.connection-pill')).toHaveText('连接凭据未保存')
+    await expect(page.locator('.source-summary__status')).toContainText('其他操作已修改保存的凭据，请重新确认后再连接。')
+    await expect(page.locator('.diagnostic-result')).toHaveCount(0)
+    for (const text of ['数据库连接失败', '数据库连接诊断失败', '服务端可能已保存', 'DATABASE_CONNECTION_OUTCOME_UNKNOWN', 'fixture-private-diagnostic-must-not-render', 'fixture-private-credential-must-not-render', originalDraft.password]) {
+      await expect(page.locator('.database-detail')).not.toContainText(text)
+    }
+    await noConfirmedConnection(page)
+    await draft(page, originalDraft)
+    await noAutomaticRetry(page, api, 2, 0, 0)
+    await keyboardActions(page)
+    await capture(page, info, api, 'credential-conflict')
+    api.expectCounts(2, 0, 0)
+
+    // 编辑草稿不派发请求；只有用户明确提交后才许可连接与目录读取。
+    await draft(page, correctedDraft, true)
+    await noConfirmedConnection(page)
+    await noAutomaticRetry(page, api, 2, 0, 0)
+    api.allow(connectPath, { sourceId: source.id, credentials: correctedDraft }, 'connected')
+    api.allow(catalogPath, { sourceId: source.id, credentials: correctedDraft }, 'catalog')
+    await keyboardActions(page)
+    await page.keyboard.press('Enter')
+    await expect(page.locator('.connection-pill--success')).toHaveText('已连接')
+    await expect(page.getByRole('link', { name: '打开 fixture_records 数据表详情', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '刷新结构', exact: true })).toBeEnabled()
+    await expect(error(page)).toHaveCount(0)
+    await expect(form(page)).toHaveCount(0)
+    await expect(page.getByRole('region', { name: '数据表和视图列表', exact: true })).toBeVisible()
+    await expect(page.locator('.database-detail')).not.toContainText('连接凭据未保存')
+    await noAutomaticRetry(page, api, 3, 1, 0)
+
+    // 草稿已经清除；明确刷新仍携带本次成功发布的更正凭据，不使用冲突草稿。
+    api.allow(catalogPath, { sourceId: source.id, credentials: correctedDraft }, 'catalog')
+    await page.getByRole('button', { name: '刷新结构', exact: true }).click()
+    await expect(page.getByRole('button', { name: '刷新结构', exact: true })).toBeEnabled()
+    await expect(page.locator('.connection-pill--success')).toHaveText('已连接')
+    await expect(page.getByRole('link', { name: '打开 fixture_records 数据表详情', exact: true })).toBeVisible()
+    await expect(error(page)).toHaveCount(0)
+    await noAutomaticRetry(page, api, 3, 2, 0)
+    expect(api.requests.filter((request) => request.method === 'POST').map((request) => request.path)).toEqual([
+      connectPath, connectPath, connectPath, catalogPath, catalogPath,
     ])
   })
 }
