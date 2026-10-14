@@ -399,7 +399,7 @@ function buildInput(runContainer: boolean): DockerContainerCreateInput {
       containerPort: Number(row.containerPort),
       protocol: row.protocol,
     })),
-    command: commandText.value.trim() ? commandText.value.split('\n').map((item) => item.trim()).filter(Boolean) : undefined,
+    command: commandText.value.trim() ? commandText.value.split('\n').filter((item) => item !== '') : undefined,
     privileged: form.privileged,
     capAdd: commaList(form.capAdd),
     capDrop: commaList(form.capDrop),
@@ -430,6 +430,7 @@ function buildInput(runContainer: boolean): DockerContainerCreateInput {
 function validationMessage(input: DockerContainerCreateInput) {
   if (!input.image) return '镜像引用不能为空。'
   if (input.name && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(input.name)) return '容器名称只能包含字母、数字、点、下划线和连字符。'
+  if (input.command?.some((argument) => ['\0', '\r', '\n'].some((character) => argument.includes(character)))) return '启动参数不能包含 NUL 或换行控制字符。'
   const rawEnvironmentKeys = environment.value.map((row) => row.key.trim()).filter(Boolean)
   if (environment.value.some((row) => !row.key.trim() && row.value) || rawEnvironmentKeys.some((key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || new Set(rawEnvironmentKeys).size !== rawEnvironmentKeys.length) return '环境变量名称无效、缺失或重复。'
   if (input.mounts?.some((mount) => !mount.target.startsWith('/') || (mount.type !== 'tmpfs' && !mount.source) || (mount.type === 'bind' && !mount.source?.startsWith('/')))) return '挂载项必须填写来源和绝对目标路径。'
@@ -628,7 +629,7 @@ async function refreshUnresolvedInventory() {
       </section>
 
       <section class="form-section">
-        <SectionHeader title="启动命令" description="每行填写一个 argv 参数；留空时使用镜像默认命令" :icon="Cpu" heading-tag="h3" />
+        <SectionHeader title="启动命令" description="每行填写一个 argv 参数；全空白时使用镜像默认命令；空行忽略，其余参数保留首尾空白，不解析 Shell 语法" :icon="Cpu" heading-tag="h3" />
         <textarea v-model="commandText" aria-label="容器启动参数（每行一个）" rows="4" placeholder="示例：&#10;sh&#10;-c&#10;echo $APP_MODE && exec /app/server"></textarea>
       </section>
 
@@ -695,7 +696,7 @@ async function refreshUnresolvedInventory() {
         <dt>挂载</dt><dd>{{ previewInput.mounts?.length || 0 }} 项<span v-if="previewInput.mounts?.length">：{{ previewInput.mounts.map((mount) => `${mount.type} ${mount.source || 'tmpfs'} → ${mount.target}`).join('；') }}</span></dd>
         <dt>网络</dt><dd>{{ previewInput.network?.name || 'Docker 默认网络' }}<span v-if="previewInput.network?.subnet">（{{ previewInput.network.subnet }}）</span></dd>
         <dt>端口</dt><dd>{{ previewInput.ports?.length ? previewInput.ports.map((port) => `${port.hostPort || '随机'} → ${port.containerPort}/${port.protocol || 'tcp'}`).join('；') : '未映射' }}</dd>
-        <dt>启动参数</dt><dd><code>{{ previewInput.command?.length ? previewInput.command.join(' ') : '使用镜像默认命令' }}</code></dd>
+        <dt>启动参数</dt><dd><code>{{ previewInput.command?.length ? JSON.stringify(previewInput.command) : '使用镜像默认命令' }}</code></dd>
         <dt>权限与硬件</dt><dd>{{ previewInput.privileged ? 'privileged；' : '' }}{{ (previewInput.capAdd?.length || 0) + (previewInput.capDrop?.length || 0) + (previewInput.devices?.length || 0) + (previewInput.gpus?.length || 0) }} 项高级设置</dd>
       </dl>
     </div>
