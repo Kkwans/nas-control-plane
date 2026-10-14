@@ -78,6 +78,8 @@ func TestSQLiteReturningColumnsOracle(t *testing.T) {
 	}{
 		{`INSERT INTO sample(id,n) VALUES(2,1),(3,2) RETURNING id,n`, 2},
 		{`INSERT INTO sample DEFAULT VALUES RETURNING id`, 1},
+		{`REPLACE INTO sample(id,n) VALUES(1,2) RETURNING id,n`, 2},
+		{`REPLACE INTO sample(id,n) VALUES(1,2)`, 0},
 		{`INSERT INTO sample(id,n) SELECT 2,n+1 FROM sample WHERE id=1 RETURNING id,n`, 2},
 		{`INSERT INTO sample(id,n) VALUES(1,10) ON CONFLICT(id) DO UPDATE SET n=excluded.n RETURNING id,n`, 2},
 		{`INSERT OR IGNORE INTO sample(id,n) VALUES(1,10) RETURNING id,n`, 2},

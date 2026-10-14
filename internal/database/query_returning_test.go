@@ -66,7 +66,10 @@ func TestSQLiteDMLReturning(t *testing.T) {
 		{"nul", "UPDATE t SET n=1 RETURNING n\x00", false},
 		{"nul literal", "UPDATE t SET n=1 RETURNING 'n\x00'", false},
 		{"nul comment", "UPDATE t SET n=1 RETURNING n --\x00", false},
-		{"replace", `REPLACE INTO t VALUES(1) RETURNING n`, false},
+		{"replace", `REPLACE INTO t VALUES(1) RETURNING n`, true},
+		{"replace no returning", `REPLACE INTO t VALUES(1)`, false},
+		{"replace literal", `REPLACE INTO t VALUES('RETURNING')`, false},
+		{"replace batch", `REPLACE INTO t VALUES(1) RETURNING n; SELECT 2`, false},
 		{"with", `WITH x AS(SELECT 1) UPDATE t SET n=1 RETURNING n`, false},
 		{"explain", `EXPLAIN UPDATE t SET n=1 RETURNING n`, false},
 		{"empty", ``, false},
@@ -89,7 +92,9 @@ func TestSQLiteDMLReturning(t *testing.T) {
 	}{
 		{DriverSQLite, `WITH x AS(SELECT 1) UPDATE t SET n=1`, false},
 		{DriverSQLite, `WITH x AS(SELECT 1) UPDATE t SET n=1 RETURNING n`, true},
-		{DriverSQLite, `REPLACE INTO t VALUES(1) RETURNING n`, false},
+		{DriverSQLite, `REPLACE INTO t VALUES(1) RETURNING n`, true},
+		{DriverMySQL, `REPLACE INTO t VALUES(1) RETURNING n`, false},
+		{DriverPostgreSQL, `REPLACE INTO t VALUES(1) RETURNING n`, false},
 		{DriverSQLite, `EXPLAIN UPDATE t SET n=1 RETURNING n`, true},
 		{DriverPostgreSQL, `INSERT INTO t SELECT 1 AS returning`, false},
 		{DriverPostgreSQL, `UPDATE t SET n=t.returning`, false},
@@ -135,7 +140,7 @@ func TestQuerySQLiteReturningModesNeverReplay(t *testing.T) {
 		{`UPDATE t SET n=:RETURNING`, false},
 		{`UPDATE t SET s='RETURNING'`, false},
 		{`UPDATE t SET n=1 RETURNING n; SELECT 2`, false},
-		{`REPLACE INTO t VALUES(1) RETURNING n`, false},
+		{`REPLACE INTO t VALUES(1) RETURNING n`, true},
 		{`UPDATE t SET n=1 RETURNING n` + strings.Repeat(" ", 1<<20), false},
 	} {
 		for _, driver := range []Driver{DriverSQLite, DriverPostgreSQL, DriverMySQL} {

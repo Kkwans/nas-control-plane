@@ -1,6 +1,7 @@
 package database
 
-// sqliteDMLReturning 只识别 SQLite 直接 INSERT/UPDATE/DELETE 的返回子句。
+// sqliteDMLReturning 只识别 SQLite 直接 INSERT/UPDATE/DELETE/REPLACE 的返回子句。
+// REPLACE 是 INSERT OR REPLACE 的别名：https://www.sqlite.org/lang_replace.html
 // SQLite 的 RETURNING terminal 不属于标识符或 fallback，区别于 PostgreSQL
 // 允许 AS returning、t.returning 的语法。依据 SQLite 3.53.3 src/parse.y。
 // 完整扫描成功才选择 rows；未知词法、批次或超限保留旧 exec，不拒绝 SQL。
@@ -10,7 +11,7 @@ func sqliteDMLReturning(driver Driver, statement string) bool {
 	}
 	scanner := cteScanner{driver: driver, statement: statement}
 	first := scanner.next()
-	if !first.word("INSERT") && !first.word("UPDATE") && !first.word("DELETE") {
+	if !first.word("INSERT") && !first.word("UPDATE") && !first.word("DELETE") && !first.word("REPLACE") {
 		return false
 	}
 	depth := 0
