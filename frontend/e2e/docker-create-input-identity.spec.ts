@@ -50,7 +50,7 @@ async function fixture(page: Page, origin: string, expected: ReturnType<typeof e
     ['/api/v1/docker/inventory', inventory],
     ['/api/v1/docker/resources', { collectedAt: stamp, networks: [], volumes: [] }],
     ['/api/v1/docker/images', { collectedAt: stamp, images: [{ id: 'sha256:identity-fixture', repoTags: ['identity:latest'], repoDigests: [], sizeBytes: 1024, createdAt: stamp, containers: 0 }] }],
-    ...['docker.projects', 'docker.containers', 'docker.images.local'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
+    ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
   ])
   page.on('pageerror', (error) => errors.push(error.message))
   await page.routeWebSocket('**', (socket) => { denied.push(`WS ${socket.url()}`); socket.close() })

@@ -26,7 +26,8 @@ async function mount() {
   const host = document.createElement('div'); document.body.append(host)
   const app = createApp({ render: () => h(CreateContainerDrawer, { modelValue: state.open, image: state.image, 'onUpdate:modelValue': (value: boolean) => { state.open = value }, onCreated: created }) })
   app.mount(host); mounted.push({ app, host }); await flush()
-  return { state, host, created, app }
+  // 弹窗传送到 body；查询覆盖抽屉与弹窗，清理仍只移除实际挂载节点。
+  return { state, host: document.body, created, app }
 }
 function button(host: HTMLElement, text: string) { return [...host.querySelectorAll('button')].find((item) => item.textContent === text)! }
 async function click(host: HTMLElement, text: string) { button(host, text).click(); await flush() }
@@ -34,7 +35,7 @@ async function submit(host: HTMLElement) { await click(host, '仅创建'); await
 async function edit(input: HTMLInputElement, value: string) { input.value = value; input.dispatchEvent(new Event('input')); await flush() }
 function name(host: HTMLElement) { return host.querySelector<HTMLInputElement>('[placeholder="例如 mysql-1"]')! }
 beforeEach(() => { vi.resetAllMocks(); beginSession(); api.resources.mockResolvedValue(emptyResources); api.inventory.mockResolvedValue({ containers: [] }) })
-afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
+afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } expect(document.querySelector('.create-container-dialogs')).toBeNull() })
 
 describe('创建容器草稿所有权', () => {
   it('自定义标题保留抽屉名称与二级标题，切换镜像时同步更新', async () => {

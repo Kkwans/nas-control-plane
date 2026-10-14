@@ -575,7 +575,7 @@ async function refreshUnresolvedInventory() {
         <div class="row-group">
           <div v-for="(row, index) in environment" :key="`env-${index}`" class="repeat-row repeat-row--env">
             <ElInput v-model="row.key" placeholder="变量，例如 APP_MODE" /><ElInput v-model="row.value" placeholder="值" />
-            <ElTooltip content="删除环境变量"><button type="button" class="row-remove" @click="removeRow(environment, index)"><Trash2 :size="16" /></button></ElTooltip>
+            <ElTooltip content="删除环境变量"><button type="button" class="row-remove" :aria-label="`删除第 ${index + 1} 个环境变量`" @click="removeRow(environment, index)"><Trash2 :size="16" /></button></ElTooltip>
           </div>
           <button type="button" class="add-row" @click="addEnvironment"><Plus :size="15" />添加环境变量</button>
         </div>
@@ -591,7 +591,7 @@ async function refreshUnresolvedInventory() {
             <span v-else class="row-placeholder">无需来源</span>
             <ElInput v-model="row.target" placeholder="容器路径，例如 /data" />
             <label class="inline-switch"><ElSwitch v-model="row.readOnly" />只读</label>
-            <ElTooltip content="删除挂载"><button type="button" class="row-remove" @click="removeRow(mounts, index)"><Trash2 :size="16" /></button></ElTooltip>
+            <ElTooltip content="删除挂载"><button type="button" class="row-remove" :aria-label="`删除第 ${index + 1} 个挂载`" @click="removeRow(mounts, index)"><Trash2 :size="16" /></button></ElTooltip>
           </div>
           <button type="button" class="add-row" @click="addMount"><Plus :size="15" />添加挂载</button>
         </div>
@@ -622,7 +622,7 @@ async function refreshUnresolvedInventory() {
             <span class="port-arrow">→</span>
             <ElInputNumber v-model="row.containerPort" :min="1" :max="65535" controls-position="right" placeholder="容器端口" />
             <NcpSelect :model-value="row.protocol" :options="protocolOptions" :accessible-label="`第 ${index + 1} 个端口映射协议`" @update:model-value="row.protocol = $event as PortRow['protocol']" />
-            <ElTooltip content="删除端口映射"><button type="button" class="row-remove" @click="removeRow(ports, index)"><Trash2 :size="16" /></button></ElTooltip>
+            <ElTooltip content="删除端口映射"><button type="button" class="row-remove" :aria-label="`删除第 ${index + 1} 个端口映射`" @click="removeRow(ports, index)"><Trash2 :size="16" /></button></ElTooltip>
           </div>
           <button type="button" class="add-row" @click="addPort"><Plus :size="15" />添加端口映射</button>
         </div>
@@ -644,7 +644,7 @@ async function refreshUnresolvedInventory() {
           <div class="row-group">
             <div v-for="(row, index) in devices" :key="`device-${index}`" class="repeat-row repeat-row--device">
               <ElInput v-model="row.hostPath" placeholder="主机设备 /dev/..." /><ElInput v-model="row.containerPath" placeholder="容器设备 /dev/..." /><ElInput v-model="row.permissions" placeholder="rwm" />
-              <ElTooltip content="删除设备"><button type="button" class="row-remove" @click="removeRow(devices, index)"><Trash2 :size="16" /></button></ElTooltip>
+              <ElTooltip content="删除设备"><button type="button" class="row-remove" :aria-label="`删除第 ${index + 1} 个设备`" @click="removeRow(devices, index)"><Trash2 :size="16" /></button></ElTooltip>
             </div>
             <button type="button" class="add-row" @click="addDevice"><Plus :size="15" />添加设备</button>
           </div>
@@ -667,7 +667,10 @@ async function refreshUnresolvedInventory() {
     </template>
   </ElDrawer>
 
-  <ElDialog v-model="pathBrowserOpen" title="选择 NAS 路径" width="min(640px, 92vw)" append-to-body>
+  <!-- 原生 section 为弹窗标题提供局部语义；整体传送到 body，避免抽屉层叠与裁切。 -->
+  <Teleport to="body">
+  <section class="create-container-dialogs">
+  <ElDialog v-model="pathBrowserOpen" title="选择 NAS 路径" width="min(640px, 92vw)">
     <div class="path-browser">
       <div class="path-browser__toolbar">
         <code>{{ currentPath }}</code>
@@ -687,7 +690,7 @@ async function refreshUnresolvedInventory() {
     </div>
   </ElDialog>
 
-  <ElDialog v-model="previewOpen" title="确认容器配置" width="min(680px, 92vw)" append-to-body>
+  <ElDialog v-model="previewOpen" title="确认容器配置" width="min(680px, 92vw)">
     <div v-if="previewInput" class="create-preview">
       <p class="preview-intro">请确认以下配置；取消不会创建任何 Docker 对象。</p>
       <dl class="preview-grid">
@@ -704,6 +707,8 @@ async function refreshUnresolvedInventory() {
       <div class="dialog-actions"><ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="previewOpen = false">返回修改</ActionButton><ActionButton variant="primary" :loading="Boolean(submitting)" :disabled="Boolean(unresolvedAttempt)" @click="executeSubmit">确认{{ pendingRunContainer ? '创建并启动' : '创建' }}</ActionButton></div>
     </template>
   </ElDialog>
+  </section>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -714,7 +719,7 @@ async function refreshUnresolvedInventory() {
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.field{display:grid;min-width:0;gap:7px}.field--wide{grid-column:1/-1}.field>span{color:var(--ncp-text-muted);font-size:.72rem;font-weight:700}.field :deep(.ncp-select),.repeat-row :deep(.ncp-select){width:100%;min-width:0}
 .row-group{display:grid;gap:8px}.repeat-row{display:grid;align-items:center;gap:8px}.repeat-row--env{grid-template-columns:minmax(150px,.8fr) minmax(220px,1.4fr) 40px}.repeat-row--mount{grid-template-columns:120px minmax(180px,1fr) minmax(150px,1fr) 82px 40px}.repeat-row--port{grid-template-columns:minmax(140px,1fr) 140px 22px 140px 90px 40px}.repeat-row--device{grid-template-columns:1fr 1fr 100px 40px}.source-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;min-width:0}.browse-button,.load-more{min-height:40px;padding:0 11px;border:1px solid var(--ncp-control-border);border-radius:10px;background:var(--ncp-control-surface);color:var(--ncp-primary-strong);font-size:.72rem;font-weight:700;white-space:nowrap}.browse-button:hover,.load-more:hover{background:var(--ncp-primary-soft)}.browse-button:focus-visible,.load-more:focus-visible,.path-entry__name:focus-visible{outline:2px solid var(--ncp-focus-ring);outline-offset:2px}.browse-button:disabled,.load-more:disabled{cursor:not-allowed;opacity:.55}.row-remove{display:grid;width:40px;height:40px;place-items:center;border:1px solid var(--ncp-danger-border);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}.add-row{display:flex;width:max-content;min-height:34px;align-items:center;gap:6px;padding:0 10px;border-radius:9px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.row-placeholder{display:flex;min-height:40px;align-items:center;padding:0 11px;border:1px dashed var(--ncp-line-strong);border-radius:10px;color:var(--ncp-text-subtle);font-size:.7rem}.inline-switch{display:flex;align-items:center;gap:7px;color:var(--ncp-text-muted);font-size:.7rem}.network-mode-switch{align-items:center}.port-arrow{text-align:center;color:var(--ncp-text-subtle)}
 textarea{width:100%;resize:vertical;padding:11px 12px;border:1px solid var(--ncp-control-border);border-radius:10px;background:var(--ncp-control-surface);color:var(--ncp-text);font-family:'JetBrains Mono Variable',monospace;font-size:.76rem;line-height:1.55;outline:none}textarea:focus{border-color:var(--ncp-primary);box-shadow:0 0 0 3px var(--ncp-primary-soft)}
-.form-section--advanced{padding:0;overflow:hidden}.advanced-toggle{display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;text-align:left}.advanced-toggle>span:last-child{color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.advanced-body{display:grid;gap:13px;padding:0 18px 17px;border-top:1px solid var(--ncp-line)}.switch-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:13px}.switch-line>span{display:grid;gap:2px}.switch-line strong{font-size:.76rem}.switch-line small{color:var(--ncp-text-subtle);font-size:.68rem}
+.form-section--advanced{padding:0;overflow:hidden}.advanced-toggle{background:var(--ncp-control-surface);display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:15px 18px;text-align:left}.advanced-toggle>span:last-child{color:var(--ncp-primary-strong);font-size:.7rem;font-weight:750}.advanced-body{display:grid;gap:13px;padding:0 18px 17px;border-top:1px solid var(--ncp-line)}.switch-line{display:flex;align-items:center;justify-content:space-between;gap:14px;padding-top:13px}.switch-line>span{display:grid;gap:2px}.switch-line strong{font-size:.76rem}.switch-line small{color:var(--ncp-text-subtle);font-size:.68rem}
 .drawer-actions{display:flex;justify-content:flex-end;gap:8px}
 .path-browser{display:grid;gap:12px}.path-browser__toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.path-browser__toolbar code{min-width:0;overflow:hidden;color:var(--ncp-text);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.path-browser__state{padding:30px;text-align:center;color:var(--ncp-text-subtle);font-size:.78rem}.path-browser__entries{display:grid;max-height:360px;overflow:auto;border:1px solid var(--ncp-line);border-radius:10px}.path-entry{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid var(--ncp-line)}.path-entry:last-child{border-bottom:0}.path-entry__name{display:flex;min-width:0;align-items:center;gap:8px;color:var(--ncp-text);font-size:.78rem;overflow:hidden;text-align:left;text-overflow:ellipsis;white-space:nowrap}.path-entry__icon{display:inline-grid;min-width:38px;height:22px;place-items:center;border-radius:6px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.58rem;font-weight:800;letter-spacing:.03em}.path-entry>span.path-entry__name .path-entry__icon{background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.load-more{width:100%}.create-preview{display:grid;gap:12px}.preview-intro{margin:0;color:var(--ncp-text-muted);font-size:.78rem}.preview-grid{display:grid;grid-template-columns:110px minmax(0,1fr);gap:0;margin:0;border:1px solid var(--ncp-line);border-radius:10px;overflow:hidden}.preview-grid dt,.preview-grid dd{margin:0;padding:10px 11px;border-bottom:1px solid var(--ncp-line);font-size:.76rem;line-height:1.45}.preview-grid dt{background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-weight:750}.preview-grid dd{min-width:0;overflow-wrap:anywhere}.preview-grid dt:last-of-type,.preview-grid dd:last-of-type{border-bottom:0}.preview-grid code{font-family:'JetBrains Mono Variable',monospace;font-size:.7rem}.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
 .command-preview{white-space:pre-wrap}
