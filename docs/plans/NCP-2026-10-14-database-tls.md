@@ -180,3 +180,11 @@
 包内 `tls_policy.go` 与纯测试已实现，未接入 Credentials、Manager、HTTP、RPC、vault 或 UI。nil 仅保留旧入口语义；显式配置只编译 verify-full。三个新生产函数语句覆盖率100%，不代表完整安全性证明。Go 数据库完整单元、TLS定向race、全仓构建/vet通过；纯证书验证覆盖CA/SAN/过期/EKU与原始字节/证书数边界。没有真实握手、证书安装、生产变更或NAS操作。
 
 T1连接器、T2保存与协议防降级、T3用户界面仍未完成。现有数据库连接不会因本片自动启用TLS，不能报告为“数据库TLS功能已上线”。优先接续这些门槛，并保留T4受控集成未验的标记。
+
+## 九、T1a 严格连接器构造检查点（2026-10-14 06:54 UTC）
+
+`tls_connector.go` 新增包内连接器构造函数，严格拒绝nil策略，复用T0配置。MySQL使用每实例NewConnector，保留既有DSN解析后的非TLS默认选项；pgx使用空密码受控解析种子、清除回退/运行参数并最后赋值实际认证信息。无全局注册，无进程环境修改。只构造connector，不调用Connect或Ping。
+
+纯测试覆盖单个及组合PG环境污染、PGSERVICE在检查后变化、种子/错误不含密码、解析器配置复制、独立CA池和明确host与验证名。定向及race、完整database测试、全仓构建/vet通过。实际解析仍有前述用户/默认路径Stat和空passfile的失败open，不把它描述为T0式纯函数。
+
+本片仍未接入Manager与sql.OpenDB池生命周期，称为T1a构造基础；T1b运行分派和池释放测试必须与T2严格RPC/vault门槛共同完成，之后才可开放HTTP/UI。旧连接路径原样保留，真实数据库TLS握手未验。T0的3ea4264已完整CI通过3266前端单元/407浏览器及Go/Compose，不证明本片连接器的实际握手。
