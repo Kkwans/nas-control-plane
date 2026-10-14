@@ -516,13 +516,13 @@ onMounted(() => {
             <span class="path-cell">{{ project.workingDirectory || '自动发现' }}</span>
           </ElTooltip>
           <div class="project-actions" @click.stop>
-            <ElTooltip :append-to="tooltipTarget" content="启动项目" placement="top">
+            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="启动项目" placement="top">
               <ListIconButton :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')" />
             </ElTooltip>
-            <ElTooltip :append-to="tooltipTarget" content="停止项目" placement="top">
+            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="停止项目" placement="top">
               <ListIconButton :icon="Square" tone="danger" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')" />
             </ElTooltip>
-            <ElTooltip :append-to="tooltipTarget" content="重启项目" placement="top">
+            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="重启项目" placement="top">
               <ListIconButton :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')" />
             </ElTooltip>
             <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">

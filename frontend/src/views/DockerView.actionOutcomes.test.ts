@@ -18,7 +18,7 @@ vi.mock('@/composables/useListPreference', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   const stub = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
-  return { ElInput: stub, ElTooltip: stub, ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 vi.mock('@/components/DockerImagePanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ContainerLogDrawer.vue', () => ({ default: { render: () => null } }))
@@ -93,6 +93,25 @@ async function ready(container = true) {
 }
 
 describe('DockerView 生命周期回执', () => {
+  it.each([true, false])('操作等待关闭原位置提示，结束后允许重新定位 container=%s', async (container) => {
+    await ready(container)
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    const target = button(container ? '重启容器' : '重启项目 demo-project')
+    const tooltip = () => target.closest('[data-tooltip-disabled]')!
+    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('false')
+    target.click(); await settle()
+    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('true')
+    const pending = deferred<Response>()
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? pending.promise : response(inventory()))
+    confirmation.resolve(confirmed); await settle()
+    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('true')
+    pending.resolve(response(container ? receipt('stopped') : projectReceipt('stopped'))); await settle()
+    expect(host.querySelector('.action-error')).not.toBeNull()
+    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('false')
+    expect(posts()).toHaveLength(1)
+  })
+
   it.each([true, false])('确认等待期间阻止重复派发，固定目标快照 container=%s', async (container) => {
     await ready(container)
     const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()

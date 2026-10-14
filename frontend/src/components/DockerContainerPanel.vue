@@ -89,13 +89,13 @@ function stateTone(container: DockerContainer) {
         <small v-if="!publicPorts(container).length">无公开端口</small>
       </div>
       <div class="container-actions">
-        <ElTooltip :append-to="tooltipAppendTo" v-if="container.state !== 'running'" content="启动容器" placement="top">
+        <ElTooltip :disabled="Boolean(actionPending)" :append-to="tooltipAppendTo" v-if="container.state !== 'running'" content="启动容器" placement="top">
           <ListIconButton :icon="Play" label="启动容器" :loading="pending(container.id, 'start')" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'start')" />
         </ElTooltip>
-        <ElTooltip :append-to="tooltipAppendTo" v-else content="停止容器" placement="top">
+        <ElTooltip :disabled="Boolean(actionPending)" :append-to="tooltipAppendTo" v-else content="停止容器" placement="top">
           <ListIconButton :icon="Square" label="停止容器" tone="danger" :loading="pending(container.id, 'stop')" :disabled="Boolean(actionPending)" @click="emit('action', container.id, 'stop')" />
         </ElTooltip>
-        <ElTooltip :append-to="tooltipAppendTo" content="重启容器" placement="top">
+        <ElTooltip :disabled="Boolean(actionPending)" :append-to="tooltipAppendTo" content="重启容器" placement="top">
           <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
         </ElTooltip>
         <ElTooltip :append-to="tooltipAppendTo" content="查看容器详情与日志" placement="top">

@@ -76,36 +76,45 @@ async function provenance() {
   const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend/src', 'frontend/e2e', 'frontend/index.html', 'frontend/package.json', 'frontend/pnpm-lock.yaml', 'frontend/vite.config.ts', 'frontend/playwright.config.ts']).split('\n').filter(Boolean)
   return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async (file) => [file, createHash('sha256').update(await readFile(resolve(root, file))).digest('hex')]))) }
 }
-async function geometry(page: Page) {
-  return page.evaluate(() => {
+async function geometry(page: Page, actionLabel: string) {
+  return page.evaluate((label) => {
     const element = document.querySelector<HTMLElement>('.action-error')!, box = element.getBoundingClientRect()
     const range = document.createRange(); range.selectNodeContents(element.querySelector('span')!)
     const close = element.querySelector<HTMLButtonElement>('button')!, closeBox = close.getBoundingClientRect()
     const closeRange = document.createRange(); closeRange.selectNodeContents(close)
     const closeLines = [...closeRange.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
-    const tooltips = [...document.querySelectorAll<HTMLElement>('[role="tooltip"]')].filter((node) => { const bounds = node.getBoundingClientRect(); return bounds.width > 0 && bounds.height > 0 && getComputedStyle(node).visibility !== 'hidden' && node.getAttribute('aria-hidden') !== 'true' }).map((node) => ({ text: node.textContent, inMain: Boolean(node.closest('main, [role="main"]')) }))
-    return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+    const tooltips = [...document.querySelectorAll<HTMLElement>('[role="tooltip"]')].filter((node) => { const bounds = node.getBoundingClientRect(); return bounds.width > 0 && bounds.height > 0 && getComputedStyle(node).visibility !== 'hidden' && node.getAttribute('aria-hidden') !== 'true' }).map((node) => ({ text: node.textContent, bounds: node.getBoundingClientRect().toJSON(), inMain: Boolean(node.closest('main, [role="main"]')) }))
+    const trigger = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find((node) => node.getAttribute('aria-label') === label && node.getBoundingClientRect().width > 0)
+    return { trigger: trigger?.getBoundingClientRect().toJSON(), width: innerWidth, scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
       close: { bounds: closeBox.toJSON(), lineCount: closeLines.length, noWrap: getComputedStyle(close).whiteSpace === 'nowrap', textContained: closeLines.every((line) => line.left >= closeBox.left - 1 && line.right <= closeBox.right + 1) }, tooltips,
       alert: element.textContent, bounds: box.toJSON(), lines: [...range.getClientRects()].map((line) => line.toJSON()),
       textContained: [...range.getClientRects()].every((line) => line.left >= box.left - 1 && line.right <= box.right + 1), focus: document.activeElement?.getAttribute('aria-label') }
-  })
+  }, actionLabel)
 }
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string) {
   await expect(page.locator('.el-message')).toHaveCount(0)
   await page.evaluate(() => document.fonts.ready)
   await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }))
-  const before = await geometry(page), requestsBefore = [...api.requests]
+  const actionLabel = state.startsWith('project-') ? `重启项目 ${name}` : '重启容器'
+  const before = await geometry(page, actionLabel), requestsBefore = [...api.requests]
   const prefix = `docker-action-outcome-${state}-${page.viewportSize()!.width}`
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = info.outputPath('ui-captures', `${prefix}.png`)
   await page.screenshot({ path: png, fullPage: true, animations: 'disabled' })
-  const after = await geometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(page)
+  const after = await geometry(page, actionLabel), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(page, actionLabel)
   const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, state, testTitle: info.title, screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, requestsBefore, requestsAfterAxe: [...api.requests], writes: api.writes, denied: api.denied, axe }
   const statePath = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
   await writeFile(statePath, JSON.stringify(metadata, null, 2))
   await info.attach(prefix, { path: png, contentType: 'image/png' }); await info.attach(`${prefix}-axe-state`, { path: statePath, contentType: 'application/json' })
   expect(api.requests).toEqual(requestsBefore); expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
-  for (const sample of [before, after, afterAxe]) { expect(sample.scrollWidth).toBeLessThanOrEqual(sample.clientWidth + 1); expect(sample.textContained).toBe(true); expect(sample.close.bounds.width).toBeGreaterThanOrEqual(44); expect(sample.close.bounds.height).toBeGreaterThanOrEqual(44); expect(sample.close.lineCount).toBe(1); expect(sample.close.noWrap).toBe(true); expect(sample.close.textContained).toBe(true); expect(sample.tooltips.every((tooltip) => tooltip.inMain)).toBe(true); if (sample.width === 1440) expect(sample.tooltips.length).toBeGreaterThan(0) }
+  for (const sample of [before, after, afterAxe]) { expect(sample.scrollWidth).toBeLessThanOrEqual(sample.clientWidth + 1); expect(sample.textContained).toBe(true); expect(sample.close.bounds.width).toBeGreaterThanOrEqual(44); expect(sample.close.bounds.height).toBeGreaterThanOrEqual(44); expect(sample.close.lineCount).toBe(1); expect(sample.close.noWrap).toBe(true); expect(sample.close.textContained).toBe(true); expect(sample.tooltips.every((tooltip) => tooltip.inMain)).toBe(true); if (sample.width === 1440) {
+    expect(sample.tooltips).toHaveLength(1)
+    expect(sample.trigger).toBeDefined()
+    const tip = sample.tooltips[0]!, trigger = sample.trigger!
+    expect(trigger.top - tip.bounds.bottom).toBeGreaterThanOrEqual(0)
+    expect(trigger.top - tip.bounds.bottom).toBeLessThanOrEqual(24)
+    expect(Math.abs((trigger.left + trigger.right - tip.bounds.left - tip.bounds.right) / 2)).toBeLessThanOrEqual(4)
+  } }
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
 }
 for (const width of [390, 1440]) for (const standalone of [false, true]) {
