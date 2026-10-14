@@ -1,4 +1,5 @@
 import { NcpApiError } from './system'
+import { requestDatabaseInsert } from './databaseInsertOutcome'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
@@ -146,7 +147,9 @@ export async function insertDatabaseRow(input: DatabaseConnection & {
   table: string
   values: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/insert', input, signal)
+  // 序列化失败发生在发送边界之前，保持本地错误，不能误判为结果未知。
+  const body = JSON.stringify(input)
+  return requestDatabaseInsert(body, signal)
 }
 
 export async function updateDatabaseRow(input: DatabaseConnection & {

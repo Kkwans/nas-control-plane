@@ -43,6 +43,7 @@ import {
   type QueryResult,
 } from '@/api/database'
 import { NcpApiError } from '@/api/system'
+import { DatabaseInsertOutcomeUnknownError } from '@/api/databaseInsertOutcome'
 import { DatabaseValueError, databaseEditorKind, databaseEditorValue, databaseWriteMode, resolveDatabaseValue } from '@/domain/database/valueConversion'
 import { classifySqlRisk } from '@/domain/database/sqlRisk'
 import DatabaseErrorPanel, { type DatabaseErrorState } from '@/components/DatabaseErrorPanel.vue'
@@ -53,7 +54,7 @@ import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
 import { useDatabaseStore } from '@/stores/database'
 import { useListPreference } from '@/composables/useListPreference'
-import { isAbortError } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 type TableMode = 'data' | 'overview' | 'structure' | 'definition' | 'sql'
 type RowDialogMode = 'insert' | 'edit'
@@ -119,6 +120,14 @@ const rowForm = ref<Record<string, string>>({})
 const rowNullFields = ref<Record<string, boolean>>({})
 const originalKeys = ref<Record<string, DatabaseValue>>({})
 const mutationPending = ref(false)
+const rowDraftGeneration = ref(0)
+const insertDraftGeneration = ref<number | null>(null)
+// 仅在当前页面实例内保留目标及状态，不保存提交值、连接凭据或原始异常。
+// 这不是后端幂等：完整重载/页面卸载后不能依靠此锁判断此前是否已写入。
+const insertAttempts = ref(new Map<string, 'pending' | 'unknown'>())
+const insertRefreshError = ref<DatabaseErrorState | null>(null)
+let insertRefreshSequence = 0
+let insertController: { key: string; controller: AbortController } | null = null
 const sql = ref('')
 const resultMode = ref<DatabaseQueryResultMode>('auto')
 const queryResult = ref<QueryResult | null>(null)
@@ -141,7 +150,13 @@ let mutationController: AbortController | null = null
 
 const columns = computed(() => table.value?.columns ?? [])
 const primaryKeyColumns = computed(() => columns.value.filter((column) => column.primaryKey))
-const routeKey = computed(() => `${sourceId.value}|${schema.value}|${tableName.value}`)
+// schema / 表名可合法包含分隔符，使用元组编码避免不同目标共享草稿归属。
+const routeKey = computed(() => JSON.stringify([sourceId.value, schema.value, tableName.value]))
+const insertTargetKey = routeKey
+const insertStatus = computed(() => insertAttempts.value.get(insertTargetKey.value))
+const insertPending = computed(() => insertStatus.value === 'pending')
+const insertUnknown = computed(() => insertStatus.value === 'unknown')
+const rowDraftPending = computed(() => rowDialogMode.value === 'insert' && insertPending.value && insertDraftGeneration.value === rowDraftGeneration.value)
 const stablePagination = computed(() => tableRows.value?.ordering?.stable !== false)
 const isView = computed(() => table.value?.type.toLowerCase() === 'view')
 const canInsertRows = computed(() => Boolean(table.value) && !isView.value)
@@ -212,6 +227,10 @@ async function initialize() {
 }
 
 function resetRouteState() {
+  interruptInsert()
+  clearRowDraft()
+  insertRefreshSequence += 1
+  insertRefreshError.value = null
   rowsSequence += 1
   querySequence += 1
   mutationSequence += 1
@@ -248,12 +267,13 @@ function connection() {
   return databaseStore.connection(sourceId.value)
 }
 
-async function refreshRows(reportError = true, requestedOffset = offset.value): Promise<RowsRefreshOutcome> {
+async function refreshRows(reportError = true, requestedOffset = offset.value, session?: SessionContext): Promise<RowsRefreshOutcome> {
   if (!table.value) return { status: 'stale' }
   const sequence = ++rowsSequence
   const requestKey = routeKey.value
   rowsController?.abort()
   const controller = new AbortController()
+  const signal = session ? AbortSignal.any([controller.signal, session.signal]) : controller.signal
   rowsController = controller
   rowsLoading.value = true
   clearError()
@@ -266,14 +286,17 @@ async function refreshRows(reportError = true, requestedOffset = offset.value): 
       offset: requestedOffset,
       sortColumn: sortColumn.value,
       sortDirection: sortDirection.value,
-    }, controller.signal)
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted) return { status: 'stale' }
+    }, signal)
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || session && !isCurrentSession(session.generation)) return { status: 'stale' }
     tableRows.value = result
     offset.value = requestedOffset
-    if (reportError) queryRefreshError.value = null
+    if (reportError) {
+      queryRefreshError.value = null
+      insertRefreshError.value = null
+    }
     return { status: 'success' }
   } catch (error) {
-    if (sequence !== rowsSequence || routeKey.value !== requestKey || controller.signal.aborted || isAbortError(error)) return { status: 'stale' }
+    if (sequence !== rowsSequence || routeKey.value !== requestKey || signal.aborted || session && !isCurrentSession(session.generation) || isAbortError(error)) return { status: 'stale' }
     const failure = toErrorState(error, '表数据读取失败。')
     if (reportError) errorState.value = failure
     return { status: 'failed', error: failure }
@@ -307,6 +330,7 @@ async function onSortChange(event: { prop?: string | null; order?: 'ascending' |
 
 function openInsert() {
   if (!canInsertRows.value) return
+  rowDraftGeneration.value += 1
   rowDialogMode.value = 'insert'
   rowForm.value = Object.fromEntries(columns.value.map((column) => [column.name, '']))
   rowNullFields.value = Object.fromEntries(columns.value.map((column) => [column.name, false]))
@@ -314,8 +338,16 @@ function openInsert() {
   rowDialogOpen.value = true
 }
 
+function clearRowDraft() {
+  rowDraftGeneration.value += 1
+  rowForm.value = {}
+  rowNullFields.value = {}
+  originalKeys.value = {}
+}
+
 function openEdit(row: Record<string, DatabaseValue>) {
   if (!canEditRows.value) return
+  rowDraftGeneration.value += 1
   rowDialogMode.value = 'edit'
   rowForm.value = Object.fromEntries(columns.value.map((column) => [
     column.name,
@@ -329,34 +361,97 @@ function openEdit(row: Record<string, DatabaseValue>) {
   rowDialogOpen.value = true
 }
 
+function rowValues(dialogMode: RowDialogMode) {
+  return Object.fromEntries(columns.value.flatMap((column) => {
+    const rawValue = rowForm.value[column.name] ?? ''
+    const nullSelected = rowNullFields.value[column.name] === true
+    const writeMode = databaseWriteMode(column)
+    if (dialogMode === 'insert' && rawValue.trim() === '' && writeMode === 'required' && !nullSelected) {
+      throw new DatabaseValueError(`字段「${column.name}」为必填项，请填写值或显式选择 NULL。`)
+    }
+    if (dialogMode === 'insert' && rawValue === '' && writeMode !== 'required') return []
+    return [[column.name, resolveDatabaseValue(rawValue, column, nullSelected)]]
+  }))
+}
+
+function interruptInsert() {
+  if (!insertController) return
+  // 中止只结束客户端观察，不证明服务端没有提交；返回该目标时仍须阻止重放。
+  insertAttempts.value.set(insertController.key, 'unknown')
+  insertController.controller.abort()
+  insertController = null
+}
+
+async function submitInsert() {
+  if (!table.value || insertStatus.value) return
+  const target = Object.freeze({ sourceId: sourceId.value, schema: table.value.schema, table: table.value.name })
+  const key = insertTargetKey.value
+  const routeGeneration = routeSequence
+  const draftGeneration = rowDraftGeneration.value
+  const refreshSequence = ++insertRefreshSequence
+  const session = captureSession()
+  const controller = new AbortController()
+  const signal = AbortSignal.any([controller.signal, session.signal])
+  const markUnknown = () => { insertAttempts.value.set(key, 'unknown') }
+  // 在首个 await 前占用目标；按钮尚未重绘时的重复调用也不能发出第二次写入。
+  insertAttempts.value.set(key, 'pending')
+  insertDraftGeneration.value = draftGeneration
+  insertController = { key, controller }
+  signal.addEventListener('abort', markUnknown, { once: true })
+  insertRefreshError.value = null
+  clearError()
+  try {
+    const values = rowValues('insert')
+    await insertDatabaseRow({ ...databaseStore.connection(target.sourceId), ...target, values }, signal)
+  } catch (error) {
+    if (error instanceof DatabaseInsertOutcomeUnknownError) {
+      insertAttempts.value.set(key, 'unknown')
+    } else {
+      // 发送后的不确定异常已由 INSERT transport 归类；稍后的中止不能把本地失败改成已发送。
+      insertAttempts.value.delete(key)
+      if (isCurrentSession(session.generation) && routeGeneration === routeSequence && key === insertTargetKey.value && draftGeneration === rowDraftGeneration.value) {
+        errorState.value = error instanceof NcpApiError
+          ? { code: error.code, message: error.message, nextStep: '新增请求未提交到数据库执行；请处理请求或登录问题后重新提交。' }
+          : toErrorState(error, '新增请求未发送，请检查字段值。')
+      }
+    }
+    return
+  } finally {
+    signal.removeEventListener('abort', markUnknown)
+    if (insertController?.controller === controller) insertController = null
+  }
+  if (signal.aborted || !isCurrentSession(session.generation)) return
+  insertAttempts.value.delete(key)
+  if (routeGeneration !== routeSequence || key !== insertTargetKey.value) return
+  ElMessage.success('新增请求已执行')
+  if (draftGeneration === rowDraftGeneration.value) rowDialogOpen.value = false
+  // 确认写入与后续只读刷新分别报告；读失败不降格为未知，也不能重放 INSERT。
+  const refresh = await refreshRows(false, offset.value, session)
+  if (isCurrentSession(session.generation) && routeGeneration === routeSequence && key === insertTargetKey.value && refreshSequence === insertRefreshSequence && refresh.status === 'failed') {
+    insertRefreshError.value = refresh.error
+  }
+}
+
 async function submitRow() {
-  if (!table.value || !canInsertRows.value) return
+  if (!table.value || !canInsertRows.value || !rowDialogOpen.value || mutationPending.value) return
+  if (rowDialogMode.value === 'insert') {
+    await submitInsert()
+    return
+  }
   const sequence = ++mutationSequence
   const requestKey = routeKey.value
+  const draftGeneration = rowDraftGeneration.value
   mutationController?.abort()
   const controller = new AbortController()
   mutationController = controller
   mutationPending.value = true
   clearError()
   try {
-    const values = Object.fromEntries(columns.value.flatMap((column) => {
-      const rawValue = rowForm.value[column.name] ?? ''
-      const nullSelected = rowNullFields.value[column.name] === true
-      const writeMode = databaseWriteMode(column)
-      if (rowDialogMode.value === 'insert' && rawValue.trim() === '' && writeMode === 'required' && !nullSelected) {
-        throw new DatabaseValueError(`字段「${column.name}」为必填项，请填写值或显式选择 NULL。`)
-      }
-      if (rowDialogMode.value === 'insert' && rawValue === '' && writeMode !== 'required') return []
-      return [[column.name, resolveDatabaseValue(rawValue, column, nullSelected)]]
-    }))
-    if (rowDialogMode.value === 'insert') {
-      await insertDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values }, controller.signal)
-    } else {
-      await updateDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values, keys: originalKeys.value }, controller.signal)
-    }
+    const values = rowValues('edit')
+    await updateDatabaseRow({ ...connection(), schema: table.value.schema, table: table.value.name, values, keys: originalKeys.value }, controller.signal)
     if (sequence !== mutationSequence || routeKey.value !== requestKey || controller.signal.aborted) return
-    ElMessage.success(rowDialogMode.value === 'insert' ? '数据行已新增' : '数据行已更新')
-    rowDialogOpen.value = false
+    ElMessage.success('数据行已更新')
+    if (draftGeneration === rowDraftGeneration.value) rowDialogOpen.value = false
     await refreshRows()
   } catch (error) {
     if (sequence === mutationSequence && routeKey.value === requestKey && !isAbortError(error)) setError(error, '数据写入失败。')
@@ -559,6 +654,7 @@ function clearError() {
 }
 
 watch(routeKey, () => { void initialize() }, { immediate: true })
+watch(rowDialogOpen, (open) => { if (!open) rowDraftGeneration.value += 1 }, { flush: 'sync' })
 watch(pageSize, (next, previous) => {
   if (next === previous) return
   invalidateRowsPage()
@@ -566,6 +662,8 @@ watch(pageSize, (next, previous) => {
   void refreshRows()
 })
 onBeforeUnmount(() => {
+  interruptInsert()
+  clearRowDraft()
   routeSequence += 1
   rowsSequence += 1
   querySequence += 1
@@ -587,6 +685,16 @@ onBeforeUnmount(() => {
     </WorkspaceHeader>
 
     <DatabaseErrorPanel v-if="errorState" title="数据表操作失败" :error="errorState" />
+    <div v-if="insertUnknown" class="insert-outcome-warning" role="alert">
+      <strong>新增结果未确认，可能已生效。</strong>
+      <span>已暂停当前目标的再次新增。草稿仍可查看；刷新仅重新读取数据，不能证明此次新增成功或失败，也不会解除保护。</span>
+      <small>请独立核对数据库状态，勿重复提交。保护仅保留在当前页面实例；完整重载或离开此页面后不再保留，服务端尚无幂等保障。</small>
+    </div>
+    <div v-if="insertRefreshError" class="insert-outcome-warning" role="alert">
+      <strong>新增请求已执行，表数据刷新失败。</strong>
+      <span>{{ insertRefreshError.message }} 请只刷新表数据，勿重复新增。</span>
+      <small>代码 {{ insertRefreshError.code }}</small>
+    </div>
 
     <div class="table-connection-note" role="note">
       <Info :size="16" aria-hidden="true" />
@@ -713,13 +821,15 @@ onBeforeUnmount(() => {
 
     <ElDialog v-model="rowDialogOpen" :title="rowDialogMode === 'insert' ? '新增数据行' : '编辑数据行'" width="min(760px, calc(100vw - 28px))">
       <div class="row-dialog-context"><component :is="tableTypeIcon(table.type)" :size="18" /><span><strong>{{ table.name }}</strong><small>保存后将直接写入数据库</small></span></div>
+      <div v-if="rowDialogMode === 'insert' && insertUnknown" class="insert-outcome-warning" role="alert"><strong>新增结果未确认，可能已生效。</strong><span>当前目标已暂停再次新增。请先只读核对数据库状态，刷新不会解除保护。</span></div>
+      <div v-else-if="rowDialogMode === 'insert' && insertPending" class="object-warning" role="status">当前目标的新增请求正在等待结果，请勿重复提交。</div>
       <ElForm class="row-form" label-position="top">
         <ElFormItem v-for="column in columns" :key="column.name">
-          <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable && !isBooleanColumn(column)" v-model="rowNullFields[column.name]" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
-          <DatabaseCellEditor :model-value="rowForm[column.name] ?? ''" :null-selected="rowNullFields[column.name] === true" :column="column" :disabled="rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" @update:model-value="rowForm[column.name] = $event" @update:null-selected="rowNullFields[column.name] = $event" />
+          <template #label><span class="form-label"><span>{{ column.name }}<small>{{ column.dataType }}<template v-if="column.primaryKey"> / 主键</template></small></span><ElSwitch v-if="column.nullable && !isBooleanColumn(column)" v-model="rowNullFields[column.name]" :disabled="rowDraftPending" size="small" inline-prompt active-text="NULL" inactive-text="值" /></span></template>
+          <DatabaseCellEditor :model-value="rowForm[column.name] ?? ''" :null-selected="rowNullFields[column.name] === true" :column="column" :disabled="rowDraftPending || rowNullFields[column.name] || (rowDialogMode === 'edit' && column.primaryKey)" :sensitive="isSensitiveColumn(column.name)" @update:model-value="rowForm[column.name] = $event" @update:null-selected="rowNullFields[column.name] = $event" />
         </ElFormItem>
       </ElForm>
-      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
+      <template #footer><ElButton @click="rowDialogOpen = false">取消</ElButton><ElButton type="primary" :loading="mutationPending || (rowDialogMode === 'insert' && insertPending)" :disabled="rowDialogMode === 'insert' && insertUnknown" @click="submitRow">{{ rowDialogMode === 'insert' ? '新增数据行' : '保存修改' }}</ElButton></template>
     </ElDialog>
 
     <ConfirmDangerDialog
@@ -745,6 +855,18 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.insert-outcome-warning {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--ncp-warning-border);
+  border-radius: var(--ncp-radius-md);
+  background: var(--ncp-warning-soft);
+  color: var(--ncp-warning-strong);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
 .sql-confirmation-snapshot {
   display: grid;
   min-width: 0;
