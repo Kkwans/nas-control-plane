@@ -44,6 +44,12 @@ function optional<T>(value: unknown, decode: (value: unknown) => T): T | undefin
   return value == null ? undefined : decode(value)
 }
 
+function optionalMember<const T extends readonly string[]>(value: unknown, values: T): T[number] | undefined {
+  // 旧 Agent 缺失的可选枚举经当前 Go DTO/HTTP 编码后会变为精确空串。
+  // 仅将该零值视为缺省；空白与未知非空值仍须通过枚举校验。
+  return value == null || value === '' ? undefined : member(value, values)
+}
+
 function slice<T>(value: unknown, decode: (value: unknown) => T, omitempty = false): T[] {
   // Go 的 nil slice 编码为 null；只有 Table.columns 声明了 omitempty。
   if (value === null || omitempty && value === undefined) return []
@@ -73,8 +79,8 @@ function source(value: unknown): DatabaseSource {
     defaultDatabase: optional(input.defaultDatabase, string),
     requiresLogin: boolean(input.requiresLogin),
     status: string(input.status),
-    reachability: optional(input.reachability, (item) => member(item, ['host', 'container-internal', 'unreachable'])),
-    evidence: optional(input.evidence, (item) => member(item, ['published-port', 'host-network', 'host-path', 'database-url', 'none'])),
+    reachability: optionalMember(input.reachability, ['host', 'container-internal', 'unreachable']),
+    evidence: optionalMember(input.evidence, ['published-port', 'host-network', 'host-path', 'database-url', 'none']),
     tags: slice(input.tags, string),
   }
 }
@@ -90,7 +96,7 @@ function column(value: unknown): DatabaseColumn {
     default: input.default === undefined ? undefined : databaseValue(input.default),
     position: integer(input.position, 0),
     // 旧 Agent 缺失此字段时，沿用调用方的 required 保守回退。
-    writeMode: optional(input.writeMode, (item) => member(item, ['required', 'optional-default', 'server-generated'])),
+    writeMode: optionalMember(input.writeMode, ['required', 'optional-default', 'server-generated']),
   }
 }
 

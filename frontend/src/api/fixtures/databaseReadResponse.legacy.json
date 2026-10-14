@@ -1,0 +1,172 @@
+{
+  "discovery": {
+    "wire": {
+      "collectedAt": "2026-10-14T00:00:00Z",
+      "sources": [
+        {
+          "category": "project",
+          "driver": "sqlite",
+          "id": "legacy-sqlite",
+          "location": "/fixture.sqlite",
+          "module": "fixture",
+          "name": "Legacy SQLite",
+          "path": "/fixture.sqlite",
+          "project": "legacy",
+          "requiresLogin": false,
+          "status": "available",
+          "tags": [
+            "SQLite"
+          ]
+        }
+      ]
+    },
+    "http": {
+      "collectedAt": "2026-10-14T00:00:00Z",
+      "sources": [
+        {
+          "id": "legacy-sqlite",
+          "name": "Legacy SQLite",
+          "driver": "sqlite",
+          "category": "project",
+          "project": "legacy",
+          "module": "fixture",
+          "location": "/fixture.sqlite",
+          "path": "/fixture.sqlite",
+          "requiresLogin": false,
+          "status": "available",
+          "reachability": "",
+          "evidence": "",
+          "tags": [
+            "SQLite"
+          ]
+        }
+      ]
+    }
+  },
+  "catalog": {
+    "wire": {
+      "source": {
+        "category": "project",
+        "driver": "sqlite",
+        "id": "legacy-sqlite",
+        "location": "/fixture.sqlite",
+        "module": "fixture",
+        "name": "Legacy SQLite",
+        "path": "/fixture.sqlite",
+        "project": "legacy",
+        "requiresLogin": false,
+        "status": "available",
+        "tags": [
+          "SQLite"
+        ]
+      },
+      "tables": [
+        {
+          "columns": [
+            {
+              "dataType": "INTEGER",
+              "name": "id",
+              "nullable": false,
+              "position": 1,
+              "primaryKey": true
+            }
+          ],
+          "name": "fixture",
+          "schema": "",
+          "type": "table"
+        }
+      ]
+    },
+    "http": {
+      "source": {
+        "id": "legacy-sqlite",
+        "name": "Legacy SQLite",
+        "driver": "sqlite",
+        "category": "project",
+        "project": "legacy",
+        "module": "fixture",
+        "location": "/fixture.sqlite",
+        "path": "/fixture.sqlite",
+        "requiresLogin": false,
+        "status": "available",
+        "reachability": "",
+        "evidence": "",
+        "tags": [
+          "SQLite"
+        ]
+      },
+      "tables": [
+        {
+          "schema": "",
+          "name": "fixture",
+          "type": "table",
+          "columns": [
+            {
+              "name": "id",
+              "dataType": "INTEGER",
+              "nullable": false,
+              "primaryKey": true,
+              "position": 1,
+              "writeMode": ""
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "rows": {
+    "wire": {
+      "hasMore": false,
+      "limit": 50,
+      "offset": 0,
+      "rows": [
+        {
+          "id": 1
+        }
+      ],
+      "table": {
+        "columns": [
+          {
+            "dataType": "INTEGER",
+            "name": "id",
+            "nullable": false,
+            "position": 1,
+            "primaryKey": true
+          }
+        ],
+        "name": "fixture",
+        "schema": "",
+        "type": "BASE TABLE"
+      }
+    },
+    "http": {
+      "table": {
+        "schema": "",
+        "name": "fixture",
+        "type": "BASE TABLE",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "INTEGER",
+            "nullable": false,
+            "primaryKey": true,
+            "position": 1,
+            "writeMode": ""
+          }
+        ]
+      },
+      "rows": [
+        {
+          "id": 1
+        }
+      ],
+      "limit": 50,
+      "offset": 0,
+      "hasMore": false,
+      "ordering": {
+        "stable": false,
+        "columns": null
+      }
+    }
+  }
+}

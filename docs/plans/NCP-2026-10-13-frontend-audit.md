@@ -413,3 +413,13 @@ UPDATE/DELETE新增九项浏览器fixture：390/1440提交后断网或损坏200�
 ### 行修改替代图闭环（2026-10-14 01:06 UTC）
 
 20acd69精确CI38492638125完整通过2229单元/100文件、393浏览器及Go/Compose。官方7,997,542字节ZIP、313源码hash与八PNG hash/CRC/路径核验通过，八图均实看，主任务另复看390表格。八份完整axe均0violation，保留四类incomplete；原滚动聚焦/刷新文字对比度失败已消失。table语义fields为空且rawDiagnostics仍保留隐藏dialog，草稿/保存禁用与表格回读符合预期。截图/axe前后状态和请求稳定，每组一次写入，读取1→2。此验收关闭6ce的四项失败，不抹掉其历史；schema新增六图仍须独立验收。
+
+### 旧 Agent 读取元数据兼容（2026-10-14 01:18 UTC）
+
+0bdd252 后续独立审查确认混合版本缺口：旧 Agent 缺失 reachability/evidence/writeMode 的 wire 数据可直接被前端接受，但经当前 callDatabaseClient、Go DTO 与真实 HTTP handler 后，三个无 omitempty 字段成为精确空字符串，三类 HTTP 200 响应反而被新 decoder 拒绝。使用纯 RPC callback、httptest recorder 复现，不启动监听或访问 NAS。
+
+修复限定为这三个可选枚举将精确空串归一为 undefined，沿用 required 等既有保守回退；空白及未知非空值继续拒绝，driver/category 必填约束不变。用共享旧 wire/HTTP fixture 绑定 Go codec 与前端回归，避免只验证理想化缺省对象。实施与独立复审进行中。
+
+另外，15组当前生产者/纯helper矩阵经真实 codec 与 HTTP handler 后均被原版 decoder 接受，涵盖三驱动元数据、排序/nil集合、PG -1、精确数字文本和SQLite特殊列名；这是模拟DTO与纯转换证据，不等同于真实MySQL/PostgreSQL连接验收。
+
+兼容修复验收（01:24 UTC）：五源码/测试/fixture文件已冻结。独立74项前后及负对照通过，原版对三份真实旧HTTP产物拒绝、补丁接受，当前15组矩阵不回归；最终共享fixture中Rows保留实际BASE TABLE、Catalog为table。主任务精确快照2392单元/104文件、全量lint、Vue类型、生产构建、dist权限与540KiB预算通过（最大518.0KiB）。fixture类型保真修正后，145项相关前端与三个Go codec子例再通过；最终源码与快照一致。未部署或访问NAS。

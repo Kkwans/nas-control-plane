@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
 import { NcpApiError } from './systemTransport'
+import { databaseWriteMode } from '@/domain/database/valueConversion'
+import legacyResponses from './fixtures/databaseReadResponse.legacy.json'
 
 const source = {
   id: 'fixture', name: '数据库', driver: 'sqlite', category: 'project', project: '', module: '',
@@ -60,8 +62,50 @@ describe('数据库读取响应归一', () => {
       expect(decodedSource.source.reachability).toBeUndefined()
       expect(decodedSource.tables[0]?.rowCount).toBeUndefined()
       expect(decodedSource.tables[0]?.columns[0]?.writeMode).toBeUndefined()
+      expect(databaseWriteMode(decodedSource.tables[0]!.columns[0]!)).toBe('required')
       expect(decodeDatabaseRows({ ...rows, ordering: absent }).ordering).toBeUndefined()
     }
+  })
+
+  it.each([undefined, null, ''])('三个可选枚举仅对缺省和精确空串 %s 采用保守回退', (absent) => {
+    const inputSource = { ...source, reachability: absent, evidence: absent }
+    const inputTable = { ...table, columns: [{ ...column, writeMode: absent }] }
+    const discovery = decodeDatabaseDiscovery({ collectedAt: '', sources: [inputSource] })
+    const catalog = decodeDatabaseCatalog({ source: inputSource, tables: [inputTable] })
+    const result = decodeDatabaseRows({ ...rows, table: inputTable })
+    for (const item of [discovery.sources[0]!, catalog.source]) {
+      expect(item.reachability).toBeUndefined()
+      expect(item.evidence).toBeUndefined()
+    }
+    for (const item of [catalog.tables[0]!.columns[0]!, result.table.columns[0]!]) {
+      expect(item.writeMode).toBeUndefined()
+      expect(databaseWriteMode(item)).toBe('required')
+    }
+    expect(inputSource.reachability).toBe(absent)
+    expect(inputTable.columns[0]!.writeMode).toBe(absent)
+  })
+
+  it('真实 Go codec/HTTP fixture 与旧 Agent 原 wire 解码后的保守元数据一致', () => {
+    const discovery = decodeDatabaseDiscovery(legacyResponses.discovery.http)
+    const catalog = decodeDatabaseCatalog(legacyResponses.catalog.http)
+    const result = decodeDatabaseRows(legacyResponses.rows.http)
+    expect(discovery).toEqual(decodeDatabaseDiscovery(legacyResponses.discovery.wire))
+    expect(catalog).toEqual(decodeDatabaseCatalog(legacyResponses.catalog.wire))
+    expect({ ...result, ordering: undefined }).toEqual(decodeDatabaseRows(legacyResponses.rows.wire))
+    expect(result.ordering).toEqual({ stable: false, columns: [] })
+    expect(catalog.source.reachability).toBeUndefined()
+    expect(catalog.source.evidence).toBeUndefined()
+    expect(result.table.columns[0]?.writeMode).toBeUndefined()
+    expect(databaseWriteMode(result.table.columns[0]!)).toBe('required')
+  })
+
+  it('普通可选字符串的合法空文本不会套用枚举缺省规则', () => {
+    const catalog = decodeDatabaseCatalog({
+      source: { ...source, path: '', host: '', defaultDatabase: '' },
+      tables: [{ ...table, createdAt: '', definition: '' }],
+    })
+    expect(catalog.source).toMatchObject({ path: '', host: '', defaultDatabase: '' })
+    expect(catalog.tables[0]).toMatchObject({ createdAt: '', definition: '' })
   })
 
   it.each(['table', 'view', 'virtual', 'unknown', 'BASE TABLE', ''])('保留对象类型 %s 和不常见合法标识符', (type) => {
@@ -131,6 +175,25 @@ describe('数据库读取畸形响应拒绝', () => {
     expectInvalid(() => decodeDatabaseDiscovery({ collectedAt: '', sources: [{ ...source, ...fields }] }))
   })
 
+  it.each([undefined, null, '', ' ', '\t\n', 'secret-fixture', false, 0])('必需 driver/category 不接受缺省或无效值 %s', (value) => {
+    for (const key of ['driver', 'category']) {
+      const invalidSource = { ...source, [key]: value }
+      expectInvalid(() => decodeDatabaseDiscovery({ collectedAt: '', sources: [invalidSource] }))
+      expectInvalid(() => decodeDatabaseCatalog({ source: invalidSource, tables: [] }))
+    }
+  })
+
+  it.each([' ', '\t\n', ' host', 'required ', 'secret-fixture', false, 0, [], {}])('可选枚举不修剪或放过未知非空值 %j', (value) => {
+    for (const key of ['reachability', 'evidence']) {
+      const invalidSource = { ...source, [key]: value }
+      expectInvalid(() => decodeDatabaseDiscovery({ collectedAt: '', sources: [invalidSource] }))
+      expectInvalid(() => decodeDatabaseCatalog({ source: invalidSource, tables: [] }))
+    }
+    const invalidTable = { ...table, columns: [{ ...column, writeMode: value }] }
+    expectInvalid(() => decodeDatabaseCatalog({ source, tables: [invalidTable] }))
+    expectInvalid(() => decodeDatabaseRows({ ...rows, table: invalidTable }))
+  })
+
   it.each([
     { schema: null }, { name: [] }, { type: 17 }, { columns: {} }, { columns: [null] },
     { rowCount: 1.5 }, { rowCount: '10' }, { sizeBytes: 0.5 }, { createdAt: 1 }, { definition: [] },
@@ -141,7 +204,7 @@ describe('数据库读取畸形响应拒绝', () => {
 
   it.each([
     { name: 1 }, { dataType: null }, { nullable: 'false' }, { primaryKey: 1 }, { position: -1 }, { position: 1.5 },
-    { position: undefined }, { writeMode: 'generated' }, { writeMode: '' }, { default: [] }, { default: { password: 'secret-fixture' } },
+    { position: undefined }, { writeMode: 'generated' }, { default: [] }, { default: { password: 'secret-fixture' } },
   ])('拒绝无效写入列元数据 %j', (fields) => {
     const malformedTable = { ...table, columns: [{ ...column, ...fields }] }
     expectInvalid(() => decodeDatabaseCatalog({ source, tables: [malformedTable] }))

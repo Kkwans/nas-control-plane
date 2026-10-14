@@ -3,6 +3,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { discoverDatabases, loadDatabaseCatalog, loadDatabaseRows } from './database'
 import { databaseProjectKey, useDatabaseStore } from '@/stores/database'
 import { invalidateSession } from '@/session/sessionLifecycle'
+import { databaseWriteMode } from '@/domain/database/valueConversion'
+import legacyResponses from './fixtures/databaseReadResponse.legacy.json'
 
 vi.mock('@/api/control', () => ({
   requestDatabaseProjectPreferences: vi.fn().mockResolvedValue([]),
@@ -32,6 +34,29 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('数据库读取 API 解码边界', () => {
+  it('接受旧 Agent 经当前 Go codec/HTTP 展开的空枚举，并保留 required 回退', async () => {
+    // 与 agentsocket 的无监听回归共用真实 Go DTO/HTTP 产物，不能只模拟缺字段。
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(legacyResponses.discovery.http))
+      .mockResolvedValueOnce(response(legacyResponses.catalog.http))
+      .mockResolvedValueOnce(response(legacyResponses.rows.http))
+    vi.stubGlobal('fetch', fetcher)
+    const resultDiscovery = await discoverDatabases()
+    const resultCatalog = await loadDatabaseCatalog({ sourceId: 'legacy-sqlite' })
+    const resultRows = await loadDatabaseRows({ sourceId: 'legacy-sqlite', table: 'fixture' })
+    for (const item of [resultDiscovery.sources[0]!, resultCatalog.source]) {
+      expect(item.reachability).toBeUndefined()
+      expect(item.evidence).toBeUndefined()
+    }
+    for (const item of [resultCatalog.tables[0]!.columns[0]!, resultRows.table.columns[0]!]) {
+      expect(item.writeMode).toBeUndefined()
+      expect(databaseWriteMode(item)).toBe('required')
+    }
+    expect(resultRows.rows).toEqual([{ id: 1 }])
+    expect(resultRows.ordering).toEqual({ stable: false, columns: [] })
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
   it('三类请求只派发一次，并保留现有请求体与取消信号', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response(discovery))
@@ -70,6 +95,19 @@ describe('数据库读取 API 解码边界', () => {
     expect(result.rows.length).toBe(0)
   })
 
+  it.each([' ', '\t\n', 'generated', 'secret-fixture', false, 0])('旧响应中的 writeMode 坏值 %j 经 API 仍拒绝且只派发一次', async (writeMode) => {
+    const payload = legacyResponses.rows.http
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({
+      ...payload, table: { ...payload.table, columns: [{ ...payload.table.columns[0], writeMode }] },
+    }))
+    vi.stubGlobal('fetch', fetcher)
+    const error = await loadDatabaseRows({ sourceId: 'legacy-sqlite', table: 'fixture' }).catch((error: unknown) => error)
+    expect(error).toMatchObject({ code: 'DATABASE_RESPONSE_INVALID', message: '数据库服务返回了无法识别的数据。' })
+    expect(error).not.toHaveProperty('cause')
+    expect(JSON.stringify(error)).not.toContain('secret-fixture')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it('有效行字段文本和原型样式字段跨 JSON 边界原样保留', async () => {
     const row = JSON.parse('{"id":"9007199254740993","amount":"1.234567890123456789002500","__proto__":"合法列","":false}')
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(response({ ...rows, rows: [row] })))
@@ -96,6 +134,63 @@ describe('数据库读取 API 解码边界', () => {
 })
 
 describe('真实 API 到数据库 store 的发布边界', () => {
+  it.each([
+    { reachability: ' ' }, { reachability: 'secret-fixture' },
+    { evidence: '\t\n' }, { evidence: 'secret-fixture' },
+    { driver: '' }, { category: '' },
+  ])('旧 discovery 正常发布，坏枚举 %j 保留最后有效来源且能恢复', async (fields) => {
+    const payload = legacyResponses.discovery.http
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(payload))
+      .mockResolvedValueOnce(response({ ...payload, collectedAt: 'changed', sources: [{ ...payload.sources[0], ...fields }] }))
+      .mockResolvedValueOnce(response({ ...payload, collectedAt: 'recovered' }))
+    vi.stubGlobal('fetch', fetcher)
+    const store = useDatabaseStore()
+    await store.refreshDiscovery()
+    const previous = store.sources
+    expect(store.sources[0]?.reachability).toBeUndefined()
+    expect(store.sources[0]?.evidence).toBeUndefined()
+    expect(databaseProjectKey(store.sources[0]!)).toBe('project:legacy')
+    await expect(store.refreshDiscovery()).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
+    expect(store.sources).toBe(previous)
+    expect(store.collectedAt).toBe(payload.collectedAt)
+    expect(store.loading).toBe(false)
+    await store.refreshDiscovery()
+    expect(store.collectedAt).toBe('recovered')
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([' ', '\t\n', 'secret-fixture'])('旧 catalog 正常发布，writeMode 坏值 %j 不覆盖目录或新凭据', async (writeMode) => {
+    const payload = legacyResponses.catalog.http
+    const malformed = {
+      ...payload, tables: [{ ...payload.tables[0], columns: [{ ...payload.tables[0]!.columns[0], writeMode }] }],
+    }
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(payload))
+      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(malformed))
+      .mockResolvedValueOnce(response(malformed))
+      .mockResolvedValueOnce(response(payload))
+    vi.stubGlobal('fetch', fetcher)
+    const store = useDatabaseStore()
+    await store.connect('legacy-sqlite', { username: 'previous' })
+    const previous = store.catalogs['legacy-sqlite']!
+    expect(previous.source.reachability).toBeUndefined()
+    expect(previous.source.evidence).toBeUndefined()
+    expect(previous.tables[0]?.columns[0]?.writeMode).toBeUndefined()
+    expect(databaseWriteMode(previous.tables[0]!.columns[0]!)).toBe('required')
+    await expect(store.connect('legacy-sqlite', { username: 'new-user' })).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
+    expect(store.catalogs['legacy-sqlite']).toBe(previous)
+    expect(store.credentials['legacy-sqlite']).toEqual({ username: 'previous' })
+    await expect(store.loadCatalog('legacy-sqlite')).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
+    expect(store.catalogs['legacy-sqlite']).toBe(previous)
+    expect(store.credentials['legacy-sqlite']).toEqual({ username: 'previous' })
+    await store.loadCatalog('legacy-sqlite')
+    expect(store.catalogs['legacy-sqlite']).toEqual(previous)
+    expect(fetcher).toHaveBeenCalledTimes(6)
+  })
+
   it('畸形 discovery 保留最后有效来源、分组与收集时间，之后可正常恢复', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response(discovery))
