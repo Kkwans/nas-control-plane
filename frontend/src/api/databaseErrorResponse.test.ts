@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  connectDatabase, discoverDatabases, loadDatabaseCatalog, loadDatabaseRows, testDatabaseConnection,
+  discoverDatabases, loadDatabaseCatalog, loadDatabaseRows, testDatabaseConnection,
 } from './database'
 import { NcpApiError } from './systemTransport'
 
@@ -9,7 +9,6 @@ const requests = [
   { name: 'discovery', path: '/api/v1/databases/discovery?refresh=true', method: 'GET', body: undefined, run: (signal?: AbortSignal) => discoverDatabases(true, signal) },
   { name: 'catalog', path: '/api/v1/databases/catalog', method: 'POST', body: connection, run: (signal?: AbortSignal) => loadDatabaseCatalog(connection, signal) },
   { name: 'rows', path: '/api/v1/databases/rows', method: 'POST', body: { ...connection, table: 'sample' }, run: (signal?: AbortSignal) => loadDatabaseRows({ ...connection, table: 'sample' }, signal) },
-  { name: 'connect', path: '/api/v1/databases/connect', method: 'POST', body: connection, run: (signal?: AbortSignal) => connectDatabase(connection, signal) },
   { name: 'test-connection', path: '/api/v1/databases/test-connection', method: 'POST', body: connection, run: (signal?: AbortSignal) => testDatabaseConnection(connection, signal) },
 ]
 const envelope = { code: 'unreachable', message: 'private-read-error', requestId: 'private-request-id' }

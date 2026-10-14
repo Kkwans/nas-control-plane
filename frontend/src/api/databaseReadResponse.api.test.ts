@@ -22,6 +22,7 @@ const table = {
 const rows = { table, rows: [{ id: '9007199254740993' }], limit: 25, offset: 0, hasMore: false }
 const catalog = { source, tables: [table] }
 const discovery = { collectedAt: '2026-10-14T00:00:00Z', sources: [source] }
+const diagnostic = { connected: true, driver: 'sqlite', endpoint: '/fixture.sqlite', operation: 'test_connection', durationMs: 0 }
 
 function response(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status })
@@ -166,9 +167,9 @@ describe('真实 API 到数据库 store 的发布边界', () => {
       ...payload, tables: [{ ...payload.tables[0], columns: [{ ...payload.tables[0]!.columns[0], writeMode }] }],
     }
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(diagnostic))
       .mockResolvedValueOnce(response(payload))
-      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(diagnostic))
       .mockResolvedValueOnce(response(malformed))
       .mockResolvedValueOnce(response(malformed))
       .mockResolvedValueOnce(response(payload))
@@ -180,7 +181,7 @@ describe('真实 API 到数据库 store 的发布边界', () => {
     expect(previous.source.evidence).toBeUndefined()
     expect(previous.tables[0]?.columns[0]?.writeMode).toBeUndefined()
     expect(databaseWriteMode(previous.tables[0]!.columns[0]!)).toBe('required')
-    await expect(store.connect('legacy-sqlite', { username: 'new-user' })).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
+    await expect(store.connect('legacy-sqlite', { username: 'new-user' })).rejects.toMatchObject({ code: 'DATABASE_CONNECTION_CATALOG_FAILED' })
     expect(store.catalogs['legacy-sqlite']).toBe(previous)
     expect(store.credentials['legacy-sqlite']).toEqual({ username: 'previous' })
     await expect(store.loadCatalog('legacy-sqlite')).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
@@ -225,15 +226,15 @@ describe('真实 API 到数据库 store 的发布边界', () => {
 
   it('连接后畸形目录也不能发布新凭据或覆盖有效目录', async () => {
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(diagnostic))
       .mockResolvedValueOnce(response(catalog))
-      .mockResolvedValueOnce(response({ connected: true }))
+      .mockResolvedValueOnce(response(diagnostic))
       .mockResolvedValueOnce(response({ ...catalog, tables: [{ ...table, columns: false }] }))
     vi.stubGlobal('fetch', fetcher)
     const store = useDatabaseStore()
     await store.connect('fixture', { username: 'previous' })
     const previous = store.catalogs.fixture
-    await expect(store.connect('fixture', { username: 'new-user' })).rejects.toMatchObject({ code: 'DATABASE_RESPONSE_INVALID' })
+    await expect(store.connect('fixture', { username: 'new-user' })).rejects.toMatchObject({ code: 'DATABASE_CONNECTION_CATALOG_FAILED' })
     expect(store.catalogs.fixture).toBe(previous)
     expect(store.credentials.fixture).toEqual({ username: 'previous' })
     expect(fetcher).toHaveBeenCalledTimes(4)

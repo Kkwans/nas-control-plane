@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DatabaseConnectionDiagnostic, DatabaseDiscovery, DatabaseSource } from '@/api/database'
 import { NcpApiError } from '@/api/system'
+import { DatabaseConnectionOutcomeUnknownError } from '@/api/databaseConnectionResponse'
 import { invalidateSession } from '@/session/sessionLifecycle'
 import { useDatabaseStore } from '@/stores/database'
 import DatabaseDetailView from './DatabaseDetailView.vue'
@@ -187,4 +188,60 @@ describe('DatabaseDetailView request ownership', () => {
     expect(host.querySelector('.diagnostic-result')).toBeNull()
     expect([...host.querySelectorAll('input')].every((input) => input.value === '')).toBe(true)
   })
+
+  it('未知连接结果保留草稿，不显示失败诊断或自动重连', async () => {
+    mount(); await settle(); await enterCredentials()
+    mocks.connect.mockRejectedValue(new DatabaseConnectionOutcomeUnknownError())
+    host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(host.textContent).toContain('数据库连接结果未确认')
+    expect(host.textContent).toContain('服务端可能已保存本次凭据')
+    expect(host.textContent).not.toContain('数据库连接失败')
+    expect(host.querySelector('.diagnostic-result')).toBeNull()
+    expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+    expect(useDatabaseStore().credentials).toEqual({})
+    expect(useDatabaseStore().catalogs).toEqual({})
+    expect(mocks.catalog).not.toHaveBeenCalled()
+    expect(mocks.connect).toHaveBeenCalledTimes(2)
+    // 不加全局锁；用户看过风险后仍能明确发起一次新连接。
+    expect(button('连接并读取数据表').disabled).toBe(false)
+    await settle(); expect(mocks.connect).toHaveBeenCalledTimes(2)
+  })
+
+  it('测试响应无效显示未确认，不误报凭据已保存或诊断未通过', async () => {
+    mocks.diagnostic.mockRejectedValue(new NcpApiError('DATABASE_RESPONSE_INVALID', '数据库服务返回了无法识别的数据。'))
+    mount(); await settle(); button('测试连接').click(); await settle()
+    expect(host.textContent).toContain('数据库连接诊断结果未确认')
+    expect(host.textContent).toContain('测试连接不会保存凭据')
+    expect(host.textContent).not.toContain('服务端可能已保存')
+    expect(host.textContent).not.toContain('连接诊断未通过')
+    expect(host.querySelector('.diagnostic-result')).toBeNull()
+    expect(mocks.diagnostic).toHaveBeenCalledTimes(1)
+  })
+
+  it('已确认连接的目录失败显示正确阶段，保留草稿', async () => {
+    mount(); await settle(); await enterCredentials()
+    mocks.connect.mockResolvedValue(diagnostic('a'))
+    mocks.catalog.mockRejectedValue(new Error('private-fixture'))
+    host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await settle()
+    expect(host.textContent).toContain('数据库连接已确认，目录读取失败')
+    expect(host.textContent).toContain('服务端可能已保存本次凭据')
+    expect(host.textContent).not.toContain('private-fixture')
+    expect(host.textContent).not.toContain('数据库连接失败')
+    expect(host.querySelector('.diagnostic-result')).toBeNull()
+    expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+    expect(useDatabaseStore().credentials).toEqual({})
+  })
+
+  it.each(['__proto__', 'constructor', 'toString', 'future_failure'])('未知失败码 %s 使用自有文案回退', async (code) => {
+    mocks.diagnostic.mockResolvedValue({ ...diagnostic('a'), connected: false, code })
+    mount(); await settle(); button('测试连接').click(); await settle()
+    expect(host.textContent).toContain('连接诊断未通过。')
+    expect(host.textContent).toContain(code)
+    expect(host.textContent).not.toContain('[object Object]')
+    expect(host.textContent).not.toContain('function Object')
+    expect(host.querySelector('.diagnostic-result--success')).toBeNull()
+  })
+
 })

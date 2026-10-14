@@ -11,6 +11,7 @@ import {
   type DatabaseCredentials,
   type DatabaseSource,
 } from '@/api/database'
+import { DatabaseConnectionCatalogError } from '@/api/databaseConnectionResponse'
 import { captureSession, isAbortError, isCurrentSession, type SessionContext } from '@/session/sessionLifecycle'
 
 export function databaseProjectKey(source: DatabaseSource) {
@@ -104,8 +105,13 @@ export const useDatabaseStore = defineStore('database', () => {
     const diagnostic = await connectDatabase(connectionInput, requestSignal)
     if (requestSignal.aborted || !isCurrentSession(session.generation))
       throw new DOMException('Session invalidated', 'AbortError')
-    if (!diagnostic.connected) throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
-    const catalog = await loadDatabaseCatalog(connectionInput, requestSignal)
+    if (diagnostic.connected !== true) throw new Error(diagnostic.code || 'DATABASE_CONNECTION_FAILED')
+    let catalog: DatabaseCatalog
+    try { catalog = await loadDatabaseCatalog(connectionInput, requestSignal) } catch (error) {
+      if (requestSignal.aborted || !isCurrentSession(session.generation) || isAbortError(error))
+        throw new DOMException('Session invalidated', 'AbortError')
+      throw new DatabaseConnectionCatalogError()
+    }
     if (requestSignal.aborted || !isCurrentSession(session.generation))
       throw new DOMException('Session invalidated', 'AbortError')
     credentials.value = { ...credentials.value, [sourceId]: snapshot }

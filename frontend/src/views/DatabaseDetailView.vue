@@ -48,6 +48,9 @@ const databaseErrorCopy: Record<string, string> = {
   key_rotation_failed: '数据库凭据密钥更新失败。',
   migration_failed: '数据库凭据存储迁移失败。',
   DATABASE_OPERATION_FAILED: '数据库操作失败，请稍后重试。',
+  DATABASE_RESPONSE_INVALID: '数据库服务返回了无法识别的数据，诊断结果尚未确认。',
+  DATABASE_CONNECTION_OUTCOME_UNKNOWN: '连接结果尚未确认，服务端可能已保存本次凭据。请核对后再决定是否重新连接。',
+  DATABASE_CONNECTION_CATALOG_FAILED: '连接已确认，但数据库对象目录读取失败。服务端可能已保存本次凭据。',
 }
 
 const route = useRoute()
@@ -63,6 +66,13 @@ const errorState = ref<DatabaseErrorState | null>(null)
 const errorOperation = ref<'discovery' | 'catalog' | 'connection' | 'diagnostic' | null>(null)
 const credentialDraft = ref<DatabaseCredentials>({})
 const diagnostic = ref<ConnectionDiagnostic | null>(null)
+const connectionOutcomeUnknown = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
+const connectionCatalogFailed = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_CATALOG_FAILED')
+const diagnosticResponseInvalid = computed(() => errorOperation.value === 'diagnostic' && errorState.value?.code === 'DATABASE_RESPONSE_INVALID')
+const errorTitle = computed(() => connectionOutcomeUnknown.value ? '数据库连接结果未确认'
+  : connectionCatalogFailed.value ? '数据库连接已确认，目录读取失败'
+    : diagnosticResponseInvalid.value ? '数据库连接诊断结果未确认'
+      : errorOperation.value === 'diagnostic' ? '数据库连接诊断失败' : '数据库连接失败')
 
 const tables = computed(() => {
   const term = query.value.trim().toLowerCase()
@@ -75,6 +85,9 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 const connectionState = computed(() => {
   if (catalog.value) return { label: '已连接', tone: 'success' as StatusTone, detail: '已读取对象目录，可打开数据表或视图。' }
+  if (connectionOutcomeUnknown.value) return { label: '连接结果未确认', tone: 'warning' as StatusTone, detail: '服务端可能已保存凭据，请核对后再决定是否重新连接。' }
+  if (connectionCatalogFailed.value) return { label: '目录读取失败', tone: 'warning' as StatusTone, detail: '连接已确认，尚未读取到可靠的对象目录。' }
+  if (diagnosticResponseInvalid.value) return { label: '诊断结果未确认', tone: 'warning' as StatusTone, detail: '未收到有效的连接诊断结果。' }
   if (source.value?.reachability === 'container-internal' || source.value?.reachability === 'unreachable') {
     return { label: '主机不可达', tone: 'danger' as StatusTone, detail: '该数据库仅在容器内部可见，未发现可由 Root Agent 访问的宿主端口。' }
   }
@@ -149,7 +162,7 @@ async function initialize() {
       } catch (error) {
         if (!request.current() || isAbortError(error)) return
         if (errorCode(error) !== 'credentials_required') {
-          diagnostic.value = diagnosticFromError(error, current, {})
+          diagnostic.value = connectionResultUnconfirmed(error) ? null : diagnosticFromError(error, current, {})
           setError(error, '自动连接失败，请检查保存的凭据或重新输入。', 'connection')
         }
       }
@@ -198,7 +211,7 @@ async function connectDatabase() {
     }
   } catch (error) {
     if (!request.current() || isAbortError(error)) return
-    diagnostic.value = diagnosticFromError(error, target, credentials)
+    diagnostic.value = connectionResultUnconfirmed(error) ? null : diagnosticFromError(error, target, credentials)
     setError(error, '数据库连接失败，请检查登录信息。', 'connection')
   } finally {
     if (request.current()) loading.value = false
@@ -218,15 +231,19 @@ async function testConnection() {
     diagnostic.value = result
     if (!result.connected) {
       const code = result.code || 'unreachable'
-      setError(new NcpApiError(code, databaseErrorCopy[code] || '连接诊断未通过。'), '连接诊断未通过。', 'diagnostic')
+      setError(new NcpApiError(code, knownErrorCopy(code) || '连接诊断未通过。'), '连接诊断未通过。', 'diagnostic')
     }
   } catch (error) {
     if (!request.current() || isAbortError(error)) return
-    diagnostic.value = diagnosticFromError(error, target, credentials)
+    diagnostic.value = errorCode(error) === 'DATABASE_RESPONSE_INVALID' ? null : diagnosticFromError(error, target, credentials)
     setError(error, '连接诊断失败，请稍后重试。', 'diagnostic')
   } finally {
     if (request.current()) diagnosticLoading.value = false
   }
+}
+
+function connectionResultUnconfirmed(error: unknown) {
+  return ['DATABASE_CONNECTION_OUTCOME_UNKNOWN', 'DATABASE_CONNECTION_CATALOG_FAILED'].includes(errorCode(error))
 }
 
 function diagnosticFromError(error: unknown, target: DatabaseSource, credentials: DatabaseCredentials): ConnectionDiagnostic {
@@ -279,15 +296,19 @@ function driverLabel(driver: string) {
   return driver === 'sqlite' ? 'SQLite' : driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL'
 }
 
+function knownErrorCopy(code: string) {
+  return Object.hasOwn(databaseErrorCopy, code) ? databaseErrorCopy[code] : undefined
+}
+
 function errorCode(error: unknown) {
   if (error instanceof NcpApiError) return error.code
-  if (error instanceof Error && databaseErrorCopy[error.message]) return error.message
+  if (error instanceof Error && knownErrorCopy(error.message)) return error.message
   return 'DATABASE_OPERATION_FAILED'
 }
 
 function errorMessage(error: unknown, fallback: string) {
   const code = errorCode(error)
-  return databaseErrorCopy[code] || (error instanceof NcpApiError ? error.message : fallback)
+  return knownErrorCopy(code) || (error instanceof NcpApiError ? error.message : fallback)
 }
 
 function errorNextStep(error: unknown) {
@@ -299,6 +320,9 @@ function errorNextStep(error: unknown) {
     case 'permission_denied': return '改用具备目录读取权限的账号。'
     case 'sql_invalid': return '检查 SQL 语句和参数后重试。'
     case 'constraint_failed': return '检查必填字段、唯一键和外键约束。'
+    case 'DATABASE_CONNECTION_OUTCOME_UNKNOWN':
+    case 'DATABASE_CONNECTION_CATALOG_FAILED': return '先核对服务端连接与凭据状态；重新连接可能再次保存凭据，不会自动重试。'
+    case 'DATABASE_RESPONSE_INVALID': return '重新测试连接以获取有效诊断；测试连接不会保存凭据。'
     default: return '稍后重试；若持续失败，请记录错误码联系管理员。'
   }
 }
@@ -330,7 +354,7 @@ function clearError() {
     </WorkspaceHeader>
 
     <ResourceState v-if="errorState && errorOperation === 'catalog'" state="error" title="数据库对象目录读取失败" :message="errorState.message" :code="errorState.code" :next-step="errorState.nextStep" retry-label="重新读取目录" @retry="reloadCatalog" />
-    <DatabaseErrorPanel v-else-if="errorState" :title="errorOperation === 'diagnostic' ? '数据库连接诊断失败' : '数据库连接失败'" :error="errorState" />
+    <DatabaseErrorPanel v-else-if="errorState" :title="errorTitle" :error="errorState" />
 
     <dl class="source-summary panel">
       <div class="source-summary__status">

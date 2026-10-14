@@ -3,6 +3,7 @@ import { requestDatabaseInsert } from './databaseInsertOutcome'
 import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
 import { requestDatabaseQuery } from './databaseQueryOutcome'
 import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
+import { decodeDatabaseConnectionDiagnostic, requestDatabaseConnect } from './databaseConnectionResponse'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
@@ -119,11 +120,12 @@ export async function discoverDatabases(force = false, signal?: AbortSignal): Pr
 }
 
 export async function testDatabaseConnection(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/test-connection', connection, signal)
+  return decodeDatabaseConnectionDiagnostic(await request<unknown>('/api/v1/databases/test-connection', connection, signal))
 }
 
 export async function connectDatabase(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/connect', connection, signal)
+  // 序列化失败发生在派发前，不属于保存结果未知。
+  return requestDatabaseConnect(JSON.stringify(connection), signal)
 }
 
 export async function loadDatabaseCatalog(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseCatalog> {
