@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import drawerSource from './CreateContainerDrawer.vue?raw'
 import { ElMessage } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, h, nextTick, reactive, type App } from 'vue'
@@ -79,9 +80,15 @@ afterEach(async () => {
 })
 
 describe('创建命令保留 argv 身份', () => {
+  it('预览样式保留连续空白并允许换行（静态合同，不替代浏览器验证）', () => {
+    const source = drawerSource
+    expect(source).toContain('class="command-preview"')
+    expect(source).toMatch(/\.command-preview\s*\{\s*white-space:\s*pre-wrap\s*;?\s*\}/)
+  })
+
   it.each([false, true])('保留空白与字面 Shell 字符，预览与提交使用同一 argv，runContainer=%s', async (runContainer) => {
     await mount()
-    const expected = ['/app/server ', ' leading ', '\targument\t', '\u00a0name\u3000', ' ', '"quoted value"', '$APP_MODE && echo ok', '--name=a b']
+    const expected = ['/app/server ', '  leading  ', '\targument\t', '\u00a0name\u3000', ' ', '"quoted value"', '$APP_MODE && echo ok', '--name=a b']
     await editCommand('\n' + expected.join('\n\n') + '\n')
     await click(runContainer ? '创建并启动' : '仅创建')
     expect(document.querySelector('.create-preview')?.textContent).toContain(JSON.stringify(expected))
