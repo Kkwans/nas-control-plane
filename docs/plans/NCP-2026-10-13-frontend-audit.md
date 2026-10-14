@@ -507,3 +507,9 @@ SQL未知状态浏览器验收补片（2026-10-14 04:42 UTC）：新增独立三
 两视口Ctrl+Enter都未弹确认的原因是真实快捷键冲突：basicSetup的Mod-Enter先插入换行，后置SQL监听器未执行。真实CodeMirror jsdom复现Ctrl执行零次且原文变化；将原有处理器排在basicSetup前，并在disabled时不发execute。11项真实编辑器回归覆盖标签、更新、启停、重挂、Ctrl/Meta及普通Enter；对比度旧版1项失败，修复7项通过。
 
 截图仅发生kbd字形5/64 CSS px重排，原始数据保留，采集等待连续稳定样本，仅矩形坐标容许最多1/8 CSS px；语义、焦点、滚动、可见/裁剪/命中及全量axe仍严格断言，Ctrl+Enter动线保留。精确五文件快照3001单元/113文件、全量lint、Vue类型、E2E严格类型、生产构建、权限及预算全部通过。远端浏览器四图与完整axe仍须再次验证，不把本地jsdom当成浏览器或NAS实测。
+
+### SQL 编辑器禁用状态实际只读（2026-10-14 05:15 UTC）
+
+真实CodeMirror事件复现原先仅改contenteditable属性而不更新编辑器facet：禁用后Enter、Backspace、paste、undo仍可改草稿，初始禁用再启用也保留旧editable值。现用Compartment同步editable/readOnly，不重建实例，保留历史及外部v-model程序更新。12项新回归旧版全部失败，修复后加已有11项及可访问性共30项通过。
+
+直接声明已安装的@codemirror/state 6.7.1，锁文件只增加对应importer，现有包integrity/snapshot未变；项目pnpm11.9.0冻结离线安装通过339项供应链检查。主任务四文件精确快照3013单元/113文件、全量lint、类型、生产构建、权限及预算通过。此为隔离DOM/编辑器验证，实际浏览器仍由后继CI核验。

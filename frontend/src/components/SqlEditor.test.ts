@@ -36,6 +36,32 @@ function expectNamedTextbox(view: EditorView) {
   expect(view.contentDOM.getAttribute('aria-multiline')).toBe('true')
 }
 
+function expectEditingState(view: EditorView, disabled: boolean) {
+  expect(view.state.facet(EditorView.editable)).toBe(!disabled)
+  expect(view.state.readOnly).toBe(disabled)
+  expect(view.contentDOM.getAttribute('contenteditable')).toBe(String(!disabled))
+  expect(view.contentDOM.getAttribute('aria-readonly')).toBe(disabled ? 'true' : null)
+  expectNamedTextbox(view)
+}
+
+function dispatchEditorInput(view: EditorView, action: 'Enter' | 'Backspace' | 'paste' | 'undo') {
+  if (action === 'paste') {
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', {
+      value: { getData: (type: string) => type === 'text/plain' ? 'INSERTED' : '' },
+    })
+    view.contentDOM.dispatchEvent(event)
+    return
+  }
+  view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {
+    key: action === 'undo' ? 'z' : action,
+    code: action === 'undo' ? 'KeyZ' : action,
+    ctrlKey: action === 'undo',
+    bubbles: true,
+    cancelable: true,
+  }))
+}
+
 afterEach(() => {
   for (const { app, host } of mounted.splice(0)) {
     app.unmount()
@@ -135,5 +161,84 @@ describe('SqlEditor 实际编辑区域', () => {
     expect(state.modelValue).toBe('SELECT 1;\n')
     expect(execute).not.toHaveBeenCalled()
     expectNamedTextbox(view())
+  })
+
+  describe.each([false, true])('初始 disabled=%s 的禁用编辑保护', (initiallyDisabled) => {
+    it.each(['Enter', 'Backspace', 'paste', 'undo'] as const)('禁用时 %s 不修改文档或双向绑定', async (action) => {
+      const { state, view, update, execute } = mountEditor(initiallyDisabled)
+      // 保留一条可撤销的程序化更新，验证禁用只阻止用户编辑。
+      view().dispatch({ changes: { from: view().state.doc.length, insert: '\n' } })
+      await nextTick()
+      view().dispatch({ selection: { anchor: view().state.doc.length } })
+      state.disabled = true
+      await nextTick()
+      expectEditingState(view(), true)
+      update.mockClear()
+
+      dispatchEditorInput(view(), action)
+      await nextTick()
+      expect(view().state.doc.toString()).toBe('SELECT 1;\n')
+      expect(state.modelValue).toBe('SELECT 1;\n')
+      expect(update).not.toHaveBeenCalled()
+      expect(execute).not.toHaveBeenCalled()
+      expectEditingState(view(), true)
+    })
+  })
+
+  it.each([false, true])('初始 disabled=%s 后反复切换会同步真实编辑状态并恢复输入', async (disabled) => {
+    const { state, view, update } = mountEditor(disabled)
+    const original = view()
+    expectEditingState(view(), disabled)
+    for (const nextDisabled of [true, false, true, false]) {
+      state.disabled = nextDisabled
+      await nextTick()
+      expectEditingState(view(), nextDisabled)
+
+      state.modelValue = `SELECT ${nextDisabled ? 2 : 3};`
+      await nextTick()
+      expect(view().state.doc.toString()).toBe(state.modelValue)
+      expectEditingState(view(), nextDisabled)
+      view().dispatch({ selection: { anchor: view().state.doc.length } })
+      update.mockClear()
+      dispatchEditorInput(view(), 'Enter')
+      await nextTick()
+      expect(view().state.doc.toString()).toBe(nextDisabled ? 'SELECT 2;' : 'SELECT 3;\n')
+      expect(update).toHaveBeenCalledTimes(nextDisabled ? 0 : 1)
+      expect(state.modelValue).toBe(view().state.doc.toString())
+      expect(view()).toBe(original)
+      expectEditingState(view(), nextDisabled)
+    }
+  })
+
+  it('解除初始禁用后恢复退格和粘贴编辑', async () => {
+    const { state, view } = mountEditor(true)
+    state.disabled = false
+    await nextTick()
+    expectEditingState(view(), false)
+    view().dispatch({ selection: { anchor: view().state.doc.length } })
+    dispatchEditorInput(view(), 'Backspace')
+    await nextTick()
+    expect(state.modelValue).toBe('SELECT 1')
+    dispatchEditorInput(view(), 'paste')
+    await nextTick()
+    expect(state.modelValue).toBe('SELECT 1INSERTED')
+  })
+
+  it('禁用切换保留撤销历史，禁用时不撤销而解除后恢复', async () => {
+    const { state, view } = mountEditor()
+    view().dispatch({ selection: { anchor: view().state.doc.length } })
+    dispatchEditorInput(view(), 'Enter')
+    await nextTick()
+    expect(state.modelValue).toBe('SELECT 1;\n')
+    state.disabled = true
+    await nextTick()
+    dispatchEditorInput(view(), 'undo')
+    await nextTick()
+    expect(state.modelValue).toBe('SELECT 1;\n')
+    state.disabled = false
+    await nextTick()
+    dispatchEditorInput(view(), 'undo')
+    await nextTick()
+    expect(state.modelValue).toBe('SELECT 1;')
   })
 })

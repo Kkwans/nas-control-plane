@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { EditorView, basicSetup } from 'codemirror'
 import { sql } from '@codemirror/lang-sql'
+import { Compartment, EditorState } from '@codemirror/state'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 
 const editorHost = ref<HTMLElement | null>(null)
 let editor: EditorView | null = null
+const disabledState = new Compartment()
 
 onMounted(() => {
   if (!editorHost.value) return
@@ -40,7 +42,10 @@ onMounted(() => {
       sql(),
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({ 'aria-label': 'SQL 编辑器' }),
-      EditorView.editable.of(!props.disabled),
+      disabledState.of([
+        EditorView.editable.of(!props.disabled),
+        EditorState.readOnly.of(props.disabled),
+      ]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
       }),
@@ -83,8 +88,12 @@ watch(() => props.modelValue, (value) => {
 watch(() => props.disabled, (disabled) => syncDisabledState(disabled))
 
 function syncDisabledState(disabled: boolean) {
-  const content = editorHost.value?.querySelector<HTMLElement>('.cm-content')
-  content?.setAttribute('contenteditable', String(!disabled))
+  editor?.dispatch({
+    effects: disabledState.reconfigure([
+      EditorView.editable.of(!disabled),
+      EditorState.readOnly.of(disabled),
+    ]),
+  })
   editorHost.value?.setAttribute('aria-disabled', String(disabled))
 }
 
