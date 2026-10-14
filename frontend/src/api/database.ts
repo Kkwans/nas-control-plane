@@ -1,6 +1,7 @@
 import { NcpApiError } from './system'
 import { requestDatabaseInsert } from './databaseInsertOutcome'
 import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
+import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
@@ -113,7 +114,7 @@ export interface QueryResult {
 }
 
 export async function discoverDatabases(force = false, signal?: AbortSignal): Promise<DatabaseDiscovery> {
-  return request<DatabaseDiscovery>(force ? '/api/v1/databases/discovery?refresh=true' : '/api/v1/databases/discovery', undefined, signal)
+  return decodeDatabaseDiscovery(await request<unknown>(force ? '/api/v1/databases/discovery?refresh=true' : '/api/v1/databases/discovery', undefined, signal))
 }
 
 export async function testDatabaseConnection(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
@@ -125,7 +126,7 @@ export async function connectDatabase(connection: DatabaseConnection, signal?: A
 }
 
 export async function loadDatabaseCatalog(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseCatalog> {
-  return request<DatabaseCatalog>('/api/v1/databases/catalog', connection, signal)
+  return decodeDatabaseCatalog(await request<unknown>('/api/v1/databases/catalog', connection, signal))
 }
 
 export async function loadDatabaseRows(input: DatabaseConnection & {
@@ -136,7 +137,7 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
   sortColumn?: string
   sortDirection?: string
 }, signal?: AbortSignal): Promise<DatabaseRows> {
-  return request<DatabaseRows>('/api/v1/databases/rows', input, signal)
+  return decodeDatabaseRows(await request<unknown>('/api/v1/databases/rows', input, signal))
 }
 
 export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string; resultMode?: DatabaseQueryResultMode }, signal?: AbortSignal): Promise<QueryResult> {

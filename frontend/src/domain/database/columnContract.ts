@@ -8,7 +8,7 @@ export function databaseColumnContract(columns: readonly DatabaseColumn[] | null
   const names = new Set<string>()
   const normalized = []
   for (const column of columns) {
-    if (!column || typeof column.name !== 'string' || !column.name || names.has(column.name)
+    if (!column || typeof column.name !== 'string' || names.has(column.name)
       || typeof column.dataType !== 'string' || typeof column.nullable !== 'boolean'
       || typeof column.primaryKey !== 'boolean') return null
     const writeMode = databaseWriteMode(column)

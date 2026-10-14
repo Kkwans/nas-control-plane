@@ -401,3 +401,15 @@ UPDATE/DELETE新增九项浏览器fixture：390/1440提交后断网或损坏200�
 新增17项真实Element Plus/视图集成回归，连同相关现有测试共116项通过；原HEAD549e207加相同测试的隔离快照六项失败，修复后17项全过，证明覆盖原缺陷。lint、Vue类型与diff检查通过；主任务已审查三处运行时变更及事件/父级集成断言，精确全量仍在执行。没有运行实际浏览器或数据库。
 
 可空布尔精确验收（01:00 UTC）：四文件快照完整2246单元/102文件、全量lint、Vue类型、生产构建、dist权限及540KiB预算全部退出成功，最大chunk518.0KiB；主任务精确diff复核无额外改动。本片不包含并行进行的数据库读取decoder及空列名兼容修正。
+
+### 读取解码与兼容验证（2026-10-14 01:06 UTC）
+
+独立审查发现rowCount非负限制与实际Go不符：PostgreSQL的reltuples在未分析时可为-1，manager直接透传该估计。[官方pg_class说明](https://www.postgresql.org/docs/current/catalog-pg-class.html)已核对。解码保持有符号整数，不把-1改为0；同步移除OpenAPI错误minimum:0并解释估计值，sizeBytes非负限制不变。新增OpenAPI回归验证-1接受、小数拒绝及描述，完整api/openapi测试通过。
+
+六个前端文件已实现并冻结，新增109项覆盖解码/真实API/Pinia状态及空列名兼容；相关338项聚焦通过。独立34项探针连同相关套件188项通过，真实API解码→挂载视图进一步证明坏行/列响应保留最后有效rows与offset、固定错误且零写入。原型样式自有列名通过Object.fromEntries保留，未知元数据不透传，未改SQL或写入合同。
+
+八源码/测试/契约文件精确快照完整2355单元/104文件、全量lint、Vue类型、生产构建、dist权限与540KiB预算全部退出成功，最大chunk518.0KiB。未运行真实MySQL/PostgreSQL或NAS；此片实际浏览器由精确CI跟进。
+
+### 行修改替代图闭环（2026-10-14 01:06 UTC）
+
+20acd69精确CI38492638125完整通过2229单元/100文件、393浏览器及Go/Compose。官方7,997,542字节ZIP、313源码hash与八PNG hash/CRC/路径核验通过，八图均实看，主任务另复看390表格。八份完整axe均0violation，保留四类incomplete；原滚动聚焦/刷新文字对比度失败已消失。table语义fields为空且rawDiagnostics仍保留隐藏dialog，草稿/保存禁用与表格回读符合预期。截图/axe前后状态和请求稳定，每组一次写入，读取1→2。此验收关闭6ce的四项失败，不抹掉其历史；schema新增六图仍须独立验收。

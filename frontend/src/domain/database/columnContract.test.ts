@@ -15,6 +15,11 @@ describe('数据库写入列合同归一', () => {
     expect(databaseColumnContract([emptyType])).not.toBeNull()
     expect(databaseColumnContract([column, emptyType])).toBe(databaseColumnContract([{ ...emptyType, position: 12 }, { ...column, position: 40, dataType: ' text ' }]))
   })
+  it('SQLite 空列名合法，但重复空列名仍然拒绝', () => {
+    const emptyName = { ...column, name: '' }
+    expect(databaseColumnContract([emptyName])).not.toBeNull()
+    expect(databaseColumnContract([emptyName, emptyName])).toBeNull()
+  })
   it.each(['', false, 0, 'false', '0', '9223372036854775807'])('默认值 %s 与未提供不同且不做数值转换', (value) => {
     expect(databaseColumnContract([{ ...column, default: value }])).not.toBe(databaseColumnContract([column]))
     expect(JSON.parse(databaseColumnContract([{ ...column, default: value }])!)[0].default).toBe(value)

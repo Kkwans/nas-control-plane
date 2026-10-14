@@ -2819,7 +2819,10 @@ components:
         columns:
           type: array
           items: { $ref: '#/components/schemas/DatabaseColumn' }
-        rowCount: { type: integer, format: int64, minimum: 0 }
+        rowCount:
+          type: integer
+          format: int64
+          description: 数据库引擎提供的行数或估计值；PostgreSQL 未统计时可能为 -1，不能将其解释为 0。
         sizeBytes: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string }
         definition: { type: string }
