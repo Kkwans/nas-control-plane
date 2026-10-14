@@ -1,11 +1,13 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,9 +20,10 @@ import (
 )
 
 const (
-	credentialCiphertextVersion   = 1
-	credentialCiphertextAlgorithm = "AES-256-GCM"
-	deploymentKeyBytes            = 32
+	credentialCiphertextVersion    = 1
+	credentialCiphertextTLSVersion = 2
+	credentialCiphertextAlgorithm  = "AES-256-GCM"
+	deploymentKeyBytes             = 32
 )
 
 // KeyMaterial is a versioned deployment key. Key is copied on ingress and
@@ -309,11 +312,31 @@ type encryptedCredentialEnvelope struct {
 	Ciphertext string `json:"ciphertext"`
 }
 
-type credentialPayload struct {
+// credentialValue 是尚未接入公开 Credentials、vault 或 RPC 的私有载体。
+// nil 策略仍写 v1；只有包内显式传入有效策略才会写 v2。
+type credentialValue struct {
+	legacyCredentials Credentials
+	tls               *databaseTLSPolicy
+}
+
+func cloneCredentialValue(value credentialValue) credentialValue {
+	if value.tls != nil {
+		policy := *value.tls
+		value.tls = &policy
+	}
+	return value
+}
+
+type credentialPayloadV1 struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	Token    string `json:"token,omitempty"`
 	Database string `json:"database,omitempty"`
+}
+
+type credentialPayloadV2 struct {
+	credentialPayloadV1
+	TLS *databaseTLSPolicy `json:"tls"`
 }
 
 func EncryptCredentials(ctx context.Context, provider KeyProvider, aad string, credentials Credentials) ([]byte, int, error) {
@@ -325,102 +348,191 @@ func EncryptCredentials(ctx context.Context, provider KeyProvider, aad string, c
 	}
 	material, err := provider.Current(ctx)
 	if err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_encrypt", Cause: err}
+		return nil, 0, credentialCodecKeyError("credential_encrypt", err)
+	}
+	return encryptCredentialValueWithKey(ctx, material, aad, credentialValue{legacyCredentials: credentials})
+}
+
+// 公开 wrapper 在 B 阶段只读取 v1，不能将 v2 策略静默丢弃后返回旧凭据。
+func DecryptCredentials(ctx context.Context, provider KeyProvider, aad string, encoded []byte) (Credentials, error) {
+	value, err := decryptCredentialValueVersions(ctx, provider, aad, encoded, false)
+	if err != nil {
+		return Credentials{}, err
+	}
+	return value.legacyCredentials, nil
+}
+
+// 普通加密与 rotation 共用版本、payload、AAD 和 envelope 的唯一构造路径。
+func encryptCredentialValueWithKey(ctx context.Context, material KeyMaterial, baseAAD string, value credentialValue) ([]byte, int, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, 0, err
 	}
 	if err := validateKeyMaterial(material); err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_encrypt", Cause: err}
+		return nil, 0, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_encrypt"}
 	}
-	ciphertext, nonce, err := sealCredential(material.Key, []byte(aad), credentials)
+	value = cloneCredentialValue(value)
+	version := credentialCiphertextVersion
+	credentials := value.legacyCredentials
+	legacy := credentialPayloadV1{
+		Username: credentials.Username, Password: credentials.Password,
+		Token: credentials.Token, Database: credentials.Database,
+	}
+	var plain any = legacy
+	if value.tls != nil {
+		if err := validateRequiredDatabaseTLSPolicy(value.tls); err != nil {
+			return nil, 0, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
+		}
+		version = credentialCiphertextTLSVersion
+		plain = credentialPayloadV2{credentialPayloadV1: legacy, TLS: value.tls}
+	}
+	payload, err := json.Marshal(plain)
+	if err != nil {
+		return nil, 0, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
+	}
+	defer clearBytes(payload)
+	aad, err := credentialEnvelopeAAD(baseAAD, version)
+	if err != nil {
+		return nil, 0, err
+	}
+	ciphertext, nonce, err := sealCredentialPayload(material.Key, aad, payload)
 	if err != nil {
 		return nil, 0, err
 	}
 	envelope := encryptedCredentialEnvelope{
-		Version: credentialCiphertextVersion, Algorithm: credentialCiphertextAlgorithm,
-		KeyVersion: material.Version,
-		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
-		Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
+		Version: version, Algorithm: credentialCiphertextAlgorithm, KeyVersion: material.Version,
+		Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
 	}
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, 0, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt", Cause: err}
+		return nil, 0, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
 	}
 	return encoded, material.Version, nil
 }
 
-func DecryptCredentials(ctx context.Context, provider KeyProvider, aad string, encoded []byte) (Credentials, error) {
+// baseAAD 保留旧绑定，v2 另加域、版本和字节长度；没有旧 AAD 重试路径。
+func credentialEnvelopeAAD(baseAAD string, version int) ([]byte, error) {
+	switch version {
+	case credentialCiphertextVersion:
+		return []byte(baseAAD), nil
+	case credentialCiphertextTLSVersion:
+		aad := []byte("ncp/database-credentials/envelope\x00")
+		aad = binary.BigEndian.AppendUint32(aad, uint32(credentialCiphertextTLSVersion))
+		aad = binary.BigEndian.AppendUint64(aad, uint64(len(baseAAD)))
+		return append(aad, baseAAD...), nil
+	default:
+		return nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_aad"}
+	}
+}
+
+func decryptCredentialValue(ctx context.Context, provider KeyProvider, baseAAD string, encoded []byte) (credentialValue, error) {
+	return decryptCredentialValueVersions(ctx, provider, baseAAD, encoded, true)
+}
+
+func decryptCredentialValueVersions(ctx context.Context, provider KeyProvider, baseAAD string, encoded []byte, allowTLS bool) (credentialValue, error) {
 	if err := contextError(ctx); err != nil {
-		return Credentials{}, err
+		return credentialValue{}, err
 	}
 	if provider == nil {
-		return Credentials{}, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_decrypt"}
+		return credentialValue{}, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_decrypt"}
 	}
 	var envelope encryptedCredentialEnvelope
-	if err := json.Unmarshal(encoded, &envelope); err != nil || envelope.Version != credentialCiphertextVersion ||
+	if err := json.Unmarshal(encoded, &envelope); err != nil ||
+		(envelope.Version != credentialCiphertextVersion && (!allowTLS || envelope.Version != credentialCiphertextTLSVersion)) ||
 		envelope.Algorithm != credentialCiphertextAlgorithm || envelope.KeyVersion <= 0 {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: errors.New("credential ciphertext version is unsupported")}
+		return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
+	}
+	aad, err := credentialEnvelopeAAD(baseAAD, envelope.Version)
+	if err != nil {
+		return credentialValue{}, err
 	}
 	material, err := provider.ForVersion(ctx, envelope.KeyVersion)
 	if err != nil {
-		return Credentials{}, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_decrypt", Cause: err}
+		return credentialValue{}, credentialCodecKeyError("credential_decrypt", err)
 	}
-	if err := validateKeyMaterial(material); err != nil {
-		return Credentials{}, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_decrypt", Cause: err}
+	if err := validateKeyMaterial(material); err != nil || material.Version != envelope.KeyVersion {
+		return credentialValue{}, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_decrypt"}
 	}
 	nonce, nonceErr := base64.RawStdEncoding.DecodeString(envelope.Nonce)
 	ciphertext, ciphertextErr := base64.RawStdEncoding.DecodeString(envelope.Ciphertext)
 	if nonceErr != nil || ciphertextErr != nil {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: errors.New("credential ciphertext encoding is invalid")}
+		return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
 	}
-	credentials, err := openCredential(material.Key, []byte(aad), nonce, ciphertext)
+	payload, err := openCredentialPayload(material.Key, aad, nonce, ciphertext)
 	if err != nil {
-		return Credentials{}, err
+		return credentialValue{}, err
 	}
-	return credentials, nil
+	defer clearBytes(payload)
+	var legacy credentialPayloadV1
+	var policy *databaseTLSPolicy
+	if envelope.Version == credentialCiphertextVersion {
+		// v1 保持 plain Unmarshal 的旧未知字段容忍行为。
+		if err := json.Unmarshal(payload, &legacy); err != nil {
+			return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
+		}
+	} else {
+		var decoded credentialPayloadV2
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&decoded); err != nil {
+			return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
+		}
+		if err := validateRequiredDatabaseTLSPolicy(decoded.TLS); err != nil {
+			return credentialValue{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
+		}
+		legacy, policy = decoded.credentialPayloadV1, decoded.TLS
+	}
+	return credentialValue{
+		legacyCredentials: Credentials{Username: legacy.Username, Password: legacy.Password, Token: legacy.Token, Database: legacy.Database},
+		tls:               policy,
+	}, nil
 }
 
-func sealCredential(key, aad []byte, credentials Credentials) (ciphertext, nonce []byte, err error) {
+func sealCredentialPayload(key, aad, payload []byte) (ciphertext, nonce []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt", Cause: err}
+		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt", Cause: err}
+		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
 	}
 	nonce = make([]byte, gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt", Cause: err}
+		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
 	}
-	payload, err := json.Marshal(credentialPayload{
-		Username: credentials.Username, Password: credentials.Password,
-		Token: credentials.Token, Database: credentials.Database,
-	})
-	if err != nil {
-		return nil, nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt", Cause: err}
-	}
-	defer clearBytes(payload)
 	return gcm.Seal(nil, nonce, payload, aad), nonce, nil
 }
 
-func openCredential(key, aad, nonce, ciphertext []byte) (Credentials, error) {
+func openCredentialPayload(key, aad, nonce, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: err}
+		return nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil || len(nonce) != gcm.NonceSize() {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: errors.New("credential nonce is invalid")}
+		return nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
 	}
 	payload, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: errors.New("credential authentication failed")}
+		return nil, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt"}
 	}
-	defer clearBytes(payload)
-	var decoded credentialPayload
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return Credentials{}, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_decrypt", Cause: errors.New("credential payload is invalid")}
+	return payload, nil
+}
+
+// 只保留可判定的 context sentinel，不让 provider 的原始诊断携带秘密。
+func credentialCodecKeyError(operation string, err error) error {
+	var cause error
+	switch {
+	case errors.Is(err, context.Canceled):
+		cause = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		cause = context.DeadlineExceeded
 	}
-	return Credentials{Username: decoded.Username, Password: decoded.Password, Token: decoded.Token, Database: decoded.Database}, nil
+	return &DatabaseError{Code: CodeKeyUnavailable, Operation: operation, Cause: cause}
 }
 
 func credentialAAD(sourceID string, driver Driver, endpoint string) string {

@@ -3,8 +3,6 @@ package database
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -807,30 +805,9 @@ func encryptWithKey(ctx context.Context, material KeyMaterial, aad string, crede
 		return nil, 0, err
 	}
 	if err := validateKeyMaterial(material); err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
+		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate"}
 	}
-	ciphertext, nonce, err := sealCredential(material.Key, []byte(aad), credentials)
-	if err != nil {
-		return nil, 0, err
-	}
-	envelope := encryptedCredentialEnvelope{
-		Version: credentialCiphertextVersion, Algorithm: credentialCiphertextAlgorithm,
-		KeyVersion: material.Version,
-		Nonce:      base64Raw(nonce), Ciphertext: base64Raw(ciphertext),
-	}
-	encoded, err := jsonMarshal(envelope)
-	if err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
-	}
-	return encoded, material.Version, nil
-}
-
-func base64Raw(value []byte) string {
-	return base64.RawStdEncoding.EncodeToString(value)
-}
-
-func jsonMarshal(value any) ([]byte, error) {
-	return json.Marshal(value)
+	return encryptCredentialValueWithKey(ctx, material, aad, credentialValue{legacyCredentials: credentials})
 }
 
 func validateCredentialTarget(source Source, credentials Credentials) error {

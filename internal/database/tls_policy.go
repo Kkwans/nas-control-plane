@@ -22,9 +22,9 @@ const (
 // databaseTLSPolicy 目前只是包内基础类型，尚未接入凭据、RPC 或数据库连接。
 // CAPEM 为空表示使用系统根；非空时仅信任这些 CA，不合并系统根。
 type databaseTLSPolicy struct {
-	Mode       databaseTLSMode
-	CAPEM      string
-	ServerName string
+	Mode       databaseTLSMode `json:"mode"`
+	CAPEM      string          `json:"caPEM,omitempty"`
+	ServerName string          `json:"serverName,omitempty"`
 }
 
 // 不保留原始输入或解析错误链，也不在本阶段增加传输层错误码。
@@ -40,14 +40,37 @@ func compileDatabaseTLS(driver Driver, dialHost string, policy *databaseTLSPolic
 	if policy == nil {
 		return nil, nil
 	}
-	if (driver != DriverMySQL && driver != DriverPostgreSQL) || policy.Mode != databaseTLSVerifyFull {
+	if driver != DriverMySQL && driver != DriverPostgreSQL {
 		return nil, errDatabaseTLSConfigurationInvalid
 	}
 	serverName, ok := databaseTLSServerName(dialHost)
 	if !ok {
 		return nil, errDatabaseTLSConfigurationInvalid
 	}
+	config, err := compileRequiredDatabaseTLSPolicy(policy)
+	if err != nil {
+		return nil, err
+	}
+	if config.ServerName == "" {
+		config.ServerName = serverName
+	}
+	return config, nil
+}
+
+// intrinsic 校验仅涉及策略本身；凭据 codec 的 AAD 是不透明字节，不能从中
+// 猜测实际拨号目标。driver/host 约束仍由 compileDatabaseTLS 负责。
+func validateRequiredDatabaseTLSPolicy(policy *databaseTLSPolicy) error {
+	_, err := compileRequiredDatabaseTLSPolicy(policy)
+	return err
+}
+
+func compileRequiredDatabaseTLSPolicy(policy *databaseTLSPolicy) (*tls.Config, error) {
+	if policy == nil || policy.Mode != databaseTLSVerifyFull {
+		return nil, errDatabaseTLSConfigurationInvalid
+	}
+	var serverName string
 	if policy.ServerName != "" {
+		var ok bool
 		serverName, ok = databaseTLSServerName(policy.ServerName)
 		if !ok {
 			return nil, errDatabaseTLSConfigurationInvalid

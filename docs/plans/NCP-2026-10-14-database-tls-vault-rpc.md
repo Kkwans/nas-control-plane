@@ -467,3 +467,13 @@ Resolve失败只条件禁用最初快照。轮换在key操作前固定受影响�
 新增可控交错覆盖晚到A对B、同秒/ABA、源凭据冻结、旧Resolve失败、轮换与并发保存、key发布后的CAS失败、原始快照禁用。真实Recorder→Coordinator→临时SQLite确认409时只保留竞争获胜记录；独立故障注入确认CAS已经提交再丢回执仍是503/可能已保存，不能用409处理。完整database/race、20次定向回归、纯HTTP/RPC、OpenAPI、全仓build/vet通过；主任务3295前端单元/116文件、全量lint、类型、构建及预算通过。没有真实凭据操作或部署。
 
 A0的252bfeb完整CI通过3266单元/407浏览器；本片新增409浏览器截图与动线另片推进，不能提前报告通过。v2密文、严格TLS RPC和Manager/UI TLS接入仍待B/C阶段；A1并不启用TLS。
+
+## 13. T2-B 私有版本化 codec 检查点（2026-10-14 07:40 UTC）
+
+增加包内 credentialValue 与 v2 加密载荷，复用 T0 的策略自身校验。v2 必须有非 nil verify-full 策略，AAD 使用第6节规定的域、版本和原绑定字节长度；解密没有旧 AAD 重试。普通加密与轮换共用唯一 envelope builder，但公开 EncryptCredentials、DecryptCredentials 和现有 vault 路径仍只支持 v1，不能读取 v2 后丢弃策略。固定旧版密文及未知字段兼容保留；版本、来源与目标篡改不能通过 GCM 校验。
+
+完整 database、race、全仓 build/vet、差异检查通过；十组新增测试包含独立构造的旧密文、精确 AAD 字节、系统/自定义 CA、深复制、无效策略、未知字段/尾随 JSON、零值失败、provider 安全错误，以及临时 SQLite 中旧轮换不能将 v2 降为 v1。仅合成密钥和数据；没有真实密钥轮换、网络握手或部署。
+
+本片的 v2 载荷只由私有规范化 writer 产生且经过认证。DisallowUnknownFields 不等于完整公开 JSON 校验：Go decoder 的大小写兼容、重复键合并与可选 string 的 null 行为仍存在。C/T3 在公开输入构造前必须单独检查 null、重复及大小写混淆；v1 的旧字段容忍行为不在本片扩大或收紧。外层未知版本仍拒绝，v2 缺失/空策略仍拒绝。
+
+下一片 C 必须一次接通 Credentials.TLS、vault 保存/读取/轮换、测试前策略继承、全部 resolver、Manager 严格连接器及八操作独立 RPC，并保留 HTTP rollout gate。尤其检查 test-connection 直接 Agent 路径、手动 ResolveConnection、SQLite 早返回与缺少 resolver 的 coordinator；这些路径不能留下隐式降级。B 完成不代表用户已能启用 TLS。
