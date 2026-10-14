@@ -144,6 +144,11 @@ async function capture(page: Page, info: TestInfo, api: Fixture, defaultCommand:
   }
   expect(after).toEqual(before); expect(afterAxe).toEqual(before)
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+  return {
+    prefix, screenshot: `${prefix}.png`, screenshotSha256: metadata.screenshotSha256,
+    captureState: `${prefix}-axe-capture-state.json`,
+    captureStateSha256: createHash('sha256').update(await readFile(statePath)).digest('hex'),
+  }
 }
 
 for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
@@ -172,7 +177,7 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
     const preview = page.getByRole('dialog', { name: '确认容器配置', exact: true })
     await expect(preview).toBeVisible()
     expect(api.writes).toEqual([])
-    await capture(page, info, api, defaultCommand)
+    const previewEvidence = await capture(page, info, api, defaultCommand)
     api.authorize()
     const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === createPath && response.request().method() === 'POST')
     try {
@@ -193,7 +198,18 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
       expect(api.writes).toEqual([expected])
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
-      await info.attach('strict-create-receipt', { body: JSON.stringify({ expected, requests: api.requests, writes: api.writes, denied: api.denied, errors: api.errors, status: response.status(), response: await response.json() }, null, 2), contentType: 'application/json' })
+      // 独立记录提交后的回执与重放观察；不能冒充确认前 PNG 的截图时状态。
+      const receiptPath = info.outputPath('ui-captures', `${previewEvidence.prefix}-receipt-capture-state.json`)
+      const receipt = {
+        ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+        evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
+        testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+        preCreatePreviewEvidence: previewEvidence, replayObservationMilliseconds: 6000,
+        expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+        status: response.status(), response: await response.json(),
+      }
+      await writeFile(receiptPath, JSON.stringify(receipt, null, 2))
+      await info.attach('strict-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })
 }
