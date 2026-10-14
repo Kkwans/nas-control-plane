@@ -48,6 +48,7 @@ const placeholder = computed(() => {
 })
 
 function updateBoolean(value: string) {
+  if (props.disabled) return
   if (value === NULL_VALUE) {
     emit('update:nullSelected', true)
     return
@@ -63,7 +64,7 @@ function updateBoolean(value: string) {
       v-if="kind === 'boolean'"
       :model-value="booleanValue"
       :options="booleanOptions"
-      :disabled="disabled && !(kind === 'boolean' && nullSelected)"
+      :disabled="disabled"
       accessible-label="布尔字段值"
       placeholder="请选择 true / false"
       @update:model-value="updateBoolean"

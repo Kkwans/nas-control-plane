@@ -379,3 +379,25 @@ UPDATE/DELETE新增九项浏览器fixture：390/1440提交后断网或损坏200�
 结构漂移浏览器补验（00:53 UTC）：新增四项白名单内存fixture，390/1440在打开草稿时接受BOOLEAN→TEXT读取，核验原类型与可选择文本、禁止提交、显式catalog→rows恢复及新TEXT编辑器原样提交字符串false/大整数；另测两阶段读取失败与恢复成功不解除旧UPDATE未知保护。只允许用户路径明确许可的一次UPDATE。计划六张正式PNG与完整axe、源码/图片hash、前后状态/焦点/选择及最终请求/效果证据，隐藏保留DOM与可见语义分别记录。
 
 实施者及主任务独立lint、strict TypeScript、四项发现和diff检查通过，尚未运行实际浏览器或生成六图；由新的精确CI验收，不能以此前结构单测代替。
+
+## 可空布尔字段的硬锁（2026-10-14 00:54 UTC，实施计划）
+
+真实Element Plus/jsdom已复现：DatabaseCellEditor的disabled=true在布尔字段选择NULL时被内部条件绕过。根因是父级把NULL值展示限制与在途请求/编辑主键硬锁共用disabled，子级又为允许退出NULL取消了全部禁用。最小修复：子组件始终遵守disabled；父级仅为非布尔字段叠加NULL显示限制，独立保留原在途和主键硬锁。不得通过允许用户重提或清除pending解决交互问题。
+
+新增真实组件与视图集成回归，覆盖NULL/非NULL、有/无硬锁、正常退出与重新选择NULL，以及在途/主键下禁止改变。只改相关组件和一处父级表达式，结构漂移与未知结果合同不变；针对性验证、精确整体验收后独立发布。
+
+## 数据库读取响应边界（2026-10-14 00:58 UTC，实施计划）
+
+已有fake复现rows:null被直接读取length、catalog.tables对象被find、source.project数字被trim导致渲染异常。正常Go路径通常分配数组，此处是缺失解码边界，不能称为已发生的线上响应故障。只对discovery/catalog/rows成功响应逐层解码，坏结构在写入store前以固定安全DATABASE_RESPONSE_INVALID拒绝，不保存响应正文、行值、凭据或cause；保留现有读失败与最后有效状态机制，不修改SQL结果和写入结果合同。
+
+对照Go模型区分必需与omitempty：合法nil切片sources/tables/rows/tags/ordering.columns归一为空数组，Table.columns允许缺失/null；其余必要成员缺失或类型错误拒绝。可选字段缺失保留兼容，writeMode与ordering显式null按既有缺省处理；表类型和名称按原字符串保留，不擅自收紧数据库命名规则。验证source用于分组/渲染的字段、列元数据、分页及行标量；保留bigint/decimal字符串原文，不把数字与字符串互转。有限浮点数保留现有JS数值语义，不能宣称恢复JSON解析前丢失的精度。目标身份、跨行列一致性及完整协议版本协商不混入本片。
+
+另已真实临时SQLite证实合法空列名可创建/插入/更新，Go mutationValues与引用逻辑也支持。刚增加的columnContract不应以空字符串误判无效：去掉该多余限制，保留重复空名称拒绝并补兼容回归。该修正不放宽字段值类型或重复列校验。
+
+计划新增decoder和纯/API fake回归，真实Pinia验证坏discovery/catalog不替换最后有效状态、connect读取坏catalog不保存新凭据；无真实数据库连接、网络监听或生产操作。独立审查与精确全量静态/构建后发布。
+
+可空布尔实施复核（00:59 UTC）：除了无条件遵守disabled与父级NULL限制拆分，真实组件交互还复现“下拉已打开后进入硬锁，旧选项仍触发update”边界，故updateBoolean在任何事件发出前拒绝disabled状态。保留未锁定NULL→true/false→NULL正常往返，不靠关闭菜单掩盖事件。
+
+新增17项真实Element Plus/视图集成回归，连同相关现有测试共116项通过；原HEAD549e207加相同测试的隔离快照六项失败，修复后17项全过，证明覆盖原缺陷。lint、Vue类型与diff检查通过；主任务已审查三处运行时变更及事件/父级集成断言，精确全量仍在执行。没有运行实际浏览器或数据库。
+
+可空布尔精确验收（01:00 UTC）：四文件快照完整2246单元/102文件、全量lint、Vue类型、生产构建、dist权限及540KiB预算全部退出成功，最大chunk518.0KiB；主任务精确diff复核无额外改动。本片不包含并行进行的数据库读取decoder及空列名兼容修正。
