@@ -389,8 +389,8 @@ function buildInput(runContainer: boolean): DockerContainerCreateInput {
     environment: Object.fromEntries(environment.value.filter((row) => row.key.trim()).map((row) => [row.key.trim(), row.value])),
     mounts: mounts.value.map((row) => ({
       type: row.type,
-      source: row.type === 'tmpfs' ? undefined : row.source.trim(),
-      target: row.target.trim(),
+      source: row.type === 'tmpfs' ? undefined : row.type === 'bind' ? row.source : row.source.trim(),
+      target: row.target,
       readOnly: row.readOnly,
     })),
     ports: ports.value.map((row) => ({
@@ -432,7 +432,7 @@ function validationMessage(input: DockerContainerCreateInput) {
   if (input.name && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(input.name)) return '容器名称只能包含字母、数字、点、下划线和连字符。'
   const rawEnvironmentKeys = environment.value.map((row) => row.key.trim()).filter(Boolean)
   if (environment.value.some((row) => !row.key.trim() && row.value) || rawEnvironmentKeys.some((key) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || new Set(rawEnvironmentKeys).size !== rawEnvironmentKeys.length) return '环境变量名称无效、缺失或重复。'
-  if (input.mounts?.some((mount) => !mount.target.startsWith('/') || (mount.type !== 'tmpfs' && !mount.source))) return '挂载项必须填写来源和绝对目标路径。'
+  if (input.mounts?.some((mount) => !mount.target.startsWith('/') || (mount.type !== 'tmpfs' && !mount.source) || (mount.type === 'bind' && !mount.source?.startsWith('/')))) return '挂载项必须填写来源和绝对目标路径。'
   const mountTargets = input.mounts?.map((mount) => mount.target) ?? []
   if (new Set(mountTargets).size !== mountTargets.length) return '同一个容器路径不能重复挂载。'
   if (input.ports?.some((port) => !Number.isInteger(port.containerPort) || port.containerPort < 1 || port.containerPort > 65535)) return '容器端口必须是 1–65535 的整数。'

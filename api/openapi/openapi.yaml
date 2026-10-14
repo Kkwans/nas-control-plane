@@ -1436,7 +1436,7 @@ paths:
         - name: path
           in: query
           required: true
-          description: 要读取的绝对 NAS 路径
+          description: 要读取的绝对 NAS 路径；不去除首尾空白，名称中的空白会原样保留，仍按既有规则清理路径分隔符和点段。
           schema: { type: string, minLength: 1, maxLength: 4096 }
         - name: cursor
           in: query
@@ -4093,8 +4093,13 @@ components:
       required: [type, target]
       properties:
         type: { type: string, enum: [bind, volume, tmpfs] }
-        source: { type: string }
-        target: { type: string, minLength: 1 }
+        source:
+          type: string
+          description: bind 使用绝对宿主机路径并原样保留名称中的空白；volume 使用卷名并去除首尾空白；tmpfs 不需要来源。
+        target:
+          type: string
+          minLength: 1
+          description: 容器内绝对目标路径，原样保留名称中的空白；前导空白不能替代绝对路径开头的斜线。
         readOnly: { type: boolean, default: false }
         volumeDriver: { type: string }
         tmpfsSizeBytes: { type: integer, minimum: 0 }

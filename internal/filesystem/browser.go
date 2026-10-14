@@ -52,7 +52,7 @@ type Request struct {
 }
 
 func (r Request) Normalize() (Request, error) {
-	path := strings.TrimSpace(r.Path)
+	path := r.Path
 	if path == "" || !filepath.IsAbs(path) {
 		return Request{}, coded("FILES_PATH_INVALID", errors.New("path must be a clean absolute path"))
 	}
