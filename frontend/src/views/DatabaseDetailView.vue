@@ -890,7 +890,6 @@ function clearError() {
 
 .diagnostic-result code {
   border: 1px solid currentColor;
-  opacity: .82;
 }
 
 .table-list {

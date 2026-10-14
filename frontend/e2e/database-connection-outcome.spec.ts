@@ -113,6 +113,8 @@ async function noConfirmedConnection(page: Page) {
 async function keyboardActions(page: Page) {
   await field(page, '数据库名').focus()
   await page.keyboard.press('Tab')
+  await expect(form(page).getByRole('button', { name: '设置证书校验 TLS', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(testConnection(page)).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(connect(page)).toBeFocused()
