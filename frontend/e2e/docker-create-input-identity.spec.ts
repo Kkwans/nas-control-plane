@@ -6,15 +6,16 @@ import { fileURLToPath } from 'node:url'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { overviewDocker, summary } from './mockApi'
+import type { DockerContainerCreateInput } from '../src/api/system'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
 const stamp = '2026-10-14T20:00:00.000Z'
 const createPath = '/api/v1/docker/containers'
 const argv = ['/app/server ', '  leading  spaces  ', ' ', '"quoted value"', '$APP_MODE && echo ok; $(literal) | *', '--name=a b']
-const mount = { type: 'bind', source: '/fixture/source  ', target: '/data/target  ', readOnly: false }
+const mount = { type: 'bind' as const, source: '/fixture/source  ', target: '/data/target  ', readOnly: false }
 const device = { hostPath: '/dev/fixture  ', containerPath: '/dev/target  ', cgroupPermissions: 'rwm' }
 const inventory = { ...overviewDocker, collectedAt: stamp, containers: [], projects: [], engine: { ...overviewDocker.engine, containers: 0, containersRunning: 0, containersStopped: 0, images: 1 } }
-function expectedInput(defaultCommand: boolean) {
+function expectedInput(defaultCommand: boolean): DockerContainerCreateInput {
   return { image: 'identity:latest', name: 'identity', restartPolicy: 'no', environment: {}, mounts: defaultCommand ? [] : [mount], ports: [],
     ...(defaultCommand ? {} : { command: argv }), privileged: false, capAdd: [], capDrop: [], devices: defaultCommand ? [] : [device], runContainer: true }
 }
@@ -26,7 +27,7 @@ function deferred() {
 
 // 只允许指定来源的静态 GET 与精确 API 白名单。创建许可仅供一次真实确认点击消费；
 // 未知请求、重发、WebSocket 均失败关闭，内存 SSE 不访问 Docker、NAS 或宿主机。
-async function fixture(page: Page, origin: string, expected: ReturnType<typeof expectedInput>, allowRootDirectory = false) {
+async function fixture(page: Page, origin: string, expected: DockerContainerCreateInput, allowRootDirectory = false) {
   await page.clock.setFixedTime(new Date(stamp))
   await page.addInitScript(() => {
     class SilentSource extends EventTarget {
@@ -283,5 +284,160 @@ for (const width of [390, 1440]) {
       evidenceKind: 'keyboard-modal-navigation', testTitle: info.title, states, requests: api.requests, writes: api.writes, denied: api.denied, errors: api.errors,
       noWriteObservationMilliseconds: 6000 }, null, 2))
     await info.attach('keyboard-modal-navigation', { path, contentType: 'application/json' })
+  })
+}
+
+const portCases = [
+  {
+    name: 'loopback-ipv6',
+    inputs: [
+      { hostIp: ' 127.0.0.1 ', hostPort: '8080', containerPort: '80', protocol: 'tcp' },
+      { hostIp: ' 2001:db8::1 ', hostPort: '8082', containerPort: '82', protocol: 'sctp' },
+    ],
+    ports: [
+      { hostIp: '127.0.0.1', hostPort: 8080, containerPort: 80, protocol: 'tcp' },
+      { hostIp: '2001:db8::1', hostPort: 8082, containerPort: 82, protocol: 'sctp' },
+    ],
+    preview: [
+      ['主机 IP：127.0.0.1', '主机端口：8080', '容器端口：80/tcp'],
+      ['主机 IP：2001:db8::1', '主机端口：8082', '容器端口：82/sctp'],
+    ],
+  },
+  {
+    name: 'wildcard-default',
+    inputs: [
+      { hostIp: '0.0.0.0', hostPort: '8081', containerPort: '81', protocol: 'udp' },
+      { hostIp: '   ', hostPort: '', containerPort: '83', protocol: 'tcp' },
+    ],
+    ports: [
+      { hostIp: '0.0.0.0', hostPort: 8081, containerPort: 81, protocol: 'udp' },
+      { containerPort: 83, protocol: 'tcp' },
+    ],
+    preview: [
+      ['主机 IP：0.0.0.0', '主机端口：8081', '容器端口：81/udp'],
+      ['主机 IP：未指定（由 Docker 默认配置决定）', '主机端口：随机', '容器端口：83/tcp'],
+    ],
+  },
+] satisfies Array<{ name: string; inputs: Array<{ hostIp: string; hostPort: string; containerPort: string; protocol: string }>; ports: DockerContainerCreateInput['ports']; preview: string[][] }>
+
+async function portGeometry(page: Page) {
+  return page.locator('ol[aria-label="端口映射"]').evaluate((list) => {
+    const dialog = list.closest('[role="dialog"]')!
+    const clips: Array<{ x: boolean; y: boolean; bounds: DOMRect }> = []
+    for (let ancestor: Element | null = list; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor)
+      const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+      if (x || y) clips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+    }
+    const fields = [...list.querySelectorAll('li > span')].map((field) => {
+      const bounds = field.getBoundingClientRect(), range = document.createRange()
+      range.selectNodeContents(field)
+      const lines = [...range.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+      return { text: field.textContent, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
+        fullTextVisible: lines.length > 0 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && line.top >= bounds.top - 1 && line.bottom <= bounds.bottom + 1 && line.left >= -1 && line.right <= innerWidth + 1 && line.top >= -1 && line.bottom <= innerHeight + 1 && clips.every((clip) => (!clip.x || line.left >= clip.bounds.left - 1 && line.right <= clip.bounds.right + 1) && (!clip.y || line.top >= clip.bounds.top - 1 && line.bottom <= clip.bounds.bottom + 1))) }
+    })
+    return { rows: [...list.querySelectorAll('li')].map((row) => [...row.querySelectorAll('span')].map((field) => field.textContent)), fields,
+      viewport: { width: innerWidth, height: innerHeight }, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
+      dialogBounds: dialog.getBoundingClientRect().toJSON(), listBounds: list.getBoundingClientRect().toJSON(),
+      clips: clips.map((clip) => ({ ...clip, bounds: clip.bounds.toJSON() })), focusInside: dialog.contains(document.activeElement) }
+  })
+}
+
+for (const width of [390, 1440]) for (const scenario of portCases) {
+  test(`${width}px ${scenario.name} 端口确认预览与规范化请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+    const expected: DockerContainerCreateInput = { ...expectedInput(true), ports: scenario.ports }
+    const api = await fixture(page, new URL(baseURL!).origin, expected)
+    await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: '镜像', exact: true }).click()
+    await page.getByRole('button', { name: '从镜像 identity:latest 创建容器', exact: true }).filter({ visible: true }).click()
+    const drawer = page.locator('.create-container-drawer')
+    await expect(drawer).toBeVisible()
+    await expect.poll(() => api.requests.includes('GET /api/v1/docker/resources')).toBe(true)
+    await expect(drawer.getByText('正在读取 Docker 网络、卷和端口清单…', { exact: true })).toHaveCount(0)
+    for (const [index, input] of scenario.inputs.entries()) {
+      await drawer.getByRole('button', { name: '添加端口映射', exact: true }).click()
+      const row = drawer.locator('.repeat-row--port').nth(index)
+      await row.getByPlaceholder('主机 IP（可选）', { exact: true }).fill(input.hostIp)
+      if (input.hostPort) await row.getByPlaceholder('主机端口', { exact: true }).fill(input.hostPort)
+      await row.getByPlaceholder('容器端口', { exact: true }).fill(input.containerPort)
+      if (input.protocol !== 'tcp') {
+        await row.getByRole('combobox', { name: `第 ${index + 1} 个端口映射协议`, exact: true }).click()
+        await page.getByRole('option', { name: input.protocol.toUpperCase(), exact: true }).click()
+      }
+    }
+    const opener = drawer.getByRole('button', { name: '创建并启动', exact: true })
+    await opener.focus(); await page.keyboard.press('Enter')
+    const preview = page.getByRole('dialog', { name: '确认容器配置', exact: true })
+    await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    const confirm = preview.getByRole('button', { name: '确认创建并启动', exact: true })
+    await confirm.focus(); await page.keyboard.press('Tab')
+    await expect(preview.locator('.el-dialog__headerbtn')).toBeFocused()
+    await page.keyboard.press('Shift+Tab'); await expect(confirm).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(preview).not.toBeVisible(); await expect(opener).toBeFocused()
+    expect(api.writes).toEqual([])
+    await page.keyboard.press('Enter'); await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    await page.evaluate(() => document.fonts.ready)
+    await preview.locator('ol[aria-label="端口映射"]').scrollIntoViewIfNeeded()
+    await page.waitForTimeout(350)
+    const before = await portGeometry(page), requestsBefore = [...api.requests]
+    const prefix = `docker-create-ports-${scenario.name}-${width}`
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const png = info.outputPath('ui-captures', `${prefix}.png`)
+    await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
+    const after = await portGeometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await portGeometry(page)
+    const captureState = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
+    const screenshotSha256 = createHash('sha256').update(await readFile(png)).digest('hex')
+    await writeFile(captureState, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+      evidenceKind: 'pre-create-port-preview', testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      expectedInput: expected, expectedPreview: scenario.preview, screenshot: `${prefix}.png`, screenshotSha256,
+      beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests],
+      writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+      keyboard: { tabWrappedToClose: true, shiftTabWrappedToConfirm: true, escapeRestoredOpener: true } }, null, 2))
+    await info.attach(prefix, { path: png, contentType: 'image/png' })
+    await info.attach(`${prefix}-axe-state`, { path: captureState, contentType: 'application/json' })
+    for (const sample of [before, after, afterAxe]) {
+      expect(sample.rows).toEqual(scenario.preview)
+      expect(sample.fields).toHaveLength(6)
+      expect(sample.fields.every((field) => field.fullTextVisible), JSON.stringify(sample)).toBe(true)
+      expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)
+      expect(sample.dialogBounds.left).toBeGreaterThanOrEqual(-1)
+      expect(sample.dialogBounds.right).toBeLessThanOrEqual(width + 1)
+      expect(sample.focusInside).toBe(true)
+    }
+    expect(after).toEqual(before); expect(afterAxe).toEqual(before)
+    expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+    expect(api.requests).toEqual(requestsBefore); expect(api.writes).toEqual([])
+    api.authorize()
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === createPath && response.request().method() === 'POST')
+    try {
+      await confirm.click()
+      await api.received.promise
+      expect(api.writes).toEqual([expected])
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
+      api.release.resolve()
+      const response = await responsePromise
+      expect(response.status()).toBe(201)
+      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
+      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      await expect(preview).not.toBeVisible()
+      await page.waitForTimeout(6000)
+      expect(api.writes).toEqual([expected])
+      expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
+      expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
+      await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+        evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
+        testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+        preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
+        replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+        status: response.status(), response: await response.json() }, null, 2))
+      await info.attach('strict-port-create-receipt', { path: receiptPath, contentType: 'application/json' })
+    } finally { api.release.resolve() }
   })
 }
