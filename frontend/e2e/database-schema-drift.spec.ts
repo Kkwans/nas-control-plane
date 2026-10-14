@@ -104,7 +104,7 @@ async function fixture(page: Page) {
       try {
         const failed = failRead === kind
         reads.push({ kind, schema: currentSchema, failed })
-        if (failed) return await route.fulfill({ status: 503, json: { code: 'agent_unavailable', message: 'fixture-only read failure' } })
+        if (failed) return await route.fulfill({ status: 503, json: { code: 'agent_unavailable', message: 'fixture-only read failure', requestId: 'fixture-schema-read-failure' } })
         return await route.fulfill({ json: kind === 'catalog'
           ? { source, tables: [table(currentSchema)] }
           : { table: table(currentSchema, true), rows: [row], limit: 10, offset: 0, hasMore: false, ordering: { stable: true, columns: ['id'] } } })

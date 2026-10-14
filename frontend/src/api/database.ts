@@ -1,4 +1,4 @@
-import { NcpApiError } from './system'
+import { isApiErrorResponse, NcpApiError } from './systemTransport'
 import { requestDatabaseInsert } from './databaseInsertOutcome'
 import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
 import { requestDatabaseQuery } from './databaseQueryOutcome'
@@ -189,13 +189,18 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
     ...(signal ? { signal } : {}),
   })
   if (!response.ok) {
+    let payload: unknown
     try {
-      const error = await response.json() as { code?: string; message?: string; requestId?: string }
-      throw new NcpApiError(error.code || 'DATABASE_OPERATION_FAILED', error.message || '数据库操作失败。', error.requestId)
-    } catch (error) {
-      if (error instanceof NcpApiError) throw error
-      throw new NcpApiError('DATABASE_OPERATION_FAILED', '数据库操作失败。')
+      payload = await response.json()
+    } catch {
+      // 畸形正文和底层读取异常不进入诊断对象。
     }
+    // Go ErrorResponse 一直包含三个自有字符串字段，缺失或类型错误不是旧版本兼容值。
+    if (!Array.isArray(payload) && isApiErrorResponse(payload)
+      && ['code', 'message', 'requestId'].every((key) => Object.hasOwn(payload, key))) {
+      throw new NcpApiError(payload.code || 'DATABASE_OPERATION_FAILED', payload.message || '数据库操作失败。', payload.requestId)
+    }
+    throw new NcpApiError('DATABASE_OPERATION_FAILED', '数据库操作失败。')
   }
   try {
     return await response.json() as T

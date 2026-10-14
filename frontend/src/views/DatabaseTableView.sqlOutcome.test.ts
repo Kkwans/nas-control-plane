@@ -307,7 +307,7 @@ describe('SQL 真实响应结果状态', () => {
     expect(queryCalls()).toHaveLength(2)
   })
 
-  it('合法 SQL 完成后 rows 的恶意错误码导致本地分类异常也只报告刷新失败', async () => {
+  it('合法 SQL 完成后 rows 的畸形错误响应安全降级且只报告刷新失败', async () => {
     await mount()
     rowsResponse.mockImplementationOnce(async () => json({ code: { toString: null }, message: 'private-read-error', requestId: 'fixture' }, 400))
     executeButton().click(); await settle()
@@ -315,7 +315,7 @@ describe('SQL 真实响应结果状态', () => {
     expect(rowsCalls()).toHaveLength(2)
     expect(host.querySelector('.query-message--success')).not.toBeNull()
     expect(host.querySelector('.query-refresh-warning')?.textContent).toContain('SQL 已执行，表数据刷新失败')
-    expect(host.querySelector('.query-refresh-warning')?.textContent).toContain('DATABASE_ROWS_REFRESH_FAILED')
+    expect(host.querySelector('.query-refresh-warning')?.textContent).toContain('DATABASE_OPERATION_FAILED')
     expect(host.textContent).not.toMatch(/SQL 请求未发送|private-read-error/)
     expect(errorText()).toBe('')
     expect(warning()).toBeNull()

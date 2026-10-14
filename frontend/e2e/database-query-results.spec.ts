@@ -188,7 +188,7 @@ for (const width of [320, 390]) {
       await page.route('**/api/v1/databases/rows', async (route) => {
         rowsRequests += 1
         if (!refreshFailed) return route.fallback()
-        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ code: 'database_not_found', message: 'Fixture table not found' }) })
+        await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ code: 'database_not_found', message: 'Fixture table not found', requestId: 'fixture-table-not-found' }) })
       })
       await page.route('**/api/v1/databases/query', async (route) => {
         requests.push(route.request().postDataJSON())
@@ -390,7 +390,7 @@ test('整页超预算连续失败后不会跳页，最后一页仍可回退', as
     offsets.push(offset)
     if (offset === limit && failures > 0) {
       failures -= 1
-      return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture table page too large' }) })
+      return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ code: 'result_too_large', message: 'Fixture table page too large', requestId: 'fixture-table-page-too-large' }) })
     }
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
       table: { schema: '', name: 'settings', type: 'table', columns: [] },
