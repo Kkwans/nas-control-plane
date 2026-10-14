@@ -11,28 +11,42 @@ import (
 	"strings"
 )
 
-type databaseTLSMode string
+type TLSMode string
+
+type databaseTLSMode = TLSMode
 
 const (
-	databaseTLSVerifyFull databaseTLSMode = "verify-full"
-	databaseTLSMaxCABytes                 = 64 << 10
-	databaseTLSMaxCACerts                 = 32
+	TLSVerifyFull         TLSMode = "verify-full"
+	databaseTLSVerifyFull         = TLSVerifyFull
+	databaseTLSMaxCABytes         = 64 << 10
+	databaseTLSMaxCACerts         = 32
 )
 
-// databaseTLSPolicy 目前只是包内基础类型，尚未接入凭据、RPC 或数据库连接。
+// TLSPolicy 是凭据、RPC 与严格连接器共用的完整验证策略。
 // CAPEM 为空表示使用系统根；非空时仅信任这些 CA，不合并系统根。
-type databaseTLSPolicy struct {
-	Mode       databaseTLSMode `json:"mode"`
-	CAPEM      string          `json:"caPEM,omitempty"`
-	ServerName string          `json:"serverName,omitempty"`
+type TLSPolicy struct {
+	Mode       TLSMode `json:"mode"`
+	CAPEM      string  `json:"caPEM,omitempty"`
+	ServerName string  `json:"serverName,omitempty"`
 }
 
-// 不保留原始输入或解析错误链，也不在本阶段增加传输层错误码。
+type databaseTLSPolicy = TLSPolicy
+
+// ValidateRequiredTLSPolicy 校验策略自身，不读取文件、系统根或网络。
+// nil 也拒绝；错误不保留输入、PEM 或解析错误链。
+func ValidateRequiredTLSPolicy(policy *TLSPolicy) error {
+	if err := validateRequiredDatabaseTLSPolicy(policy); err != nil {
+		return &DatabaseError{Code: CodeTLSConfigurationInvalid, Operation: "tls_policy_validate"}
+	}
+	return nil
+}
+
+// 包内配置错误使用固定 sentinel，边界映射为稳定错误码。
 var errDatabaseTLSConfigurationInvalid = errors.New("tls_configuration_invalid")
 
 // compileDatabaseTLS 是纯配置编译器，不解析 DSN、不读文件、不联网。
-// nil policy 返回 nil, nil，供未来调用方保留旧路径；这不是 TLS 安全承诺。
-// 未来严格 RPC/v2 凭据入口仍须单独要求非 nil policy，不能将缺省当作成功。
+// nil policy 返回 nil, nil，供调用方保留旧路径；这不是 TLS 安全承诺。
+// 严格 RPC/v2 凭据入口单独要求非 nil policy，不能将缺省当作成功。
 // dialHost 必须是实际拨号的单个 host，而非地址、URL 或 socket 路径。
 // 即使提供 ServerName 也校验 dialHost；覆盖只改变验证身份，不改变拨号目标。
 // 每次调用都新建配置和自定义根池；调用方负责连接器的无明文 fallback 约束。

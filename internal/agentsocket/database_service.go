@@ -1,8 +1,10 @@
 package agentsocket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"google.golang.org/grpc/codes"
@@ -36,8 +38,28 @@ type DatabaseQueryOptionsProvider interface {
 	QueryWithOptions(context.Context, ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error)
 }
 
+// DatabaseTLSPolicyProvider 显式承诺全部建连入口都会执行 TLS 策略。
+type DatabaseTLSPolicyProvider interface {
+	DatabaseProvider
+	DatabaseConnectionProvider
+	DatabaseQueryOptionsProvider
+	SupportsDatabaseTLSPolicy() bool
+}
+
 type databaseService struct {
-	provider DatabaseProvider
+	provider       DatabaseProvider
+	strictProvider DatabaseTLSPolicyProvider
+}
+
+type databaseTLSService struct{ *databaseService }
+
+func (*databaseTLSService) databaseTLSServiceMarker() {}
+
+func newDatabaseTLSService(provider DatabaseTLSPolicyProvider) (*databaseTLSService, error) {
+	if provider == nil || !provider.SupportsDatabaseTLSPolicy() {
+		return nil, &ncpdatabase.DatabaseError{Code: ncpdatabase.CodeTLSPolicyUnsupported}
+	}
+	return &databaseTLSService{databaseService: &databaseService{provider: provider, strictProvider: provider}}, nil
 }
 
 func newDatabaseService(provider DatabaseProvider) *databaseService {
@@ -65,15 +87,19 @@ func (s *databaseService) Discover(ctx context.Context, request *structpb.Struct
 }
 
 func (s *databaseService) TestConnection(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	var decoded ncpdatabase.Connection
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded); err != nil {
+		return nil, err
+	}
+	if s.strictProvider != nil {
+		result, err := s.strictProvider.TestConnection(ctx, decoded)
+		return databaseResponse(result, err)
+	}
 	tester, ok := s.provider.(DatabaseConnectionProvider)
 	if !ok {
 		return databaseResponse(ncpdatabase.ConnectionDiagnostic{}, &ncpdatabase.DatabaseError{
 			Code: ncpdatabase.CodeAgentUnavailable, Operation: "test_connection",
 		})
-	}
-	var decoded ncpdatabase.Connection
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
-		return nil, err
 	}
 	result, err := tester.TestConnection(ctx, decoded)
 	return databaseResponse(result, err)
@@ -81,7 +107,7 @@ func (s *databaseService) TestConnection(ctx context.Context, request *structpb.
 
 func (s *databaseService) Catalog(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.CatalogRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Catalog(ctx, decoded)
@@ -90,7 +116,7 @@ func (s *databaseService) Catalog(ctx context.Context, request *structpb.Struct)
 
 func (s *databaseService) Query(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.QueryRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Query(ctx, decoded)
@@ -99,11 +125,15 @@ func (s *databaseService) Query(ctx context.Context, request *structpb.Struct) (
 
 func (s *databaseService) QueryWithOptions(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.QueryRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	if err := ncpdatabase.ValidateQueryResultMode(decoded.ResultMode); err != nil {
 		return databaseResponse(nil, err)
+	}
+	if s.strictProvider != nil {
+		result, err := s.strictProvider.QueryWithOptions(ctx, decoded)
+		return databaseResponse(result, err)
 	}
 	provider, ok := s.provider.(DatabaseQueryOptionsProvider)
 	if !ok {
@@ -117,7 +147,7 @@ func (s *databaseService) QueryWithOptions(ctx context.Context, request *structp
 
 func (s *databaseService) Rows(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.RowsRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Rows(ctx, decoded)
@@ -126,7 +156,7 @@ func (s *databaseService) Rows(ctx context.Context, request *structpb.Struct) (*
 
 func (s *databaseService) Insert(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.InsertRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Insert(ctx, decoded)
@@ -135,7 +165,7 @@ func (s *databaseService) Insert(ctx context.Context, request *structpb.Struct) 
 
 func (s *databaseService) Update(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.UpdateRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Update(ctx, decoded)
@@ -144,7 +174,7 @@ func (s *databaseService) Update(ctx context.Context, request *structpb.Struct) 
 
 func (s *databaseService) Delete(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.DeleteRequest
-	if err := decodeDatabaseRequest(request, &decoded); err != nil {
+	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Delete(ctx, decoded)
@@ -163,6 +193,124 @@ func decodeDatabaseRequest(request *structpb.Struct, destination any) error {
 		return grpcstatus.Error(codes.InvalidArgument, "数据库请求格式无效")
 	}
 	return nil
+}
+
+// 每个建连入口都在调用 provider 前检查策略；旧 namespace 也不能吞掉 TLS。
+func (s *databaseService) decodeConnectionRequest(request *structpb.Struct, destination any, connection *ncpdatabase.Connection) error {
+	if s.strictProvider != nil {
+		if err := decodeStrictDatabaseRequest(request, destination); err != nil {
+			return err
+		}
+		if err := ncpdatabase.ValidateRequiredTLSPolicy(connection.Credentials.TLS); err != nil {
+			_, statusErr := databaseResponse(nil, err)
+			return statusErr
+		}
+		return nil
+	}
+	if err := decodeDatabaseRequest(request, destination); err != nil {
+		return err
+	}
+	if connection.Credentials.TLS != nil {
+		return grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeTLSPolicyUnsupported))
+	}
+	return nil
+}
+
+func decodeStrictDatabaseRequest(request *structpb.Struct, destination any) error {
+	if request == nil {
+		return grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeTLSConfigurationInvalid))
+	}
+	encoded, err := json.Marshal(request.AsMap())
+	if err != nil {
+		return grpcstatus.Error(codes.InvalidArgument, "数据库请求格式无效")
+	}
+	return decodeStrictDatabaseJSON(encoded, destination)
+}
+
+// 在结构体解码前检查协议对象，拒绝 Go JSON 的重复合并、大小写别名和 null 字符串。
+// values/keys 是用户数据，其列名保持大小写敏感，不按协议字段规则重写。
+func decodeStrictDatabaseJSON(encoded []byte, destination any) error {
+	invalid := grpcstatus.Error(codes.InvalidArgument, "数据库请求格式无效")
+	invalidTLS := grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeTLSConfigurationInvalid))
+	root, err := strictDatabaseJSONObject(encoded, []string{"sourceId", "credentials", "sql", "resultMode", "schema", "table", "limit", "offset", "sortColumn", "sortDirection", "values", "keys"}, invalid)
+	if err != nil {
+		return err
+	}
+	if raw, present := root["credentials"]; present {
+		credentials, err := strictDatabaseJSONObject(raw, []string{"username", "password", "token", "database", "tls"}, invalidTLS)
+		if err != nil {
+			return err
+		}
+		if raw, present := credentials["tls"]; present {
+			policy, err := strictDatabaseJSONObject(raw, []string{"mode", "caPEM", "serverName"}, invalidTLS)
+			if err != nil {
+				return err
+			}
+			for _, raw := range policy {
+				var value any
+				if json.Unmarshal(raw, &value) != nil {
+					return invalidTLS
+				}
+				if _, ok := value.(string); !ok {
+					return invalidTLS
+				}
+			}
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return invalid
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return invalid
+	}
+	return nil
+}
+
+func strictDatabaseJSONObject(encoded []byte, allowed []string, invalid error) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, invalid
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, invalid
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, invalid
+		}
+		canonical := false
+		for _, name := range allowed {
+			if key == name {
+				canonical = true
+				break
+			}
+		}
+		if !canonical {
+			return nil, invalid
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, invalid
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, invalid
+		}
+		fields[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, invalid
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, invalid
+	}
+	return fields, nil
 }
 
 func databaseResponse(result any, err error) (*structpb.Struct, error) {

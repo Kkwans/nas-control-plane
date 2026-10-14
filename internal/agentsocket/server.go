@@ -199,7 +199,7 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerInventoryEventsServiceServer(grpcServer, newDockerInventoryEventsService(dockerInventoryEvents))
 	RegisterAgentFilesystemServiceServer(grpcServer, newFilesystemService(filesystemProvider))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
-	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
+	registerDatabaseServices(grpcServer, databaseProvider)
 	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))
 	RegisterAgentWebProbeServiceServer(grpcServer, newWebProbeService())
 	RegisterAgentSystemServiceServer(grpcServer, NewSystemService(systemProvider))

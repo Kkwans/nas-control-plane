@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -41,6 +42,9 @@ type Manager struct {
 	now        func() time.Time
 	registry   sourceRegistry
 	discoverFn func(context.Context) (Discovery, error)
+	// 仅替换单个实例的打开边界，供无网络测试使用；严格配置构造不允许替换。
+	sqlOpen   func(string, string) (*sql.DB, error)
+	sqlOpenDB func(driver.Connector) *sql.DB
 }
 
 const discoveryTTL = 10 * time.Second
@@ -55,6 +59,11 @@ type sourceRegistry struct {
 
 func NewManager() *Manager {
 	return &Manager{now: time.Now}
+}
+
+// SupportsDatabaseTLSPolicy 承诺全部建连入口都经过严格策略分派，且不降级重试。
+func (m *Manager) SupportsDatabaseTLSPolicy() bool {
+	return true
 }
 
 func (m *Manager) TestConnection(ctx context.Context, request Connection) (ConnectionDiagnostic, error) {
@@ -381,6 +390,8 @@ func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationRe
 }
 
 func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, error) {
+	// 在 discovery 等外部调用之前固定策略，避免调用方持有的指针改变建连语义。
+	connection.Credentials = CloneCredentials(connection.Credentials)
 	discovery, err := m.Discover(ctx)
 	if err != nil {
 		return Source{}, nil, MapError(ctx, Source{}, "discover", err)
@@ -395,13 +406,30 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 	if source.ID == "" {
 		return Source{}, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
 	}
-	driver, dsn, err := connectionString(source, connection.Credentials)
-	if err != nil {
-		return Source{}, nil, MapError(ctx, source, "connect", err)
-	}
-	db, err := sql.Open(driver, dsn)
-	if err != nil {
-		return Source{}, nil, MapError(ctx, source, "connect", err)
+	var db *sql.DB
+	if connection.Credentials.TLS != nil {
+		connector, err := newDatabaseTLSConnector(source, connection.Credentials, connection.Credentials.TLS)
+		if err != nil {
+			return Source{}, nil, MapError(ctx, source, "connect", err)
+		}
+		openDB := m.sqlOpenDB
+		if openDB == nil {
+			openDB = sql.OpenDB
+		}
+		db = openDB(connector)
+	} else {
+		driverName, dsn, err := connectionString(source, connection.Credentials)
+		if err != nil {
+			return Source{}, nil, MapError(ctx, source, "connect", err)
+		}
+		open := m.sqlOpen
+		if open == nil {
+			open = sql.Open
+		}
+		db, err = open(driverName, dsn)
+		if err != nil {
+			return Source{}, nil, MapError(ctx, source, "connect", err)
+		}
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)

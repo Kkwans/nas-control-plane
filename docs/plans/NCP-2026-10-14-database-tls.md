@@ -198,3 +198,15 @@ A0新增一致快照及SQLite条件保存/禁用/原子轮换原语，18组临�
 ## 十一、T2-A1 并发保存保护代码接入（2026-10-14 07:28 UTC）
 
 ManualConnect已在测试前冻结revision并条件保存，Resolve与轮换也切到原始快照条件写入。409只表示本次凭据未保存，保留草稿并禁止自动重试；持久化提交未知仍按503/结果未知处理。移除旧无条件写入口，轮换冲突不撤销已发布key，版本溢出/重用失败关闭。详见专项A1记录与测试证据。此处描述仓库代码接入，不表示生产已部署；TLS运行入口、v2和严格RPC仍未开放。
+
+## 十二、T3 交互与公开合同细化（设计，尚未实施）
+
+- 复用现有连接 panel、NcpSelect、Element Plus 和 Lucide；已有 catalog 时增加“连接设置”入口展开同一内联表单，不能只向未连接分支添加字段。MySQL/PostgreSQL提供入口，SQLite没有。保留原两列/窄屏单列，TLS字段整行；用明确class替换 last-of-type 布局假设。
+- 用“设置证书校验 TLS”显式进入草稿，模式固定 verify-full；信任来源需选择“Root Agent 系统根证书”或“自定义 PEM CA”。自定义只信任输入CA、不与系统根合并，首版粘贴不上传。可选服务器名只改变验证/SNI、不改变目标。撤销仅清本次编辑并省略policy，明确仍继承已保存严格策略，不提供关闭/跳过校验按钮。
+- 未编辑完全省略 tls，编辑后发送显式对象，禁止 null/空对象/重复或大小写混淆键。TLS-only算手动意图，但不得偷偷取保存密码；空密码仍可合法，用户名/有效数据库要求不放宽。保存策略是服务端事实，不从source标签或缓存推断；旧CA不回填。
+- 单一深复制函数覆盖View提交、store接入/发布和connection返回。冻结source ID/目标绑定、session、sequence、draft revision及嵌套policy；connect/catalog用同一提交。请求期间编辑使本次草稿验证状态失效，迟到结果不清空新草稿；切源、同ID换目标、退出和unmount清草稿、CA、密码、证明，阻止旧结果发布。
+- 本地检查UTF-8 65536字节与32证书边界，不能用字符数代替字节预算或静默截断；PEM只预检，DER/CA/KeyUsage由后端权威判断。serverName对齐T0的原始输入总长<=253、label<=63、ASCII DNS/raw IP、单尾点规则；不trim修复非法非空输入。错误靠近字段并关联描述，首次无效提交聚焦首错。
+- 当前诊断无TLS已应用证明。设置入口本身不产生安全锁或“已加密”状态。未来可扩展严格校验的 appliedTls 摘要：mode、trust、实际serverName，且只能来自本次严格adapter成功建连；不含CA/密码/DSN，旧响应缺省保持未知，坏摘要拒绝。没有这项合同也可提供设置入口，但继续不显示验证成功徽标。该摘要仅证明本次测试/连接，不宣称后续所有请求或长期状态。
+- 连接结果未知、准确409本次未保存、已确认后目录失败三类继续区分；均保留草稿，不重试/移除TLS。新TLS码不会自动进入SQL/写入前置拒绝白名单；只有证明确在保存前拒绝的HTTP合同才考虑扩展connect白名单。
+- T3删除HTTP gate的同一提交同步共用Credentials/OpenAPI/fixtures，八入口一致：tls对象additionalProperties=false、required mode、可选非null字符串，拒绝null/未知/歧义字段；CA字节/数量限制以服务端为准，整体1MiB预算保留。不得先发布会发TLS的UI再补后端。无旧Agent探测后去TLS重试。
+- 验收包括390/1440/大字号无横向滚动、键盘select/textarea/折叠焦点、错误关联、reduced motion；嵌套草稿竞态、same-ID目标变更、session清理、错误正文防泄漏、系统/自定义切换残留、64KiB与32/33边界、旧响应不出锁及准确409/未知/目录失败。未来浏览器截图使用合成fixture，不等同真实TLS握手或部署。

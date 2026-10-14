@@ -312,11 +312,24 @@ type encryptedCredentialEnvelope struct {
 	Ciphertext string `json:"ciphertext"`
 }
 
-// credentialValue 是尚未接入公开 Credentials、vault 或 RPC 的私有载体。
-// nil 策略仍写 v1；只有包内显式传入有效策略才会写 v2。
+// credentialValue 是 codec 的规范化载体：legacyCredentials.TLS 恒为 nil。
+// TLS 只由 tls 保存，转换函数深复制并清除公开字段，避免两个策略真值。
 type credentialValue struct {
 	legacyCredentials Credentials
 	tls               *databaseTLSPolicy
+}
+
+func credentialValueFromCredentials(credentials Credentials) credentialValue {
+	credentials = CloneCredentials(credentials)
+	policy := credentials.TLS
+	credentials.TLS = nil
+	return credentialValue{legacyCredentials: credentials, tls: policy}
+}
+
+func (value credentialValue) credentials() Credentials {
+	credentials := value.legacyCredentials
+	credentials.TLS = value.tls
+	return CloneCredentials(credentials)
 }
 
 func cloneCredentialValue(value credentialValue) credentialValue {
@@ -340,6 +353,7 @@ type credentialPayloadV2 struct {
 }
 
 func EncryptCredentials(ctx context.Context, provider KeyProvider, aad string, credentials Credentials) ([]byte, int, error) {
+	value := credentialValueFromCredentials(credentials)
 	if err := contextError(ctx); err != nil {
 		return nil, 0, err
 	}
@@ -350,16 +364,16 @@ func EncryptCredentials(ctx context.Context, provider KeyProvider, aad string, c
 	if err != nil {
 		return nil, 0, credentialCodecKeyError("credential_encrypt", err)
 	}
-	return encryptCredentialValueWithKey(ctx, material, aad, credentialValue{legacyCredentials: credentials})
+	return encryptCredentialValueWithKey(ctx, material, aad, value)
 }
 
-// 公开 wrapper 在 B 阶段只读取 v1，不能将 v2 策略静默丢弃后返回旧凭据。
+// v1/v2 共享认证入口；v2 策略必须完整返回，不能静默降为旧凭据。
 func DecryptCredentials(ctx context.Context, provider KeyProvider, aad string, encoded []byte) (Credentials, error) {
-	value, err := decryptCredentialValueVersions(ctx, provider, aad, encoded, false)
+	value, err := decryptCredentialValue(ctx, provider, aad, encoded)
 	if err != nil {
 		return Credentials{}, err
 	}
-	return value.legacyCredentials, nil
+	return value.credentials(), nil
 }
 
 // 普通加密与 rotation 共用版本、payload、AAD 和 envelope 的唯一构造路径。
@@ -369,6 +383,9 @@ func encryptCredentialValueWithKey(ctx context.Context, material KeyMaterial, ba
 	}
 	if err := validateKeyMaterial(material); err != nil {
 		return nil, 0, &DatabaseError{Code: CodeKeyUnavailable, Operation: "credential_encrypt"}
+	}
+	if value.legacyCredentials.TLS != nil {
+		return nil, 0, &DatabaseError{Code: CodeCredentialCorrupt, Operation: "credential_encrypt"}
 	}
 	value = cloneCredentialValue(value)
 	version := credentialCiphertextVersion

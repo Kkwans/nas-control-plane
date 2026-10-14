@@ -170,7 +170,7 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 	}
 	defer controlStore.Close()
 
-	var databaseConnections *ncpdatabase.ConnectionCoordinator
+	var databaseConnections httpapi.DatabaseConnectionCoordinator
 	var credentialStore *ncpdatabase.SQLiteCredentialStore
 	if keyPath := filepath.Clean(*databaseKeyPath); strings.TrimSpace(*databaseKeyPath) != "" {
 		credentialStore, err = ncpdatabase.OpenCredentialStore(*databasePath)
@@ -189,10 +189,11 @@ func runHTTPServer(ctx context.Context, args []string) (resultErr error) {
 		if migrateErr := vault.Migrate(ctx); migrateErr != nil {
 			return migrateErr
 		}
-		databaseConnections, err = ncpdatabase.NewConnectionCoordinator(vault, socketDatabaseConnectionTester{socketPath: *agentSocketPath})
-		if err != nil {
-			return err
+		coordinator, coordinatorErr := ncpdatabase.NewConnectionCoordinator(vault, socketDatabaseConnectionTester{socketPath: *agentSocketPath})
+		if coordinatorErr != nil {
+			return coordinatorErr
 		}
+		databaseConnections = coordinator
 	}
 
 	collector, err := monitoring.NewCollector(socketSummarySource{socketPath: *agentSocketPath}, controlStore, monitoring.Options{Logger: slog.Default(), ResourceAlerts: *resourceAlerts})

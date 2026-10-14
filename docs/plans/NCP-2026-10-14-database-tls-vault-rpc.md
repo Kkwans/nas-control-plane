@@ -477,3 +477,19 @@ A0的252bfeb完整CI通过3266单元/407浏览器；本片新增409浏览器截�
 本片的 v2 载荷只由私有规范化 writer 产生且经过认证。DisallowUnknownFields 不等于完整公开 JSON 校验：Go decoder 的大小写兼容、重复键合并与可选 string 的 null 行为仍存在。C/T3 在公开输入构造前必须单独检查 null、重复及大小写混淆；v1 的旧字段容忍行为不在本片扩大或收紧。外层未知版本仍拒绝，v2 缺失/空策略仍拒绝。
 
 下一片 C 必须一次接通 Credentials.TLS、vault 保存/读取/轮换、测试前策略继承、全部 resolver、Manager 严格连接器及八操作独立 RPC，并保留 HTTP rollout gate。尤其检查 test-connection 直接 Agent 路径、手动 ResolveConnection、SQLite 早返回与缺少 resolver 的 coordinator；这些路径不能留下隐式降级。B 完成不代表用户已能启用 TLS。
+
+## 14. T2-C 内部防降级链路接入（2026-10-14 07:54 UTC）
+
+公开Go凭据增加独立可复制TLS策略；普通加密、读取与轮换双向保留v2。手动连接、只读测试、手动resolver和自动路径统一保存策略守卫；省略策略时先认证旧记录，disabled v2也要继承，绝不借用旧密码。坏记录/不可用key失败关闭，显式有效严格策略可在原CAS基线上修复。三处SQLite早返回已关闭，已有同ID网络严格记录不能变成SQLite无策略连接。A1快照/CAS、竞争胜者保护、已发布key保留不变。
+
+认证旧v1后仍允许手动重连已移动目标；只有继承v2要求当前绑定一致，自动Resolve对所有版本保持绑定检查。sourceEndpoint现与实际连接器的Location端口优先级及请求/默认数据库选择一致，避免Host字段掩盖真实拨号端口变化。原密文仍用保存的旧endpoint作为AAD认证，不批量改写；历史字段不一致的legacy自动记录可能需要一次手动重连。
+
+Manager非nil策略只走严格connector/sql.OpenDB，nil保留旧DSN；无失败回退，Ping失败关闭pool，2/1连接池约束保留。TLS/x509错误按类型分类并移除原始证书/驱动错误链，真实context sentinel优先，单纯网络timeout不伪造context原因。假driver验证派发、冻结、context、池限制与释放，没有真实数据库握手。
+
+新增独立AgentDatabaseTLSService八方法，只有完整provider接口加显式true marker才注册；严格handler在provider前校验非nil策略与规范JSON，旧handler拒绝非nil TLS。客户端各typed wrapper冻结同一策略用于路由/载荷，严格Unimplemented返回tls_policy_unsupported；显式resultMode保留，单次Invoke、零旧namespace重试。直接ServiceDesc/interceptor/recording registrar/fake ClientConn验证，不启监听器。
+
+HTTP继续拒绝任意credentials.tls键，含null、重复、转义与Unicode大小写折叠；不误伤行数据或字符串中的同名内容。已配置coordinator缺少tester/resolver不再直达Agent，main未配置时保持真正nil接口。test-connection改走受保护只读测试；OpenAPI仅同步拒绝及安全错误，没有开放TLS输入。前端只新增固定TLS诊断文案，SQL/连接TLS错误仍保留未知结果语义，不增加确定未执行/未保存的白名单，也不显示已加密徽标。
+
+根任务完整database/race、纯RPC/HTTP、完整OpenAPI、全仓Go构建/vet通过；前端3305单元/116文件、全量lint/typecheck/构建/权限/540KiB预算通过。独立复核发现并修正v1手动目标兼容、Location端口绑定、Unicode键、冻结策略和取消优先级问题。T2-B f9f9212已完整CI通过3295单元/409浏览器；本片远端CI须按对应提交另行核验，不能沿用B结果。
+
+仍未开放T3表单/HTTP输入，未安装CA、改变进程环境或操作真实凭据/生产服务；T4真实TLS握手仍未验证。T3详细交互与验收追加在主TLS方案第十二节。

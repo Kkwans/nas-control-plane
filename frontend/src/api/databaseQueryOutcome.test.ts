@@ -283,7 +283,8 @@ describe('真实 SQL API 的单次发送边界', () => {
     [503, 'agent_unavailable'], [422, 'result_too_large'], [400, 'DATABASE_OPERATION_FAILED'],
     [400, 'credentials_required'], [401, 'auth_failed'], [503, 'unreachable'], [404, 'database_not_found'],
     [503, 'credential_store_unavailable'], [503, 'credential_corrupt'], [503, 'key_unavailable'],
-    [503, 'key_rotation_failed'], [503, 'migration_failed'],
+    [503, 'key_rotation_failed'], [503, 'migration_failed'], [409, 'credential_conflict'],
+    [400, 'tls_configuration_invalid'], [400, 'tls_policy_unsupported'], [400, 'tls_verification_failed'],
   ] as const)('%s / %s 仅保留安全诊断，不能证明 SQL 未执行', async (status, code) => {
     const fetcher = useResponse(response(envelope(code), status))
     await expectUnknown(executeDatabaseSQL(input), code)

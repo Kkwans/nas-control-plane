@@ -613,9 +613,9 @@ type preparedCredentialWrite struct {
 	baseline    CredentialBaseline
 }
 
-// 当前四个凭据字段均为值类型。后续增加指针字段时必须在此处深复制。
+// 包内兼容入口与公开边界使用同一深复制合同。
 func cloneCredentials(credentials Credentials) Credentials {
-	return credentials
+	return CloneCredentials(credentials)
 }
 
 func (v *CredentialVault) prepareManual(ctx context.Context, source Source, credentials Credentials) (preparedCredentialWrite, error) {
@@ -634,7 +634,44 @@ func (v *CredentialVault) prepareManual(ctx context.Context, source Source, cred
 	if err != nil {
 		return preparedCredentialWrite{}, err
 	}
+	if credentials.TLS == nil && snapshot.Baseline.Exists {
+		// 省略策略不表示撤销。包括 disabled 记录在内，先认证原始绑定，
+		// 再继承策略；永不借用原用户名、密码或 token。
+		saved, err := v.authenticatedRecord(ctx, source, snapshot, false)
+		if err != nil {
+			return preparedCredentialWrite{}, err
+		}
+		credentials.TLS = saved.TLS
+		if err := validateCredentialTarget(source, credentials); err != nil {
+			return preparedCredentialWrite{}, err
+		}
+	}
 	return preparedCredentialWrite{source: source, credentials: credentials, baseline: snapshot.Baseline}, nil
+}
+
+// authenticatedRecord 只使用同一快照，失败仅条件禁用该版本。新凭据带有
+// 显式有效严格策略时可跳过旧记录的认证来修复它，但仍须遵守原 CAS 基线。
+func (v *CredentialVault) authenticatedRecord(ctx context.Context, source Source, snapshot CredentialSnapshot, requireBinding bool) (Credentials, error) {
+	record := snapshot.Record
+	bindingMatches := record.Driver == source.Driver && record.Endpoint == sourceEndpoint(source, record.Database)
+	if requireBinding && !bindingMatches {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, CodeCredentialsRequired)
+		return Credentials{}, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
+	}
+	credentials, err := DecryptCredentials(ctx, v.keys, credentialAAD(record.SourceID, record.Driver, record.Endpoint), record.Ciphertext)
+	if err == nil && credentials.TLS != nil && !bindingMatches {
+		err = newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
+	}
+	if err == nil && credentials.TLS != nil {
+		if policyErr := validateCredentialTLSTarget(source, credentials.TLS); policyErr != nil {
+			err = newDatabaseError(CodeCredentialCorrupt, source, "credential_resolve", nil)
+		}
+	}
+	if err != nil {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, ErrorCodeOf(err))
+		return Credentials{}, err
+	}
+	return CloneCredentials(credentials), nil
 }
 
 // savePrepared 只供成功测试分支使用，不能创建无 expected 的兼容写入口。
@@ -671,25 +708,25 @@ func (v *CredentialVault) Resolve(ctx context.Context, source Source) (Credentia
 	if v == nil || v.store == nil || v.keys == nil {
 		return Credentials{}, false, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_resolve"}
 	}
-	if source.Driver == DriverSQLite {
-		return Credentials{}, true, nil
+	if err := contextError(ctx); err != nil {
+		return Credentials{}, false, err
 	}
+	source.Tags = append([]string(nil), source.Tags...)
 	snapshot, err := v.store.ReadCredentialSnapshot(ctx, source.ID)
 	if err != nil {
 		return Credentials{}, false, err
 	}
 	if !snapshot.Baseline.Exists {
-		return Credentials{}, false, nil
+		// 仅真正没有旧记录的 SQLite 可以走无凭据路径。
+		return Credentials{}, source.Driver == DriverSQLite, nil
 	}
-	record := snapshot.Record
-	if !record.AutomaticEnabled || record.Driver != source.Driver || record.Endpoint != sourceEndpoint(source, record.Database) {
-		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, CodeCredentialsRequired)
-		return Credentials{}, false, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", errors.New("automatic credentials are disabled"))
-	}
-	credentials, err := DecryptCredentials(ctx, v.keys, credentialAAD(record.SourceID, record.Driver, record.Endpoint), record.Ciphertext)
+	credentials, err := v.authenticatedRecord(ctx, source, snapshot, true)
 	if err != nil {
-		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, ErrorCodeOf(err))
 		return Credentials{}, false, err
+	}
+	if !snapshot.Record.AutomaticEnabled {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, CodeCredentialsRequired)
+		return Credentials{}, false, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
 	}
 	return credentials, true, nil
 }
@@ -807,12 +844,17 @@ func encryptWithKey(ctx context.Context, material KeyMaterial, aad string, crede
 	if err := validateKeyMaterial(material); err != nil {
 		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate"}
 	}
-	return encryptCredentialValueWithKey(ctx, material, aad, credentialValue{legacyCredentials: credentials})
+	return encryptCredentialValueWithKey(ctx, material, aad, credentialValueFromCredentials(credentials))
 }
 
 func validateCredentialTarget(source Source, credentials Credentials) error {
 	if strings.TrimSpace(source.ID) == "" {
 		return newDatabaseError(CodeDatabaseNotFound, source, "credential_save", errors.New("source is required"))
+	}
+	if credentials.TLS != nil {
+		if err := validateCredentialTLSTarget(source, credentials.TLS); err != nil {
+			return err
+		}
 	}
 	if source.Driver == DriverSQLite {
 		if strings.TrimSpace(source.Path) == "" {
@@ -828,6 +870,21 @@ func validateCredentialTarget(source Source, credentials Credentials) error {
 	}
 	if source.Driver != DriverMySQL && source.Driver != DriverPostgreSQL {
 		return newDatabaseError(CodeSQLInvalid, source, "credential_save", errors.New("unsupported driver"))
+	}
+	return nil
+}
+
+// 使用实际 source 的 driver/host；显式 serverName 不得替代拨号目标校验。
+func validateCredentialTLSTarget(source Source, policy *TLSPolicy) error {
+	host, port, _ := endpointParts(source.Location, source.Port, source.DefaultDatabase)
+	if strings.TrimSpace(source.Host) != "" {
+		host = source.Host
+	}
+	if port <= 0 || port > 65535 {
+		return newDatabaseError(CodeTLSConfigurationInvalid, source, "credential_validate", nil)
+	}
+	if _, err := compileDatabaseTLS(source.Driver, host, policy); err != nil {
+		return newDatabaseError(CodeTLSConfigurationInvalid, source, "credential_validate", nil)
 	}
 	return nil
 }

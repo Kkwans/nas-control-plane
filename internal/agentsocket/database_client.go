@@ -8,6 +8,7 @@ import (
 	"math"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -31,33 +32,30 @@ func discoverDatabases(ctx context.Context, socketPath string, force bool) (ncpd
 }
 
 func TestDatabaseConnection(ctx context.Context, socketPath string, request ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error) {
+	request = snapshotDatabaseConnection(request)
 	var result ncpdatabase.ConnectionDiagnostic
-	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		connectionClient, ok := client.(AgentDatabaseConnectionServiceClient)
-		if !ok {
-			return nil, grpcstatus.Error(codes.Unimplemented, "database connection diagnostics are unavailable")
-		}
-		return connectionClient.TestConnection(ctx, payload)
-	})
+	err := callDatabaseConnection(ctx, socketPath, request, request, &result, databaseOperationTestConnection)
 	return result, err
 }
 
 func CatalogDatabase(ctx context.Context, socketPath string, request ncpdatabase.CatalogRequest) (ncpdatabase.Catalog, error) {
+	request.Connection = snapshotDatabaseConnection(request.Connection)
 	var result ncpdatabase.Catalog
-	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Catalog(ctx, payload)
-	})
+	err := callDatabaseConnection(ctx, socketPath, request.Connection, request, &result, databaseOperationCatalog)
 	return result, err
 }
 
 func QueryDatabase(ctx context.Context, socketPath string, request ncpdatabase.QueryRequest) (ncpdatabase.QueryResult, error) {
+	request.Connection = snapshotDatabaseConnection(request.Connection)
 	var result ncpdatabase.QueryResult
 	if err := ncpdatabase.ValidateQueryResultMode(request.ResultMode); err != nil {
 		return result, coded(string(ncpdatabase.CodeSQLInvalid), err)
 	}
-	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return queryDatabaseRPC(ctx, client, payload, request.ResultMode)
-	})
+	operation := databaseOperationQuery
+	if request.ResultMode != "" {
+		operation = databaseOperationQueryWithOptions
+	}
+	err := callDatabaseConnection(ctx, socketPath, request.Connection, request, &result, operation)
 	return result, err
 }
 
@@ -65,6 +63,10 @@ func queryDatabaseRPC(ctx context.Context, client AgentDatabaseServiceClient, pa
 	if mode == "" {
 		return client.Query(ctx, payload)
 	}
+	return queryDatabaseOptionsRPC(ctx, client, payload)
+}
+
+func queryDatabaseOptionsRPC(ctx context.Context, client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
 	optionsClient, ok := client.(AgentDatabaseQueryOptionsServiceClient)
 	if !ok {
 		return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeResultModeUnsupported))
@@ -78,35 +80,142 @@ func queryDatabaseRPC(ctx context.Context, client AgentDatabaseServiceClient, pa
 }
 
 func ReadDatabaseRows(ctx context.Context, socketPath string, request ncpdatabase.RowsRequest) (ncpdatabase.RowsResult, error) {
+	request.Connection = snapshotDatabaseConnection(request.Connection)
 	var result ncpdatabase.RowsResult
-	err := callDatabase(ctx, socketPath, request, &result, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Rows(ctx, payload)
-	})
+	err := callDatabaseConnection(ctx, socketPath, request.Connection, request, &result, databaseOperationRows)
 	return result, err
 }
 
 func InsertDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.InsertRequest) (ncpdatabase.MutationResult, error) {
-	return mutateDatabase(ctx, socketPath, request, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Insert(ctx, payload)
-	})
+	request.Connection = snapshotDatabaseConnection(request.Connection)
+	return mutateDatabase(ctx, socketPath, request.Connection, request, databaseOperationInsert)
 }
 
 func UpdateDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.UpdateRequest) (ncpdatabase.MutationResult, error) {
-	return mutateDatabase(ctx, socketPath, request, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Update(ctx, payload)
-	})
+	request.Connection = snapshotDatabaseConnection(request.Connection)
+	return mutateDatabase(ctx, socketPath, request.Connection, request, databaseOperationUpdate)
 }
 
 func DeleteDatabaseRow(ctx context.Context, socketPath string, request ncpdatabase.DeleteRequest) (ncpdatabase.MutationResult, error) {
-	return mutateDatabase(ctx, socketPath, request, func(client AgentDatabaseServiceClient, payload *structpb.Struct) (*structpb.Struct, error) {
-		return client.Delete(ctx, payload)
+	request.Connection = snapshotDatabaseConnection(request.Connection)
+	return mutateDatabase(ctx, socketPath, request.Connection, request, databaseOperationDelete)
+}
+
+func mutateDatabase(ctx context.Context, socketPath string, connection ncpdatabase.Connection, request any, operation databaseConnectionOperation) (ncpdatabase.MutationResult, error) {
+	var result ncpdatabase.MutationResult
+	err := callDatabaseConnection(ctx, socketPath, connection, request, &result, operation)
+	return result, err
+}
+
+// 在校验和拨号前冻结策略，避免调用者之后修改指针使路由与线载荷分歧。
+func snapshotDatabaseConnection(connection ncpdatabase.Connection) ncpdatabase.Connection {
+	connection.Credentials = ncpdatabase.CloneCredentials(connection.Credentials)
+	return connection
+}
+
+type databaseConnectionOperation string
+
+const (
+	databaseOperationTestConnection   databaseConnectionOperation = "TestConnection"
+	databaseOperationCatalog          databaseConnectionOperation = "Catalog"
+	databaseOperationQuery            databaseConnectionOperation = "Query"
+	databaseOperationQueryWithOptions databaseConnectionOperation = "QueryWithOptions"
+	databaseOperationRows             databaseConnectionOperation = "Rows"
+	databaseOperationInsert           databaseConnectionOperation = "Insert"
+	databaseOperationUpdate           databaseConnectionOperation = "Update"
+	databaseOperationDelete           databaseConnectionOperation = "Delete"
+)
+
+// 连接参数由每个强类型调用显式提供，不从 any 请求反射推断策略。
+func callDatabaseConnection(ctx context.Context, socketPath string, connection ncpdatabase.Connection, request, result any, operation databaseConnectionOperation) error {
+	if err := ctx.Err(); err != nil {
+		return databaseRPCError(err)
+	}
+	if err := validateDatabaseConnectionPolicy(connection); err != nil {
+		return err
+	}
+	transport, err := dialSocket(socketPath)
+	if err != nil {
+		return databaseCodedError(ncpdatabase.CodeAgentUnavailable, nil)
+	}
+	defer transport.Close()
+	return callDatabaseConnectionClient(ctx, transport, connection, request, result, operation)
+}
+
+func validateDatabaseConnectionPolicy(connection ncpdatabase.Connection) error {
+	if connection.Credentials.TLS != nil {
+		if err := ncpdatabase.ValidateRequiredTLSPolicy(connection.Credentials.TLS); err != nil {
+			return databaseCodedError(ncpdatabase.CodeTLSConfigurationInvalid, nil)
+		}
+	}
+	return nil
+}
+
+// 可注入 ClientConnInterface，验证路由无需建立监听器或连接。
+func callDatabaseConnectionClient(ctx context.Context, transport grpc.ClientConnInterface, connection ncpdatabase.Connection, request, result any, operation databaseConnectionOperation) error {
+	if err := ctx.Err(); err != nil {
+		return databaseRPCError(err)
+	}
+	if err := validateDatabaseConnectionPolicy(connection); err != nil {
+		return err
+	}
+	if connection.Credentials.TLS != nil {
+		client := NewAgentDatabaseTLSServiceClient(transport)
+		return callDatabasePayload(request, result, func(payload *structpb.Struct) (*structpb.Struct, error) {
+			response, err := invokeDatabaseTLSConnection(ctx, client, payload, operation)
+			// 必须先识别严格 namespace 的缺失，不能被旧 resultMode 分支抢先映射。
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && grpcstatus.Code(err) == codes.Unimplemented {
+				return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeTLSPolicyUnsupported))
+			}
+			return response, err
+		})
+	}
+	client := &agentDatabaseServiceClient{connection: transport}
+	return callDatabasePayload(request, result, func(payload *structpb.Struct) (*structpb.Struct, error) {
+		switch operation {
+		case databaseOperationTestConnection:
+			return client.TestConnection(ctx, payload)
+		case databaseOperationCatalog:
+			return client.Catalog(ctx, payload)
+		case databaseOperationQuery:
+			return client.Query(ctx, payload)
+		case databaseOperationQueryWithOptions:
+			return queryDatabaseOptionsRPC(ctx, client, payload)
+		case databaseOperationRows:
+			return client.Rows(ctx, payload)
+		case databaseOperationInsert:
+			return client.Insert(ctx, payload)
+		case databaseOperationUpdate:
+			return client.Update(ctx, payload)
+		case databaseOperationDelete:
+			return client.Delete(ctx, payload)
+		default:
+			return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeSQLInvalid))
+		}
 	})
 }
 
-func mutateDatabase(ctx context.Context, socketPath string, request any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) (ncpdatabase.MutationResult, error) {
-	var result ncpdatabase.MutationResult
-	err := callDatabase(ctx, socketPath, request, &result, call)
-	return result, err
+func invokeDatabaseTLSConnection(ctx context.Context, client AgentDatabaseTLSServiceClient, payload *structpb.Struct, operation databaseConnectionOperation) (*structpb.Struct, error) {
+	switch operation {
+	case databaseOperationTestConnection:
+		return client.TestConnection(ctx, payload)
+	case databaseOperationCatalog:
+		return client.Catalog(ctx, payload)
+	case databaseOperationQuery:
+		return client.Query(ctx, payload)
+	case databaseOperationQueryWithOptions:
+		return client.QueryWithOptions(ctx, payload)
+	case databaseOperationRows:
+		return client.Rows(ctx, payload)
+	case databaseOperationInsert:
+		return client.Insert(ctx, payload)
+	case databaseOperationUpdate:
+		return client.Update(ctx, payload)
+	case databaseOperationDelete:
+		return client.Delete(ctx, payload)
+	default:
+		return nil, grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeSQLInvalid))
+	}
 }
 
 func callDatabase(ctx context.Context, socketPath string, request, result any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) error {
@@ -122,6 +231,12 @@ func callDatabase(ctx context.Context, socketPath string, request, result any, c
 }
 
 func callDatabaseClient(client AgentDatabaseServiceClient, request, result any, call func(AgentDatabaseServiceClient, *structpb.Struct) (*structpb.Struct, error)) error {
+	return callDatabasePayload(request, result, func(payload *structpb.Struct) (*structpb.Struct, error) {
+		return call(client, payload)
+	})
+}
+
+func callDatabasePayload(request, result any, call func(*structpb.Struct) (*structpb.Struct, error)) error {
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
@@ -147,7 +262,7 @@ func callDatabaseClient(client AgentDatabaseServiceClient, request, result any, 
 	if err != nil {
 		return coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
-	response, err := call(client, payload)
+	response, err := call(payload)
 	if err != nil {
 		return databaseRPCError(err)
 	}

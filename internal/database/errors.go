@@ -2,6 +2,8 @@ package database
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"net"
@@ -15,17 +17,20 @@ import (
 type ErrorCode string
 
 const (
-	CodeCredentialsRequired   ErrorCode = "credentials_required"
-	CodeAuthFailed            ErrorCode = "auth_failed"
-	CodeUnreachable           ErrorCode = "unreachable"
-	CodeDatabaseNotFound      ErrorCode = "database_not_found"
-	CodePermissionDenied      ErrorCode = "permission_denied"
-	CodeSQLInvalid            ErrorCode = "sql_invalid"
-	CodeResultModeUnsupported ErrorCode = "result_mode_unsupported"
-	CodeResultTooLarge        ErrorCode = "result_too_large"
-	CodeConstraintFailed      ErrorCode = "constraint_failed"
-	CodeAgentUnavailable      ErrorCode = "agent_unavailable"
-	CodeTimeout               ErrorCode = "timeout"
+	CodeCredentialsRequired     ErrorCode = "credentials_required"
+	CodeAuthFailed              ErrorCode = "auth_failed"
+	CodeUnreachable             ErrorCode = "unreachable"
+	CodeDatabaseNotFound        ErrorCode = "database_not_found"
+	CodePermissionDenied        ErrorCode = "permission_denied"
+	CodeSQLInvalid              ErrorCode = "sql_invalid"
+	CodeResultModeUnsupported   ErrorCode = "result_mode_unsupported"
+	CodeResultTooLarge          ErrorCode = "result_too_large"
+	CodeConstraintFailed        ErrorCode = "constraint_failed"
+	CodeAgentUnavailable        ErrorCode = "agent_unavailable"
+	CodeTimeout                 ErrorCode = "timeout"
+	CodeTLSConfigurationInvalid ErrorCode = "tls_configuration_invalid"
+	CodeTLSPolicyUnsupported    ErrorCode = "tls_policy_unsupported"
+	CodeTLSVerificationFailed   ErrorCode = "tls_verification_failed"
 
 	// These codes describe failures in the server-side credential boundary.
 	// They are intentionally separate from remote database outcomes.
@@ -86,7 +91,8 @@ func CodeFromString(value string) ErrorCode {
 		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid, CodeResultModeUnsupported,
 		CodeConstraintFailed, CodeResultTooLarge, CodeAgentUnavailable, CodeTimeout,
 		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeCredentialConflict, CodeKeyUnavailable,
-		CodeKeyRotationFailed, CodeMigrationFailed:
+		CodeKeyRotationFailed, CodeMigrationFailed,
+		CodeTLSConfigurationInvalid, CodeTLSPolicyUnsupported, CodeTLSVerificationFailed:
 		return code
 	default:
 		return ""
@@ -94,6 +100,9 @@ func CodeFromString(value string) ErrorCode {
 }
 
 func newDatabaseError(code ErrorCode, source Source, operation string, cause error) error {
+	if isTLSErrorCode(code) {
+		cause = nil
+	}
 	return &DatabaseError{
 		Code:      code,
 		Driver:    source.Driver,
@@ -105,18 +114,34 @@ func newDatabaseError(code ErrorCode, source Source, operation string, cause err
 }
 
 // MapError turns a driver, context, or validation error into a stable
-// DatabaseError. The original error remains available through Unwrap for
-// internal diagnostics and tests, but never appears in Error().
+// DatabaseError. Legacy non-TLS causes remain available through Unwrap;
+// TLS/x509 failures discard raw certificate/driver chains at this boundary.
 func MapError(ctx context.Context, source Source, operation string, err error) error {
 	if err == nil {
 		return nil
 	}
 	var databaseErr *DatabaseError
 	if errors.As(err, &databaseErr) && databaseErr != nil {
+		if isTLSErrorCode(databaseErr.Code) || isTLSVerificationError(err) {
+			safe := *databaseErr
+			safe.Cause = nil
+			if cause := tlsContextCause(ctx, err); cause != nil {
+				safe.Code, safe.Cause = CodeTimeout, cause
+			}
+			return &safe
+		}
 		return databaseErr
 	}
 	code := ClassifyError(ctx, operation, err)
-	return newDatabaseError(code, source, operation, err)
+	cause := err
+	if isTLSVerificationError(err) || errors.Is(err, errDatabaseTLSConfigurationInvalid) {
+		// TLS/x509 错误可能携带证书、目标或底层驱动链，不保留它们。
+		cause = nil
+		if code == CodeTimeout {
+			cause = tlsContextCause(ctx, err)
+		}
+	}
+	return newDatabaseError(code, source, operation, cause)
 }
 
 // ClassifyError is intentionally conservative and driver-agnostic. Driver
@@ -126,13 +151,8 @@ func ClassifyError(ctx context.Context, operation string, err error) ErrorCode {
 	if err == nil {
 		return ""
 	}
-	if ctx != nil {
-		switch {
-		case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
-			return CodeTimeout
-		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
-			return CodeTimeout
-		}
+	if tlsContextCause(ctx, err) != nil {
+		return CodeTimeout
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return CodeDatabaseNotFound
@@ -140,6 +160,13 @@ func ClassifyError(ctx context.Context, operation string, err error) ErrorCode {
 	var networkErr net.Error
 	if errors.As(err, &networkErr) && networkErr.Timeout() {
 		return CodeTimeout
+	}
+
+	if errors.Is(err, errDatabaseTLSConfigurationInvalid) {
+		return CodeTLSConfigurationInvalid
+	}
+	if isTLSVerificationError(err) {
+		return CodeTLSVerificationFailed
 	}
 
 	text := strings.ToLower(err.Error())
@@ -205,4 +232,54 @@ func hasAny(text string, fragments ...string) bool {
 		}
 	}
 	return false
+}
+
+func isTLSErrorCode(code ErrorCode) bool {
+	return code == CodeTLSConfigurationInvalid || code == CodeTLSPolicyUnsupported || code == CodeTLSVerificationFailed
+}
+
+// 仅按类型分类；不得通过原始证书或驱动错误文字猜测 TLS 失败。
+func isTLSVerificationError(err error) bool {
+	var verification *tls.CertificateVerificationError
+	var ech *tls.ECHRejectionError
+	var headerPointer *tls.RecordHeaderError
+	var unknownPointer *x509.UnknownAuthorityError
+	var invalidPointer *x509.CertificateInvalidError
+	var hostnamePointer *x509.HostnameError
+	var rootsPointer *x509.SystemRootsError
+	var alertPointer *tls.AlertError
+	var algorithmPointer *x509.InsecureAlgorithmError
+	var constraintPointer *x509.ConstraintViolationError
+	var extensionPointer *x509.UnhandledCriticalExtension
+	var header tls.RecordHeaderError
+	var alert tls.AlertError
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var roots x509.SystemRootsError
+	var algorithm x509.InsecureAlgorithmError
+	var constraint x509.ConstraintViolationError
+	var extension x509.UnhandledCriticalExtension
+	return errors.As(err, &verification) || errors.As(err, &ech) ||
+		errors.As(err, &headerPointer) || errors.As(err, &unknownPointer) || errors.As(err, &invalidPointer) ||
+		errors.As(err, &hostnamePointer) || errors.As(err, &rootsPointer) ||
+		errors.As(err, &alertPointer) || errors.As(err, &algorithmPointer) ||
+		errors.As(err, &constraintPointer) || errors.As(err, &extensionPointer) ||
+		errors.As(err, &header) || errors.As(err, &alert) ||
+		errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &hostname) ||
+		errors.As(err, &roots) || errors.As(err, &algorithm) || errors.As(err, &constraint) || errors.As(err, &extension)
+}
+
+func tlsContextCause(ctx context.Context, err error) error {
+	var contextErr error
+	if ctx != nil {
+		contextErr = ctx.Err()
+	}
+	if errors.Is(contextErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(contextErr, context.Canceled) || errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return nil
 }

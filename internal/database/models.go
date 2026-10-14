@@ -35,10 +35,20 @@ type Discovery struct {
 }
 
 type Credentials struct {
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	Token    string `json:"token,omitempty"`
-	Database string `json:"database,omitempty"`
+	Username string     `json:"username,omitempty"`
+	Password string     `json:"password,omitempty"`
+	Token    string     `json:"token,omitempty"`
+	Database string     `json:"database,omitempty"`
+	TLS      *TLSPolicy `json:"tls,omitempty"`
+}
+
+// CloneCredentials 为跨测试、RPC 与持久化边界创建独立的策略副本。
+func CloneCredentials(credentials Credentials) Credentials {
+	if credentials.TLS != nil {
+		policy := *credentials.TLS
+		credentials.TLS = &policy
+	}
+	return credentials
 }
 
 type Connection struct {

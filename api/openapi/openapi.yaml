@@ -609,13 +609,19 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -656,7 +662,7 @@ paths:
                     message: 凭据已被其他请求更改，本次凭据未保存，请重新确认后手动重试。
                     requestId: req-example
         '503':
-          description: 数据库或凭据服务不可用
+          description: 数据库或凭据服务不可用；credential_store_unavailable 表示凭据服务未能完成请求，不保证本次凭据未保存。
           content:
             application/json:
               schema:
@@ -665,16 +671,23 @@ paths:
     post:
       operationId: testDatabaseConnection
       summary: 测试数据库连接并返回稳定诊断码
+      description: 已配置凭据服务时先发现来源并准备受保护策略；测试可继承已保存的 TLS 策略，但不保存或替换凭据。缺少测试能力时拒绝请求，不绕过凭据服务直接测试。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -689,6 +702,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseConnectionDiagnostic'
+        '404':
+          description: 未找到目标数据库来源
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 认证失败
           content:
@@ -702,7 +721,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或 Root Agent 不可用
+          description: 数据库不可达或 Root Agent 不可用；已配置但缺少受保护的测试能力时返回 credential_store_unavailable，不降级到直接连接。
           content:
             application/json:
               schema:
@@ -714,7 +733,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
@@ -736,13 +755,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/DatabaseCatalog'
         '400':
-          description: 数据库请求、SQL 或凭据无效
+          description: 数据库请求、SQL 或凭据无效 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或凭据服务不可用
+          description: 数据库不可达或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
           content:
             application/json:
               schema:
@@ -762,7 +781,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
@@ -784,7 +803,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/DatabaseQueryResult'
         '400':
-          description: 请求格式无效（DATABASE_INPUT_INVALID）、SQL 或模式无效（sql_invalid），或 Agent 不支持显式模式（result_mode_unsupported）；不支持时 SQL 不会执行，应先升级 Agent。
+          description: 请求格式无效（DATABASE_INPUT_INVALID）、SQL 或模式无效（sql_invalid），或 Agent 不支持显式模式（result_mode_unsupported）；不支持时 SQL 不会执行，应先升级 Agent。 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
           content:
             application/json:
               schema:
@@ -796,7 +815,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可用
+          description: 数据库不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
           content:
             application/json:
               schema:
@@ -812,7 +831,7 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
@@ -834,7 +853,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/DatabaseRowsResult'
         '400':
-          description: 表名、排序或分页参数无效
+          description: 表名、排序或分页参数无效 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
           content:
             application/json:
               schema:
@@ -846,13 +871,19 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -873,6 +904,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/databases/rows/update:
     post:
       operationId: updateDatabaseRow
@@ -880,13 +917,19 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -907,6 +950,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/databases/rows/delete:
     post:
       operationId: deleteDatabaseRow
@@ -914,13 +963,19 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
-        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/RequestBodyTooLarge'
         '415':
@@ -937,6 +992,12 @@ paths:
                 $ref: '#/components/schemas/DatabaseMutationResult'
         '409':
           description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
           content:
             application/json:
               schema:
@@ -2762,7 +2823,7 @@ components:
         password: { type: string, format: password, maxLength: 512 }
         token: { type: string, format: password, maxLength: 2048 }
         database: { type: string, maxLength: 256 }
-      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password 或 token。
+      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password 或 token。 当前 HTTP 合同尚不接受 credentials.tls；只要此键出现（包括 null、重复对象或键、大小写变体），即返回 400 DATABASE_INPUT_INVALID。
     DatabaseConnection:
       type: object
       required: [sourceId]

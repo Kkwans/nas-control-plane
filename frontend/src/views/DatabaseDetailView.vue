@@ -36,6 +36,9 @@ const databaseErrorCopy: Record<string, string> = {
   credentials_required: '连接需要数据库凭据，请填写表单后重试。',
   auth_failed: '数据库认证失败，请核对用户名和密码。',
   credential_conflict: '数据库凭据发生冲突，请重新确认后重试。',
+  tls_configuration_invalid: 'TLS 设置无效，请检查 CA 证书和服务器名。',
+  tls_policy_unsupported: 'Root Agent 尚不支持此 TLS 策略，请升级后重试。',
+  tls_verification_failed: '证书或服务器身份校验失败，请核对 CA、服务器名和证书有效期。',
   unreachable: '数据库服务不可达，请检查地址和端口。',
   database_not_found: '目标数据库或数据表不存在，请检查数据库名。',
   permission_denied: '当前账号没有执行该操作的权限。',
@@ -325,6 +328,9 @@ function errorNextStep(error: unknown) {
     case 'auth_failed': return '核对用户名、密码和数据库名；密码不会显示在错误信息中。'
     case 'credential_conflict': return errorOperation.value === 'connection'
       ? '核对当前凭据后手动重新连接；不会自动重试。' : '核对当前凭据后重试。'
+    case 'tls_configuration_invalid':
+    case 'tls_verification_failed': return '核对证书与服务器身份后再测试；不会跳过校验或自动降级。'
+    case 'tls_policy_unsupported': return '升级 Root Agent 后手动重试；不会移除 TLS 策略重新连接。'
     case 'unreachable': return '确认数据库服务运行且地址、端口可访问。'
     case 'database_not_found': return '确认数据库名、schema 或对象名称。'
     case 'permission_denied': return '改用具备目录读取权限的账号。'

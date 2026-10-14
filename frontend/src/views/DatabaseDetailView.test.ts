@@ -360,6 +360,30 @@ describe('DatabaseDetailView request ownership', () => {
       await settle(); expect(fetcher).toHaveBeenCalledTimes(3)
     })
 
+    it.each([
+      ['tls_configuration_invalid', 'TLS 设置无效，请检查 CA 证书和服务器名。'],
+      ['tls_policy_unsupported', 'Root Agent 尚不支持此 TLS 策略，请升级后重试。'],
+      ['tls_verification_failed', '证书或服务器身份校验失败，请核对 CA、服务器名和证书有效期。'],
+    ])('只读诊断 %s 使用安全文案，不声称已连接或自动重试', async (code, copy) => {
+      const fetcher = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(credentialsRequired())
+        .mockResolvedValueOnce(response({ code, message: 'private-fixture caPEM password=secret', requestId: 'fixture-request' }, 400))
+      vi.stubGlobal('fetch', fetcher)
+      mount(); await settle(); await enterCredentials()
+      button('测试连接').click(); await settle()
+      expect(host.textContent).toContain(copy)
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(host.textContent).not.toContain('password=secret')
+      expect(host.textContent).not.toContain('已连接')
+      expect(host.textContent).not.toContain('本次连接未保存')
+      expect(host.querySelector('.diagnostic-result--success')).toBeNull()
+      expect(host.querySelector('.diagnostic-result--failure')?.textContent).toContain(code)
+      expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+      expect(useDatabaseStore().credentials).toEqual({})
+      expect(useDatabaseStore().catalogs).toEqual({})
+      await settle(); expect(fetcher).toHaveBeenCalledTimes(2)
+    })
+
     it.each(['diagnostic', 'catalog'])('%s 的同名冲突不继承 connect 专有的保存结论', async (operation) => {
       const fetcher = vi.fn<typeof fetch>()
       if (operation === 'diagnostic') {
@@ -386,6 +410,9 @@ describe('DatabaseDetailView request ownership', () => {
       { name: '409 错误码不匹配', reply: () => Promise.resolve(response({ code: 'auth_failed', message: 'private-fixture', requestId: 'fixture-request' }, 409)) },
       { name: '409 信封缺少 requestId', reply: () => Promise.resolve(response({ code: 'credential_conflict', message: 'private-fixture' }, 409)) },
       { name: '409 正文无法解析', reply: () => Promise.resolve(new Response('private-fixture', { status: 409 })) },
+      ...['tls_configuration_invalid', 'tls_policy_unsupported', 'tls_verification_failed'].map(code => ({
+        name: `连接返回 ${code}`, reply: () => Promise.resolve(response({ code, message: 'private-fixture', requestId: 'fixture-request' }, 400)),
+      })),
       { name: '网络中断', reply: () => Promise.reject(new TypeError('private-fixture')) },
     ])('$name 保持结果未知，不把草稿说成未保存', async ({ reply }) => {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(credentialsRequired()).mockImplementationOnce(reply)

@@ -282,7 +282,9 @@ func TestCredentialVersionedV2RoundTripAndCopies(t *testing.T) {
 			t.Fatal("independent decrypts share mutable policy")
 		}
 		public, err := DecryptCredentials(context.Background(), keys, aad, encoded)
-		assertVersionedFailure(t, credentialValue{legacyCredentials: public}, err, CodeCredentialCorrupt)
+		if err != nil || !reflect.DeepEqual(public, before.credentials()) || public.TLS == before.tls {
+			t.Fatal("public reader lost or aliased v2 policy")
+		}
 		old, err := versionedLegacyDecode(t, material, aad, encoded)
 		if old != (Credentials{}) || err == nil {
 			t.Fatal("old v1 decoder accepted v2")
@@ -447,7 +449,7 @@ func (p *versionedFakeKeys) ForVersion(context.Context, int) (KeyMaterial, error
 	return p.material, p.err
 }
 
-func TestCredentialVersionedKeyFailuresAndLegacyGate(t *testing.T) {
+func TestCredentialVersionedKeyFailuresAndPublicV2(t *testing.T) {
 	t.Parallel()
 	_, material := versionedFixtureKeys(t)
 	for _, provider := range []KeyProvider{nil,
@@ -473,10 +475,10 @@ func TestCredentialVersionedKeyFailuresAndLegacyGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	public, err := DecryptCredentials(context.Background(), provider, versionedFixtureAAD, encoded)
-	assertVersionedFailure(t, credentialValue{legacyCredentials: public}, err, CodeCredentialCorrupt)
-	if provider.calls != 0 {
-		t.Fatal("public v1 gate must reject v2 before key lookup")
+	if err != nil || public.TLS == nil || public.TLS.Mode != TLSVerifyFull || provider.calls != 1 {
+		t.Fatal("public reader must authenticate and preserve v2")
 	}
+	provider.calls = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	got, err = decryptCredentialValue(ctx, provider, versionedFixtureAAD, []byte(versionedFixtureV1))
@@ -494,7 +496,7 @@ func TestCredentialVersionedRotationCannotDowngradeV2(t *testing.T) {
 	keys, material := versionedFixtureKeys(t)
 	vault := activationVault(t, store, keys)
 	ctx := context.Background()
-	// 只在临时 SQLite 注入合成 v2，生产保存接口仍无法构造 TLS。
+	// 临时 SQLite 注入合成 v2，验证轮换继续写 v2。
 	record := revisionFixture("private-v2")
 	var err error
 	record.Ciphertext, record.KeyVersion, err = encryptCredentialValueWithKey(ctx, material,
@@ -508,17 +510,21 @@ func TestCredentialVersionedRotationCannotDowngradeV2(t *testing.T) {
 	}
 	before := revisionSnapshot(t, store, record.SourceID).Record
 	// 已知合成新 key 直接传给 re-encryption，不调用任何 provider Rotate。
-	err = vault.reencryptWithKey(ctx, []StoredCredential{before}, KeyMaterial{Version: 8, Key: bytes.Repeat([]byte{0x24}, 32)})
-	if ErrorCodeOf(err) != CodeKeyRotationFailed {
-		t.Fatal("legacy rotation accepted private v2")
+	newMaterial := KeyMaterial{Version: 8, Key: bytes.Repeat([]byte{0x24}, 32)}
+	err = vault.reencryptWithKey(ctx, []StoredCredential{before}, newMaterial)
+	if err != nil {
+		t.Fatal(err)
 	}
 	after := revisionSnapshot(t, store, record.SourceID).Record
-	if !bytes.Equal(after.Ciphertext, before.Ciphertext) || after.KeyVersion != before.KeyVersion || after.AutomaticEnabled || after.LastErrorCode != CodeKeyRotationFailed {
-		t.Fatal("legacy rotation changed v2 ciphertext instead of failing closed")
+	if bytes.Equal(after.Ciphertext, before.Ciphertext) || after.KeyVersion != newMaterial.Version ||
+		after.AutomaticEnabled != before.AutomaticEnabled || after.LastErrorCode != before.LastErrorCode ||
+		versionedEnvelope(t, after.Ciphertext).Version != 2 {
+		t.Fatal("rotation lost v2 or changed saved state")
 	}
-	got, err := decryptCredentialValue(ctx, keys, credentialAAD(after.SourceID, after.Driver, after.Endpoint), after.Ciphertext)
-	if err != nil || got.tls == nil || got.tls.Mode != databaseTLSVerifyFull {
-		t.Fatal("failed legacy rotation damaged private v2 payload")
+	got, err := DecryptCredentials(ctx, &versionedFakeKeys{material: newMaterial},
+		credentialAAD(after.SourceID, after.Driver, after.Endpoint), after.Ciphertext)
+	if err != nil || got.TLS == nil || got.TLS.Mode != TLSVerifyFull {
+		t.Fatal("rotation damaged v2 payload")
 	}
 }
 

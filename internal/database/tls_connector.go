@@ -24,7 +24,7 @@ type databaseTLSConnectorDeps struct {
 	newPostgres   func(pgx.ConnConfig) driver.Connector
 }
 
-// newDatabaseTLSConnector 是尚未接入 Manager 的严格构造边界，不拨号。
+// newDatabaseTLSConnector 是 Manager 严格分支的构造边界；构造本身不拨号。
 // 与 T0 编译器不同，nil policy 也是错误；这里绝不回退到旧 DSN/sql.Open。
 // 后续调用方必须使用 sql.OpenDB，不能重新序列化配置或使用 ConnString。
 func newDatabaseTLSConnector(source Source, credentials Credentials, policy *databaseTLSPolicy) (driver.Connector, error) {

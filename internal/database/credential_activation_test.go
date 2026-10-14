@@ -277,7 +277,23 @@ func TestCredentialActivationResolveFailureCannotDisableReplacement(t *testing.T
 			counted := &activationStore{CredentialStore: reader}
 			var replacement CredentialSnapshot
 			counted.afterRead = func(CredentialSnapshot) {
-				activationSave(t, goodVault, source, activationCredentials("replacement"))
+				// 模拟仍可写旧形状的并发 writer，保持 A1 的 v1 胜者断言。
+				// C 的受保护手动入口不允许 nil TLS 修复损坏的旧记录。
+				credentials := activationCredentials("replacement")
+				before := revisionSnapshot(t, writer, source.ID)
+				record := before.Record
+				record.Driver, record.Endpoint = source.Driver, sourceEndpoint(source, credentials.Database)
+				record.Username, record.Database = credentials.Username, credentials.Database
+				record.AutomaticEnabled, record.LastErrorCode = true, ""
+				var err error
+				record.Ciphertext, record.KeyVersion, err = EncryptCredentials(context.Background(), keys,
+					credentialAAD(source.ID, source.Driver, record.Endpoint), credentials)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.CompareAndSwapCredential(context.Background(), before.Baseline, record); err != nil {
+					t.Fatal(err)
+				}
 				replacement = revisionSnapshot(t, writer, source.ID)
 			}
 			var resolverKeys KeyProvider = keys

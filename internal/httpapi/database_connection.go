@@ -15,10 +15,14 @@ type DatabaseConnectionAgentClient interface {
 	TestDatabaseConnection(context.Context, string, ncpdatabase.Connection) (ncpdatabase.ConnectionDiagnostic, error)
 }
 
-// DatabaseConnectionResolver is optional so handlers remain source-compatible
-// with existing test doubles. The live coordinator resolves encrypted saved
-// credentials for catalog, query and mutation requests after a connection has
-// been diagnosed successfully.
+// DatabaseConnectionTester 在不保存凭据的前提下准备并测试策略。
+// 已配置协调器时必须实现此扩展，不能绕过 vault 直接调用 Agent。
+type DatabaseConnectionTester interface {
+	TestConnection(context.Context, ncpdatabase.Source, ncpdatabase.Credentials) (ncpdatabase.ConnectionDiagnostic, error)
+}
+
+// DatabaseConnectionResolver 保留可选接口的源码兼容性；已配置协调器
+// 却缺少此扩展时必须拒绝请求，不能跳过已保存的策略。
 type DatabaseConnectionResolver interface {
 	ResolveConnection(context.Context, ncpdatabase.Source, *ncpdatabase.Credentials) (ncpdatabase.Connection, error)
 }
@@ -37,14 +41,30 @@ func (api *handler) databaseTestConnection(response http.ResponseWriter, request
 	if !api.decodeDatabaseBody(response, request, &input) {
 		return
 	}
-	client, ok := api.databaseAgent.(DatabaseConnectionAgentClient)
-	if !ok {
-		api.writeError(response, request, http.StatusServiceUnavailable, string(ncpdatabase.CodeAgentUnavailable), "Root Agent 尚未提供数据库连接诊断能力。")
-		return
-	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
 	defer cancel()
-	result, err := client.TestDatabaseConnection(ctx, api.agentSocketPath, input)
+	var result ncpdatabase.ConnectionDiagnostic
+	var err error
+	if api.databaseConnections != nil {
+		tester, ok := api.databaseConnections.(DatabaseConnectionTester)
+		if !ok {
+			api.writeDatabaseError(response, request, &ncpdatabase.DatabaseError{Code: ncpdatabase.CodeCredentialStoreUnavailable, Operation: "connection_test"})
+			return
+		}
+		source, discoverErr := api.discoverDatabaseSource(ctx, input.SourceID)
+		if discoverErr != nil {
+			api.writeDatabaseError(response, request, discoverErr)
+			return
+		}
+		result, err = tester.TestConnection(ctx, source, ncpdatabase.CloneCredentials(input.Credentials))
+	} else {
+		client, ok := api.databaseAgent.(DatabaseConnectionAgentClient)
+		if !ok {
+			api.writeError(response, request, http.StatusServiceUnavailable, string(ncpdatabase.CodeAgentUnavailable), "Root Agent 尚未提供数据库连接诊断能力。")
+			return
+		}
+		result, err = client.TestDatabaseConnection(ctx, api.agentSocketPath, input)
+	}
 	if err != nil {
 		api.writeDatabaseError(response, request, err)
 		return
@@ -91,7 +111,7 @@ func (api *handler) databaseConnect(response http.ResponseWriter, request *http.
 		}
 		credentials := ncpdatabase.Credentials{}
 		if input.Credentials != nil {
-			credentials = *input.Credentials
+			credentials = ncpdatabase.CloneCredentials(*input.Credentials)
 		}
 		result, err = client.TestDatabaseConnection(ctx, api.agentSocketPath, ncpdatabase.Connection{SourceID: source.ID, Credentials: credentials})
 	}
@@ -114,9 +134,12 @@ func (api *handler) writeDatabaseConnectError(response http.ResponseWriter, requ
 }
 
 func (api *handler) prepareDatabaseConnection(ctx context.Context, connection ncpdatabase.Connection) (ncpdatabase.Connection, error) {
+	if api.databaseConnections == nil {
+		return connection, nil
+	}
 	resolver, ok := api.databaseConnections.(DatabaseConnectionResolver)
 	if !ok {
-		return connection, nil
+		return ncpdatabase.Connection{}, &ncpdatabase.DatabaseError{Code: ncpdatabase.CodeCredentialStoreUnavailable, Operation: "connection_resolve"}
 	}
 	source, err := api.discoverDatabaseSource(ctx, connection.SourceID)
 	if err != nil {
@@ -124,7 +147,7 @@ func (api *handler) prepareDatabaseConnection(ctx context.Context, connection nc
 	}
 	var manual *ncpdatabase.Credentials
 	if hasDatabaseCredentials(connection.Credentials) {
-		credentials := connection.Credentials
+		credentials := ncpdatabase.CloneCredentials(connection.Credentials)
 		manual = &credentials
 	}
 	return resolver.ResolveConnection(ctx, source, manual)
@@ -147,5 +170,6 @@ func hasDatabaseCredentials(credentials ncpdatabase.Credentials) bool {
 	return strings.TrimSpace(credentials.Username) != "" ||
 		strings.TrimSpace(credentials.Password) != "" ||
 		strings.TrimSpace(credentials.Token) != "" ||
-		strings.TrimSpace(credentials.Database) != ""
+		strings.TrimSpace(credentials.Database) != "" ||
+		credentials.TLS != nil
 }
