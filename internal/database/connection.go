@@ -91,16 +91,21 @@ func (c *ConnectionCoordinator) AutoConnect(ctx context.Context, source Source) 
 
 func (c *ConnectionCoordinator) ManualConnect(ctx context.Context, source Source, credentials Credentials) (ConnectionDiagnostic, error) {
 	started := c.now()
-	if err := validateCredentialTarget(source, credentials); err != nil {
+	prepared, err := c.vault.prepareManual(ctx, source, credentials)
+	if err != nil {
 		return diagnosticForError(source, "manual_connect", started, err), err
 	}
-	diagnostic, err := c.test(ctx, source, credentials, "manual_connect", started)
+	diagnostic, err := c.test(ctx, prepared.source, cloneCredentials(prepared.credentials), "manual_connect", started)
 	if err != nil {
 		// A failed manual attempt is intentionally not written to the vault.
 		return diagnostic, err
 	}
-	if _, err := c.vault.Save(ctx, source, credentials); err != nil {
-		return diagnosticForError(source, "manual_persist", started, err), err
+	if _, err := c.vault.savePrepared(ctx, prepared); err != nil {
+		// 远端诊断已经完成，但持久化失败。不能把这个结果当作重新测试或保存成功。
+		err = newDatabaseError(ErrorCodeOf(err), prepared.source, "manual_persist", err)
+		diagnostic.Code = string(ErrorCodeOf(err))
+		diagnostic.Operation = "manual_persist"
+		return diagnostic, err
 	}
 	return diagnostic, nil
 }

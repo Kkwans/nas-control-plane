@@ -27,6 +27,11 @@ function source(id: string): DatabaseSource {
 function diagnostic(id: string): DatabaseConnectionDiagnostic {
   return { connected: true, driver: 'mysql', endpoint: `${id}:3306`, operation: 'test_connection', durationMs: 1 }
 }
+function response(payload: unknown, status = 200) { return new Response(JSON.stringify(payload), { status }) }
+function credentialsRequired() { return response({ code: 'credentials_required', message: 'private-fixture', requestId: 'fixture-request' }, 400) }
+function credentialConflict() {
+  return response({ code: 'credential_conflict', message: 'private-fixture password=secret', requestId: 'fixture-request', credentials: { password: 'private-fixture' } }, 409)
+}
 async function settle() { for (let i = 0; i < 20; i++) await nextTick() }
 let app: App | undefined
 let host: HTMLDivElement
@@ -41,13 +46,17 @@ function button(label: string) {
   if (!found) throw new Error(`Missing button ${label}`)
   return found
 }
-async function enterCredentials() {
+async function enterCredentials(values = ['alice', 'secret', 'catalog_a']) {
   const inputs = host.querySelectorAll('input')
-  for (const [index, value] of ['alice', 'secret', 'catalog_a'].entries()) {
+  for (const [index, value] of values.entries()) {
     const input = inputs[index]!
     input.value = value
     input.dispatchEvent(new Event('input', { bubbles: true }))
   }
+  await settle()
+}
+async function submitConnection() {
+  host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
   await settle()
 }
 
@@ -60,7 +69,7 @@ describe('DatabaseDetailView request ownership', () => {
     mocks.connect.mockRejectedValue(new NcpApiError('credentials_required', '需要凭据'))
     useDatabaseStore().sources = [source('a'), source('b')]
   })
-  afterEach(() => { app?.unmount(); app = undefined; host?.remove() })
+  afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.unstubAllGlobals() })
 
   it('clears all credential fields and ignores late diagnostics when the source changes', async () => {
     const pending = deferred<DatabaseConnectionDiagnostic>()
@@ -242,6 +251,195 @@ describe('DatabaseDetailView request ownership', () => {
     expect(host.textContent).not.toContain('[object Object]')
     expect(host.textContent).not.toContain('function Object')
     expect(host.querySelector('.diagnostic-result--success')).toBeNull()
+  })
+
+  describe('真实 API、store 与保存冲突视图', () => {
+    beforeEach(async () => {
+      const api = await vi.importActual<typeof import('@/api/database')>('@/api/database')
+      mocks.connect.mockImplementation(api.connectDatabase)
+      mocks.diagnostic.mockImplementation(api.testDatabaseConnection)
+      mocks.catalog.mockImplementation(api.loadDatabaseCatalog)
+    })
+
+    it('精确 409 保留草稿及既有缓存，只有明确重试并读到目录后才发布新凭据', async () => {
+      const pendingCatalog = deferred<Response>()
+      const fetcher = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(credentialsRequired())
+        .mockResolvedValueOnce(response(diagnostic('a')))
+        .mockResolvedValueOnce(credentialConflict())
+        .mockResolvedValueOnce(response(diagnostic('a')))
+        .mockReturnValueOnce(pendingCatalog.promise)
+      vi.stubGlobal('fetch', fetcher)
+      const store = useDatabaseStore()
+      const previousCredentials = { a: { username: 'previous-a' }, b: { username: 'previous-b' } }
+      const previousCatalogs = { b: { source: source('b'), tables: [] } }
+      store.credentials = previousCredentials
+      store.catalogs = previousCatalogs
+      mount(); await settle(); await enterCredentials()
+      button('测试连接').click(); await settle()
+      expect(host.textContent).toContain('连接诊断通过')
+      await submitConnection()
+      expect(host.querySelector('.connection-pill')?.textContent).toBe('连接凭据未保存')
+      expect(host.textContent).toContain('其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。')
+      expect(host.textContent).toContain('手动重新连接；不会自动重试')
+      expect(host.textContent).not.toContain('服务端可能已保存')
+      expect(host.textContent).not.toContain('数据库连接失败')
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(host.textContent).not.toContain('password=secret')
+      expect(host.querySelector('.diagnostic-result')).toBeNull()
+      expect(host.querySelector('[aria-label="数据表和视图列表"]')).toBeNull()
+      expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+      expect(store.credentials).toEqual(previousCredentials)
+      expect(store.catalogs).toEqual(previousCatalogs)
+      expect(mocks.catalog).not.toHaveBeenCalled()
+      expect(button('连接并读取数据表').disabled).toBe(false)
+      await settle()
+      expect(fetcher).toHaveBeenCalledTimes(3)
+
+      await enterCredentials(['bob', 'new-secret', 'catalog_retry'])
+      await submitConnection()
+      expect(fetcher).toHaveBeenCalledTimes(5)
+      const retried = { sourceId: 'a', credentials: { username: 'bob', password: 'new-secret', database: 'catalog_retry' } }
+      expect(JSON.parse(String(fetcher.mock.calls[2]![1]!.body))).toEqual({ sourceId: 'a', credentials: { username: 'alice', password: 'secret', database: 'catalog_a' } })
+      expect(JSON.parse(String(fetcher.mock.calls[3]![1]!.body))).toEqual(retried)
+      expect(fetcher.mock.calls[4]![0]).toBe('/api/v1/databases/catalog')
+      expect(JSON.parse(String(fetcher.mock.calls[4]![1]!.body))).toEqual(retried)
+      expect(store.credentials).toEqual(previousCredentials)
+      expect(store.catalogs).toEqual(previousCatalogs)
+      pendingCatalog.resolve(response({ source: source('a'), tables: [] }))
+      await settle()
+      expect(store.credentials).toEqual({ ...previousCredentials, a: retried.credentials })
+      expect(store.catalogs.b).toEqual(previousCatalogs.b)
+      expect(store.catalogs.a?.source.id).toBe('a')
+      expect(host.querySelector('.connection-pill')?.textContent).toBe('已连接')
+      expect(host.textContent).not.toContain('连接凭据未保存')
+      expect(host.querySelector('form')).toBeNull()
+      expect(fetcher).toHaveBeenCalledTimes(5)
+    })
+
+    it('冲突后的测试连接仍只诊断，不保存或发布凭据，不自动重连', async () => {
+      const fetcher = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(credentialsRequired())
+        .mockResolvedValueOnce(credentialConflict())
+        .mockResolvedValueOnce(response(diagnostic('a')))
+      vi.stubGlobal('fetch', fetcher)
+      mount(); await settle(); await enterCredentials(); await submitConnection()
+      button('测试连接').click(); await settle()
+      expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+        '/api/v1/databases/connect', '/api/v1/databases/connect', '/api/v1/databases/test-connection',
+      ])
+      expect(host.querySelector('.connection-pill')?.textContent).toBe('诊断通过')
+      expect(host.textContent).not.toContain('服务端可能已保存')
+      expect(host.textContent).not.toContain('已连接')
+      expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+      expect(useDatabaseStore().credentials).toEqual({})
+      expect(useDatabaseStore().catalogs).toEqual({})
+      expect(mocks.catalog).not.toHaveBeenCalled()
+      await settle(); expect(fetcher).toHaveBeenCalledTimes(3)
+    })
+
+    it('连接确认后的目录 409 仍属于目录失败，不能证明本次凭据未保存', async () => {
+      const fetcher = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(credentialsRequired())
+        .mockResolvedValueOnce(response(diagnostic('a')))
+        .mockResolvedValueOnce(credentialConflict())
+      vi.stubGlobal('fetch', fetcher)
+      mount(); await settle(); await enterCredentials(); await submitConnection()
+      expect(host.textContent).toContain('数据库连接已确认，目录读取失败')
+      expect(host.textContent).toContain('服务端可能已保存本次凭据')
+      expect(host.textContent).not.toContain('连接凭据未保存')
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(host.querySelector('.connection-pill')?.textContent).toBe('目录读取失败')
+      expect(host.querySelector('.diagnostic-result')).toBeNull()
+      expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+      expect(useDatabaseStore().credentials).toEqual({})
+      expect(useDatabaseStore().catalogs).toEqual({})
+      expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+        '/api/v1/databases/connect', '/api/v1/databases/connect', '/api/v1/databases/catalog',
+      ])
+      await settle(); expect(fetcher).toHaveBeenCalledTimes(3)
+    })
+
+    it.each(['diagnostic', 'catalog'])('%s 的同名冲突不继承 connect 专有的保存结论', async (operation) => {
+      const fetcher = vi.fn<typeof fetch>()
+      if (operation === 'diagnostic') {
+        fetcher.mockResolvedValueOnce(credentialsRequired()).mockResolvedValueOnce(credentialConflict())
+      } else {
+        useDatabaseStore().sources = [{ ...source('a'), requiresLogin: false }]
+        fetcher.mockResolvedValueOnce(credentialConflict())
+      }
+      vi.stubGlobal('fetch', fetcher)
+      mount(); await settle()
+      if (operation === 'diagnostic') { button('测试连接').click(); await settle() }
+      expect(host.textContent).toContain('数据库凭据发生冲突，请重新确认后重试。')
+      expect(host.textContent).not.toContain('连接凭据未保存')
+      expect(host.textContent).not.toContain('本次连接未保存')
+      expect(host.textContent).not.toContain('服务端可能已保存')
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(useDatabaseStore().credentials).toEqual({})
+      expect(useDatabaseStore().catalogs).toEqual({})
+      expect(fetcher).toHaveBeenCalledTimes(operation === 'diagnostic' ? 2 : 1)
+    })
+
+    it.each([
+      { name: '冲突码状态不匹配', reply: () => Promise.resolve(response({ code: 'credential_conflict', message: 'private-fixture', requestId: 'fixture-request' }, 503)) },
+      { name: '409 错误码不匹配', reply: () => Promise.resolve(response({ code: 'auth_failed', message: 'private-fixture', requestId: 'fixture-request' }, 409)) },
+      { name: '409 信封缺少 requestId', reply: () => Promise.resolve(response({ code: 'credential_conflict', message: 'private-fixture' }, 409)) },
+      { name: '409 正文无法解析', reply: () => Promise.resolve(new Response('private-fixture', { status: 409 })) },
+      { name: '网络中断', reply: () => Promise.reject(new TypeError('private-fixture')) },
+    ])('$name 保持结果未知，不把草稿说成未保存', async ({ reply }) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(credentialsRequired()).mockImplementationOnce(reply)
+      vi.stubGlobal('fetch', fetcher)
+      mount(); await settle(); await enterCredentials(); await submitConnection()
+      expect(host.querySelector('.connection-pill')?.textContent).toBe('连接结果未确认')
+      expect(host.textContent).toContain('服务端可能已保存本次凭据')
+      expect(host.textContent).not.toContain('连接凭据未保存')
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(host.querySelector('.diagnostic-result')).toBeNull()
+      expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+      expect(useDatabaseStore().credentials).toEqual({})
+      expect(useDatabaseStore().catalogs).toEqual({})
+      expect(mocks.catalog).not.toHaveBeenCalled()
+      await settle(); expect(fetcher).toHaveBeenCalledTimes(2)
+    })
+
+    it.each(['source', 'session', 'unmount'])('迟到的保存冲突不会污染已变更的 %s 上下文', async (change) => {
+      const pending = deferred<Response>()
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(credentialsRequired()).mockReturnValueOnce(pending.promise)
+      vi.stubGlobal('fetch', fetcher)
+      const store = useDatabaseStore()
+      mount(); await settle(); await enterCredentials(); await submitConnection()
+      const signal = fetcher.mock.calls[1]![1]!.signal as AbortSignal
+      const currentCredentials = { username: 'current-user' }
+      const currentCatalog = { source: source(change === 'source' ? 'b' : 'a'), tables: [] }
+      if (change === 'source') {
+        store.credentials.b = currentCredentials
+        store.catalogs.b = currentCatalog
+        mocks.route.params.sourceId = 'b'
+      } else if (change === 'session') {
+        invalidateSession()
+        store.resetSessionState()
+        store.sources = [source('a'), source('b')]
+        store.credentials.a = currentCredentials
+        store.catalogs.a = currentCatalog
+        app?.unmount(); app = undefined; host.remove()
+        mount()
+      } else { app?.unmount(); app = undefined }
+      await settle()
+      expect(signal.aborted).toBe(true)
+      const credentialsBefore = JSON.stringify(store.credentials)
+      const catalogsBefore = JSON.stringify(store.catalogs)
+      pending.resolve(credentialConflict())
+      await settle()
+      expect(host.textContent).not.toContain('连接凭据未保存')
+      expect(host.textContent).not.toContain('private-fixture')
+      expect(host.querySelector('.diagnostic-result')).toBeNull()
+      expect(JSON.stringify(store.credentials)).toBe(credentialsBefore)
+      expect(JSON.stringify(store.catalogs)).toBe(catalogsBefore)
+      expect([...host.querySelectorAll('input')].every(input => input.value === '')).toBe(true)
+      expect(mocks.catalog).not.toHaveBeenCalled()
+      expect(fetcher).toHaveBeenCalledTimes(2)
+    })
   })
 
 })

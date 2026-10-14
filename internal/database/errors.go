@@ -31,6 +31,7 @@ const (
 	// They are intentionally separate from remote database outcomes.
 	CodeCredentialStoreUnavailable ErrorCode = "credential_store_unavailable"
 	CodeCredentialCorrupt          ErrorCode = "credential_corrupt"
+	CodeCredentialConflict         ErrorCode = "credential_conflict"
 	CodeKeyUnavailable             ErrorCode = "key_unavailable"
 	CodeKeyRotationFailed          ErrorCode = "key_rotation_failed"
 	CodeMigrationFailed            ErrorCode = "migration_failed"
@@ -84,7 +85,7 @@ func CodeFromString(value string) ErrorCode {
 	case CodeCredentialsRequired, CodeAuthFailed, CodeUnreachable,
 		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid, CodeResultModeUnsupported,
 		CodeConstraintFailed, CodeResultTooLarge, CodeAgentUnavailable, CodeTimeout,
-		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeKeyUnavailable,
+		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeCredentialConflict, CodeKeyUnavailable,
 		CodeKeyRotationFailed, CodeMigrationFailed:
 		return code
 	default:

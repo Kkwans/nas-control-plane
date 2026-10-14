@@ -59,6 +59,22 @@ func revisionInsert(t *testing.T, store *SQLiteCredentialStore, sourceID string)
 	return revisionSnapshot(t, store, sourceID)
 }
 
+// 常规夹具也必须经过快照和 CAS；仅旧 schema 迁移夹具使用明确的原始 INSERT。
+func revisionPut(t *testing.T, store *SQLiteCredentialStore, record StoredCredential) error {
+	t.Helper()
+	return store.CompareAndSwapCredential(context.Background(), revisionSnapshot(t, store, record.SourceID).Baseline, record)
+}
+
+func revisionLegacyPut(ctx context.Context, store *SQLiteCredentialStore, record StoredCredential) error {
+	_, err := store.database.ExecContext(ctx, `INSERT INTO ncp_database_credentials (
+		source_id, driver, endpoint, username, database_name, ciphertext, key_version,
+		automatic_enabled, last_error_code, created_at_unix, updated_at_unix
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.SourceID, string(record.Driver), record.Endpoint,
+		record.Username, record.Database, record.Ciphertext, record.KeyVersion, boolInt(record.AutomaticEnabled),
+		string(record.LastErrorCode), record.CreatedAt.Unix(), record.UpdatedAt.Unix())
+	return err
+}
+
 func revisionExec(t *testing.T, store *SQLiteCredentialStore, statement string, args ...any) {
 	t.Helper()
 	if _, err := store.database.ExecContext(context.Background(), statement, args...); err != nil {
@@ -75,8 +91,8 @@ func revisionAssertUnchanged(t *testing.T, store *SQLiteCredentialStore, before 
 
 func revisionAssertConflict(t *testing.T, err error) {
 	t.Helper()
-	if !errors.Is(err, errCredentialConflict) || err.Error() != "credential snapshot conflict" || ErrorCodeOf(err) != "" {
-		t.Fatalf("expected private fixed conflict, got %v", err)
+	if !errors.Is(err, errCredentialConflict) || err.Error() != string(CodeCredentialConflict) || ErrorCodeOf(err) != CodeCredentialConflict {
+		t.Fatalf("expected stable credential conflict, got %v", err)
 	}
 }
 
@@ -121,7 +137,7 @@ func TestCredentialRevisionMigrationPreservesLegacyV1AndRepeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutCredential(ctx, legacy); err != nil {
+	if err := revisionLegacyPut(ctx, store, legacy); err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
@@ -154,7 +170,7 @@ func TestCredentialRevisionMigrationPreservesLegacyV1AndRepeats(t *testing.T) {
 func TestCredentialRevisionMigrationFailureRollsBackAndRetries(t *testing.T) {
 	store := revisionLegacyStore(t)
 	legacy := revisionFixture("legacy")
-	if err := store.PutCredential(context.Background(), legacy); err != nil {
+	if err := revisionLegacyPut(context.Background(), store, legacy); err != nil {
 		t.Fatal(err)
 	}
 	// 让第三次迁移在已建表和回填后失败，验证 DDL、回填和 ledger 一起回滚。
@@ -295,14 +311,14 @@ func TestCredentialRevisionSameSecondAndABACannotOverwrite(t *testing.T) {
 			case "same-second":
 				replacement := before.Record
 				replacement.Ciphertext = []byte("concurrent-replacement")
-				if err := other.PutCredential(context.Background(), replacement); err != nil {
+				if err := revisionPut(t, other, replacement); err != nil {
 					t.Fatal(err)
 				}
 			case "state-aba":
-				if err := other.DisableAutomatic(context.Background(), "source", CodeCredentialCorrupt); err != nil {
+				if err := other.DisableAutomaticIfUnchanged(context.Background(), revisionSnapshot(t, other, "source").Baseline, CodeCredentialCorrupt); err != nil {
 					t.Fatal(err)
 				}
-				if err := other.PutCredential(context.Background(), before.Record); err != nil {
+				if err := revisionPut(t, other, before.Record); err != nil {
 					t.Fatal(err)
 				}
 			case "delete-reinsert", "deleted":
@@ -310,7 +326,7 @@ func TestCredentialRevisionSameSecondAndABACannotOverwrite(t *testing.T) {
 					t.Fatal(err)
 				}
 				if scenario == "delete-reinsert" {
-					if err := other.PutCredential(context.Background(), before.Record); err != nil {
+					if err := revisionPut(t, other, before.Record); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -324,7 +340,7 @@ func TestCredentialRevisionSameSecondAndABACannotOverwrite(t *testing.T) {
 			}
 			revisionAssertConflict(t, store.CompareAndSwapCredential(context.Background(), before.Baseline, before.Record))
 			revisionAssertConflict(t, store.DisableAutomaticIfUnchanged(context.Background(), before.Baseline, CodeCredentialCorrupt))
-			revisionAssertConflict(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{revisionRotation(before)}, nil))
+			revisionAssertConflict(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{revisionRotation(before)}, nil))
 			revisionAssertUnchanged(t, store, current)
 		})
 	}
@@ -391,7 +407,7 @@ func TestCredentialRevisionReadsConsistentWithConcurrentWrites(t *testing.T) {
 	reader, writer := revisionOpenStore(t, path), revisionOpenStore(t, path)
 	initial := revisionFixture("source")
 	initial.Username = "1"
-	if err := writer.PutCredential(context.Background(), initial); err != nil {
+	if err := revisionPut(t, writer, initial); err != nil {
 		t.Fatal(err)
 	}
 	writeDone := make(chan error, 1)
@@ -473,7 +489,7 @@ func TestCredentialRevisionRotationZeroOneAndMultiple(t *testing.T) {
 					updates = append(updates, revisionRotation(snapshot))
 				}
 			}
-			if err := store.ApplyRotationIfUnchanged(context.Background(), updates, disables); err != nil {
+			if err := store.ApplyRotation(context.Background(), updates, disables); err != nil {
 				t.Fatal(err)
 			}
 			for i, before := range snapshots {
@@ -503,11 +519,11 @@ func TestCredentialRevisionRotationConflictRollsBackWholeBatch(t *testing.T) {
 			disables := []CredentialRotationDisable{{SourceID: "c", Expected: snapshots[2].Baseline, Code: CodeCredentialCorrupt}}
 			replacement := snapshots[conflictAt].Record
 			replacement.Ciphertext = []byte("concurrent-success")
-			if err := other.PutCredential(context.Background(), replacement); err != nil {
+			if err := revisionPut(t, other, replacement); err != nil {
 				t.Fatal(err)
 			}
 			snapshots[conflictAt] = revisionSnapshot(t, store, replacement.SourceID)
-			revisionAssertConflict(t, store.ApplyRotationIfUnchanged(context.Background(), updates, disables))
+			revisionAssertConflict(t, store.ApplyRotation(context.Background(), updates, disables))
 			for _, before := range snapshots {
 				revisionAssertUnchanged(t, store, before)
 			}
@@ -528,7 +544,7 @@ func TestCredentialRevisionRotationPersistenceFailureRollsBack(t *testing.T) {
 				revisionExec(t, store, `CREATE TABLE fixture_child (id INTEGER REFERENCES fixture_parent(id) DEFERRABLE INITIALLY DEFERRED)`)
 				revisionExec(t, store, `CREATE TRIGGER fixture_rotation_failure AFTER UPDATE ON ncp_database_credentials WHEN OLD.source_id = 'b' BEGIN INSERT INTO fixture_child VALUES (1); END`)
 			}
-			err := store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{revisionRotation(a), revisionRotation(b)}, nil)
+			err := store.ApplyRotation(context.Background(), []CredentialRotationUpdate{revisionRotation(a), revisionRotation(b)}, nil)
 			revisionAssertStoreFailure(t, err)
 			revisionAssertUnchanged(t, store, a)
 			revisionAssertUnchanged(t, store, b)
@@ -564,7 +580,7 @@ func TestCredentialRevisionIntegerRangeAndOverflowRollback(t *testing.T) {
 	revisionAssertStoreFailure(t, store.DeleteCredential(context.Background(), "source"))
 	revisionAssertUnchanged(t, store, before)
 	first := revisionInsert(t, store, "first")
-	revisionAssertStoreFailure(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{revisionRotation(first), revisionRotation(before)}, nil))
+	revisionAssertStoreFailure(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{revisionRotation(first), revisionRotation(before)}, nil))
 	revisionAssertUnchanged(t, store, first)
 	revisionAssertUnchanged(t, store, before)
 	// 无变化写入不会递增，最大整数版本仍可完成真正的 no-op。
@@ -596,15 +612,15 @@ func TestCredentialRevisionRejectsInvalidAndUnknownBaselines(t *testing.T) {
 	revisionAssertConflict(t, store.DisableAutomaticIfUnchanged(context.Background(), missing, CodeCredentialCorrupt))
 	update := revisionRotation(before)
 	update.Expected.SourceID = "other"
-	revisionAssertStoreFailure(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{update}, nil))
+	revisionAssertStoreFailure(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{update}, nil))
 	update = revisionRotation(before)
-	revisionAssertStoreFailure(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{update, update}, nil))
+	revisionAssertStoreFailure(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{update, update}, nil))
 	update.KeyVersion = 0
-	revisionAssertStoreFailure(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{update}, nil))
+	revisionAssertStoreFailure(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{update}, nil))
 	update = revisionRotation(before)
 	update.Expected = missing
 	update.SourceID = missing.SourceID
-	revisionAssertConflict(t, store.ApplyRotationIfUnchanged(context.Background(), []CredentialRotationUpdate{revisionRotation(before), update}, nil))
+	revisionAssertConflict(t, store.ApplyRotation(context.Background(), []CredentialRotationUpdate{revisionRotation(before), update}, nil))
 	revisionAssertUnchanged(t, store, before)
 }
 
@@ -632,7 +648,7 @@ func TestCredentialRevisionReadAndWriteErrorsAreNotConflicts(t *testing.T) {
 			revisionAssertStoreFailure(t, err)
 			revisionAssertStoreFailure(t, store.CompareAndSwapCredential(ctx, before.Baseline, before.Record))
 			revisionAssertStoreFailure(t, store.DisableAutomaticIfUnchanged(ctx, before.Baseline, CodeCredentialCorrupt))
-			revisionAssertStoreFailure(t, store.ApplyRotationIfUnchanged(ctx, []CredentialRotationUpdate{revisionRotation(before)}, nil))
+			revisionAssertStoreFailure(t, store.ApplyRotation(ctx, []CredentialRotationUpdate{revisionRotation(before)}, nil))
 			if failure == "cancelled" {
 				revisionAssertUnchanged(t, store, before)
 			}
@@ -670,4 +686,21 @@ func TestCredentialRevisionCASResultChecksExactRowsAffected(t *testing.T) {
 		revisionAssertStoreFailure(t, credentialCASResult(result, nil, "fixture"))
 	}
 	revisionAssertStoreFailure(t, credentialCASResult(revisionResult{affected: 1}, errors.New("synthetic write failure"), "fixture"))
+}
+
+func TestCredentialRevisionLegacySQLWritesStillInvalidateBaseline(t *testing.T) {
+	store := revisionTestStore(t)
+	before := revisionInsert(t, store, "source")
+	// 明确模拟旧二进制的无条件 UPSERT，不能恢复为生产方法。
+	revisionExec(t, store, `INSERT INTO ncp_database_credentials (
+		source_id, driver, endpoint, username, database_name, ciphertext, key_version,
+		automatic_enabled, last_error_code, created_at_unix, updated_at_unix
+	) VALUES ('source', 'postgresql', 'synthetic.invalid:5432/fixture', 'legacy-user', 'fixture', X'1234', 1, 1, '', 1730000000, 1730000000)
+	ON CONFLICT(source_id) DO UPDATE SET username = excluded.username, ciphertext = excluded.ciphertext`)
+	after := revisionSnapshot(t, store, "source")
+	if after.Baseline.Revision != before.Baseline.Revision+1 {
+		t.Fatal("legacy UPSERT did not advance revision")
+	}
+	revisionAssertConflict(t, store.CompareAndSwapCredential(context.Background(), before.Baseline, before.Record))
+	revisionAssertUnchanged(t, store, after)
 }

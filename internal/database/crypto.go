@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -103,7 +104,14 @@ func (p *MemoryKeyProvider) Rotate(ctx context.Context) (KeyMaterial, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.current++
+	if p.current <= 0 || p.current == math.MaxInt {
+		return KeyMaterial{}, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "key_rotate"}
+	}
+	nextVersion := p.current + 1
+	if _, exists := p.keys[nextVersion]; exists {
+		return KeyMaterial{}, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "key_rotate"}
+	}
+	p.current = nextVersion
 	p.keys[p.current] = key
 	return KeyMaterial{Version: p.current, Key: append([]byte(nil), key...)}, nil
 }
@@ -194,9 +202,12 @@ func (p *FileKeyProvider) Rotate(ctx context.Context) (KeyMaterial, error) {
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return KeyMaterial{}, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "key_rotate", Cause: err}
 	}
+	if document.CurrentVersion == math.MaxInt {
+		return KeyMaterial{}, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "key_rotate"}
+	}
 	nextVersion := document.CurrentVersion + 1
-	if nextVersion <= 0 {
-		nextVersion = 1
+	if _, exists := document.Keys[strconv.Itoa(nextVersion)]; exists {
+		return KeyMaterial{}, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "key_rotate"}
 	}
 	if document.Keys == nil {
 		document.Keys = make(map[string]string)

@@ -35,6 +35,7 @@ type StatusTone = 'success' | 'warning' | 'danger' | 'neutral'
 const databaseErrorCopy: Record<string, string> = {
   credentials_required: '连接需要数据库凭据，请填写表单后重试。',
   auth_failed: '数据库认证失败，请核对用户名和密码。',
+  credential_conflict: '数据库凭据发生冲突，请重新确认后重试。',
   unreachable: '数据库服务不可达，请检查地址和端口。',
   database_not_found: '目标数据库或数据表不存在，请检查数据库名。',
   permission_denied: '当前账号没有执行该操作的权限。',
@@ -66,13 +67,15 @@ const errorState = ref<DatabaseErrorState | null>(null)
 const errorOperation = ref<'discovery' | 'catalog' | 'connection' | 'diagnostic' | null>(null)
 const credentialDraft = ref<DatabaseCredentials>({})
 const diagnostic = ref<ConnectionDiagnostic | null>(null)
+const connectionCredentialConflict = computed(() => errorOperation.value === 'connection' && errorState.value?.code === 'credential_conflict')
 const connectionOutcomeUnknown = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
 const connectionCatalogFailed = computed(() => errorState.value?.code === 'DATABASE_CONNECTION_CATALOG_FAILED')
 const diagnosticResponseInvalid = computed(() => errorOperation.value === 'diagnostic' && errorState.value?.code === 'DATABASE_RESPONSE_INVALID')
-const errorTitle = computed(() => connectionOutcomeUnknown.value ? '数据库连接结果未确认'
-  : connectionCatalogFailed.value ? '数据库连接已确认，目录读取失败'
-    : diagnosticResponseInvalid.value ? '数据库连接诊断结果未确认'
-      : errorOperation.value === 'diagnostic' ? '数据库连接诊断失败' : '数据库连接失败')
+const errorTitle = computed(() => connectionCredentialConflict.value ? '连接凭据未保存'
+  : connectionOutcomeUnknown.value ? '数据库连接结果未确认'
+    : connectionCatalogFailed.value ? '数据库连接已确认，目录读取失败'
+      : diagnosticResponseInvalid.value ? '数据库连接诊断结果未确认'
+        : errorOperation.value === 'diagnostic' ? '数据库连接诊断失败' : '数据库连接失败')
 
 const tables = computed(() => {
   const term = query.value.trim().toLowerCase()
@@ -85,6 +88,7 @@ const stats = computed<WorkspaceStat[]>(() => [
 ])
 const connectionState = computed(() => {
   if (catalog.value) return { label: '已连接', tone: 'success' as StatusTone, detail: '已读取对象目录，可打开数据表或视图。' }
+  if (connectionCredentialConflict.value) return { label: '连接凭据未保存', tone: 'warning' as StatusTone, detail: '其他操作已修改保存的凭据，请重新确认后再连接。' }
   if (connectionOutcomeUnknown.value) return { label: '连接结果未确认', tone: 'warning' as StatusTone, detail: '服务端可能已保存凭据，请核对后再决定是否重新连接。' }
   if (connectionCatalogFailed.value) return { label: '目录读取失败', tone: 'warning' as StatusTone, detail: '连接已确认，尚未读取到可靠的对象目录。' }
   if (diagnosticResponseInvalid.value) return { label: '诊断结果未确认', tone: 'warning' as StatusTone, detail: '未收到有效的连接诊断结果。' }
@@ -162,7 +166,7 @@ async function initialize() {
       } catch (error) {
         if (!request.current() || isAbortError(error)) return
         if (errorCode(error) !== 'credentials_required') {
-          diagnostic.value = connectionResultUnconfirmed(error) ? null : diagnosticFromError(error, current, {})
+          diagnostic.value = connectionDiagnosticUnavailable(error) ? null : diagnosticFromError(error, current, {})
           setError(error, '自动连接失败，请检查保存的凭据或重新输入。', 'connection')
         }
       }
@@ -211,7 +215,7 @@ async function connectDatabase() {
     }
   } catch (error) {
     if (!request.current() || isAbortError(error)) return
-    diagnostic.value = connectionResultUnconfirmed(error) ? null : diagnosticFromError(error, target, credentials)
+    diagnostic.value = connectionDiagnosticUnavailable(error) ? null : diagnosticFromError(error, target, credentials)
     setError(error, '数据库连接失败，请检查登录信息。', 'connection')
   } finally {
     if (request.current()) loading.value = false
@@ -242,8 +246,9 @@ async function testConnection() {
   }
 }
 
-function connectionResultUnconfirmed(error: unknown) {
-  return ['DATABASE_CONNECTION_OUTCOME_UNKNOWN', 'DATABASE_CONNECTION_CATALOG_FAILED'].includes(errorCode(error))
+function connectionDiagnosticUnavailable(error: unknown) {
+  // 保存冲突只证明本次没有写入凭据，不能据此伪造连接诊断失败。
+  return ['credential_conflict', 'DATABASE_CONNECTION_OUTCOME_UNKNOWN', 'DATABASE_CONNECTION_CATALOG_FAILED'].includes(errorCode(error))
 }
 
 function diagnosticFromError(error: unknown, target: DatabaseSource, credentials: DatabaseCredentials): ConnectionDiagnostic {
@@ -308,6 +313,9 @@ function errorCode(error: unknown) {
 
 function errorMessage(error: unknown, fallback: string) {
   const code = errorCode(error)
+  if (errorOperation.value === 'connection' && code === 'credential_conflict') {
+    return '其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。'
+  }
   return knownErrorCopy(code) || (error instanceof NcpApiError ? error.message : fallback)
 }
 
@@ -315,6 +323,8 @@ function errorNextStep(error: unknown) {
   switch (errorCode(error)) {
     case 'credentials_required': return '输入凭据后重新测试连接。'
     case 'auth_failed': return '核对用户名、密码和数据库名；密码不会显示在错误信息中。'
+    case 'credential_conflict': return errorOperation.value === 'connection'
+      ? '核对当前凭据后手动重新连接；不会自动重试。' : '核对当前凭据后重试。'
     case 'unreachable': return '确认数据库服务运行且地址、端口可访问。'
     case 'database_not_found': return '确认数据库名、schema 或对象名称。'
     case 'permission_denied': return '改用具备目录读取权限的账号。'

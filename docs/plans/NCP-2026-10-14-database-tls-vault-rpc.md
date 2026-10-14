@@ -457,3 +457,13 @@ Query 做四组合：TLS nil/non-nil × resultMode omitted/explicit；再覆盖 
 18组新Go测试通过（重复20次），完整database与race、全仓构建/vet通过；独立复核包含REPLACE、两种recursive_triggers状态、删除重开、事务内ABA和溢出回滚。旧v1记录、重复迁移和迁移失败回滚均覆盖。使用真实临时SQLite和合成数据，没有读取或轮换真实密钥/凭据。
 
 存储原语具备条件能力不等于TLS已启用；v2密文、严格RPC、Manager分派和HTTP/UI入口仍未激活。下一片优先把测试前快照接入ManualConnect，并将Resolve失败禁用、rotation全部切至条件写入，冲突不重测、不回滚已发布key。
+
+## 12. T2-A1 条件写入接入检查点（2026-10-14 07:28 UTC）
+
+生产代码的CredentialStore/vault/coordinator现已切至条件写入，移除无条件PutCredential、Save和store.DisableAutomatic入口。ManualConnect测试前冻结源、凭据和版本，成功后只按该版本保存；409 credential_conflict保证仅本次未保存，不推断测试成功或其他请求未保存，不自动取新版本覆盖/重测。前端保留草稿并区分未保存与未知结果，异常状态/信封仍保守归未知。
+
+Resolve失败只条件禁用最初快照。轮换在key操作前固定受影响记录，条件更新整批原子提交；冲突不禁用、不回滚已经发布的新key，旧key继续保留。真正失败只尽力禁用原始未改变记录，保留失败证据。另拒绝key版本溢出或覆盖已保留版本，未扩大密钥文件协调范围。
+
+新增可控交错覆盖晚到A对B、同秒/ABA、源凭据冻结、旧Resolve失败、轮换与并发保存、key发布后的CAS失败、原始快照禁用。真实Recorder→Coordinator→临时SQLite确认409时只保留竞争获胜记录；独立故障注入确认CAS已经提交再丢回执仍是503/可能已保存，不能用409处理。完整database/race、20次定向回归、纯HTTP/RPC、OpenAPI、全仓build/vet通过；主任务3295前端单元/116文件、全量lint、类型、构建及预算通过。没有真实凭据操作或部署。
+
+A0的252bfeb完整CI通过3266单元/407浏览器；本片新增409浏览器截图与动线另片推进，不能提前报告通过。v2密文、严格TLS RPC和Manager/UI TLS接入仍待B/C阶段；A1并不启用TLS。

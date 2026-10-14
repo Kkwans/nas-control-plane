@@ -197,11 +197,16 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 	return true
 }
 
-func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, err error) {
+func databaseErrorCode(err error) ncpdatabase.ErrorCode {
 	code := ncpdatabase.ErrorCodeOf(err)
 	if code == "" {
 		code = ncpdatabase.CodeFromString(agentsocket.ErrorCode(err))
 	}
+	return code
+}
+
+func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, err error) {
+	code := databaseErrorCode(err)
 	status := http.StatusBadRequest
 	message := "数据库操作失败，请检查连接信息、SQL 或数据约束。"
 	switch code {
@@ -223,6 +228,8 @@ func (api *handler) writeDatabaseError(response http.ResponseWriter, request *ht
 		status, message = http.StatusUnprocessableEntity, "数据库结果超过大小限制，SQL 可能已经执行。请先核对写入状态，不要直接重试；可减少返回列或读取范围。"
 	case ncpdatabase.CodeConstraintFailed:
 		status, message = http.StatusConflict, "数据库约束未满足。"
+	case ncpdatabase.CodeCredentialConflict:
+		status, message = http.StatusConflict, "数据库凭据已变更，请重新确认后再连接。"
 	case ncpdatabase.CodeAgentUnavailable:
 		status, message = http.StatusServiceUnavailable, "Root Agent 暂不可用。"
 	case ncpdatabase.CodeTimeout:

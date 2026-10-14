@@ -64,6 +64,7 @@ const rejections: Record<string, readonly [number, string]> = {
   HTTP_UNSUPPORTED_MEDIA_TYPE: [415, '请求必须使用 application/json 内容类型。'],
   credentials_required: [400, '连接需要数据库凭据，请填写表单后重试。'],
   auth_failed: [401, '数据库认证失败，请核对用户名和密码。'],
+  credential_conflict: [409, '其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。'],
 }
 
 export async function requestDatabaseConnect(body: string, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {

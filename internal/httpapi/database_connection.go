@@ -65,7 +65,7 @@ func (api *handler) databaseConnect(response http.ResponseWriter, request *http.
 	defer cancel()
 	discovery, err := api.databaseAgent.DiscoverDatabases(ctx, api.agentSocketPath)
 	if err != nil {
-		api.writeDatabaseError(response, request, err)
+		api.writeDatabaseConnectError(response, request, err)
 		return
 	}
 	var source ncpdatabase.Source
@@ -96,10 +96,21 @@ func (api *handler) databaseConnect(response http.ResponseWriter, request *http.
 		result, err = client.TestDatabaseConnection(ctx, api.agentSocketPath, ncpdatabase.Connection{SourceID: source.ID, Credentials: credentials})
 	}
 	if err != nil {
-		api.writeDatabaseError(response, request, err)
+		api.writeDatabaseConnectError(response, request, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+// /connect 的冲突仅表示本次尝试未保存凭据，不代表测试已成功；
+// Agent 测试阶段的同名错误也会在保存前中止，其他请求仍可能已保存新凭据。
+func (api *handler) writeDatabaseConnectError(response http.ResponseWriter, request *http.Request, err error) {
+	if databaseErrorCode(err) == ncpdatabase.CodeCredentialConflict {
+		api.writeError(response, request, http.StatusConflict, string(ncpdatabase.CodeCredentialConflict),
+			"凭据已被其他请求更改，本次凭据未保存，请重新确认后手动重试。")
+		return
+	}
+	api.writeDatabaseError(response, request, err)
 }
 
 func (api *handler) prepareDatabaseConnection(ctx context.Context, connection ncpdatabase.Connection) (ncpdatabase.Connection, error) {

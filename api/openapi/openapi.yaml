@@ -605,6 +605,7 @@ paths:
     post:
       operationId: connectDatabase
       summary: 使用已保存或手动提供的凭据连接数据库
+      description: 手动凭据先测试，再以读取时的版本条件保存；冲突不会自动覆盖或重试。credential_conflict 仅保证本次尝试未写入凭据，不表示连接测试成功，也不表示其他请求没有保存凭据；用户需重新确认后手动重试。其他错误不提供本次凭据未写入的保证。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
@@ -641,6 +642,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: credential_conflict 表示凭据版本冲突，本次尝试没有写入凭据；可发生在连接测试阶段，或测试成功后的条件保存阶段，不能据此判断测试成功。重新确认后手动重试，不自动重发。constraint_failed 仍表示数据库约束失败，不适用该凭据保证。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                credentialConflict:
+                  summary: 本次凭据未保存，其他请求可能已保存新凭据
+                  value:
+                    code: credential_conflict
+                    message: 凭据已被其他请求更改，本次凭据未保存，请重新确认后手动重试。
+                    requestId: req-example
         '503':
           description: 数据库或凭据服务不可用
           content:

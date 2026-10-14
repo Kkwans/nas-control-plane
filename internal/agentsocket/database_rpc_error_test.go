@@ -50,6 +50,7 @@ func TestDatabaseRPCStableCodesSurviveCoordinatorMapping(t *testing.T) {
 		ncpdatabase.CodeAgentUnavailable, ncpdatabase.CodeCredentialStoreUnavailable,
 		ncpdatabase.CodeCredentialCorrupt, ncpdatabase.CodeKeyUnavailable,
 		ncpdatabase.CodeKeyRotationFailed, ncpdatabase.CodeMigrationFailed,
+		ncpdatabase.CodeCredentialConflict,
 	} {
 		t.Run(string(code), func(t *testing.T) {
 			_, serviceErr := databaseResponse(nil, &ncpdatabase.DatabaseError{Code: code, Cause: errors.New("password=private; SQL=private")})
@@ -90,12 +91,17 @@ func TestDatabaseRPCStableCodesKeepWhitelistAndTransportPriority(t *testing.T) {
 		{"unknown code", grpcstatus.Error(codes.InvalidArgument, "future_database_code"), ncpdatabase.CodeAgentUnavailable},
 		{"raw auth detail", grpcstatus.Error(codes.Unauthenticated, "authentication failed: password=private"), ncpdatabase.CodeAgentUnavailable},
 		{"code with private suffix", grpcstatus.Error(codes.InvalidArgument, "auth_failed: password=private"), ncpdatabase.CodeAgentUnavailable},
+		{"conflict with private suffix", grpcstatus.Error(codes.Aborted, "credential_conflict: password=private"), ncpdatabase.CodeAgentUnavailable},
+		{"conflict without stable code", grpcstatus.Error(codes.Aborted, "private conflict details"), ncpdatabase.CodeAgentUnavailable},
 		{"private non-status error", errors.New("password=private; connection refused"), ncpdatabase.CodeAgentUnavailable},
 		{"unimplemented method", grpcstatus.Error(codes.Unimplemented, "private method details"), ncpdatabase.CodeAgentUnavailable},
 		{"whitespace around code", grpcstatus.Error(codes.InvalidArgument, "  auth_failed\n"), ncpdatabase.CodeAuthFailed},
+		{"whitespace around conflict", grpcstatus.Error(codes.Aborted, "  credential_conflict\n"), ncpdatabase.CodeCredentialConflict},
 		{"deadline before wire code", grpcstatus.Error(codes.DeadlineExceeded, "auth_failed"), ncpdatabase.CodeTimeout},
 		{"canceled before wire code", grpcstatus.Error(codes.Canceled, "auth_failed"), ncpdatabase.CodeTimeout},
 		{"budget before wire code", grpcstatus.Error(codes.ResourceExhausted, "auth_failed"), ncpdatabase.CodeResultTooLarge},
+		{"deadline before conflict code", grpcstatus.Error(codes.DeadlineExceeded, "credential_conflict"), ncpdatabase.CodeTimeout},
+		{"budget before conflict code", grpcstatus.Error(codes.ResourceExhausted, "credential_conflict"), ncpdatabase.CodeResultTooLarge},
 		{"legacy receive budget", grpcstatus.Error(codes.ResourceExhausted, "grpc: received message larger than max (4194305 vs. 4194304)"), ncpdatabase.CodeResultTooLarge},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -104,6 +110,25 @@ func TestDatabaseRPCStableCodesKeepWhitelistAndTransportPriority(t *testing.T) {
 	}
 	if databaseRPCError(nil) != nil {
 		t.Fatal("nil RPC error became a failure")
+	}
+}
+
+func TestDatabaseRPCCredentialConflictDoesNotInventPersistenceOutcome(t *testing.T) {
+	response, err := databaseResponse(ncpdatabase.ConnectionDiagnostic{
+		Connected: true, Code: "credential_conflict", Operation: "manual_persist",
+		Endpoint: "password=private",
+	}, &ncpdatabase.DatabaseError{
+		Code: ncpdatabase.CodeCredentialConflict, Operation: "manual_persist", Cause: errors.New("password=private"),
+	})
+	status := grpcstatus.Convert(err)
+	if response != nil || status.Code() != codes.Aborted || status.Message() != "credential_conflict" {
+		t.Fatalf("unexpected conflict encoding: response = %v, status = %v", response, status)
+	}
+	mapped := databaseRPCError(status.Err())
+	assertDatabaseRPCStableError(t, mapped, ncpdatabase.CodeCredentialConflict)
+	var typed *ncpdatabase.DatabaseError
+	if !errors.As(mapped, &typed) || typed.Operation != "" || typed.Endpoint != "" || typed.Cause != nil {
+		t.Fatalf("RPC conflict invented persistence evidence: %#v", typed)
 	}
 }
 

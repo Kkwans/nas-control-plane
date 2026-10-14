@@ -7,6 +7,7 @@ import wireFixtures from './fixtures/databaseConnectionResponse.wire.json'
 const diagnostic = { connected: true, driver: 'mysql', endpoint: 'fixture:3306/catalog', operation: 'test_connection', durationMs: 0 }
 const connection = { sourceId: 'fixture', credentials: { username: 'fixture-user', password: 'private-fixture' } }
 const unknownMessage = '连接结果尚未确认，服务端可能已保存本次凭据。请核对后再决定是否重新连接。'
+const conflictMessage = '其他操作已修改保存的凭据，本次连接未保存凭据。请重新确认后再连接。'
 const fields = ['connected', 'driver', 'endpoint', 'operation', 'durationMs'] as const
 const invalidFields: unknown[] = [undefined, null, {}, [], ['private-fixture'], { password: 'private-fixture' }]
 const malformed = [null, false, true, 1, 'private-fixture', [], {},
@@ -111,6 +112,8 @@ describe('connect 保存结果边界', () => {
   it.each([
     [503, 'credential_store_unavailable'], [503, 'key_unavailable'], [503, 'agent_unavailable'], [504, 'timeout'],
     [400, 'future_failure'], [500, 'auth_failed'], [503, 'credentials_required'], [401, 'HTTP_UNSUPPORTED_MEDIA_TYPE'],
+    [400, 'credential_conflict'], [401, 'credential_conflict'], [500, 'credential_conflict'], [503, 'credential_conflict'],
+    [409, 'credentials_required'], [409, 'auth_failed'], [409, 'CREDENTIAL_CONFLICT'], [409, 'credential_conflict '], [409, 'future_failure'],
   ])('完整 HTTP %s/%s 错误也不能一概证明未保存', async (status, code) => {
     const fetcher = stub(response({ code, message: 'private-fixture', requestId: 'private-request' }, Number(status)))
     expectSafe(await connectDatabase(connection).catch(error => error), 'DATABASE_CONNECTION_OUTCOME_UNKNOWN', unknownMessage)
@@ -119,7 +122,7 @@ describe('connect 保存结果边界', () => {
   it.each([
     [503, 'AUTH_UNAVAILABLE'], [401, 'AUTH_UNAUTHORIZED'], [403, 'HTTP_CROSS_ORIGIN_REJECTED'],
     [400, 'DATABASE_INPUT_INVALID'], [413, 'HTTP_REQUEST_BODY_TOO_LARGE'], [415, 'HTTP_UNSUPPORTED_MEDIA_TYPE'],
-    [400, 'credentials_required'], [401, 'auth_failed'],
+    [400, 'credentials_required'], [401, 'auth_failed'], [409, 'credential_conflict'],
   ])('仅保留确证保存前拒绝的 HTTP %s/%s', async (status, code) => {
     const fetcher = stub(response({ code, message: 'private-fixture', requestId: 'fixture-request' }, Number(status)))
     const error = await connectDatabase(connection).catch(error => error)
@@ -127,15 +130,36 @@ describe('connect 保存结果边界', () => {
     expect(error).toMatchObject({ requestId: 'fixture-request' })
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
-  it.each(['code', 'message', 'requestId'])('拒绝非自有或非字符串错误信封字段 %s', async (field) => {
-    for (const value of [undefined, null, 1, {}, []]) {
-      stub(response({ code: 'credentials_required', message: 'private-fixture', requestId: 'private-request', [field]: value }, 400))
+  describe.each([{ code: 'credentials_required', status: 400 }, { code: 'credential_conflict', status: 409 }])('$status/$code 错误信封', ({ code, status }) => {
+    it.each(['code', 'message', 'requestId'])('拒绝非自有或非字符串字段 %s', async (field) => {
+      for (const value of [undefined, null, 1, {}, []]) {
+        const fetcher = stub(response({ code, message: 'private-fixture', requestId: 'private-request', [field]: value }, status))
+        expectSafe(await connectDatabase(connection).catch(error => error), 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
+        expect(fetcher).toHaveBeenCalledTimes(1)
+      }
+      const payload = { code, message: 'private-fixture', requestId: 'private-request' }
+      const value = payload[field as keyof typeof payload]; Reflect.deleteProperty(payload, field); Object.setPrototypeOf(payload, { [field]: value })
+      const valueResponse = response(null, status); vi.spyOn(valueResponse, 'json').mockResolvedValue(payload); const fetcher = stub(valueResponse)
       expectSafe(await connectDatabase(connection).catch(error => error), 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
-    }
-    const payload = { code: 'credentials_required', message: 'private-fixture', requestId: 'private-request' }
-    const value = payload[field as keyof typeof payload]; Reflect.deleteProperty(payload, field); Object.setPrototypeOf(payload, { [field]: value })
-    const valueResponse = response(null, 400); vi.spyOn(valueResponse, 'json').mockResolvedValue(payload); stub(valueResponse)
-    expectSafe(await connectDatabase(connection).catch(error => error), 'DATABASE_CONNECTION_OUTCOME_UNKNOWN')
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    })
+  })
+  it('精确保存冲突只暴露固定安全文案，不保留正文细节或自动重放', async () => {
+    const fetcher = stub(response({
+      code: 'credential_conflict', message: 'private-fixture: password /dsn token', requestId: 'private-request?password=fixture',
+      credentials: connection.credentials, cause: { password: 'private-fixture' }, diagnostic,
+    }, 409))
+    const error = await connectDatabase(connection).catch(error => error)
+    expectSafe(error, 'credential_conflict', conflictMessage)
+    expect(error.requestId).toBeUndefined()
+    expect(error).not.toHaveProperty('credentials')
+    expect(error).not.toHaveProperty('diagnostic')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+  it.each([new Response('private-fixture: invalid JSON', { status: 409 }), response({ code: 'credential_conflict', message: 'private-fixture', requestId: 'fixture-request' })])('无法验证的保存冲突仍保持结果未知', async (value) => {
+    const fetcher = stub(value)
+    expectSafe(await connectDatabase(connection).catch(error => error), 'DATABASE_CONNECTION_OUTCOME_UNKNOWN', unknownMessage)
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
   it.each([null, [], {}, 'private-fixture'])('拒绝畸形非成功错误信封 %j', async (payload) => {
     stub(response(payload, 503))

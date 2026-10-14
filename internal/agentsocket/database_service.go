@@ -186,6 +186,8 @@ func databaseResponse(result any, err error) (*structpb.Struct, error) {
 			grpcCode = codes.NotFound
 		case ncpdatabase.CodeConstraintFailed:
 			grpcCode = codes.FailedPrecondition
+		case ncpdatabase.CodeCredentialConflict:
+			grpcCode = codes.Aborted
 		case ncpdatabase.CodeResultTooLarge:
 			grpcCode = codes.ResourceExhausted
 		}
