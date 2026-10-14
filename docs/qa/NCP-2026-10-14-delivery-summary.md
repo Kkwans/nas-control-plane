@@ -93,3 +93,16 @@
 - Docker 八张 PNG 对应的完整 axe 扫描零违规，但仍有三类 incomplete；883eb7d 的八组截图、完整 axe、352 项源码哈希及 PNG 哈希已逐项复核，三阶段几何一致，桌面提示定位与 390px 关闭按钮均符合本轮限定检查；不据此声称全面无障碍或视觉验收合格。此前 SQL 四张截图属于 f2cce02 检查点，不替代后续改动验收。
 - 浏览器使用隔离 API 数据；部分集成使用临时 SQLite、文件和受控子进程。真实 NAS、Docker、PostgreSQL/MySQL TLS 握手及原生多会话尚未验收。**代码已推送不代表部署或发布；本轮没有部署或发布。**
 - 下一步先核验新创建输入用例的 CI 和参数预览实际布局，再继续可隔离验证的开发。Agent 专用访问身份、更完整的跨引擎 SQL 自动识别、慢操作统一任务化、跨页面幂等回执及一致性备份恢复仍待推进。数据库 TLS 已从方案推进到完整代码链路，真实握手验收仍待完成。现有页面防重复保护不能替代服务端幂等，Compose 内容核对也不能证明应用运行健康。
+
+## 后续验证补充（2026-10-14 22:16 UTC）
+
+前述待验创建流程已经完成一轮失败定位、修复和复验，并非初次运行即成功：首轮四项新用例暴露删除图标无名称、高级配置说明对比不足、确认弹窗重复 banner，以及偏好读取 fixture 缺失。
+
+- [37a77b5](https://github.com/Kkwans/nas-control-plane/commit/37a77b56960d775e23612850b2e41f41c30b8c26) 修复上述产品语义与样式，补齐准确的偏好读取响应；没有缩小完整 axe 扫描或放宽未知请求拒绝。真实 DOM 回归覆盖两个弹窗的 Tab 循环、Escape、焦点归还及层叠。
+- [d0f08a6](https://github.com/Kkwans/nas-control-plane/commit/d0f08a63eba891e0ebc659a725f98578b1d008ee) 将当前位置改为具名导航并标注唯一当前页面，保留祖先链接和现有焦点逻辑。
+- [CI 38641143224](https://github.com/Kkwans/nas-control-plane/actions/runs/38641143224) 全部适用检查通过：125 文件、3558 单元测试、421 浏览器用例、11 制品分片测试及 Go/Compose 检查；发布步骤跳过。
+- 四张 390/1440 参数与默认命令预览 PNG、完整 axe JSON、独立提交后回执均已核验。[制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38641143224/artifacts/11931007096) 中 354 个源码哈希与该提交一致，CI 工作树为空，图片和回执引用哈希匹配。确认前零写入；确认后精确一次 POST、201 响应、六秒无重放，未知请求和页面错误均为空。
+- 启动参数 JSON 空白与折行可见，预览几何稳定。路径字段通过精确请求核验，不宣称路径摘要中的尾空白具有视觉辨识度。四张图完整 axe 零违规，当前位置相关 aria-prohibited-attr 不再列为未决；仍有 aria-valid-attr-value 与 color-contrast 两类 incomplete，需要人工和后续专项验证，不能称为全面无障碍验收。
+- [f3efd48](https://github.com/Kkwans/nas-control-plane/commit/f3efd48990d353a6db0cf885e54d7e5ea2d58eee) 修复 SQLite BOM 前导语句的自动结果识别，隔离真实 SQLite 覆盖单次执行和返回行。原始 SQL 保持不变；其他方言不扩展 BOM 规则。
+
+以上仍是源码、隔离 SQLite 与浏览器 fixture 证据，没有 NAS、真实 Docker 或 PostgreSQL/MySQL TLS 实机验收。接续工作包括弹窗实际浏览器键盘动线和更完整的 SQL 结果模式边界；后续未推送代码不计入上述远端完成量。
