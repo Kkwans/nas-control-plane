@@ -696,12 +696,33 @@ async function refreshUnresolvedInventory() {
       <dl class="preview-grid">
         <dt>镜像</dt><dd><code>{{ previewInput.image }}</code></dd>
         <dt>容器名称</dt><dd>{{ previewLabel(previewInput.name, '自动生成') }}</dd>
-        <dt>挂载</dt><dd>{{ previewInput.mounts?.length || 0 }} 项<span v-if="previewInput.mounts?.length">：{{ previewInput.mounts.map((mount) => `${mount.type} ${mount.source || 'tmpfs'} → ${mount.target}`).join('；') }}</span></dd>
+        <dt>挂载</dt><dd>
+          {{ previewInput.mounts?.length || 0 }} 项
+          <ol v-if="previewInput.mounts?.length" class="path-mappings" aria-label="挂载映射">
+            <li v-for="(mount, index) in previewInput.mounts" :key="index">
+              <span>{{ mount.type }} · {{ mount.readOnly ? '只读' : '读写' }}</span>
+              <span v-if="mount.type !== 'tmpfs'">{{ mount.type === 'volume' ? '卷名' : '主机路径' }}：<code class="path-preview">{{ JSON.stringify(mount.source) }}</code></span>
+              <span v-else>内存挂载，无需来源</span>
+              <span>容器路径：<code class="path-preview">{{ JSON.stringify(mount.target) }}</code></span>
+            </li>
+          </ol>
+        </dd>
         <dt>网络</dt><dd>{{ previewInput.network?.name || 'Docker 默认网络' }}<span v-if="previewInput.network?.subnet">（{{ previewInput.network.subnet }}）</span></dd>
         <dt>端口</dt><dd>{{ previewInput.ports?.length ? previewInput.ports.map((port) => `${port.hostPort || '随机'} → ${port.containerPort}/${port.protocol || 'tcp'}`).join('；') : '未映射' }}</dd>
         <dt>启动参数</dt><dd><code class="command-preview">{{ previewInput.command?.length ? JSON.stringify(previewInput.command) : '使用镜像默认命令' }}</code></dd>
+        <dt>设备映射</dt><dd>
+          {{ previewInput.devices?.length || 0 }} 项
+          <ol v-if="previewInput.devices?.length" class="path-mappings" aria-label="设备映射">
+            <li v-for="(device, index) in previewInput.devices" :key="index">
+              <span>主机路径：<code class="path-preview">{{ JSON.stringify(device.hostPath) }}</code></span>
+              <span>容器路径：<code class="path-preview">{{ JSON.stringify(device.containerPath) }}</code></span>
+              <span>权限：{{ device.cgroupPermissions || 'rwm' }}</span>
+            </li>
+          </ol>
+        </dd>
         <dt>权限与硬件</dt><dd>{{ previewInput.privileged ? 'privileged；' : '' }}{{ (previewInput.capAdd?.length || 0) + (previewInput.capDrop?.length || 0) + (previewInput.devices?.length || 0) + (previewInput.gpus?.length || 0) }} 项高级设置</dd>
       </dl>
+      <p v-if="previewInput.mounts?.length || previewInput.devices?.length" class="preview-intro">路径和卷名以双引号标示边界，保留空格；反斜杠、引号和控制字符按 JSON 转义显示。</p>
     </div>
     <template #footer>
       <div class="dialog-actions"><ActionButton variant="secondary" :disabled="Boolean(submitting)" @click="previewOpen = false">返回修改</ActionButton><ActionButton variant="primary" :loading="Boolean(submitting)" :disabled="Boolean(unresolvedAttempt)" @click="executeSubmit">确认{{ pendingRunContainer ? '创建并启动' : '创建' }}</ActionButton></div>
@@ -723,6 +744,8 @@ textarea{width:100%;resize:vertical;padding:11px 12px;border:1px solid var(--ncp
 .drawer-actions{display:flex;justify-content:flex-end;gap:8px}
 .path-browser{display:grid;gap:12px}.path-browser__toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.path-browser__toolbar code{min-width:0;overflow:hidden;color:var(--ncp-text);font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.path-browser__state{padding:30px;text-align:center;color:var(--ncp-text-subtle);font-size:.78rem}.path-browser__entries{display:grid;max-height:360px;overflow:auto;border:1px solid var(--ncp-line);border-radius:10px}.path-entry{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid var(--ncp-line)}.path-entry:last-child{border-bottom:0}.path-entry__name{display:flex;min-width:0;align-items:center;gap:8px;color:var(--ncp-text);font-size:.78rem;overflow:hidden;text-align:left;text-overflow:ellipsis;white-space:nowrap}.path-entry__icon{display:inline-grid;min-width:38px;height:22px;place-items:center;border-radius:6px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.58rem;font-weight:800;letter-spacing:.03em}.path-entry>span.path-entry__name .path-entry__icon{background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}.load-more{width:100%}.create-preview{display:grid;gap:12px}.preview-intro{margin:0;color:var(--ncp-text-muted);font-size:.78rem}.preview-grid{display:grid;grid-template-columns:110px minmax(0,1fr);gap:0;margin:0;border:1px solid var(--ncp-line);border-radius:10px;overflow:hidden}.preview-grid dt,.preview-grid dd{margin:0;padding:10px 11px;border-bottom:1px solid var(--ncp-line);font-size:.76rem;line-height:1.45}.preview-grid dt{background:var(--ncp-surface-quiet);color:var(--ncp-text-muted);font-weight:750}.preview-grid dd{min-width:0;overflow-wrap:anywhere}.preview-grid dt:last-of-type,.preview-grid dd:last-of-type{border-bottom:0}.preview-grid code{font-family:'JetBrains Mono Variable',monospace;font-size:.7rem}.dialog-actions{display:flex;justify-content:flex-end;gap:8px}
 .command-preview{white-space:pre-wrap}
+.path-preview{white-space:pre-wrap;overflow-wrap:anywhere}
+.path-mappings{display:grid;gap:10px;margin:8px 0 0;padding-left:20px}.path-mappings li{min-width:0}.path-mappings li>span{display:block}.path-mappings li+li{padding-top:10px;border-top:1px solid var(--ncp-line)}
 @media(max-width:760px){.form-grid{grid-template-columns:1fr}.field--wide{grid-column:auto}.repeat-row{grid-template-columns:1fr}.row-remove{justify-self:end}.repeat-row--port .port-arrow{display:none}.drawer-actions{display:grid;grid-template-columns:1fr 1fr}.drawer-actions>:last-child{grid-column:1/-1}.inline-switch{min-height:40px}.form-section{padding:14px}}
 </style>
 

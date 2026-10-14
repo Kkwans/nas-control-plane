@@ -141,7 +141,7 @@ describe('创建容器挂载路径的端到端组件身份', () => {
     await edit(1, '容器路径，例如 /data', '/data ')
     expect(requestedPaths()).toEqual(['/', '/selected', '/', '/', '/selected ', '/'])
     await click(runContainer ? '创建并启动' : '仅创建')
-    expect(document.querySelector('.create-preview')?.textContent).toContain('bind /selected → /data；bind /selected  → /data ')
+    expect([...document.querySelectorAll('.path-preview')].map((node) => node.textContent)).toEqual(['/selected', '/data', '/selected ', '/data '].map((path) => JSON.stringify(path)))
     expect(createCalls()).toHaveLength(0)
     await click(runContainer ? '确认创建并启动' : '确认创建')
     expect(createCalls()).toHaveLength(1)
@@ -160,7 +160,7 @@ describe('创建容器挂载路径的端到端组件身份', () => {
     await chooseBind(0, `selected${suffix}`)
     await edit(0, '容器路径，例如 /data', `/data${suffix}`)
     await click('仅创建')
-    expect(document.querySelector('.create-preview')?.textContent).toContain(`bind /selected${suffix} → /data${suffix}`)
+    expect([...document.querySelectorAll('.path-preview')].map((node) => node.textContent)).toEqual([`/selected${suffix}`, `/data${suffix}`].map((path) => JSON.stringify(path)))
     await click('确认创建')
     expect(submittedInput().mounts).toEqual([{ type: 'bind', source: `/selected${suffix}`, target: `/data${suffix}`, readOnly: false }])
   })
@@ -205,7 +205,7 @@ describe('创建容器挂载路径的端到端组件身份', () => {
     await chooseType(1, '临时目录')
     await edit(1, '容器路径，例如 /data', '/temp\u3000')
     await click('仅创建')
-    expect(document.querySelector('.create-preview')?.textContent).toContain('volume app-data → /volume ；tmpfs tmpfs → /temp\u3000')
+    expect([...document.querySelectorAll('.path-preview')].map((node) => node.textContent)).toEqual(['app-data', '/volume ', '/temp\u3000'].map((path) => JSON.stringify(path)))
     await click('确认创建')
     expect(submittedInput().mounts).toEqual([
       { type: 'volume', source: 'app-data', target: '/volume ', readOnly: false },

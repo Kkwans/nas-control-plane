@@ -107,7 +107,19 @@ async function geometry(page: Page) {
       const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
       if (x || y) clips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
     }
-    return { text: code.textContent, whiteSpace: getComputedStyle(code).whiteSpace, characters,
+    const pathPreviews = [...dialog.querySelectorAll('.path-preview')].map((path) => {
+      const text = path.firstChild!, parentBounds = path.parentElement!.getBoundingClientRect()
+      const whole = document.createRange(); whole.selectNodeContents(path)
+      const lines = [...whole.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+      const spaces = Array.from({ length: text.textContent!.length }, (_, index) => index).filter((index) => text.textContent![index] === ' ').map((index) => {
+        const range = document.createRange(); range.setStart(text, index); range.setEnd(text, index + 1)
+        return range.getBoundingClientRect().width
+      })
+      return { text: path.textContent, whiteSpace: getComputedStyle(path).whiteSpace, spaces,
+        bounds: path.getBoundingClientRect().toJSON(), lines: lines.map((line) => line.toJSON()),
+        fitsLabel: lines.length > 0 && lines.every((line) => line.left >= parentBounds.left - 1 && line.right <= parentBounds.right + 1 && line.top >= parentBounds.top - 1 && line.bottom <= parentBounds.bottom + 1) }
+    })
+    return { pathPreviews, text: code.textContent, whiteSpace: getComputedStyle(code).whiteSpace, characters,
       viewport: { width: innerWidth, height: innerHeight }, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
       bounds: bounds.toJSON(), dialogBounds: dialogBounds.toJSON(), lines: lines.map((line) => line.toJSON()),
       clips: clips.map((clip) => ({ ...clip, bounds: clip.bounds.toJSON() })),
@@ -135,6 +147,11 @@ async function capture(page: Page, info: TestInfo, api: Fixture, defaultCommand:
   for (const sample of [before, after, afterAxe]) {
     expect(sample.text).toBe(metadata.expectedPreview)
     expect(sample.whiteSpace).toBe('pre-wrap')
+    expect(sample.pathPreviews.map((path) => path.text)).toEqual(defaultCommand ? [] : [mount.source, mount.target, device.hostPath, device.containerPath].map((path) => JSON.stringify(path)))
+    for (const path of sample.pathPreviews) {
+      expect(path.whiteSpace).toBe('pre-wrap'); expect(path.fitsLabel, JSON.stringify(path)).toBe(true)
+      expect(path.spaces.every((width) => width > 0)).toBe(true)
+    }
     expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)
     expect(sample.fullTextVisible, JSON.stringify(sample)).toBe(true)
     if (!defaultCommand) {
