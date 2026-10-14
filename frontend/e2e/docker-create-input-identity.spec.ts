@@ -363,7 +363,9 @@ for (const width of [390, 1440]) for (const scenario of portCases) {
       if (input.hostPort) await row.getByPlaceholder('主机端口', { exact: true }).fill(input.hostPort)
       await row.getByPlaceholder('容器端口', { exact: true }).fill(input.containerPort)
       if (input.protocol !== 'tcp') {
-        await row.getByRole('combobox', { name: `第 ${index + 1} 个端口映射协议`, exact: true }).click()
+        // Element Plus 的输入框由当前值层覆盖；点击真实可见的选择器包装层。
+        await expect(row.getByRole('combobox', { name: `第 ${index + 1} 个端口映射协议`, exact: true })).toHaveCount(1)
+        await row.locator('.el-select__wrapper').click()
         await page.getByRole('option', { name: input.protocol.toUpperCase(), exact: true }).click()
       }
     }
