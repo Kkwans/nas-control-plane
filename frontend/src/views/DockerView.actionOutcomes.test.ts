@@ -19,7 +19,7 @@ vi.mock('@/composables/useListPreference', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   const stub = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
-  return { ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('aside', [slots.header?.(), slots.default?.()]) : null }), ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('aside', [slots.header?.({ titleId: 'docker-view-drawer-test-title' }), slots.default?.()]) : null }), ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 vi.mock('@/components/DockerImagePanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ContainerLogDrawer.vue', () => ({ default: { render: () => null } }))

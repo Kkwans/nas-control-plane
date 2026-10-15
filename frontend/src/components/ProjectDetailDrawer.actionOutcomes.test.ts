@@ -8,7 +8,7 @@ vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return {
     // 保留具名标题与正文插槽，真实抽屉内容参与断言；不测传送和动画。
-    ElDrawer: defineComponent({ setup: (_, { slots }) => () => h('aside', [slots.header?.(), slots.default?.()]) }),
+    ElDrawer: defineComponent({ setup: (_, { slots }) => () => h('aside', [slots.header?.({ titleId: 'project-drawer-test-title' }), slots.default?.()]) }),
     ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }),
   }
 })

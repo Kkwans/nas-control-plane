@@ -110,10 +110,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
     modal-class="project-drawer-modal"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <template #header>
+    <template #header="{ titleId }">
       <div v-if="project" class="drawer-title">
         <span class="drawer-title__icon"><Boxes :size="21" /></span>
-        <div><strong>{{ project.name }}</strong><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
+        <div><h2 :id="titleId">{{ project.name }}</h2><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
         <StatusPill :label="currentStateLabel" :tone="currentStateTone" />
       </div>
     </template>
@@ -217,8 +217,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .drawer-title { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 11px; min-width: 0; padding-right: 10px; }
 .drawer-title__icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 11px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .drawer-title>div { display: grid; min-width: 0; }
-.drawer-title strong { overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
-.drawer-title span:not(.drawer-title__icon) { color: var(--ncp-text-subtle); font-size: .72rem; }
+.drawer-title h2 { margin: 0; overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-title>div>span { color: var(--ncp-text-subtle); font-size: .72rem; }
 .project-detail { display: grid; gap: 18px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
 .detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .detail-overview>div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 2px 8px; padding: 14px; border: 1px solid var(--ncp-line); border-radius: 12px; background: var(--ncp-surface-quiet); }

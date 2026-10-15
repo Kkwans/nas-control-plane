@@ -52,10 +52,10 @@ function restartPolicyLabel(value?: string) {
     class="container-detail-drawer"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <template #header>
+    <template #header="{ titleId }">
       <div class="drawer-heading">
         <span><Box :size="21" /></span>
-        <div><strong>{{ containerName }}</strong><small>容器详情与运行日志</small></div>
+        <div><h2 :id="titleId">{{ containerName }}</h2><small>容器详情与运行日志</small></div>
       </div>
     </template>
 
@@ -118,7 +118,7 @@ function restartPolicyLabel(value?: string) {
 </template>
 
 <style scoped>
-.drawer-heading{display:flex;min-width:0;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;min-width:0;gap:2px}.drawer-heading strong{overflow:hidden;color:var(--ncp-text);font-size:.95rem;text-overflow:ellipsis;white-space:nowrap}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
+.drawer-heading{display:flex;min-width:0;align-items:center;gap:11px}.drawer-heading>span{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;border-radius:12px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.drawer-heading>div{display:grid;min-width:0;gap:2px}.drawer-heading h2{margin:0;overflow:hidden;color:var(--ncp-text);font-size:.95rem;text-overflow:ellipsis;white-space:nowrap}.drawer-heading small{color:var(--ncp-text-subtle);font-size:.72rem}
 .drawer-loading{display:grid;min-height:260px;place-items:center;align-content:center;gap:8px;color:var(--ncp-text-subtle)}.drawer-loading strong{color:var(--ncp-text);font-size:.85rem}.drawer-loading span{font-size:.72rem}.drawer-content{display:grid;gap:18px;padding-bottom:20px}.drawer-error{padding:10px 12px;border:1px solid var(--ncp-danger-border);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.74rem;line-height:1.55}
 .facts-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.facts-grid article{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;padding:12px;border:1px solid var(--ncp-line);border-radius:12px;background:var(--ncp-surface-quiet)}.facts-grid svg{grid-row:1/4;color:var(--ncp-primary-strong)}.facts-grid span{color:var(--ncp-text-subtle);font-size:.67rem}.facts-grid strong,.facts-grid small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.facts-grid strong{color:var(--ncp-text);font-size:.76rem}.facts-grid small{color:var(--ncp-text-muted);font-size:.65rem}
 .detail-block,.logs-block{display:grid;gap:11px}.detail-block>header,.logs-block>header{display:flex;align-items:center;gap:8px;color:var(--ncp-primary-strong)}.detail-block>header>div,.logs-block>header>div{display:grid;gap:1px}.detail-block>header strong,.logs-block>header strong{color:var(--ncp-text);font-size:.84rem}.detail-block>header span,.logs-block>header span{color:var(--ncp-text-subtle);font-size:.68rem}.network-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.network-grid article{display:grid;gap:3px;padding:11px 12px;border:1px solid var(--ncp-line);border-radius:10px;background:#fff}.network-grid strong{font-size:.74rem}.network-grid span,.network-grid small{overflow:hidden;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.66rem;text-overflow:ellipsis;white-space:nowrap}.network-grid small{color:var(--ncp-text-subtle)}
