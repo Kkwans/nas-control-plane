@@ -131,3 +131,16 @@
 - 每组确认后精确一次 POST、201 响应、六秒无重放；完整 axe 零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项。本轮限定的窄屏页脚与路径折行问题已通过实际截图和对应几何复验，不扩展为全面无障碍或真实环境验收。
 
 资源限制与重启策略的后续改动正在实施，尚未完成，不计入本次完成范围。以上仍为隔离浏览器/SQLite 证据，没有真实 NAS、原生 Docker 或真实数据库 TLS 验收，也没有部署或发布。
+
+
+## 资源与重启预览、网络复用复验（2026-10-15 01:39 UTC）
+
+最新已推送代码为 [c2d14af](https://github.com/Kkwans/nas-control-plane/commit/c2d14afac0adb735eda8ee80edde752c6ac40ab4)。本节接续上次尚未完成的资源限制与重启策略工作，保留前述历史结论。
+
+- **资源与重启快照**：[0eee0a1](https://github.com/Kkwans/nas-control-plane/commit/0eee0a1a4877f9755e3e4b8f8932a59c011ef0cb) 增加 CPU、内存、重启策略及重试次数的确认预览。四项新增浏览器用例在 [CI #348 / 38663732203](https://github.com/Kkwans/nas-control-plane/actions/runs/38663732203) 因选择器问题失败，原有 427 项通过；随后 c2d14af 为三个数字输入显式绑定可访问名称，并修正重启策略 combobox 的相对作用域，保留精确请求、几何及完整 axe 检查。
+- **网络复用边界**：[6f12be3](https://github.com/Kkwans/nas-control-plane/commit/6f12be3af9f2b81b9c815d8701f5c3b287cc58c2) 在复用同名网络前校验有效驱动及同一匹配子网条目的显式网关；仅明确 404 不存在时创建，权限、服务或传输失败均不触发写入。16 项 fakeRoundTripper 回归、Docker 全包 race、全树构建与 vet 通过，并同步 OpenAPI；不代表真实 Docker 网络验收。
+- **最新完整 CI**：[CI #350 / 38665490164](https://github.com/Kkwans/nas-control-plane/actions/runs/38665490164) 全部适用检查通过：129 文件、3585 单元测试、431 浏览器用例、11 项制品分片测试及 Go/Compose。新增四项已完成失败后的复验，不能记为首轮成功。
+- **实际证据复核**：[制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38665490164/artifacts/11942035542) 与[分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38665490164/artifacts/11942180492) 中 12 张实际 PNG、12 组配对捕获/提交回执及两份键盘 JSON 均已检查；每组 358 项源码哈希与该提交一致，记录的 CI 工作树干净，归档、图片及关联证据哈希匹配。390/1440 资源行和页脚完整可见，文本边界、面板/页脚几何、按钮命中及 Home/End 固定标题页脚检查通过；键盘焦点循环、Escape 归还和取消零写入均通过。
+- **预览与提交一致**：限定资源场景显示 1.5 核、402653184 字节（384 MiB）、on-failure 与 3 次重试；默认资源场景明确本次请求未设置 CPU/内存限制，on-failure 的 0 次重试明确为不设重试上限。12 组均确认前零写入，确认后精确一次创建 POST、201 响应、六秒无重放，无未知请求或页面错误。完整 axe 零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项，不据此宣称全面无障碍合格。
+
+以上是源码、内存传输与浏览器 fixture 证据；真实 NAS、原生 Docker、PostgreSQL/MySQL TLS 握手及原生多会话仍未验收。本轮没有部署或发布。
