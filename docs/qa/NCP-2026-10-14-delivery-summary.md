@@ -144,3 +144,16 @@
 - **预览与提交一致**：限定资源场景显示 1.5 核、402653184 字节（384 MiB）、on-failure 与 3 次重试；默认资源场景明确本次请求未设置 CPU/内存限制，on-failure 的 0 次重试明确为不设重试上限。12 组均确认前零写入，确认后精确一次创建 POST、201 响应、六秒无重放，无未知请求或页面错误。完整 axe 零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项，不据此宣称全面无障碍合格。
 
 以上是源码、内存传输与浏览器 fixture 证据；真实 NAS、原生 Docker、PostgreSQL/MySQL TLS 握手及原生多会话仍未验收。本轮没有部署或发布。
+
+
+## 网络与 GPU 确认详情复验（2026-10-15 02:39 UTC）
+
+最新已推送代码为 [cf01fec](https://github.com/Kkwans/nas-control-plane/commit/cf01fec005ac1c676f3d10f93862a39d22249025)。以下接续前一检查点，保留失败、修复及复验的先后记录。
+
+- **网络确认详情**：[3629e93](https://github.com/Kkwans/nas-control-plane/commit/3629e9328ca341ee7a13cdffb59b5fd19185cb7d) 展示网络名称、驱动、子网、网关和固定 IP，区分默认连接、已有网络及条件创建/复用。CI #352 的四项新增用例因点击隐藏开关 input 失败，原有 431 项通过；[86f5752](https://github.com/Kkwans/nas-control-plane/commit/86f5752212735d314285a7b1ef1942113cb5aa0f) 改为点击实际可见开关核心，并加强 checked 状态断言，没有强制点击或放宽检查。[CI #353 / 38668747550](https://github.com/Kkwans/nas-control-plane/actions/runs/38668747550) 全部适用检查通过：130 文件、3597 单元测试、435 浏览器用例、11 项制品分片测试及 Go/Compose；16 张实际 PNG、16 组配对回执、两份键盘 JSON 与 359 项源码哈希完成复核。
+- **GPU 确认前校验**：[8cd9094](https://github.com/Kkwans/nas-control-plane/commit/8cd909422f6d93b540ac7201ebdf7ec88dbecc90) 阻止启用 GPU 时的 0、null、非整数数量及无效驱动/能力进入确认，保留 -1 表示全部、空能力默认 gpu、混合大小写提交原值及禁用时忽略残留值的语义。CI #354 通过 131 文件、3615 单元测试、435 浏览器用例及 11 项制品分片测试。
+- **GPU 请求快照**：cf01fec 逐项显示自动/指定驱动、全部/指定数量及按 Agent 规则规范化的请求能力；例如自动场景的 -1 与空能力显示“全部”和默认 gpu，指定场景保留请求中的 `Nvidia_1.test-driver`、数量 2 及 `[GPU, Compute, utility_1]`，预览规范化能力为 `[gpu, compute, utility_1]`。预览取自待提交快照，保留编辑失效与精确提交边界。[CI #355 / 38670577374](https://github.com/Kkwans/nas-control-plane/actions/runs/38670577374) 全部适用检查通过：132 文件、3622 单元测试、439 浏览器用例、11 项制品分片测试及 Go/Compose。
+- **最新实际证据闭环**：[制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38670577374/artifacts/11944413902) 与[分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38670577374/artifacts/11944209052) 的 20 张实际 PNG、20 组配对捕获/回执及两份键盘 JSON 均已复核；361 项源码哈希与 cf01fec 一致，记录的 CI 工作树干净，归档、图片及关联证据哈希匹配。原有 16 组预览仍通过；新增 GPU 字形均位于可见边界内，390px 指定 GPU 场景 End 滚动至 33px 后可见最后字段，页脚按钮位于 772–812px，处于 844px 视口内并通过命中检查，Home 归零且标题/页脚固定。长内容通过详情区滚动查看，不声称所有正文同时出现在截图内。
+- **写入与无障碍边界**：20 组均确认前零写入，确认后精确一次创建 POST、预期 201 回执、六秒无重放，无未知请求或页面错误；两份键盘记录覆盖弹窗层叠、焦点循环、Escape 归还及六秒零写入。完整 axe 扫描没有缩小规则或排除范围，零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项，不代表全面无障碍验收。
+
+以上仍是源码与隔离浏览器 fixture 证据，不证明真实 GPU 分配、原生 Docker 或 NAS 可用；真实数据库 TLS 握手及原生多会话也仍未验收。本轮没有部署或发布。
