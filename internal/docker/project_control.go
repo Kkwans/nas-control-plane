@@ -196,7 +196,15 @@ func (c *ProjectController) controlContainer(ctx context.Context, containerID st
 		item.ContainerID = containerResult.ContainerID
 		item.Name = containerResult.Name
 		item.State = containerResult.State
-		item.Success = true
+		// 命令返回不代表目标状态已达到；保留本次读回结果，不轮询或重做动作。
+		wantState := "running"
+		if action == ContainerActionStop {
+			wantState = "stopped"
+		}
+		item.Success = containerResult.State == wantState
+		if !item.Success {
+			item.ErrorCode = "DOCKER_CONTAINER_STATE_MISMATCH"
+		}
 		return item, nil
 	}
 	if errors.Is(controlErr, context.Canceled) || errors.Is(controlErr, context.DeadlineExceeded) {

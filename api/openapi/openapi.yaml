@@ -4299,8 +4299,12 @@ components:
         name: { type: string }
         action: { type: string, enum: [start, stop, restart] }
         state: { type: string }
-        success: { type: boolean }
-        errorCode: { type: string }
+        success:
+          type: boolean
+          description: 动作与读回均成功，且本次观察状态符合目标（start/restart 为 running，stop 为 stopped）；不保证之后持续健康。
+        errorCode:
+          type: string
+          description: DOCKER_CONTAINER_STATE_MISMATCH 表示命令已返回但读回状态不符，state 保留实际观察；不表示没有副作用，也不授权自动重试。
     DockerProjectActionResult:
       type: object
       required: [projectId, kind, action, state, completed, containers]
@@ -4309,7 +4313,9 @@ components:
         kind: { type: string, enum: [standalone] }
         action: { type: string, enum: [start, stop, restart] }
         state: { type: string }
-        completed: { type: boolean }
+        completed:
+          type: boolean
+          description: 全部请求容器都有结果且 success 为 true；状态不符或单项失败时为 false，不触发重试、额外轮询或回滚。
         containers:
           type: array
           items: { $ref: '#/components/schemas/DockerProjectContainerActionResult' }
