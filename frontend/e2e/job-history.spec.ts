@@ -126,11 +126,12 @@ async function measure(page: Page, control?: Locator, scroll = true) {
       const style = getComputedStyle(parent)
       ancestors.push({ tag: parent.tagName, className: parent.className, bounds: parent.getBoundingClientRect().toJSON(), scrollTop: parent.scrollTop, scrollLeft: parent.scrollLeft, scrollHeight: parent.scrollHeight, clientHeight: parent.clientHeight, scrollWidth: parent.scrollWidth, clientWidth: parent.clientWidth, overflowX: style.overflowX, overflowY: style.overflowY, display: style.display, flex: style.flex })
     }
-    return { tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent, bounds: rect.toJSON(), centerHit: !!hit && element.contains(hit), hitElement: hit ? { tag: hit.tagName, className: hit.className } : null, ancestors }
+    const controlIndex = [...element.closest('.task-center-drawer')!.querySelectorAll('button,input,select,summary')].indexOf(element)
+    return { tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent, rootFontSize: getComputedStyle(document.documentElement).fontSize, controlIndex, bounds: rect.toJSON(), centerHit: !!hit && element.contains(hit), hitElement: hit ? { tag: hit.tagName, className: hit.className } : null, ancestors }
   }) : null
   return { ...panel, target }
 }
-async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, control?: Locator) {
+async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, control?: Locator, expectedFontSize?: number) {
   await page.evaluate(() => document.fonts.ready)
   const before = await measure(page, control)
   const name = `job-history-${page.viewportSize()!.width}-${phase}`
@@ -139,11 +140,19 @@ async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, 
   await page.screenshot({ path: png, animations: 'disabled' })
   const after = await measure(page, control, false), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, control, false)
   const state = `${name}-capture-state.json`, statePath = info.outputPath('ui-captures', state)
-  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, testTitle: info.title, phase, screenshot: `${name}.png`, screenshotSha256: hash(await readFile(png)), before, after, afterAxe, axe, requestLedger: [...api.requests] }, null, 2))
+  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, testTitle: info.title, phase, expectedFontSize, screenshot: `${name}.png`, screenshotSha256: hash(await readFile(png)), before, after, afterAxe, axe, requestLedger: [...api.requests] }, null, 2))
   api.captures.push({ state, sha256: hash(await readFile(statePath)) })
   await info.attach(name, { path: png, contentType: 'image/png' })
   await info.attach(`${name}-state`, { path: statePath, contentType: 'application/json' })
   try {
+  for (const frame of [before, after, afterAxe]) {
+    if (expectedFontSize !== undefined) expect(frame.rootFontSize).toBe(`${expectedFontSize}px`)
+    if (frame.target) {
+      expect(frame.target.rootFontSize).toBe(frame.rootFontSize)
+      expect(frame.target.controlIndex).toBeGreaterThanOrEqual(0)
+      expect(frame.controls[frame.target.controlIndex]!.bounds).toEqual(frame.target.bounds)
+    }
+  }
   expect(axe.violations).toEqual([])
   expect(after.root.scrollWidth).toBeLessThanOrEqual(after.root.width + 1)
   expect(after.bounds.left).toBeGreaterThanOrEqual(-1)
@@ -157,7 +166,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, 
   } catch (error) {
     // Bounded fixture-only geometry survives an artifact-upload failure. No headers,
     // credentials or external content are included, and assertions remain unchanged.
-    const diagnostic = (frame: typeof before) => ({ focus: frame.activeElement, target: frame.target ? { ...frame.target, label: frame.target.label?.slice(0, 160), ancestors: frame.target.ancestors.slice(0, 12).map(ancestor => ({ ...ancestor, className: ancestor.className.slice(0, 160) })) } : null })
+    const diagnostic = (frame: typeof before) => ({ rootFontSize: frame.rootFontSize, expectedFontSize, focus: frame.activeElement, target: frame.target ? { ...frame.target, label: frame.target.label?.slice(0, 160), ancestors: frame.target.ancestors.slice(0, 12).map(ancestor => ({ ...ancestor, className: ancestor.className.slice(0, 160) })) } : null })
     console.error('JOB_HISTORY_CAPTURE_FAILURE', JSON.stringify({ fixtureOnly: true, name, before: diagnostic(before), after: diagnostic(after), afterAxe: diagnostic(afterAxe), axeViolations: axe.violations.slice(0, 12).map(item => ({ id: item.id, impact: item.impact, targets: item.nodes.slice(0, 8).map(node => node.target) })) }))
     throw error
   }
@@ -187,20 +196,24 @@ for (const width of [390, 1440]) {
     await expect(row.locator('time')).toHaveAttribute('datetime', stamp)
     await expect(row.locator('time')).toContainText('记录更新时间')
     for (const scale of [1, 2]) {
-      await page.addStyleTag({ content: `html { font-size: ${15 * scale}px !important; }` })
+      const expectedFontSize = 15 * scale
+      await page.addStyleTag({ content: `html { font-size: ${expectedFontSize}px !important; }` })
+      // 字号样式生效后再等待字体就绪，避免按上一字号滚动后才发生重排。
+      await expect(page.locator('html')).toHaveCSS('font-size', `${expectedFontSize}px`)
+      await page.evaluate(() => document.fonts.ready)
       const toggle = row.locator('summary')
-      await capture(page, info, api, `font-${scale * 100}-summary`, toggle)
+      await capture(page, info, api, `font-${scale * 100}-summary`, toggle, expectedFontSize)
       if (await row.locator('details').getAttribute('open') === null) { await toggle.focus(); await page.keyboard.press('Enter') }
       await expect(row.locator('dd').first()).toHaveText(longId)
       await expect(row).toContainText('最后保存的消息 <script>不得执行</script>')
       await expect(row.locator('script')).toHaveCount(0)
       await row.locator('dd').first().evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
       await expect(row.locator('dd').first()).toBeInViewport()
-      await capture(page, info, api, `font-${scale * 100}-details`)
-      await capture(page, info, api, `font-${scale * 100}-pagination`, button(page, '回到最新页'))
+      await capture(page, info, api, `font-${scale * 100}-details`, undefined, expectedFontSize)
+      await capture(page, info, api, `font-${scale * 100}-pagination`, button(page, '回到最新页'), expectedFontSize)
       let controlIndex = 0
       for (const control of [history(page).getByLabel('已保存任务类型', { exact: true }), history(page).getByLabel('每页条数', { exact: true }), history(page).getByLabel('其他类型精确查询（保留空格）', { exact: true }), button(page, '查询类型'), button(page, '关闭已保存历史')]) {
-        await capture(page, info, api, `font-${scale * 100}-control-${controlIndex++}`, control)
+        await capture(page, info, api, `font-${scale * 100}-control-${controlIndex++}`, control, expectedFontSize)
       }
     }
     await button(page, '关闭已保存历史').click()
