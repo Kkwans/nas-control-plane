@@ -4,6 +4,12 @@ import { canRequestJobCancellation, isTerminalJob, jobArtifactLabel, jobState, j
 
 const job = (fields: Partial<JobSnapshot> = {}): JobSnapshot => ({ id: 'a', type: 'docker-image-pull', status: 'running', artifactState: 'unknown', cancellable: true, message: '', progress: 0, createdAt: '2026-10-13T10:00:00Z', updatedAt: '2026-10-13T10:00:00Z', downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {}, ...fields })
 describe('通用任务状态与能力', () => {
+  it('删除任务区分接收与完成且不支持取消', () => {
+    expect(jobTypeLabel('docker-image-remove')).toBe('镜像删除')
+    expect(jobStateDescription(job({ type: 'docker-image-remove', status: 'queued' }))).toContain('尚未确认删除完成')
+    expect(jobStateDescription(job({ type: 'docker-image-remove', status: 'completed' }))).toContain('任务已完成')
+    expect(canRequestJobCancellation(job({ type: 'docker-image-remove', cancellable: true }))).toBe(false)
+  })
   it.each([['queued', '排队中'], ['running', '执行中'], ['completed', '已完成'], ['failed', '失败'], ['cancelled', '已取消'], ['interrupted', '结果未确认']] as const)('明确展示 %s', (status, label) => { expect(jobStateLabel(job({ status }))).toBe(label) })
   it('保存、取消请求、未知结果优先；产物状态不改写任务状态', () => {
     expect(jobState(job({ persistenceStatus: 'pending', cancellationStatus: 'unknown' }))).toBe('persisting')

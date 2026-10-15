@@ -198,6 +198,41 @@ export async function deleteJob(jobId: string, fetcher: typeof fetch = fetch): P
   if (!response.ok) throw await responseError(response)
 }
 
+export class DockerImageRemoveAdmissionUnknownError extends NcpApiError {
+  constructor() {
+    super('DOCKER_IMAGE_REMOVE_ADMISSION_UNKNOWN', '删除任务可能已接收，结果尚未确认。请查看最近任务并只读刷新镜像，勿重复提交。')
+  }
+}
+
+/** 202 只证明任务接收；不把传输失败或异常回执解释为未执行。 */
+export async function requestDockerImageRemoveJob(imageId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new NcpApiError('DOCKER_IMAGE_REMOVE_INVALID', '请选择完整的镜像 ID。')
+  let rejection: NcpApiError | undefined
+  try {
+    const response = await fetcher('/api/v1/docker/images/remove-job', requestOptions(jsonRequest({ imageId })))
+    const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') throw new DockerImageRemoveAdmissionUnknownError()
+    const payload: unknown = await response.json()
+    if (isApiErrorResponse(payload) && (
+      (response.status === 400 && payload.code === 'DOCKER_IMAGE_REMOVE_INVALID') ||
+      (response.status === 503 && ['AGENT_DOCKER_IMAGES_UNAVAILABLE', 'JOB_QUEUE_FULL', 'JOB_PERSIST_FAILED', 'JOB_ENGINE_UNAVAILABLE'].includes(payload.code))
+    )) {
+      rejection = new NcpApiError(payload.code, payload.message, payload.requestId)
+      throw rejection
+    }
+    const job = parseJobSnapshot(payload)
+    if (response.status !== 202 || !isRecord(payload) || payload.artifactState !== 'unknown' || !job || !job.id.trim() || job.type !== 'docker-image-remove' || job.reference !== imageId || job.cancellable !== false ||
+      job.status !== 'queued' || job.cancellationStatus !== undefined || job.persistenceStatus !== undefined ||
+      job.completedAt !== undefined || job.error !== undefined || job.errorCode !== undefined || Object.keys(job.layers).length !== 0 ||
+      !Number.isFinite(Date.parse(job.createdAt)) || !Number.isFinite(Date.parse(job.updatedAt)) ||
+      ![job.progress, job.downloadedBytes, job.totalBytes, job.speedBytes].every((value) => value === 0)) throw new DockerImageRemoveAdmissionUnknownError()
+    return job
+  } catch (caught) {
+    if (rejection && caught === rejection) throw rejection
+    throw new DockerImageRemoveAdmissionUnknownError()
+  }
+}
+
 export async function removeDockerImage(
   imageId: string,
   fetcher: typeof fetch = fetch,

@@ -9,6 +9,7 @@ const hooks = vi.hoisted(() => ({ downloads: vi.fn(), local: vi.fn(), warning: v
 vi.mock('@/composables/useDockerImageDownloads', () => ({ useDockerImageDownloads: hooks.downloads }))
 vi.mock('@/composables/useDockerLocalImages', () => ({ useDockerLocalImages: hooks.local }))
 vi.mock('@/stores/system', () => ({ useSystemStore: () => ({ refresh: hooks.inventoryRefresh }) }))
+vi.mock('./TaskCenterDrawer.vue', () => ({ default: { render: () => h('section', { 'data-testid': 'removal-tasks' }, '最近任务') } }))
 vi.mock('./DockerHubBrowser.vue', () => ({ default: defineComponent({ emits: ['job-created'], setup(_, { emit }) { return () => h('button', { class: 'hub-created-stub', onClick: () => emit('job-created', job()) }, 'fixture 创建下载任务') } }) }))
 vi.mock('./CreateContainerDrawer.vue', () => ({ default: defineComponent({ emits: ['created'], setup(_, { emit }) { return () => h('button', { class: 'container-created-stub', onClick: () => emit('created', 'container-A') }, 'fixture 容器已创建') } }) }))
 vi.mock('./ListPageSizeControl.vue', () => ({ default: { render: () => null } }))
@@ -60,7 +61,7 @@ beforeEach(() => {
   beginSession()
   downloads = downloadState(); hooks.downloads.mockReturnValue(downloads)
   hooks.local.mockReturnValue({
-    images: ref([]), loading: ref(false), error: ref(''), removeFailures: ref([]), selectedImageIds: ref([]), localPage: ref(1),
+    removeAdmissions: ref({}), images: ref([]), loading: ref(false), error: ref(''), removeFailures: ref([]), selectedImageIds: ref([]), localPage: ref(1),
     localPreference: ref({ sortKey: 'name', sortDirection: 'asc' }), filteredImages: ref([]), localPageCount: ref(1), pagedImages: ref([]),
     allVisibleSelected: ref(false), someVisibleSelected: ref(false), selectedImageCount: ref(0), bulkRemovePending: ref(false),
     refresh: vi.fn(), dateLabel: (value: string) => value,
@@ -69,6 +70,18 @@ beforeEach(() => {
 afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
 
 describe('DockerImagePanel 下载观察状态', () => {
+  it.each(['accepted', 'unknown'])('删除 %s 保留只读核验入口', async (state) => {
+    const local = hooks.local() as { removeAdmissions: { value: unknown }; refresh: ReturnType<typeof vi.fn> }
+    local.removeAdmissions.value = { 'sha256:fixture': { name: 'alpine', state, jobId: state === 'accepted' ? 'job-1' : undefined } }
+    const host = document.createElement('div'); document.body.append(host)
+    const app = createApp({ render: () => h(DockerImagePanel, { query: '', containers: [], pageSize: 20 }) })
+    app.mount(host); mounted.push({ app, host }); await nextTick()
+    expect(host.textContent).toContain(state === 'accepted' ? '尚未确认删除完成' : '请勿重复提交')
+    button(host, '只读刷新镜像').click(); await nextTick()
+    expect(local.refresh).toHaveBeenCalledTimes(2)
+    button(host, '查看最近任务').click(); await nextTick()
+    expect(host.querySelector('[data-testid="removal-tasks"]')).not.toBeNull()
+  })
   it('Hub 创建事件交给唯一观察 owner，完成回调保留本地镜像刷新', async () => {
     const host = await mountDownloads()
     const options = hooks.downloads.mock.calls[0]![1] as { onCreatedDownloadCompleted: () => void | Promise<void> }

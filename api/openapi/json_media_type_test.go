@@ -37,8 +37,8 @@ func TestJSONRequestMediaTypeContract(t *testing.T) {
 			}
 		}
 	}
-	if count != 35 {
-		t.Fatalf("JSON route count=%d, want 35", count)
+	if count != 36 {
+		t.Fatalf("JSON route count=%d, want 36", count)
 	}
 	response := document.Components.Responses["UnsupportedMediaType"].Value
 	if response.Description == nil || !strings.Contains(*response.Description, "HTTP_UNSUPPORTED_MEDIA_TYPE") || !strings.Contains(*response.Description, "requestId") {

@@ -71,6 +71,7 @@ type jobRegistry struct {
 	done           chan struct{}
 	workers        sync.WaitGroup
 	pulls          chan *jobEntry
+	removals       chan *jobEntry
 	compose        chan *jobEntry
 	capacity       chan struct{}
 	closeOnce      sync.Once
@@ -87,7 +88,7 @@ func NewJobEngine(store any) (*JobEngine, error) {
 	return r, r.initErr
 }
 func newJobRegistry(store any) *jobRegistry {
-	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: make(chan *jobEntry, jobCapacity), compose: make(chan *jobEntry, jobCapacity), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background()}
+	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: make(chan *jobEntry, jobCapacity), removals: make(chan *jobEntry, jobCapacity), compose: make(chan *jobEntry, jobCapacity), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background()}
 	if store == nil {
 		return r
 	}
@@ -349,12 +350,14 @@ func (r *jobRegistry) start() {
 		}
 		r.workers.Add(1)
 		go r.worker(r.compose)
+		r.workers.Add(1)
+		go r.worker(r.removals)
 		go r.flushLoop()
 		go func() { r.workers.Wait(); close(r.workersDone) }()
 	})
 }
 func (r *jobRegistry) submit(kind, reference string, total int64, run func(context.Context, string)) (jobSnapshot, error) {
-	if kind != "docker-image-pull" && kind != "compose-deploy" || run == nil {
+	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType || run == nil {
 		return jobSnapshot{}, errJobUnavailable
 	}
 	r.admission.Lock()
@@ -386,6 +389,8 @@ func (r *jobRegistry) submit(kind, reference string, total int64, run func(conte
 	r.start()
 	if kind == "compose-deploy" {
 		r.compose <- e
+	} else if kind == imageRemoveJobType {
+		r.removals <- e
 	} else {
 		r.pulls <- e
 	}

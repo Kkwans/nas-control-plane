@@ -330,6 +330,7 @@ func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.H
 			protected.Get("/docker/hub/tags", api.dockerHubTags)
 			protected.Post("/docker/images/pull", api.pullDockerImage)
 			protected.Post("/docker/images/remove", api.removeDockerImage)
+			protected.Post("/docker/images/remove-job", api.removeDockerImageJob)
 			protected.Post("/docker/images/remove-batch", api.removeDockerImages)
 			protected.Post("/docker/containers", api.createDockerContainer)
 			protected.Post("/docker/projects/{projectID}/actions/{action}", api.controlStandaloneProject)

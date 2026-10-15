@@ -1,4 +1,4 @@
-import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
+import { computed, onScopeDispose, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
@@ -6,19 +6,44 @@ import {
   type DockerImageSummary,
   type DockerInventory,
 } from '@/api/system'
-import { removeDockerImages, requestDockerImages } from '@/api/docker'
+import { DockerImageRemoveAdmissionUnknownError, requestDockerImageRemoveJob, removeDockerImages, requestDockerImages } from '@/api/docker'
+import { captureSession } from '@/session/sessionLifecycle'
 import { useListPreference } from '@/composables/useListPreference'
 
 type ReadonlyRef<T> = Ref<T> | ComputedRef<T>
 export type ImageRemoveFailure = { id: string; name: string; message: string }
+type RemovalAdmission = { name: string; state: 'accepted' | 'unknown'; jobId?: string }
+// 页面重挂载不等于重新获得写入许可；同一登录会话保留不确定提交。
+let admissionSession = -1
+let sessionAdmissions = ref<Record<string, RemovalAdmission>>({})
+function removalAdmissionsForSession(session: ReturnType<typeof captureSession>) {
+  if (admissionSession !== session.generation) {
+    admissionSession = session.generation
+    sessionAdmissions = ref<Record<string, RemovalAdmission>>({})
+    const owned = sessionAdmissions
+    session.signal.addEventListener('abort', () => { owned.value = {} }, { once: true })
+  }
+  return sessionAdmissions
+}
 
 interface UseDockerLocalImagesOptions {
+  active?: ReadonlyRef<boolean>
   query: ReadonlyRef<string>
   containers: ReadonlyRef<DockerInventory['containers']>
   pageSize: ReadonlyRef<number>
 }
 
 export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
+  const session = captureSession()
+  let disposed = false
+  let generation = 0
+  let readSequence = 0
+  const alive = (owner = generation) => !disposed && !session.signal.aborted && owner === generation
+  const active = () => alive() && options.active?.value !== false
+  if (options.active) watch(options.active, () => { generation += 1 }, { flush: 'sync' })
+  onScopeDispose(() => { disposed = true; generation += 1 })
+  const removeAdmissions = removalAdmissionsForSession(session)
+  const singlePendingIds = ref<string[]>([])
   const images = ref<DockerImageSummary[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -85,7 +110,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   function isRemovePending(imageId: string) {
-    return removePendingIds.value.includes(imageId)
+    return removePendingIds.value.includes(imageId) || singlePendingIds.value.includes(imageId) || !!removeAdmissions.value[imageId]
   }
 
   async function toggleLocalSort(key: 'name' | 'size' | 'created' | 'containers') {
@@ -101,16 +126,22 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   async function refresh() {
+    if (!alive()) return
+    const sequence = ++readSequence
+    const valid = () => alive() && sequence === readSequence
     loading.value = true
     error.value = null
     try {
-      images.value = (await requestDockerImages()).images
+      const result = await requestDockerImages()
+      if (!valid()) return
+      images.value = result.images
       const availableIds = new Set(images.value.map((image) => image.id))
       selectedImageIds.value = selectedImageIds.value.filter((id) => availableIds.has(id))
     } catch (caught) {
+      if (!valid()) return
       error.value = caught instanceof NcpApiError ? caught.message : '本地镜像读取失败。'
     } finally {
-      loading.value = false
+      if (valid()) loading.value = false
     }
   }
 
@@ -124,11 +155,45 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   async function confirmRemove(image: DockerImageSummary) {
-    await confirmRemoveImages([image])
+    if (!active() || isRemovePending(image.id)) return
+    const id = image.id
+    const name = displayName(image)
+    const tags = JSON.stringify(image.repoTags)
+    const owner = generation
+    const currentTarget = () => images.value.find((item) => item.id === id && JSON.stringify(item.repoTags) === tags)
+    if (!currentTarget() || containerReferenceCount(image) > 0) return
+    // 在确认框前锁定目标，避免双击产生两个确认或重复写入。
+    singlePendingIds.value.push(id)
+    try {
+      try {
+        await ElMessageBox.confirm(`将从 NAS 删除“${name}”（${id}）。提交后由后台任务执行，不会强制删除。`, '删除本地镜像', {
+          confirmButtonText: '提交删除任务', cancelButtonText: '取消', type: 'warning',
+        })
+      } catch { return }
+      const target = currentTarget()
+      if (!active() || !alive(owner) || !target || containerReferenceCount(target) > 0 || target.id !== id || removeAdmissions.value[id]) return
+      removeAdmissions.value[id] = { name, state: 'unknown' }
+      try {
+        const job = await requestDockerImageRemoveJob(id)
+        if (!active() || !alive(owner)) return
+        removeAdmissions.value[id] = { name, state: 'accepted', jobId: job.id }
+        ElMessage.success('删除任务已接收，请在最近任务中查看实际结果。')
+      } catch (caught) {
+        if (!active() || !alive(owner)) return
+        if (caught instanceof DockerImageRemoveAdmissionUnknownError || !(caught instanceof NcpApiError)) {
+          removeAdmissions.value[id] = { name, state: 'unknown' }
+        } else {
+          delete removeAdmissions.value[id]
+          removeFailures.value = [{ id, name, message: caught.message }]
+        }
+      }
+    } finally {
+      singlePendingIds.value = singlePendingIds.value.filter((pending) => pending !== id)
+    }
   }
 
   async function confirmRemoveSelected() {
-    const selected = images.value.filter((image) => selectedImageIds.value.includes(image.id))
+    const selected = images.value.filter((image) => selectedImageIds.value.includes(image.id) && !isRemovePending(image.id))
     await confirmRemoveImages(selected)
   }
 
@@ -150,6 +215,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
       })
     } catch { return }
 
+    if (removable.some((image) => isRemovePending(image.id))) return
     removeFailures.value = []
     removePendingIds.value = removable.map((image) => image.id)
     try {
@@ -191,6 +257,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   return {
+    removeAdmissions,
     images,
     loading,
     error,

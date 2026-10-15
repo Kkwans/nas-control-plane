@@ -169,3 +169,18 @@ NAS实机、真实PG/MySQL与原生多PTY部署边界未改变，不把隔离CI�
 修复保留已有大小写和首尾空白兼容，将规范动作同时用于派发与结果，项目/Compose的Normalize拥有独立切片；非法输入仍在副作用之前拒绝。两个项目RPC decoder显式返回Normalize结果，保证自定义provider继续收到规范容器ID、工作目录及配置路径，不再依赖原地修改的副作用。没有改变状态匹配语义、公开HTTP字段、重试策略或部署配置；“命令完成但读回状态不符”的结果反馈仍留独立切片。
 
 Docker新增断言使用基线生产文件overlay先复现失败，再在修复后通过：`go test ./internal/docker -run '^Test(ContainerController|ProjectController|ProjectAction)' -race -count=20`；纯RPC decoder/service通过`go test ./internal/agentsocket -run '^Test(Project|Compose)Action(Decoder|Service)' -race -count=20`。相关Go vet、`go build ./cmd/...`与diff检查通过；未执行含监听器的整包测试、浏览器、真实Docker/Compose、NAS或部署。提交与远端CI由主任务接续核验。
+
+
+## 耗时操作 Job 扩展：单镜像删除（2026-10-15，实施中）
+
+本片沿用后端审计的耗时操作迁移方向，离开容器创建修补；只迁移本地镜像行内单目标删除，旧同步及多选批量接口保留。新增 `POST /api/v1/docker/images/remove-job`，请求 `{imageId}` 只接受清单中 `sha256:` 加64位小写十六进制内容身份；202返回现有JobSnapshot的原始queued快照，即使后台已推进也不替换接收回执；type为`docker-image-remove`、reference固定该ID、cancellable=false、status=queued、artifactState=unknown；progress/downloadedBytes/totalBytes/speedBytes均为0、layers为空对象，不包含cancellationStatus/persistenceStatus/completedAt/errorCode/error元数据。接收不等于删除完成，无取消、自动/手动重试或跨请求幂等承诺。
+
+1. 后端复用持久化admission/CAS/收尾/容量32与停机逻辑，增加独立单worker删除队列；HTTP断开不取消已接收执行。只调用一次既有RemoveDockerImages单元素RPC，保留引用预检、Force=false及PruneChildren=false，不绕到旧单镜像RPC。
+2. 回执必须恰好匹配该唯一目标、Removed/Completed/计数/错误码自洽。合法成功才completed；明确删除前拒绝或引用中为failed；一般删除错误、传输异常、超时和坏回执为interrupted。未知原始错误不公开，终态保存失败只重试持久化，不重做删除。artifactState保持unknown，完成不保证未来镜像仍不存在。
+3. 前端冻结确认目标并区分已接收/已完成，复用最近任务只读核对；响应丢失不得重发或降级到同步接口。原多选删除不迁移，本片不实现跨页面幂等回执、批量结果持久化或新取消协议。
+4. 验证使用fake Agent/store、HTTP recorder和barrier：持久接收前零RPC、HTTP取消独立、队列/运行写失败、终态持久重试不重放、严格回执、取消/重试拒绝、shutdown/recovery不重放。补OpenAPI、Go定向race及build/vet，前端单元/静态与CI浏览器分别核验；不运行本地监听器、真实Docker、NAS或生产凭据操作。实现/验证结果随后记录，不把计划当作通过。
+
+已知边界：JOB_PERSIST_FAILED表示本次未派发删除RPC，但INSERT确认与核对都失败时可能留下待恢复记录；无法据此保证没有Job。任务引用只存非敏感镜像ID，actor/requestId审计与全局去重后续独立设计。
+
+
+后端本地验证：新增10组删除Job测试通过race×20；既有Job与新增删除Job、MIME路由拒绝/非法body/认证来源顺序通过race×3，完整36条JSON路由body限额通过race×3；既有fake Docker批量删除通过race×3。完整OpenAPI测试、`go build ./...`和`go vet ./...`通过。首次扩展回归发现固定路由计数仍为35，已同步为新增后的36并复跑通过，未移除用例。独立后端审查无阻塞发现。恢复用例为fake store hydration、不代表真实SQLite重启集成；未执行含监听器的整包HTTP测试、真实Docker/Agent socket或NAS。前端与远端CI由主任务接续，暂不宣称整片交付完成。

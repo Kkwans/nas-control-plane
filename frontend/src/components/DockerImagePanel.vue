@@ -8,6 +8,7 @@ import {
   type DockerInventory,
   type JobSnapshot,
 } from '@/api/system'
+import TaskCenterDrawer from '@/components/TaskCenterDrawer.vue'
 import ActionButton from '@/components/ActionButton.vue'
 import CreateContainerDrawer from '@/components/CreateContainerDrawer.vue'
 import DockerHubBrowser from '@/components/DockerHubBrowser.vue'
@@ -29,12 +30,13 @@ let alive = true
 onBeforeUnmount(() => { alive = false })
 
 const mode = ref<ImageMode>('local')
+const removalTasksOpen = ref(false)
 const createImage = ref<DockerImageSummary | null>(null)
 const createDrawerOpen = ref(false)
-const localImages = useDockerLocalImages({ query: computed(() => props.query), containers: computed(() => props.containers), pageSize: computed(() => props.pageSize) })
+const localImages = useDockerLocalImages({ active: computed(() => mode.value === 'local'), query: computed(() => props.query), containers: computed(() => props.containers), pageSize: computed(() => props.pageSize) })
 const downloads = useDockerImageDownloads(localImages.images, { onCreatedDownloadCompleted: () => localImages.refresh() })
 const {
-  images, loading, error, removeFailures, selectedImageIds, localPage, localPreference,
+  images, loading, error, removeAdmissions, removeFailures, selectedImageIds, localPage, localPreference,
   filteredImages, localPageCount, pagedImages, allVisibleSelected,
   someVisibleSelected, selectedImageCount, bulkRemovePending, toggleLocalSort, refresh,
   handleVisibleSelectionChange, handleImageSelectionChange, isRemovePending, confirmRemove,
@@ -98,6 +100,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <TaskCenterDrawer v-if="removalTasksOpen" @close="removalTasksOpen = false" />
   <section class="image-workspace">
     <header class="image-modebar">
       <SectionTabs v-model="mode" :tabs="imageModeTabs" accessible-label="镜像来源" />
@@ -123,6 +126,11 @@ onMounted(() => {
       <div v-if="removeFailures.length" class="inline-error bulk-remove-error" role="alert">
         <div><strong>部分镜像删除失败</strong><ul><li v-for="failure in removeFailures" :key="failure.id">{{ failure.name }}：{{ failure.message }}</li></ul></div>
         <button type="button" @click="removeFailures = []">关闭</button>
+      </div>
+      <div v-for="(admission, id) in removeAdmissions" :key="id" class="inline-error removal-admission" :class="{ 'removal-admission--unknown': admission.state === 'unknown' }" role="status">
+        <span>{{ admission.name }}（{{ id }}）：{{ admission.state === 'accepted' ? `删除任务已接收（${admission.jobId}），尚未确认删除完成。` : '删除任务可能已接收，结果尚未确认，请勿重复提交。' }}</span>
+        <button type="button" @click="removalTasksOpen = true">查看最近任务</button>
+        <button type="button" :disabled="loading" @click="refresh">只读刷新镜像</button>
       </div>
       <section class="resource-table panel">
         <div class="resource-head">
@@ -253,6 +261,7 @@ onMounted(() => {
 </style>
 
 <style scoped>
+.inline-error.removal-admission{flex-wrap:wrap;gap:8px;margin-bottom:10px;background:var(--ncp-info-soft);color:var(--ncp-info-strong);border-color:var(--ncp-line)}.removal-admission>span{flex:1 1 320px;min-width:0;overflow-wrap:anywhere}.removal-admission button{min-height:44px;padding:6px 10px}.inline-error.removal-admission--unknown{background:var(--ncp-warning-soft);color:var(--ncp-warning-strong)}
 .image-workspace { container: image-workspace / inline-size; }
 /* 工具栏根据可用面板宽度和字号换行，标签不能依赖横向滚动才能读全。 */
 .image-modebar { min-width: 0; flex-wrap: wrap; }

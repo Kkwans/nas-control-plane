@@ -20,6 +20,16 @@ function set(key: string, value: unknown) { (mock.state[key] as Ref<unknown>).va
 function button(text: string) { return [...host.querySelectorAll('button')].find(item => item.textContent?.includes(text))! }
 afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
+  it('镜像删除接收不显示完成、字节进度或取消，并提供只读刷新', async () => {
+    await mount([job({ type: 'docker-image-remove', status: 'queued', cancellable: false })])
+    expect(host.textContent).toContain('镜像删除')
+    expect(host.textContent).toContain('尚未确认删除完成')
+    expect(host.querySelector('progress')).toBeNull()
+    button('查看详情').click(); await nextTick()
+    expect(host.querySelector('.task-cancel')).toBeNull()
+    button('刷新任务').click(); await nextTick()
+    expect(refresh).toHaveBeenCalledOnce(); expect(requestCancel).not.toHaveBeenCalled()
+  })
   it('自定义 div 标题不创建重复 banner，dialog 仍关联可见标题', async () => {
     await mount(); const dialog = host.querySelector('[role="dialog"]')!
     expect(dialog.getAttribute('data-body-class')).toBe('task-center-drawer__body'); expect(dialog.getAttribute('data-with-header')).toBe('false'); expect(host.querySelector('header')).toBeNull()

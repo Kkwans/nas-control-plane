@@ -290,7 +290,7 @@ func TestJSONBodyLimitNoProgressAndNil(t *testing.T) {
 
 func TestJSONBodyLimitRoutesRejectBeforeSideEffects(t *testing.T) {
 	routes := jsonMIMERoutes()
-	if len(routes) != 35 {
+	if len(routes) != 36 {
 		t.Fatalf("route inventory=%d", len(routes))
 	}
 	for _, route := range routes {

@@ -87,6 +87,7 @@ func jsonMIMERoutes() []jsonMIMERoute {
 		{"PUT", "/databases/project-preferences", "CONTROL_INPUT_INVALID"},
 		{"POST", "/docker/images/pull", "CONTROL_INPUT_INVALID"},
 		{"POST", "/docker/images/remove", "CONTROL_INPUT_INVALID"},
+		{"POST", "/docker/images/remove-job", "CONTROL_INPUT_INVALID"},
 		{"POST", "/docker/images/remove-batch", "CONTROL_INPUT_INVALID"},
 		{"POST", "/docker/containers", "CONTROL_INPUT_INVALID"},
 		{"POST", "/docker/projects/fixture/actions/start", "CONTROL_INPUT_INVALID"},
@@ -111,8 +112,8 @@ func jsonMIMERoutes() []jsonMIMERoute {
 
 func TestJSONRoutesRejectUnsupportedMediaBeforeSideEffects(t *testing.T) {
 	routes := jsonMIMERoutes()
-	if len(routes) != 35 {
-		t.Fatalf("JSON route inventory=%d, want 35", len(routes))
+	if len(routes) != 36 {
+		t.Fatalf("JSON route inventory=%d, want 36", len(routes))
 	}
 	for _, route := range routes {
 		for _, tc := range []jsonMIMECase{

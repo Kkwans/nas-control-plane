@@ -18,7 +18,7 @@ export function jobStateLabel(job: JobSnapshot): string {
   return jobStatusOptions.find((option) => option.value === jobState(job))!.label
 }
 export function jobTypeLabel(type: string): string {
-  return type === 'docker-image-pull' ? '镜像拉取' : type === 'compose-deploy' ? 'Compose 部署' : type
+  return type === 'docker-image-remove' ? '镜像删除' : type === 'docker-image-pull' ? '镜像拉取' : type === 'compose-deploy' ? 'Compose 部署' : type
 }
 export function jobArtifactLabel(job: JobSnapshot): string {
   return job.artifactState === 'present' ? '存在' : job.artifactState === 'deleted' ? '已不存在' : '未核实'
@@ -28,6 +28,8 @@ export function jobStateDescription(job: JobSnapshot): string {
   if (state === 'persisting') return '执行结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
+  if (job.type === 'docker-image-remove' && state === 'completed') return '镜像删除任务已完成，可刷新本地镜像核验当前状态。'
+  if (job.type === 'docker-image-remove' && (state === 'queued' || state === 'running')) return '删除任务已接收，尚未确认删除完成。'
   if (job.type === 'compose-deploy' && state === 'completed') return '部署命令已完成，配置与实际运行状态仍需核验。'
   return ''
 }

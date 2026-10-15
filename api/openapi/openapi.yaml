@@ -1943,6 +1943,51 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ComposeRevision'
+  /api/v1/docker/images/remove-job:
+    post:
+      operationId: submitDockerImageRemoval
+      summary: 将单个本地镜像的非强制删除提交为持久任务
+      description: 仅接受清单中的完整 sha256 内容身份。202 只表示任务已持久接收，不表示镜像已删除；关闭页面不会取消任务。任务不支持取消或重试，仍调用既有单元素批量删除以保留容器引用预检及非强制删除。返回结果必须完整匹配唯一目标；未知响应、传输错误和一般删除错误归档 interrupted，只有匹配成功回执才 completed，明确预检拒绝可 failed。响应丢失时先只读核对最近任务与清单，禁止自动重新提交。当前接口不提供跨请求幂等键。
+      tags: [docker, jobs]
+      security: [{RootSession: []}]
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerImageRemoveJobRequest'
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照，即使后台已推进也不替换该接收回执。type=docker-image-remove、reference=请求 imageId、cancellable=false、status=queued、artifactState=unknown；progress、downloadedBytes、totalBytes、speedBytes 均为0，layers为空对象；不包含 cancellationStatus、persistenceStatus、completedAt、errorCode 或 error 元数据。实际执行与结果持久化独立于 HTTP 生命周期；成功不是镜像未来持续不存在的保证。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: CONTROL_INPUT_INVALID 或 DOCKER_IMAGE_REMOVE_INVALID；未提交任务。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 必须登录 Root 会话。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: AGENT_DOCKER_IMAGES_UNAVAILABLE、JOB_ENGINE_UNAVAILABLE、JOB_QUEUE_FULL 或 JOB_PERSIST_FAILED。本次未派发删除 RPC；持久化确认失败仍可能留下待恢复任务记录，不保证记录不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images/remove:
     post:
       operationId: removeDockerImage
@@ -4032,7 +4077,7 @@ components:
           description: 执行结果待持久化。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，不代表执行失败。
         cancellable:
           type: boolean
-          description: 执行器是否支持取消；Compose 为 false。实际操作仍由服务端状态校验决定。
+          description: 执行器是否支持取消；Compose 与 docker-image-remove 为 false。实际操作仍由服务端状态校验决定。
         errorCode:
           type: string
           description: 稳定错误码，例如 JOB_QUEUE_TIMEOUT、JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
@@ -4053,6 +4098,16 @@ components:
         error: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    DockerImageRemoveJobRequest:
+      type: object
+      required: [imageId]
+      properties:
+        imageId:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          minLength: 71
+          maxLength: 71
+          description: 清单中的完整内容身份，不接受标签、短 ID 或空白。
     DockerImageRemoveRequest:
       type: object
       required: [imageId]
