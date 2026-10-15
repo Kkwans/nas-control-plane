@@ -142,3 +142,7 @@ d2a8003 的实际移动端 wrong-project 截图显示未知结果正文上方仍
 Element Plus 2.14.3 的真实 header slot 提供 titleId，但自定义标题未消费它。ProjectDetailDrawer 现在将项目名渲染为带该 ID 的 h2，保留原字号与截断样式并清零标题 margin；正文 h3 不变。副文本样式限定为标题文字容器的直接 span，避免父 scoped 样式命中 StatusPill 根节点后覆盖其语义颜色。健康色恢复已有 --ncp-success-strong，静态 token 对比度约 5.63:1；不修改任何全局色值。ContainerLogDrawer 具有同一源码合同缺陷，有限同步其 header slot、容器名 h2 和原排版样式；此抽屉没有本轮实际浏览器失败证据。
 
 新增真实 ElDrawer 的 jsdom 回归覆盖两个抽屉的有效、唯一标题 ID、项目 h2/h3 层级及运行/降级/停止/pending 状态；编译真实 scoped CSS 并在真实组件 DOM 匹配选择器，防止副文本颜色再次污染 StatusPill 根节点或后代。两个既有 ElDrawer 桩同步传递 titleId slot 参数。四份定向组件文件共 109 项通过，修改文件 ESLint、Vue 类型检查、生产构建及 540KiB 包预算通过。没有修改 tooltip、键盘激活、生命周期、确认、请求、焦点恢复或完整 axe 门槛。没有本地浏览器、监听器、Docker/Compose、NAS 或生产操作；真实可见布局、颜色与完整 axe、取消恢复及完成回执仍须新提交远端 CI 验收。
+
+## 容器详情只读键盘浏览器专项（2026-10-15）
+
+新增 1440/390 像素 × 列表/项目抽屉四个隔离用例：通过原生 Enter、Space 打开指定容器详情，核对每次恰好一次详情 GET 和一次日志 GET，验证 Escape 关闭、嵌套抽屉保留与触发器焦点恢复。拦截所有非 GET、外部来源及未授权 API，要求零写请求；保留完整未过滤 axe、截图、几何、源码散列与失败时请求账本。初始触发器通过 focus() 定位，因此不证明从页面起点完整 Tab 可达性。已通过 ESLint、严格 TypeScript、四用例发现及独立静态审查；尚无真实浏览器结果，须远端 CI 验收。完整 axe 采用软断言保留后续键盘循环与账本，但任何违规仍使测试失败，不降低检查门槛。
