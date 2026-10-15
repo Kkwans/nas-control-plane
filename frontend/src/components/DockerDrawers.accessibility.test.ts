@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
-import { afterEach, describe, expect, it } from 'vitest'
-import { createApp, h, nextTick, type App } from 'vue'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApp, h, nextTick, ref, type App } from 'vue'
 import { compileStyle, parse } from 'vue/compiler-sfc'
 import ProjectDetailDrawer from './ProjectDetailDrawer.vue'
 import ContainerLogDrawer from './ContainerLogDrawer.vue'
@@ -10,20 +10,23 @@ import type { DockerProject } from '@/api/system'
 const project: DockerProject = { id: 'demo', name: 'demo-project', kind: 'compose', workingDirectory: '/srv/demo', configFiles: [], containerCount: 0, runningCount: 0, state: 'running' }
 let app: App | undefined
 let host: HTMLDivElement | undefined
+const detailsOpen = ref(true)
+const updateDetails = vi.fn()
 async function mount(state: DockerProject['state'] = 'running', pending = false) {
+  detailsOpen.value = true
   host = document.createElement('div')
   document.body.append(host)
   app = createApp({ render: () => h('main', [
     h('h1', 'Docker 管理'),
     h(ProjectDetailDrawer, { modelValue: true, project: { ...project, state }, containers: [], hostName: 'nas', allowOperations: true, projectActionPending: pending ? 'restart' : null }),
-    h(ContainerLogDrawer, { modelValue: true, containerName: 'demo-web', loading: false, details: null, logs: null, error: '' }),
+    h(ContainerLogDrawer, { modelValue: detailsOpen.value, containerName: 'demo-web', loading: false, details: null, logs: { containerId: 'demo-web', collectedAt: '2026-10-15T12:00:00Z', tail: 1, entries: [{ timestamp: '2026-10-15T12:00:00Z', level: 'info', stream: 'stdout', message: 'ready' }] }, error: '', 'onUpdate:modelValue': updateDetails }),
   ]) })
   app.mount(host)
   for (let index = 0; index < 8; index++) await nextTick()
   await new Promise(resolve => setTimeout(resolve, 50))
   await nextTick()
 }
-afterEach(() => { app?.unmount(); host?.remove(); app = undefined; host = undefined })
+afterEach(() => { app?.unmount(); host?.remove(); app = undefined; host = undefined; updateDetails.mockClear() })
 
 function stylesheet(name: string, id: string) {
   const filename = `${import.meta.dirname}/${name}.vue`
@@ -35,6 +38,84 @@ function stylesheet(name: string, id: string) {
 }
 
 describe('Docker 抽屉真实 Element Plus 标题合同', () => {
+  it('传送到 body 的容器详情保留 dialog 标题但不创建页面 banner', async () => {
+    await mount()
+    const drawer = document.querySelector('.container-detail-drawer')!
+    expect(drawer.closest('main')).toBeNull()
+    expect(drawer.getAttribute('role')).toBe('dialog')
+    expect(drawer.getAttribute('aria-modal')).toBe('true')
+    const heading = drawer.querySelector('.el-drawer__header')!
+    expect(heading.tagName).toBe('HEADER')
+    const section = heading.closest('section')!
+    expect(section.className).toBe('container-detail-dialogs')
+    expect(section.parentElement).toBe(document.body)
+    expect(section.hasAttribute('role')).toBe(false)
+    expect(section.hasAttribute('aria-label')).toBe(false)
+    expect(section.hasAttribute('aria-labelledby')).toBe(false)
+    expect(heading.querySelector('h2')?.id).toBe(drawer.getAttribute('aria-labelledby'))
+    // 内部日志 header 保留在 section 中；无 sectioning 祖先的原生 header 才会成为 banner。
+    const banners = [...drawer.querySelectorAll('header')].filter(header => !header.parentElement?.closest('article, aside, main, nav, section'))
+    expect(banners).toEqual([])
+    expect(drawer.querySelector('[role="banner"]')).toBeNull()
+    const close = drawer.querySelector<HTMLButtonElement>('.el-drawer__close-btn')!
+    expect(close.tagName).toBe('BUTTON')
+    expect(close.type).toBe('button')
+    expect(close.getAttribute('aria-label')).toBeTruthy()
+    expect(close.disabled).toBe(false)
+    close.focus()
+    expect(document.activeElement).toBe(close)
+    close.click()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    await nextTick()
+    expect(updateDetails.mock.calls).toEqual([[false]])
+  })
+
+  it('真实 Teleport 在关闭、重开与卸载后不遗留可见遮罩或独立标题', async () => {
+    await mount()
+    const section = document.querySelector('.container-detail-dialogs')!
+    const overlay = section.querySelector<HTMLElement>('.el-overlay')!
+    const titleId = section.querySelector('h2')!.id
+    expect(overlay.style.display).not.toBe('none')
+    detailsOpen.value = false
+    for (let index = 0; index < 8; index++) await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(overlay.style.display).toBe('none')
+    detailsOpen.value = true
+    for (let index = 0; index < 8; index++) await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(overlay.style.display).not.toBe('none')
+    expect(section.querySelector('h2')!.id).toBe(titleId)
+    expect(document.querySelectorAll('.container-detail-dialogs')).toHaveLength(1)
+    app!.unmount()
+    app = undefined
+    expect(document.querySelector('.container-detail-dialogs')).toBeNull()
+    expect(document.getElementById(titleId)).toBeNull()
+    expect(overlay.isConnected).toBe(false)
+  })
+
+  it('INFO 使用强信息色并满足普通文字 4.5:1 对比度', async () => {
+    await mount()
+    const info = document.querySelector('.container-detail-drawer .log-level--info')!
+    const scope = [...info.attributes].find(attr => attr.name.startsWith('data-v-'))!.name
+    const colors: Record<string, string> = {}
+    stylesheet('ContainerLogDrawer', scope).walkRules(rule => {
+      if (rule.selectors.some(selector => info.matches(selector))) rule.walkDecls(declaration => { colors[declaration.prop] = declaration.value })
+    })
+    expect(colors.color).toBe('var(--ncp-info-strong)')
+    expect(colors.background).toBe('var(--ncp-info-soft)')
+    const tokens = readFileSync(`${import.meta.dirname}/../styles/tokens.css`, 'utf8')
+    function luminance(property: string) {
+      const name = /var\((--[\w-]+)\)/.exec(colors[property]!)![1]!
+      const hex = new RegExp(`${name}:\\s*(#[\\da-f]{6});`, 'i').exec(tokens)![1]!
+      const channels = [1, 3, 5].map(start => {
+        const value = Number.parseInt(hex.slice(start, start + 2), 16) / 255
+        return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4
+      })
+      return channels[0]! * .2126 + channels[1]! * .7152 + channels[2]! * .0722
+    }
+    expect((luminance('background') + .05) / (luminance('color') + .05)).toBeGreaterThanOrEqual(4.5)
+  })
+
   it.each([
     ['running', false, '运行中'], ['degraded', false, '需关注'], ['stopped', false, '已停止'], ['running', true, '正在重启'],
   ] as const)('%s pending=%s 保留命名、层级和状态', async (state, pending, label) => {
