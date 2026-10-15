@@ -130,7 +130,7 @@ func TestJobLifecycleCompatibilityContract(t *testing.T) {
 	if len(job.Properties["status"].Value.Enum) != 6 {
 		t.Fatal("v1 Job status must retain six values")
 	}
-	for _, field := range []string{"cancellationStatus", "persistenceStatus", "cancellable", "errorCode", "completedAt"} {
+	for _, field := range []string{"cancellationStatus", "persistenceStatus", "cancellable", "errorCode", "completedAt", "progressLimited"} {
 		if job.Properties[field] == nil {
 			t.Fatalf("missing optional lifecycle property %s", field)
 		}
@@ -307,5 +307,32 @@ func TestDatabaseOperationBusyContract(t *testing.T) {
 	response := document.Paths.Value("/api/v1/databases/discovery").Get.Responses.Value("503")
 	if response == nil || response.Value.Description == nil || strings.Contains(*response.Value.Description, "operation_busy") {
 		t.Fatal("standalone discovery must retain its unrelated unavailable response")
+	}
+}
+
+func TestJobProgressLimitedCompatibilityContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	document, err := loader.LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := document.Components.Schemas["JobSnapshot"].Value
+	limited := job.Properties["progressLimited"].Value
+	if !limited.Type.Is("boolean") || limited.Nullable {
+		t.Fatal("progressLimited must be an optional non-null boolean")
+	}
+	for _, text := range []string{"单调", "不保证进度完整", "终态"} {
+		if !strings.Contains(limited.Description, text) {
+			t.Fatalf("progressLimited description missing %s", text)
+		}
+	}
+	layers := job.Properties["layers"].Value
+	if layers.MaxProps != nil || layers.AdditionalProperties.Has == nil || !*layers.AdditionalProperties.Has || layers.AdditionalProperties.Schema != nil {
+		t.Fatal("legacy layer snapshots must remain readable without new global schema limits")
+	}
+	for _, text := range []string{"新接纳", "128 层", "128 UTF-8", "256 UTF-8", "32 KiB", "2 × ID", "旧持久化快照"} {
+		if !strings.Contains(layers.Description, text) {
+			t.Fatalf("layer admission limits description missing %s", text)
+		}
 	}
 }

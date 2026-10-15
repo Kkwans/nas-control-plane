@@ -187,6 +187,7 @@ type JobRecord struct {
 	Reference          string    `json:"reference"`
 	Message            string    `json:"message"`
 	Progress           int       `json:"progress"`
+	ProgressLimited    bool      `json:"progressLimited"`
 	Error              string    `json:"error"`
 	DownloadedBytes    int64     `json:"downloadedBytes"`
 	TotalBytes         int64     `json:"totalBytes"`
@@ -854,6 +855,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"revision", "INTEGER NOT NULL DEFAULT 1"},
 		{"cancellation_status", "TEXT NOT NULL DEFAULT ''"},
 		{"error_code", "TEXT NOT NULL DEFAULT ''"},
+		{"progress_limited", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, "jobs", column.name, column.definition); err != nil {
 			return err

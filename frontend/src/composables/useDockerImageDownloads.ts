@@ -88,7 +88,7 @@ export function useDockerImageDownloads(
     if (downloadPage.value > count) downloadPage.value = count
   })
 
-  function upsertDownloadJob(job: JobSnapshot): JobSnapshot | undefined {
+  function upsertDownloadJob(job: JobSnapshot, liveProgress = false): JobSnapshot | undefined {
     if (!alive() || deletedJobs.has(job.id)) return
     const index = downloadJobs.value.findIndex((item) => item.id === job.id)
     const current = downloadJobs.value[index]
@@ -97,12 +97,21 @@ export function useDockerImageDownloads(
       Date.parse(current.updatedAt) > Date.parse(job.updatedAt) ||
       (isLiveJob(job) && ((current.persistenceStatus === 'pending' && job.persistenceStatus !== 'pending') ||
         (current.cancellationStatus === 'requested' && job.cancellationStatus !== 'requested') ||
-        (current.status === 'running' && job.status === 'queued'))))) return current
+        (current.status === 'running' && job.status === 'queued'))))) {
+      // 迟到状态不可倒退，但新获知的受限证据仍需保留。
+      if (job.progressLimited === true && current.progressLimited !== true) {
+        current.progressLimited = true
+        versions.set(job.id, ++mutation)
+      }
+      return current
+    }
+    if (current?.progressLimited === true && job.progressLimited !== true) job = { ...job, progressLimited: true }
     if (index >= 0) downloadJobs.value[index] = job
     else downloadJobs.value.unshift(job)
     versions.set(job.id, ++mutation)
     observations.value.set(job.id, { interrupted: false, lastObservedAt: new Date().toISOString() })
     if (!isLiveJob(job)) closeSubscription(job.id)
+    else if (liveProgress) streamingJobs.value.add(job.id)
     downloadJobs.value = [...downloadJobs.value]
     notifyCreatedDownloadResult(job)
     return job
@@ -167,7 +176,8 @@ export function useDockerImageDownloads(
     return '镜像未核实'
   }
   function effectiveTotal(job: JobSnapshot) {
-    return job.totalBytes || localImageForJob(job)?.sizeBytes || 0
+    // 部分层统计不能用本地镜像容量补成完整总量。
+    return job.progressLimited ? job.totalBytes : job.totalBytes || localImageForJob(job)?.sizeBytes || 0
   }
   function dateLabel(value: string) {
     const date = new Date(value)
@@ -210,8 +220,7 @@ export function useDockerImageDownloads(
     try {
       subscription = subscribeJob(job.id, (next) => {
         if (!alive() || subscriptions.get(job.id) !== subscription || next.id !== job.id) return
-        const accepted = upsertDownloadJob(next)
-        if (accepted === next && isLiveJob(next)) streamingJobs.value.add(job.id)
+        upsertDownloadJob(next, true)
       })
     } catch {
       interrupted()

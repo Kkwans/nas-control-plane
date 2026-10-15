@@ -589,6 +589,8 @@ export interface JobSnapshot {
   reference?: string
   message: string
   progress: number
+  /** true 表示进度信息受资源限制；省略或 false 不保证进度完整。 */
+  progressLimited?: boolean
   error?: string
   createdAt: string
   updatedAt: string

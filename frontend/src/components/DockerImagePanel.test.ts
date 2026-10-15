@@ -307,3 +307,29 @@ describe('DockerImagePanel 窄屏下载恢复语义', () => {
     expect(host.querySelector('.job-observation-recovery')).toBeNull()
   })
 })
+
+
+describe('下载任务进度受限提示', () => {
+  it.each([
+    { status: 'running' }, { status: 'completed' }, { status: 'failed' }, { status: 'cancelled' },
+    { status: 'interrupted', cancellationStatus: 'unknown' },
+    { status: 'running', persistenceStatus: 'pending' }, { status: 'running', cancellationStatus: 'requested' },
+  ] as Partial<JobSnapshot>[])('部分统计不显示完整百分比、字节量或速度：%j', async (fields) => {
+    downloads.downloadJobsLoaded.value = true
+    downloads.downloadJobs.value = [{ ...job(), ...fields, progressLimited: true, progress: 100, totalBytes: 8192 }]
+    downloads.trusted.value = true
+    const host = await mountDownloads(), row = host.querySelector('.download-row')!
+    expect(row.textContent).toContain('进度信息受资源限制，仅保留部分层或状态')
+    expect(row.textContent).toContain('完整进度未提供')
+    expect(row.querySelector('[role="progressbar"]')).toBeNull()
+    expect(row.querySelector('.job-progress')?.textContent).not.toMatch(/%|KiB/)
+    expect(row.querySelector('.job-speed')?.textContent).not.toContain('/s')
+    if (fields.status === 'completed') expect(row.textContent).toContain('已完成')
+    if (fields.persistenceStatus) expect(row.textContent).toContain('尚未确认最终结果')
+    if (fields.cancellationStatus === 'requested') expect(row.textContent).toContain('远端执行可能仍在继续')
+    if (fields.cancellationStatus === 'unknown') expect(row.textContent).toContain('执行结果未确认')
+    downloads.interrupted.value = true; await nextTick()
+    expect(row.textContent).toContain('进度信息受资源限制')
+    expect(row.textContent).toContain('进度连接中断')
+  })
+})

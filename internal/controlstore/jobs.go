@@ -19,7 +19,7 @@ var (
 const jobColumns = `id, type, status, reference, message, error, progress,
  downloaded_bytes, total_bytes, speed_bytes, layers_json,
  created_at_unix, updated_at_unix, completed_at_unix,
- revision, cancellation_status, error_code`
+ revision, cancellation_status, error_code, progress_limited`
 
 func jobCompletedUnix(job JobRecord) int64 {
 	if job.CompletedAt.IsZero() {
@@ -31,11 +31,11 @@ func jobCompletedUnix(job JobRecord) int64 {
 // CreateJob 仅创建新记录；初始版本固定为 1，不使用调用方提供的 Revision。
 func (s *Store) CreateJob(ctx context.Context, job JobRecord) error {
 	result, err := s.database.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
  ON CONFLICT(id) DO NOTHING`, job.ID, job.Type, job.Status, job.Reference,
 		job.Message, job.Error, job.Progress, job.DownloadedBytes, job.TotalBytes,
 		job.SpeedBytes, job.LayersJSON, job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode)
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited)
 	if err != nil {
 		return err
 	}
@@ -58,10 +58,10 @@ func (s *Store) UpdateJob(ctx context.Context, job JobRecord, expectedRevision i
 	err := s.mutateJobRevision(ctx, job.ID, expectedRevision, `UPDATE jobs SET
  status = ?, message = ?, error = ?, progress = ?, downloaded_bytes = ?,
  total_bytes = ?, speed_bytes = ?, layers_json = ?, updated_at_unix = ?,
- completed_at_unix = ?, cancellation_status = ?, error_code = ?, revision = revision + 1
+ completed_at_unix = ?, cancellation_status = ?, error_code = ?, progress_limited = ?, revision = revision + 1
  WHERE id = ? AND revision = ?`, job.Status, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON, job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode)
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited)
 	if err != nil {
 		return 0, err
 	}
@@ -111,7 +111,7 @@ func scanJob(row interface{ Scan(...any) error }) (JobRecord, error) {
 	var created, updated, completed int64
 	err := row.Scan(&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error,
 		&job.Progress, &job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
-		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode)
+		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode, &job.ProgressLimited)
 	if err != nil {
 		return JobRecord{}, err
 	}
@@ -197,8 +197,8 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 		INSERT INTO jobs (
 			id, type, status, reference, message, error, progress,
 			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at_unix, updated_at_unix, completed_at_unix, progress_limited
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			message = excluded.message,
@@ -210,9 +210,10 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 			layers_json = excluded.layers_json,
 			updated_at_unix = excluded.updated_at_unix,
 			completed_at_unix = excluded.completed_at_unix,
+			progress_limited = excluded.progress_limited,
 			revision = jobs.revision + 1
 	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
-		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt)
+		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt, job.ProgressLimited)
 	return err
 }

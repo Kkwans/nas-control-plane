@@ -666,3 +666,37 @@ describe('重试任务完成归属', () => {
     expect(api.retry).toHaveBeenCalledOnce()
   })
 })
+
+describe('下载进度受限证据', () => {
+  it.each([undefined, false])('SSE、取消、列表与终态中的 %s 不能清除受限标记', async (progressLimited) => {
+    const state = setup()
+    state.observeCreatedDownload(job({ progressLimited: true }))
+    const event = api.subscribe.mock.calls[0]![1] as (job: JobSnapshot) => void
+    event(job({ progressLimited }))
+    expect(state.downloadJobs.value[0]?.progressLimited).toBe(true)
+    expect(state.canShowDownloadSpeed(state.downloadJobs.value[0]!)).toBe(true)
+    api.cancel.mockResolvedValue(job({ cancellationStatus: 'requested', progressLimited }))
+    await state.stopDownload(state.downloadJobs.value[0]!)
+    expect(state.downloadJobs.value[0]).toMatchObject({ cancellationStatus: 'requested', progressLimited: true })
+    api.list.mockResolvedValue({ jobs: [job({ cancellationStatus: 'requested', persistenceStatus: 'pending', progressLimited })], invalidCount: 0 })
+    await state.loadDownloadJobs()
+    expect(state.downloadJobs.value[0]).toMatchObject({ persistenceStatus: 'pending', progressLimited: true })
+    event(job({ status: 'completed', progressLimited, progress: 100 }))
+    expect(state.downloadJobs.value[0]).toMatchObject({ status: 'completed', progressLimited: true })
+    expect(state.isLiveJob(state.downloadJobs.value[0]!)).toBe(false)
+  })
+  it('迟到受限快照不倒退最终结果，不污染另一个重试任务', () => {
+    const state = setup()
+    state.upsertDownloadJob(job({ status: 'completed' }))
+    state.upsertDownloadJob(job({ progressLimited: true }))
+    expect(state.downloadJobs.value[0]).toMatchObject({ status: 'completed', progressLimited: true })
+    state.observeCreatedDownload(job({ id: 'retry-2' }))
+    expect(state.downloadJobs.value.find((item) => item.id === 'retry-2')?.progressLimited).toBeUndefined()
+  })
+  it('受限记录不通过本地镜像容量补齐缺失总量', () => {
+    const images = ref<DockerImageSummary[]>([{ id: 'local', repoTags: ['alpine:latest'], repoDigests: [], sizeBytes: 1024, createdAt: '', containers: 0 }])
+    const state = setup(images)
+    expect(state.effectiveTotal(job({ reference: 'alpine:latest', totalBytes: 0, progressLimited: true }))).toBe(0)
+    expect(state.effectiveTotal(job({ reference: 'alpine:latest', totalBytes: 0 }))).toBe(1024)
+  })
+})

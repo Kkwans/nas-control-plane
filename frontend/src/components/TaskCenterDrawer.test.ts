@@ -80,3 +80,22 @@ describe('TaskCenterDrawer', () => {
     const close = await mount(); invalidateSession(); expect(close).toHaveBeenCalledOnce(); app?.unmount(); app = undefined; invalidateSession(); expect(close).toHaveBeenCalledOnce()
   })
 })
+
+
+describe('TaskCenter 进度受限提示', () => {
+  it.each([
+    { status: 'running' }, { status: 'completed' }, { status: 'failed' }, { status: 'cancelled' },
+    { status: 'interrupted', cancellationStatus: 'unknown' },
+    { status: 'running', persistenceStatus: 'pending' }, { status: 'running', cancellationStatus: 'requested' },
+  ] as Partial<JobSnapshot>[])('所有生命周期保留受限提示，不展示部分百分比：%j', async (fields) => {
+    await mount([job({ ...fields, progressLimited: true })])
+    expect(host.textContent).toContain('进度信息受资源限制，仅保留部分层或状态')
+    expect(host.textContent).toContain('完整进度未提供')
+    expect(host.querySelector('progress')).toBeNull()
+    expect(host.querySelector('.task-progress-row')?.textContent).not.toContain('%')
+    if (fields.status === 'completed') expect(host.textContent).toContain('已完成')
+    if (fields.persistenceStatus) expect(host.textContent).toContain('尚未确认最终结果')
+    if (fields.cancellationStatus === 'requested') expect(host.textContent).toContain('远端执行可能仍在继续')
+    if (fields.cancellationStatus === 'unknown') expect(host.textContent).toContain('执行结果未确认')
+  })
+})

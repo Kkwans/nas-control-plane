@@ -241,7 +241,7 @@ func jobTerminal(status string) bool {
 }
 func recordFromSnapshot(j jobSnapshot) controlstore.JobRecord {
 	layers, _ := json.Marshal(j.Layers)
-	record := controlstore.JobRecord{ID: j.ID, Type: j.Type, Status: j.Status, Reference: j.Reference, Message: j.Message, Error: j.Error, Progress: j.Progress, DownloadedBytes: j.DownloadedBytes, TotalBytes: j.TotalBytes, SpeedBytes: j.SpeedBytes, LayersJSON: string(layers), CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, CancellationStatus: j.CancellationStatus, ErrorCode: j.ErrorCode}
+	record := controlstore.JobRecord{ProgressLimited: j.ProgressLimited, ID: j.ID, Type: j.Type, Status: j.Status, Reference: j.Reference, Message: j.Message, Error: j.Error, Progress: j.Progress, DownloadedBytes: j.DownloadedBytes, TotalBytes: j.TotalBytes, SpeedBytes: j.SpeedBytes, LayersJSON: string(layers), CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, CancellationStatus: j.CancellationStatus, ErrorCode: j.ErrorCode}
 	if j.CompletedAt != nil {
 		record.CompletedAt = *j.CompletedAt
 	}
@@ -249,6 +249,7 @@ func recordFromSnapshot(j jobSnapshot) controlstore.JobRecord {
 }
 
 func copyJobProgress(to *jobSnapshot, from jobSnapshot) {
+	to.ProgressLimited = to.ProgressLimited || from.ProgressLimited
 	to.Layers = from.Layers
 	to.DownloadedBytes = from.DownloadedBytes
 	to.TotalBytes = from.TotalBytes
@@ -298,11 +299,7 @@ func (r *jobRegistry) commit(e *jobEntry, j jobSnapshot) error {
 	e.viewMu.Lock()
 	j.PersistenceStatus = ""
 	if e.dirty != generation && !jobTerminal(j.Status) {
-		j.Layers = e.view.Layers
-		j.DownloadedBytes = e.view.DownloadedBytes
-		j.TotalBytes = e.view.TotalBytes
-		j.SpeedBytes = e.view.SpeedBytes
-		j.Progress = e.view.Progress
+		copyJobProgress(&j, e.view)
 	}
 	e.view = cloneJobSnapshot(j)
 	e.saved = generation
@@ -604,8 +601,15 @@ func (r *jobRegistry) updatePullProgress(id string, layer jobLayer) {
 		return
 	}
 	j := &e.view
-	if layer.ID == "" {
-		layer.ID = "status"
+	wasLimited := j.ProgressLimited
+	var accepted bool
+	layer, accepted = boundedPullLayer(j, layer)
+	if !accepted {
+		if !wasLimited && j.ProgressLimited {
+			j.UpdatedAt = time.Now().UTC()
+			e.dirty++
+		}
+		return
 	}
 	if j.Layers == nil {
 		j.Layers = map[string]jobLayer{}
@@ -623,8 +627,8 @@ func (r *jobRegistry) updatePullProgress(id string, layer jobLayer) {
 	j.Layers[layer.ID] = layer
 	var current, total int64
 	for _, v := range j.Layers {
-		current += v.Current
-		total += v.Total
+		current = addPullBytes(current, v.Current)
+		total = addPullBytes(total, v.Total)
 	}
 	if elapsed := time.Since(j.UpdatedAt).Seconds(); elapsed > 0 {
 		j.SpeedBytes = max(0, int64(float64(current-j.DownloadedBytes)/elapsed))

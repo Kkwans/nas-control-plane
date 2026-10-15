@@ -42,3 +42,24 @@ describe('通用任务状态与能力', () => {
     expect(items[0]!.id).toBe('b')
   })
 })
+
+
+describe('进度受限证据单调合并', () => {
+  it.each([undefined, false])('较新快照中的 %s 不能清除已记录受限状态', (progressLimited) => {
+    const current = job({ progressLimited: true })
+    for (const status of ['running', 'completed', 'failed', 'interrupted', 'cancelled'] as const) {
+      const incoming = job({ status, progressLimited, updatedAt: '2026-10-13T10:00:01Z' })
+      expect(mergeJobSnapshot(current, incoming)).toMatchObject({ status, progressLimited: true })
+      expect(incoming.progressLimited).toBe(progressLimited)
+    }
+  })
+  it('迟到受限证据不会倒退终态、取消和待保存标记', () => {
+    for (const fields of [{ status: 'completed' }, { persistenceStatus: 'pending' }, { cancellationStatus: 'requested' }] as Partial<JobSnapshot>[]) {
+      const current = job(fields)
+      const merged = mergeJobSnapshot(current, job({ progressLimited: true }))
+      expect(merged).toMatchObject({ ...fields, progressLimited: true })
+      expect(current.progressLimited).toBeUndefined()
+    }
+    expect(mergeJobSnapshot(job({ updatedAt: '2026-10-13T10:00:01Z' }), job({ progressLimited: true }))).toMatchObject({ updatedAt: '2026-10-13T10:00:01Z', progressLimited: true })
+  })
+})

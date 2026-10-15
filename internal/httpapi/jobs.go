@@ -15,6 +15,7 @@ import (
 )
 
 type jobSnapshot struct {
+	ProgressLimited    bool                `json:"progressLimited,omitempty"`
 	CancellationStatus string              `json:"cancellationStatus,omitempty"`
 	PersistenceStatus  string              `json:"persistenceStatus,omitempty"`
 	Cancellable        bool                `json:"cancellable"`
@@ -53,7 +54,7 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 	layers := make(map[string]jobLayer)
 	_ = json.Unmarshal([]byte(record.LayersJSON), &layers)
 	job := jobSnapshot{
-		CancellationStatus: record.CancellationStatus, ErrorCode: record.ErrorCode, Cancellable: record.Type == "docker-image-pull",
+		ProgressLimited: record.ProgressLimited, CancellationStatus: record.CancellationStatus, ErrorCode: record.ErrorCode, Cancellable: record.Type == "docker-image-pull",
 		ID: record.ID, Type: record.Type, Status: record.Status, Reference: record.Reference,
 		Message: record.Message, Progress: record.Progress, Error: record.Error,
 		DownloadedBytes: record.DownloadedBytes, TotalBytes: record.TotalBytes, SpeedBytes: record.SpeedBytes,

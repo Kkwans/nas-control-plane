@@ -222,7 +222,7 @@ export async function requestDockerImageRemoveJob(imageId: string, fetcher: type
     }
     const job = parseJobSnapshot(payload)
     if (response.status !== 202 || !isRecord(payload) || payload.artifactState !== 'unknown' || !job || !job.id.trim() || job.type !== 'docker-image-remove' || job.reference !== imageId || job.cancellable !== false ||
-      job.status !== 'queued' || job.cancellationStatus !== undefined || job.persistenceStatus !== undefined ||
+      job.status !== 'queued' || job.progressLimited === true || job.cancellationStatus !== undefined || job.persistenceStatus !== undefined ||
       job.completedAt !== undefined || job.error !== undefined || job.errorCode !== undefined || Object.keys(job.layers).length !== 0 ||
       !Number.isFinite(Date.parse(job.createdAt)) || !Number.isFinite(Date.parse(job.updatedAt)) ||
       ![job.progress, job.downloadedBytes, job.totalBytes, job.speedBytes].every((value) => value === 0)) throw new DockerImageRemoveAdmissionUnknownError()
@@ -603,6 +603,7 @@ function parseJobSnapshot(value: unknown): JobSnapshot | null {
     (value.cancellationStatus === undefined || value.cancellationStatus === 'requested' || value.cancellationStatus === 'confirmed' || value.cancellationStatus === 'unknown') &&
     (value.persistenceStatus === undefined || value.persistenceStatus === 'pending') &&
     (value.cancellable === undefined || typeof value.cancellable === 'boolean') &&
+    (value.progressLimited === undefined || typeof value.progressLimited === 'boolean') &&
     (value.errorCode === undefined || typeof value.errorCode === 'string'))) {
     return null
   }

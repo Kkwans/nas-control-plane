@@ -4202,12 +4202,27 @@ components:
         artifactState: { type: string, enum: [present, deleted, unknown] }
         reference: { type: string }
         message: { type: string }
-        progress: { type: integer, minimum: 0, maximum: 100 }
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 进度观测值，不是执行完成证据。progressLimited 为 true 时可能只覆盖部分层，不应展示为完整任务百分比；执行完成仅由可信最终回执确认。
+        progressLimited:
+          type: boolean
+          description: |
+            可选的单调受限标记；一旦为 true，同一任务的后续快照、取消、待保存和终态继续保留 true。
+            true 表示层或状态进度遥测曾触及资源限制，字节数、总量和速度均可能只覆盖部分层；不改变执行生命周期或产物结论。
+            省略或 false 仅表示没有记录到资源限制，不保证进度完整；不能根据此标记或层进度推断任务已完成。
         downloadedBytes: { type: integer, minimum: 0 }
         totalBytes: { type: integer, minimum: 0 }
         speedBytes: { type: integer, minimum: 0 }
         layers:
           type: object
+          description: |
+            新接纳的镜像拉取进度最多保留 128 层，按每层 2 × ID 的 UTF-8 字节数 + 256 字节预留字符串容量，总预算 32 KiB。
+            ID 超过 128 UTF-8 字节时拒绝该层，不截断身份；状态超过 256 UTF-8 字节时在字符边界安全截断。
+            因层数、字符串预算或 ID 限制拒绝新层，或状态被截断时设置 progressLimited；已接纳层仍可更新，裁剪进度不会结束执行。
+            限制适用于新接纳的进度；旧持久化快照保持可读，不对此字段追加全局数量或字符串 schema 限制。
           additionalProperties: true
         error: { type: string }
         createdAt: { type: string, format: date-time }

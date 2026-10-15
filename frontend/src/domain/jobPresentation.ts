@@ -1,5 +1,7 @@
 import type { JobSnapshot } from '@/api/system'
 
+export const jobProgressLimitedWarning = '进度信息受资源限制，仅保留部分层或状态；数值不代表完整下载进度。'
+
 export type JobState = JobSnapshot['status'] | 'persisting' | 'cancelling'
 export const jobStatusOptions: { value: JobState | 'all'; label: string }[] = [
   { value: 'all', label: '全部状态' }, { value: 'queued', label: '排队中' },
@@ -47,12 +49,16 @@ export function sortJobs(jobs: JobSnapshot[]): JobSnapshot[] {
 /** 相同秒级时间不能证明新旧；终态和已接收的控制标记不可倒退。 */
 export function mergeJobSnapshot(current: JobSnapshot | undefined, incoming: JobSnapshot): JobSnapshot {
   if (!current) return incoming
-  if (isTerminalJob(current) && (!isTerminalJob(incoming) || current.status !== incoming.status)) return current
-  if (Date.parse(current.updatedAt) > Date.parse(incoming.updatedAt)) return current
+  // 受限证据单调保留，旧快照也不能清除；不改变执行状态的优先级。
+  const preserveLimit = (selected: JobSnapshot): JobSnapshot =>
+    (current.progressLimited === true || incoming.progressLimited === true) && selected.progressLimited !== true
+      ? { ...selected, progressLimited: true } : selected
+  if (isTerminalJob(current) && (!isTerminalJob(incoming) || current.status !== incoming.status)) return preserveLimit(current)
+  if (Date.parse(current.updatedAt) > Date.parse(incoming.updatedAt)) return preserveLimit(current)
   if (!isTerminalJob(incoming) && (
     (current.persistenceStatus === 'pending' && incoming.persistenceStatus !== 'pending') ||
     (current.cancellationStatus === 'requested' && incoming.cancellationStatus !== 'requested') ||
     (current.status === 'running' && incoming.status === 'queued')
-  )) return current
-  return incoming
+  )) return preserveLimit(current)
+  return preserveLimit(incoming)
 }

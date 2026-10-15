@@ -180,3 +180,16 @@ describe('任务中心观察与竞争', () => {
     expect(next.state.jobs.value[0]!.status).toBe('running')
   })
 })
+
+describe('任务中心进度受限证据', () => {
+  it.each([undefined, false])('取消响应和后续列表中的 %s 不清除受限标记', async (progressLimited) => {
+    api.list.mockResolvedValueOnce(list([job({ progressLimited: true })]))
+    const { state } = setup(); await flush()
+    api.cancel.mockResolvedValueOnce(job({ cancellationStatus: 'requested', progressLimited }))
+    await state.requestCancel(state.jobs.value[0]!)
+    expect(state.jobs.value[0]).toMatchObject({ cancellationStatus: 'requested', progressLimited: true })
+    api.list.mockResolvedValueOnce(list([job({ status: 'completed', progress: 100, progressLimited })]))
+    await state.refresh()
+    expect(state.jobs.value[0]).toMatchObject({ status: 'completed', progressLimited: true })
+  })
+})

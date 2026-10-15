@@ -11,12 +11,15 @@ describe('single image deletion admission', () => {
     expect(fetcher.mock.calls[0]![0]).toBe('/api/v1/docker/images/remove-job')
     expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ imageId })
   })
+  it('允许显式 false，但它不增加删除完成证据', async () => {
+    await expect(requestDockerImageRemoveJob(imageId, vi.fn().mockResolvedValue(response({ ...job, progressLimited: false })))).resolves.toMatchObject({ status: 'queued', progressLimited: false })
+  })
   it.each(['alpine:latest', 'sha256:abc', `sha256:${'A'.repeat(64)}`])('rejects invalid input before transport: %s', async (id) => {
     const fetcher = vi.fn()
     await expect(requestDockerImageRemoveJob(id, fetcher)).rejects.toMatchObject({ code: 'DOCKER_IMAGE_REMOVE_INVALID' })
     expect(fetcher).not.toHaveBeenCalled()
   })
-  it.each([{ artifactState: undefined }, { artifactState: 'invalid' }, { artifactState: 'present' }, { artifactState: 'deleted' }, { type: 'docker-image-pull' }, { reference: 'other' }, { cancellable: true }, { cancellable: undefined }, { id: '' }, { status: 'mystery' }, { createdAt: '' }, { status: 'completed' }, { status: 'running' }, { status: 'cancelled' }, { cancellationStatus: 'requested' }, { persistenceStatus: 'pending' }, { progress: -1 }, { progress: 101 }, { downloadedBytes: 1 }, { layers: { fake: {} } }])('treats mismatched receipts as unknown', async (fields) => {
+  it.each([{ progressLimited: true }, { progressLimited: 'false' }, { artifactState: undefined }, { artifactState: 'invalid' }, { artifactState: 'present' }, { artifactState: 'deleted' }, { type: 'docker-image-pull' }, { reference: 'other' }, { cancellable: true }, { cancellable: undefined }, { id: '' }, { status: 'mystery' }, { createdAt: '' }, { status: 'completed' }, { status: 'running' }, { status: 'cancelled' }, { cancellationStatus: 'requested' }, { persistenceStatus: 'pending' }, { progress: -1 }, { progress: 101 }, { downloadedBytes: 1 }, { layers: { fake: {} } }])('treats mismatched receipts as unknown', async (fields) => {
     await expect(requestDockerImageRemoveJob(imageId, vi.fn().mockResolvedValue(response({ ...job, ...fields })))).rejects.toMatchObject({ code: 'DOCKER_IMAGE_REMOVE_ADMISSION_UNKNOWN' })
   })
   it.each([200, 201, 204, 500])('does not equate status %s with admission', async (status) => {

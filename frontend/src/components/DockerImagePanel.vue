@@ -19,6 +19,7 @@ import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
 import { useDockerImageDownloads } from '@/composables/useDockerImageDownloads'
 import { useDockerLocalImages } from '@/composables/useDockerLocalImages'
 import { formatBytes } from '@/domain/overview'
+import { jobProgressLimitedWarning, jobStateDescription } from '@/domain/jobPresentation'
 import { useSystemStore } from '@/stores/system'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
@@ -211,8 +212,9 @@ onMounted(() => {
           <span :class="['job-state', `job-state--${downloadState(job)}`]">{{ downloadStateLabel(job) }}</span>
           <span v-if="isDownloadObservationInterrupted(job)" class="job-observation-warning">进度连接中断</span>
         </div>
-        <div class="job-progress"><span role="progressbar" :aria-label="`${job.reference} ${isLiveJob(job) && !canShowDownloadSpeed(job) ? '上次报告进度' : '下载进度'}`" :aria-valuenow="job.progress" :aria-valuemin="0" :aria-valuemax="100"><i :style="{ width: `${job.progress}%` }"></i></span><small><template v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次报告：</template>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
-        <span class="job-speed"><span class="job-mobile-label">速度：</span>{{ canShowDownloadSpeed(job) && job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
+        <div v-if="!job.progressLimited" class="job-progress"><span role="progressbar" :aria-label="`${job.reference} ${isLiveJob(job) && !canShowDownloadSpeed(job) ? '上次报告进度' : '下载进度'}`" :aria-valuenow="job.progress" :aria-valuemin="0" :aria-valuemax="100"><i :style="{ width: `${job.progress}%` }"></i></span><small><template v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次报告：</template>{{ job.progress }}% · {{ formatBytes(job.downloadedBytes || (job.progress === 100 ? effectiveTotal(job) : 0)) }} / {{ effectiveTotal(job) ? formatBytes(effectiveTotal(job)) : '未知' }}</small></div>
+        <div v-else class="job-progress job-progress--limited"><small>完整进度未提供</small></div>
+        <span class="job-speed"><span class="job-mobile-label">速度：</span>{{ !job.progressLimited && canShowDownloadSpeed(job) && job.speedBytes > 0 ? `${formatBytes(job.speedBytes)}/s` : '—' }}</span>
         <div class="job-observed-time">
           <span><span class="job-mobile-label">更新时间：</span><time :datetime="job.updatedAt">{{ dateLabel(job.updatedAt) }}</time></span>
           <small v-if="isLiveJob(job) && !canShowDownloadSpeed(job)">上次获取：{{ observationTime(downloadLastObservedAt(job)) }}</small>
@@ -223,6 +225,8 @@ onMounted(() => {
           <button v-else-if="downloadState(job) === 'completed'" type="button" title="查看本地镜像" aria-label="查看本地镜像" @click="showDownloadedImage(job)"><Eye :size="15" /><span class="job-mobile-label">查看本地镜像</span></button>
           <button v-if="canDeleteJob(job)" class="job-delete" type="button" title="删除下载记录" aria-label="删除下载记录" @click="confirmDeleteJob(job)"><Trash2 :size="15" /><span class="job-mobile-label">删除下载记录</span></button>
         </div>
+        <p v-if="job.progressLimited && jobStateDescription(job)" class="job-lifecycle-description">{{ jobStateDescription(job) }}</p>
+        <p v-if="job.progressLimited" class="job-progress-warning">{{ jobProgressLimitedWarning }}</p>
         <div v-if="isDownloadObservationInterrupted(job)" class="job-observation-recovery">
           <span>显示上次报告的进度，任务可能仍在执行。</span>
           <button type="button" :disabled="downloadJobsLoading" :aria-label="`重新获取 ${job.reference} 的下载进度`" @click="loadDownloadJobs">{{ downloadJobsLoading ? '正在获取…' : '重新获取进度' }}</button>
@@ -299,6 +303,9 @@ onMounted(() => {
 .download-row .job-observation-recovery { grid-column: 1 / -1; justify-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 12px; color: var(--ncp-text-muted); text-align: left; }
 .job-observation-recovery button { color: var(--ncp-primary-strong); }
 .job-mobile-label { display: none; }
+.download-row .job-progress--limited small { white-space: normal; overflow-wrap: anywhere; }
+.job-progress-warning,.job-lifecycle-description { grid-column: 1 / -1; margin: 0; padding-bottom: 12px; font-size: .78rem; line-height: 1.6; overflow-wrap: anywhere; }
+.job-progress-warning { color: var(--ncp-warning-strong); }
 /* 同时保护固定列最小宽度与放大文字；按面板实际空间切换，不依赖侧栏状态。 */
 @container image-downloads (max-width:980px) or (max-width:61.25rem) {
   .download-workspace>header { min-width: 0; align-items: flex-start; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
