@@ -326,7 +326,7 @@ func databaseResponse(result any, err error) (*structpb.Struct, error) {
 		switch code {
 		case ncpdatabase.CodeTimeout:
 			grpcCode = codes.DeadlineExceeded
-		case ncpdatabase.CodeUnreachable, ncpdatabase.CodeAgentUnavailable:
+		case ncpdatabase.CodeUnreachable, ncpdatabase.CodeAgentUnavailable, ncpdatabase.CodeOperationBusy:
 			grpcCode = codes.Unavailable
 		case ncpdatabase.CodePermissionDenied:
 			grpcCode = codes.PermissionDenied

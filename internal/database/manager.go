@@ -39,6 +39,7 @@ type sqliteCandidate struct {
 }
 
 type Manager struct {
+	operations operationBudget
 	now        func() time.Time
 	registry   sourceRegistry
 	discoverFn func(context.Context) (Discovery, error)
@@ -68,11 +69,11 @@ func (m *Manager) SupportsDatabaseTLSPolicy() bool {
 
 func (m *Manager) TestConnection(ctx context.Context, request Connection) (ConnectionDiagnostic, error) {
 	started := time.Now()
-	source, db, err := m.connect(ctx, request)
+	source, _, cleanup, err := m.connect(ctx, request)
 	if err != nil {
 		return diagnosticForError(Source{ID: request.SourceID}, "test_connection", started, err), err
 	}
-	defer db.Close()
+	defer cleanup()
 	return ConnectionDiagnostic{
 		Connected:  true,
 		Code:       "connected",
@@ -220,11 +221,11 @@ func (m *Manager) discoverFresh(ctx context.Context) (Discovery, error) {
 }
 
 func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return Catalog{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	tables, err := listTables(ctx, db, source, request.Credentials)
 	if err != nil {
 		return Catalog{}, MapError(ctx, source, "catalog", err)
@@ -247,11 +248,11 @@ func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult,
 	if strings.TrimSpace(request.SQL) == "" {
 		return QueryResult{}, newDatabaseError(CodeSQLInvalid, Source{ID: request.SourceID}, "query", errors.New("SQL statement is empty"))
 	}
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return QueryResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	result, err := executeQuery(ctx, databaseQueryRunner{db}, source.Driver, request)
 	if err != nil {
 		return QueryResult{}, MapError(ctx, source, "query", err)
@@ -265,11 +266,11 @@ func (m *Manager) QueryWithOptions(ctx context.Context, request QueryRequest) (Q
 }
 
 func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return RowsResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return RowsResult{}, MapError(ctx, source, "rows", err)
@@ -304,11 +305,11 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 }
 
 func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "insert", err)
@@ -339,11 +340,11 @@ func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationRe
 }
 
 func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "update", err)
@@ -371,11 +372,11 @@ func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationRe
 }
 
 func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "delete", err)
@@ -389,12 +390,34 @@ func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationRe
 	return result, MapError(ctx, source, "delete", err)
 }
 
-func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, error) {
+func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, func(), error) {
+	release, err := m.operations.acquire(ctx, connection.SourceID)
+	if err != nil {
+		return Source{}, nil, nil, err
+	}
+	var db *sql.DB
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			// Close 完成前仍占用许可；即使测试驱动 panic，也不能泄漏计数。
+			defer release()
+			if db != nil {
+				_ = db.Close()
+			}
+		})
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			cleanup()
+		}
+	}()
+
 	// 在 discovery 等外部调用之前固定策略，避免调用方持有的指针改变建连语义。
 	connection.Credentials = CloneCredentials(connection.Credentials)
 	discovery, err := m.Discover(ctx)
 	if err != nil {
-		return Source{}, nil, MapError(ctx, Source{}, "discover", err)
+		return Source{}, nil, nil, MapError(ctx, Source{}, "discover", err)
 	}
 	var source Source
 	for _, candidate := range discovery.Sources {
@@ -404,13 +427,12 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 		}
 	}
 	if source.ID == "" {
-		return Source{}, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
+		return Source{}, nil, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
 	}
-	var db *sql.DB
 	if connection.Credentials.TLS != nil {
 		connector, err := newDatabaseTLSConnector(source, connection.Credentials, connection.Credentials.TLS)
 		if err != nil {
-			return Source{}, nil, MapError(ctx, source, "connect", err)
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
 		}
 		openDB := m.sqlOpenDB
 		if openDB == nil {
@@ -420,7 +442,7 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 	} else {
 		driverName, dsn, err := connectionString(source, connection.Credentials)
 		if err != nil {
-			return Source{}, nil, MapError(ctx, source, "connect", err)
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
 		}
 		open := m.sqlOpen
 		if open == nil {
@@ -428,16 +450,19 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 		}
 		db, err = open(driverName, dsn)
 		if err != nil {
-			return Source{}, nil, MapError(ctx, source, "connect", err)
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
 		}
+	}
+	if db == nil {
+		return Source{}, nil, nil, newDatabaseError(CodeUnreachable, source, "connect", errors.New("database opener returned no pool"))
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return Source{}, nil, MapError(ctx, source, "connect", err)
+		return Source{}, nil, nil, MapError(ctx, source, "connect", err)
 	}
-	return source, db, nil
+	transferred = true
+	return source, db, cleanup, nil
 }
 
 func connectionString(source Source, credentials Credentials) (string, string, error) {

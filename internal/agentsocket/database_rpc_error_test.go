@@ -44,7 +44,7 @@ func TestDatabaseRPCStableCodesSurviveCoordinatorMapping(t *testing.T) {
 	for _, code := range []ncpdatabase.ErrorCode{
 		ncpdatabase.CodeAuthFailed, ncpdatabase.CodeCredentialsRequired,
 		ncpdatabase.CodePermissionDenied, ncpdatabase.CodeDatabaseNotFound,
-		ncpdatabase.CodeTimeout, ncpdatabase.CodeResultTooLarge,
+		ncpdatabase.CodeTimeout, ncpdatabase.CodeResultTooLarge, ncpdatabase.CodeOperationBusy,
 		ncpdatabase.CodeUnreachable, ncpdatabase.CodeSQLInvalid,
 		ncpdatabase.CodeResultModeUnsupported, ncpdatabase.CodeConstraintFailed,
 		ncpdatabase.CodeAgentUnavailable, ncpdatabase.CodeCredentialStoreUnavailable,
@@ -102,6 +102,10 @@ func TestDatabaseRPCStableCodesKeepWhitelistAndTransportPriority(t *testing.T) {
 		{"budget before wire code", grpcstatus.Error(codes.ResourceExhausted, "auth_failed"), ncpdatabase.CodeResultTooLarge},
 		{"deadline before conflict code", grpcstatus.Error(codes.DeadlineExceeded, "credential_conflict"), ncpdatabase.CodeTimeout},
 		{"budget before conflict code", grpcstatus.Error(codes.ResourceExhausted, "credential_conflict"), ncpdatabase.CodeResultTooLarge},
+		{"busy transport", grpcstatus.Error(codes.Unavailable, "operation_busy"), ncpdatabase.CodeOperationBusy},
+		{"busy with private suffix", grpcstatus.Error(codes.Unavailable, "operation_busy: password=private"), ncpdatabase.CodeAgentUnavailable},
+		{"deadline before busy code", grpcstatus.Error(codes.DeadlineExceeded, "operation_busy"), ncpdatabase.CodeTimeout},
+		{"budget before busy code", grpcstatus.Error(codes.ResourceExhausted, "operation_busy"), ncpdatabase.CodeResultTooLarge},
 		{"legacy receive budget", grpcstatus.Error(codes.ResourceExhausted, "grpc: received message larger than max (4194305 vs. 4194304)"), ncpdatabase.CodeResultTooLarge},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -168,4 +172,16 @@ func TestDatabaseRPCEarlyFailuresRemainTypedWithoutDialing(t *testing.T) {
 	// 空目标在创建 gRPC 客户端之前被拒绝，不会尝试拨号。
 	_, err = TestDatabaseConnection(context.Background(), "", ncpdatabase.Connection{})
 	assertDatabaseRPCStableError(t, err, ncpdatabase.CodeAgentUnavailable)
+}
+
+// 直接调用编码边界，确保繁忙不会进入旧客户端的结果超限分支。
+func TestDatabaseRPCBusyUsesUnavailableWithoutDetails(t *testing.T) {
+	response, err := databaseResponse(ncpdatabase.QueryResult{Rows: [][]any{{"private result"}}}, &ncpdatabase.DatabaseError{
+		Code: ncpdatabase.CodeOperationBusy, Operation: "private operation", Endpoint: "private endpoint", Cause: errors.New("password=private; SQL=private"),
+	})
+	status := grpcstatus.Convert(err)
+	if response != nil || status.Code() != codes.Unavailable || status.Message() != "operation_busy" || len(status.Details()) != 0 {
+		t.Fatalf("unexpected busy encoding: response = %v, status = %v", response, status)
+	}
+	assertDatabaseRPCStableError(t, databaseRPCError(err), ncpdatabase.CodeOperationBusy)
 }

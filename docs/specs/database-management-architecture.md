@@ -250,3 +250,16 @@ Redis/Valkey 使用独立接口：
 ## 10. 工作方式
 
 本模块使用一份长期架构文档和阶段任务清单作为主要依据。明确的局部实现直接按项目规则开发；只有凭据迁移、连接注册表重大变更、跨进程 RPC 重构、备份恢复等高风险决策才按需使用 OpenSpec 或 ADR。
+
+## 2026-10-15：短生命周期数据库操作并发预算
+
+本切片补齐既有 SQL 并发约束，不引入事务协议、取消 RPC、自动重试或部署参数。Agent 启动时创建一个 Manager，并将同一个 provider 注册给普通与 TLS 数据库服务；因此准入在不同请求之间共享。
+
+- 同一 Manager 固定最多 4 个池拥有操作，无等待队列（maxWaiters=0）。这是保守源码默认值，不是 NAS 实测最优容量。每池保持最多 2 条连接，合计至多 8 个池内连接额度；不是全部进程、全部客户端或数据库引擎后台工作的物理连接硬上限。
+- 在私有 connect 开始时检查原 Context 并准入，早于 Agent 凭据复制、发现、DSN/TLS 构造和打开/Ping。饱和立即返回稳定码 operation_busy；因此饱和时它可以优先于来源不存在或连接配置无效。Query 的既有空 SQL/结果模式校验仍在准入前。取消继续采用 timeout，原 Context 不替换、不延长。
+- TestConnection、Catalog、Query、Rows、Insert、Update、Delete 共用预算；QueryWithOptions 只通过 Query 获取一次许可。独立 Discover、Server 侧凭据解析/vault、自身存储池、其他 Manager/进程不在范围内。此预算不是发现、HTTP 解析、单次查询工作量或驱动峰值内存上限，也不提供公平性。
+- connect 明确返回池清理函数，所有调用者必须 defer 清理；失败路径留在 connect 内清理。函数幂等，先关闭池，再释放许可；行结果的 Close/Err 和驱动连接关闭期间仍占用许可。取消不提前释放仍在执行或收尾的操作；驱动不响应取消可能持续占满预算。
+- RPC 使用 Unavailable 携带 operation_busy，HTTP 使用 503 和固定安全文案。不能使用 ResourceExhausted，因为旧映射将它解释为 result_too_large。旧 Server 可能保守降级为 agent_unavailable。OpenAPI 与读取提示同步更新；写 SQL、行写入和保存连接的既有未知结果合同不扩大拒绝白名单，不自动重放。准入拒绝只证明此次 Agent 操作未开始，不能证明完整跨层请求或其他请求没有副作用。
+- 许可不在 metadata helper 或 QueryWithOptions 重复获取；不持有准入锁执行发现、驱动或关闭。Server 诊断成功之后的凭据保存仍是独立步骤，保存失败不重测、不重新准入，保留原有部分结果语义。
+
+验证范围：纯内存 fake SQL driver 的四许可/即时拒绝、Context 取消、七入口及 QueryWithOptions、独立 Manager、失败/panic 回收、阻塞 Rows.Close/driver.Close 和单次执行；临时 SQLite 的既有数据库/凭据回归；内存 RPC、HTTP Recorder 与前端契约验证。不连接真实数据库服务、不创建监听器、不操作 NAS 或生产凭据。实际验证结果以本次提交验收记录为准。

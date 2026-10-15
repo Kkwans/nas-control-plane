@@ -92,6 +92,32 @@ describe('DatabaseDetailView request ownership', () => {
     expect(host.textContent).not.toContain('a:3306')
   })
 
+  it('诊断繁忙保留凭据草稿，只允许手动重新测试', async () => {
+    mount()
+    await settle()
+    await enterCredentials()
+    const connects = mocks.connect.mock.calls.length
+    mocks.diagnostic.mockRejectedValueOnce(new NcpApiError('operation_busy', 'private-response-secret'))
+    button('测试连接').click()
+    await settle()
+    expect(host.textContent).toContain('数据库操作繁忙，请稍后核对状态再操作。')
+    expect(host.textContent).toContain('不会自动重试')
+    expect(host.textContent).not.toContain('private-response-secret')
+    expect(mocks.diagnostic.mock.calls[0]![0]).toMatchObject({ credentials: { username: 'alice', password: 'secret', database: 'catalog_a' } })
+    expect([...host.querySelectorAll('input')].map(input => input.value)).toEqual(['alice', 'secret', 'catalog_a'])
+    await settle()
+    expect(mocks.diagnostic).toHaveBeenCalledTimes(1)
+    expect(mocks.connect).toHaveBeenCalledTimes(connects)
+    expect(mocks.catalog).not.toHaveBeenCalled()
+    mocks.diagnostic.mockResolvedValueOnce(diagnostic('a'))
+    button('测试连接').click()
+    await settle()
+    expect(mocks.diagnostic).toHaveBeenCalledTimes(2)
+    expect(mocks.diagnostic.mock.calls[1]![0]).toEqual(mocks.diagnostic.mock.calls[0]![0])
+    expect(host.textContent).toContain('连接诊断通过')
+    expect(host.textContent).not.toContain('数据库操作繁忙')
+  })
+
   it('clears a displayed diagnostic error when switching sources', async () => {
     mocks.diagnostic.mockRejectedValue(new NcpApiError('auth_failed', '认证失败'))
     mount()

@@ -35,6 +35,7 @@ type ConnectionDiagnostic = DatabaseConnectionDiagnostic
 type StatusTone = 'success' | 'warning' | 'danger' | 'neutral'
 
 const databaseErrorCopy: Record<string, string> = {
+  operation_busy: '数据库操作繁忙，请稍后核对状态再操作。',
   credentials_required: '连接需要数据库凭据，请填写表单后重试。',
   auth_failed: '数据库认证失败，请核对用户名和密码。',
   credential_conflict: '数据库凭据发生冲突，请重新确认后重试。',
@@ -390,6 +391,7 @@ function errorMessage(error: unknown, fallback: string) {
 
 function errorNextStep(error: unknown) {
   switch (errorCode(error)) {
+    case 'operation_busy': return '稍后手动重新测试或读取目录；不会自动重试。'
     case 'credentials_required': return '输入凭据后重新测试连接。'
     case 'auth_failed': return '核对用户名、密码和数据库名；密码不会显示在错误信息中。'
     case 'credential_conflict': return errorOperation.value === 'connection'

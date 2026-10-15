@@ -219,7 +219,7 @@ describe('SQL 真实响应结果状态', () => {
 
   it.each([
     [400, 'sql_invalid'], [409, 'constraint_failed'], [403, 'permission_denied'],
-    [504, 'timeout'], [503, 'agent_unavailable'], [422, 'result_too_large'],
+    [504, 'timeout'], [503, 'agent_unavailable'], [503, 'operation_busy'], [422, 'result_too_large'],
     [400, 'DATABASE_OPERATION_FAILED'], [400, 'result_mode_unsupported'],
     [500, 'DATABASE_INPUT_INVALID'], [400, 'AUTH_UNAUTHORIZED'],
   ])('%i/%s 即使带稳定码也不能证明未执行', async (status, code) => {

@@ -281,3 +281,31 @@ func TestDatabaseResultBudgetCompatibilityContract(t *testing.T) {
 		t.Fatal("table page budget failure must not silently advance pagination")
 	}
 }
+
+func TestDatabaseOperationBusyContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	document, err := loader.LoadFromFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"connect", "test-connection", "catalog", "query", "rows", "rows/insert", "rows/update", "rows/delete"} {
+		path := "/api/v1/databases/" + endpoint
+		response := document.Paths.Value(path).Post.Responses.Value("503")
+		if response == nil || response.Value == nil || response.Value.Description == nil {
+			t.Fatalf("%s lacks a 503 description", path)
+		}
+		for _, clause := range []string{"operation_busy", "固定 4 个", "不排队", "不自动重试", "直到池关闭才释放", "独立来源发现、Server 端连接解析及凭据服务不在预算内", "不保证整条请求没有副作用", "不保证凭据未保存"} {
+			if !strings.Contains(*response.Value.Description, clause) {
+				t.Fatalf("%s missing busy clause %q", path, clause)
+			}
+		}
+		media := response.Value.Content.Get("application/json")
+		if media == nil || media.Schema.Ref != "#/components/schemas/ErrorResponse" {
+			t.Fatalf("%s has invalid busy error schema", path)
+		}
+	}
+	response := document.Paths.Value("/api/v1/databases/discovery").Get.Responses.Value("503")
+	if response == nil || response.Value.Description == nil || strings.Contains(*response.Value.Description, "operation_busy") {
+		t.Fatal("standalone discovery must retain its unrelated unavailable response")
+	}
+}

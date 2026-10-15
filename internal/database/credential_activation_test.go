@@ -203,7 +203,7 @@ func TestCredentialActivationLateManualCannotOverwrite(t *testing.T) {
 }
 
 func TestCredentialActivationFreezesValuesAndSkipsWritesOnTestFailure(t *testing.T) {
-	for _, failedCode := range []ErrorCode{"", CodeAuthFailed, CodeCredentialConflict} {
+	for _, failedCode := range []ErrorCode{"", CodeAuthFailed, CodeCredentialConflict, CodeOperationBusy} {
 		t.Run(string(failedCode), func(t *testing.T) {
 			store := revisionTestStore(t)
 			counted := &activationStore{CredentialStore: store}

@@ -5,7 +5,7 @@ import { isApiErrorResponse, NcpApiError } from './systemTransport'
 const diagnosticCodes = [
   'credentials_required', 'auth_failed', 'unreachable', 'database_not_found',
   'permission_denied', 'sql_invalid', 'result_mode_unsupported', 'result_too_large',
-  'constraint_failed', 'agent_unavailable', 'timeout', 'credential_store_unavailable',
+  'constraint_failed', 'agent_unavailable', 'operation_busy', 'timeout', 'credential_store_unavailable',
   'credential_corrupt', 'credential_conflict', 'key_unavailable', 'key_rotation_failed', 'migration_failed',
   'tls_configuration_invalid', 'tls_policy_unsupported', 'tls_verification_failed',
   'DATABASE_OPERATION_FAILED', 'AUTH_UNAVAILABLE', 'AUTH_UNAUTHORIZED',

@@ -235,6 +235,8 @@ func (api *handler) writeDatabaseError(response http.ResponseWriter, request *ht
 		message = "SQL 或数据库请求无效。"
 	case ncpdatabase.CodeResultModeUnsupported:
 		message = "当前 Agent 不支持结果模式，请先升级 Agent。"
+	case ncpdatabase.CodeOperationBusy:
+		status, message = http.StatusServiceUnavailable, "数据库操作繁忙，请稍后核对状态再操作。"
 	case ncpdatabase.CodeResultTooLarge:
 		status, message = http.StatusUnprocessableEntity, "数据库结果超过大小限制，SQL 可能已经执行。请先核对写入状态，不要直接重试；可减少返回列或读取范围。"
 	case ncpdatabase.CodeConstraintFailed:

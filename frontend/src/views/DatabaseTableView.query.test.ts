@@ -371,6 +371,29 @@ describe('表分页设置重置与请求归属', () => {
     expect(button('上一页').disabled).toBe(false)
   }
 
+  it('读取繁忙保留当前行和分页游标，仅用户主动翻页才重试', async () => {
+    await openSecondPage()
+    mocks.rows.mockRejectedValueOnce(new NcpApiError('operation_busy', 'private-response-secret'))
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[2]![0]).toMatchObject({ limit: 25, offset: 50 })
+    expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":26}]')
+    expect(button('上一页').disabled).toBe(false)
+    expect(host.querySelector('.database-error')?.textContent).toContain('数据库操作繁忙，请稍后核对状态再操作。')
+    expect(host.querySelector('.database-error')?.textContent).toContain('不会自动重试')
+    expect(host.textContent).not.toContain('private-response-secret')
+    await settle()
+    expect(mocks.rows).toHaveBeenCalledTimes(3)
+    expect(mocks.execute).not.toHaveBeenCalled()
+    mocks.rows.mockResolvedValueOnce({ ...tableRows, offset: 50, rows: [{ id: 51 }], hasMore: false })
+    button('下一页').click()
+    await settle()
+    expect(mocks.rows.mock.calls[3]![0]).toMatchObject({ limit: 25, offset: 50 })
+    expect(mocks.rows).toHaveBeenCalledTimes(4)
+    expect(host.querySelector('.database-error')).toBeNull()
+    expect(host.querySelector('.data-table [data-table-rows]')?.getAttribute('data-table-rows')).toBe('[{"id":51}]')
+  })
+
   async function changeSetting(setting: 'sort' | 'pageSize') {
     if (setting === 'sort') await sortRows('descending')
     else { mocks.pageSize.value = 50; await settle() }

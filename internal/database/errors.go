@@ -28,6 +28,7 @@ const (
 	CodeConstraintFailed        ErrorCode = "constraint_failed"
 	CodeAgentUnavailable        ErrorCode = "agent_unavailable"
 	CodeTimeout                 ErrorCode = "timeout"
+	CodeOperationBusy           ErrorCode = "operation_busy"
 	CodeTLSConfigurationInvalid ErrorCode = "tls_configuration_invalid"
 	CodeTLSPolicyUnsupported    ErrorCode = "tls_policy_unsupported"
 	CodeTLSVerificationFailed   ErrorCode = "tls_verification_failed"
@@ -89,7 +90,7 @@ func CodeFromString(value string) ErrorCode {
 	switch code {
 	case CodeCredentialsRequired, CodeAuthFailed, CodeUnreachable,
 		CodeDatabaseNotFound, CodePermissionDenied, CodeSQLInvalid, CodeResultModeUnsupported,
-		CodeConstraintFailed, CodeResultTooLarge, CodeAgentUnavailable, CodeTimeout,
+		CodeConstraintFailed, CodeResultTooLarge, CodeAgentUnavailable, CodeTimeout, CodeOperationBusy,
 		CodeCredentialStoreUnavailable, CodeCredentialCorrupt, CodeCredentialConflict, CodeKeyUnavailable,
 		CodeKeyRotationFailed, CodeMigrationFailed,
 		CodeTLSConfigurationInvalid, CodeTLSPolicyUnsupported, CodeTLSVerificationFailed:

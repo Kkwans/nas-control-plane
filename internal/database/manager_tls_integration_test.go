@@ -24,11 +24,14 @@ func TestManagerTLSPolicySupportAndStrictDispatch(t *testing.T) {
 			h := newManagerTLSHarness(t, driverName, &TLSPolicy{Mode: TLSVerifyFull})
 			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), managerTLSContextKey{}, "request"), time.Minute)
 			defer cancel()
-			source, db, err := h.manager.connect(ctx, h.connection)
+			source, db, cleanup, err := h.manager.connect(ctx, h.connection)
+			if cleanup != nil {
+				t.Cleanup(cleanup)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
+			defer cleanup()
 			if source.ID != h.source.ID || h.strictOpens != 1 || h.legacyOpens != 0 {
 				t.Fatalf("unexpected dispatch: source=%q strict=%d legacy=%d", source.ID, h.strictOpens, h.legacyOpens)
 			}
@@ -61,9 +64,7 @@ func TestManagerTLSPolicySupportAndStrictDispatch(t *testing.T) {
 			if stats := db.Stats(); stats.Idle != 1 || stats.MaxIdleClosed != 1 {
 				t.Fatalf("idle limit changed: %+v", stats)
 			}
-			if err := db.Close(); err != nil {
-				t.Fatal(err)
-			}
+			cleanup()
 			if h.fake.closedCount() != 2 {
 				t.Fatal("pool must close both fake connections")
 			}
@@ -79,11 +80,14 @@ func TestManagerTLSNilKeepsLegacyConnectionString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, db, err := h.manager.connect(context.Background(), h.connection)
+			_, _, cleanup, err := h.manager.connect(context.Background(), h.connection)
+			if cleanup != nil {
+				t.Cleanup(cleanup)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
+			defer cleanup()
 			if h.legacyOpens != 1 || h.strictOpens != 0 || h.legacyDriver != wantDriver || h.legacyDSN != wantDSN {
 				t.Fatal("nil TLS must use exactly the existing DSN path")
 			}
@@ -106,12 +110,15 @@ func TestManagerTLSFreezesPolicyBeforeDiscovery(t *testing.T) {
 				policy.ServerName = "changed.example"
 				return Discovery{CollectedAt: time.Now(), Sources: []Source{h.source}}, nil
 			}
-			_, db, err := h.manager.connect(context.Background(), h.connection)
+			_, db, cleanup, err := h.manager.connect(context.Background(), h.connection)
+			if cleanup != nil {
+				t.Cleanup(cleanup)
+			}
 			if initiallyValid {
 				if err != nil || db == nil || h.strictOpens != 1 {
 					t.Fatalf("discovery changed frozen valid policy: %v", err)
 				}
-				defer db.Close()
+				defer cleanup()
 			} else if ErrorCodeOf(err) != CodeTLSConfigurationInvalid || db != nil || h.strictOpens != 0 {
 				t.Fatalf("discovery repaired a frozen invalid policy: %v", err)
 			}
@@ -148,7 +155,10 @@ func TestManagerTLSInvalidConfigurationNeverOpens(t *testing.T) {
 			t.Run(string(driverName)+"/"+tt.name, func(t *testing.T) {
 				h := newManagerTLSHarness(t, driverName, &TLSPolicy{Mode: TLSVerifyFull})
 				tt.change(h)
-				_, db, err := h.manager.connect(context.Background(), h.connection)
+				_, db, cleanup, err := h.manager.connect(context.Background(), h.connection)
+				if cleanup != nil {
+					t.Cleanup(cleanup)
+				}
 				if db != nil || ErrorCodeOf(err) != CodeTLSConfigurationInvalid || h.strictOpens != 0 || h.legacyOpens != 0 {
 					t.Fatalf("invalid policy reached opener: err=%v strict=%d legacy=%d", err, h.strictOpens, h.legacyOpens)
 				}
@@ -181,7 +191,10 @@ func TestManagerTLSFailureClosesWithoutFallback(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				h := newManagerTLSHarness(t, DriverMySQL, policy)
 				h.fake.pingErr = tt.err
-				_, db, err := h.manager.connect(context.Background(), h.connection)
+				_, db, cleanup, err := h.manager.connect(context.Background(), h.connection)
+				if cleanup != nil {
+					t.Cleanup(cleanup)
+				}
 				if db != nil || ErrorCodeOf(err) != tt.code {
 					t.Fatalf("unexpected mapped failure: %v", err)
 				}
@@ -291,7 +304,10 @@ func TestManagerTLSLegacyOpenFailureDoesNotTryStrict(t *testing.T) {
 		h.legacyOpens++
 		return nil, errors.New("fake connection refused")
 	}
-	_, db, err := h.manager.connect(context.Background(), h.connection)
+	_, db, cleanup, err := h.manager.connect(context.Background(), h.connection)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
 	if db != nil || err == nil || h.legacyOpens != 1 || h.strictOpens != 0 {
 		t.Fatal("legacy opener failure must propagate without another path")
 	}

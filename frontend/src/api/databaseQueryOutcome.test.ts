@@ -280,7 +280,7 @@ describe('真实 SQL API 的单次发送边界', () => {
 
   it.each([
     [400, 'sql_invalid'], [409, 'constraint_failed'], [403, 'permission_denied'], [504, 'timeout'],
-    [503, 'agent_unavailable'], [422, 'result_too_large'], [400, 'DATABASE_OPERATION_FAILED'],
+    [503, 'agent_unavailable'], [503, 'operation_busy'], [422, 'result_too_large'], [400, 'DATABASE_OPERATION_FAILED'],
     [400, 'credentials_required'], [401, 'auth_failed'], [503, 'unreachable'], [404, 'database_not_found'],
     [503, 'credential_store_unavailable'], [503, 'credential_corrupt'], [503, 'key_unavailable'],
     [503, 'key_rotation_failed'], [503, 'migration_failed'], [409, 'credential_conflict'],

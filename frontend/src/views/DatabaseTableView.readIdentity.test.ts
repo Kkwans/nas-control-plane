@@ -255,6 +255,21 @@ describe('数据库读取目标身份边界', () => {
     expect(store.credentials.a).toEqual({ username: 'previous' })
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+  it('目录繁忙保留最后有效目录和凭据，不自动重试', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ source: source('a'), tables: [table] }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'operation_busy', message: 'private-fixture', requestId: 'fixture' }), { status: 503 }))
+    vi.stubGlobal('fetch', fetcher)
+    const store = useDatabaseStore()
+    store.credentials.a = { username: 'previous' }
+    await store.loadCatalog('a')
+    const previous = store.catalogs.a
+    await expect(store.loadCatalog('a')).rejects.toMatchObject({ code: 'operation_busy' })
+    expect(store.catalogs.a).toBe(previous)
+    expect(store.credentials.a).toEqual({ username: 'previous' })
+    await settle()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
   it('连接诊断成功但目录目标不符时不能发布新凭据', async () => {
     const fetcher = vi
       .fn<typeof fetch>()

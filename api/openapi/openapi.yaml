@@ -662,7 +662,7 @@ paths:
                     message: 凭据已被其他请求更改，本次凭据未保存，请重新确认后手动重试。
                     requestId: req-example
         '503':
-          description: 数据库或凭据服务不可用；credential_store_unavailable 表示凭据服务未能完成请求，不保证本次凭据未保存。
+          description: 数据库或凭据服务不可用；credential_store_unavailable 表示凭据服务未能完成请求，不保证本次凭据未保存。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -721,7 +721,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或 Root Agent 不可用；已配置但缺少受保护的测试能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库不可达或 Root Agent 不可用；已配置但缺少受保护的测试能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -761,7 +761,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库不可达或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -815,7 +815,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -859,7 +859,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -905,7 +905,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -951,7 +951,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -997,7 +997,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:

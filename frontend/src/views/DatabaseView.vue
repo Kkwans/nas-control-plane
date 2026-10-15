@@ -39,6 +39,7 @@ interface DatabaseErrorCopy {
 }
 
 const databaseErrorCopy: Record<string, DatabaseErrorCopy> = {
+  operation_busy: { message: '数据库操作繁忙，请稍后核对状态再操作。', nextStep: '稍后手动重新读取；不会自动重试。' },
   credentials_required: { message: '连接需要数据库凭据。', nextStep: '打开对应数据源，输入凭据后重新测试连接。' },
   auth_failed: { message: '数据库认证失败，请核对用户名、密码和数据库名。', nextStep: '核对连接信息后重新测试；错误提示不会显示或保存密码。' },
   unreachable: { message: '数据库服务不可达，请检查地址和端口。', nextStep: '确认数据库服务运行且主机、端口可访问后重试。' },
