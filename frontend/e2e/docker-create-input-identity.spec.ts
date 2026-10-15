@@ -128,24 +128,74 @@ async function geometry(page: Page) {
     }
   })
 }
+async function verifyConfigurationScroll(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '确认容器配置', exact: true })
+  const region = dialog.getByRole('region', { name: '容器配置详情', exact: true })
+  await region.focus()
+  await page.waitForTimeout(350)
+  const before = await modalChrome(page)
+  await page.keyboard.press('End')
+  await expect.poll(() => region.evaluate((element) => Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop))).toBeLessThanOrEqual(1)
+  const bottom = await region.evaluate((element) => {
+    const bounds = element.getBoundingClientRect(), last = element.querySelector('.preview-grid dd:last-of-type')!.getBoundingClientRect()
+    return { scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
+      lastFieldVisible: last.top >= bounds.top - 1 && last.bottom <= bounds.bottom + 1 }
+  })
+  expect(bottom.lastFieldVisible).toBe(true)
+  const atBottom = await modalChrome(page)
+  expect(atBottom).toEqual(before); assertModalChrome(atBottom)
+  await page.keyboard.press('Home')
+  await expect.poll(() => region.evaluate((element) => element.scrollTop)).toBe(0)
+  await dialog.locator('.el-dialog__headerbtn').focus()
+  return { before, atBottom, bottom, homeRestoredTop: true }
+}
+async function modalChrome(page: Page) {
+  return page.getByRole('dialog', { name: '确认容器配置', exact: true }).evaluate((dialog) => {
+    const header = dialog.querySelector<HTMLElement>('.el-dialog__header')!
+    const body = dialog.querySelector<HTMLElement>('.el-dialog__body')!
+    const footer = dialog.querySelector<HTMLElement>('.el-dialog__footer')!
+    const bounds = (element: Element) => element.getBoundingClientRect().toJSON()
+    return { viewport: { width: innerWidth, height: innerHeight }, dialog: bounds(dialog.querySelector('.el-dialog')!), header: bounds(header), body: bounds(body), footer: bounds(footer),
+      buttons: [...footer.querySelectorAll('button')].map((button) => {
+        const rect = button.getBoundingClientRect()
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return { text: button.textContent, bounds: rect.toJSON(), hitTest: top !== null && (top === button || button.contains(top)) }
+      }) }
+  })
+}
+function assertModalChrome(chrome: Awaited<ReturnType<typeof modalChrome>>) {
+  expect(chrome.dialog.top).toBeGreaterThanOrEqual(-1)
+  expect(chrome.dialog.bottom).toBeLessThanOrEqual(chrome.viewport.height + 1)
+  expect(chrome.header.bottom).toBeLessThanOrEqual(chrome.body.top + 1)
+  expect(chrome.body.bottom).toBeLessThanOrEqual(chrome.footer.top + 1)
+  expect(chrome.buttons).toHaveLength(2)
+  for (const button of chrome.buttons) {
+    expect(button.bounds.width).toBeGreaterThan(0); expect(button.bounds.height).toBeGreaterThan(0)
+    expect(button.bounds.left).toBeGreaterThanOrEqual(-1); expect(button.bounds.right).toBeLessThanOrEqual(chrome.viewport.width + 1)
+    expect(button.bounds.top).toBeGreaterThanOrEqual(-1); expect(button.bounds.bottom).toBeLessThanOrEqual(chrome.viewport.height + 1)
+    expect(button.hitTest, JSON.stringify(button)).toBe(true)
+  }
+}
 async function capture(page: Page, info: TestInfo, api: Fixture, defaultCommand: boolean) {
   await page.evaluate(() => document.fonts.ready)
+  const scrollEvidence = await verifyConfigurationScroll(page)
   await page.locator('.command-preview').scrollIntoViewIfNeeded()
   // 等待弹窗进入动画结束，截图和几何必须来自同一稳定布局。
   await page.waitForTimeout(350)
-  const before = await geometry(page), requestsBefore = [...api.requests]
+  const before = { ...await geometry(page), chrome: await modalChrome(page) }, requestsBefore = [...api.requests]
   const prefix = `docker-create-identity-${defaultCommand ? 'default' : 'argv-paths'}-${page.viewportSize()!.width}`
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = info.outputPath('ui-captures', `${prefix}.png`)
   await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
-  const after = await geometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(page)
-  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, expectedInput: expectedInput(defaultCommand), expectedPreview: defaultCommand ? '使用镜像默认命令' : JSON.stringify(argv), testTitle: info.title, screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], axe }
+  const after = { ...await geometry(page), chrome: await modalChrome(page) }, axe = await new AxeBuilder({ page }).analyze(), afterAxe = { ...await geometry(page), chrome: await modalChrome(page) }
+  const metadata = { scrollEvidence, ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, expectedInput: expectedInput(defaultCommand), expectedPreview: defaultCommand ? '使用镜像默认命令' : JSON.stringify(argv), testTitle: info.title, screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], axe }
   const statePath = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
   await writeFile(statePath, JSON.stringify(metadata, null, 2))
   await info.attach(prefix, { path: png, contentType: 'image/png' })
   await info.attach(`${prefix}-axe-state`, { path: statePath, contentType: 'application/json' })
   expect(api.requests).toEqual(requestsBefore); expect(api.writes).toEqual([])
   for (const sample of [before, after, afterAxe]) {
+    assertModalChrome(sample.chrome)
     expect(sample.text).toBe(metadata.expectedPreview)
     expect(sample.whiteSpace).toBe('pre-wrap')
     expect(sample.pathPreviews.map((path) => path.text)).toEqual(defaultCommand ? [] : [mount.source, mount.target, device.hostPath, device.containerPath].map((path) => JSON.stringify(path)))
@@ -384,18 +434,19 @@ for (const width of [390, 1440]) for (const scenario of portCases) {
     await page.keyboard.press('Enter'); await expect(preview).toBeVisible()
     await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
     await page.evaluate(() => document.fonts.ready)
+    const scrollEvidence = await verifyConfigurationScroll(page)
     await preview.locator('ol[aria-label="端口映射"]').scrollIntoViewIfNeeded()
     await page.waitForTimeout(350)
-    const before = await portGeometry(page), requestsBefore = [...api.requests]
+    const before = { ...await portGeometry(page), chrome: await modalChrome(page) }, requestsBefore = [...api.requests]
     const prefix = `docker-create-ports-${scenario.name}-${width}`
     await mkdir(info.outputPath('ui-captures'), { recursive: true })
     const png = info.outputPath('ui-captures', `${prefix}.png`)
     await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
-    const after = await portGeometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await portGeometry(page)
+    const after = { ...await portGeometry(page), chrome: await modalChrome(page) }, axe = await new AxeBuilder({ page }).analyze(), afterAxe = { ...await portGeometry(page), chrome: await modalChrome(page) }
     const captureState = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
     const screenshotSha256 = createHash('sha256').update(await readFile(png)).digest('hex')
     await writeFile(captureState, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
-      evidenceKind: 'pre-create-port-preview', testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      evidenceKind: 'pre-create-port-preview', scrollEvidence, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
       expectedInput: expected, expectedPreview: scenario.preview, screenshot: `${prefix}.png`, screenshotSha256,
       beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests],
       writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
@@ -403,6 +454,7 @@ for (const width of [390, 1440]) for (const scenario of portCases) {
     await info.attach(prefix, { path: png, contentType: 'image/png' })
     await info.attach(`${prefix}-axe-state`, { path: captureState, contentType: 'application/json' })
     for (const sample of [before, after, afterAxe]) {
+      assertModalChrome(sample.chrome)
       expect(sample.rows).toEqual(scenario.preview)
       expect(sample.fields).toHaveLength(6)
       expect(sample.fields.every((field) => field.fullTextVisible), JSON.stringify(sample)).toBe(true)

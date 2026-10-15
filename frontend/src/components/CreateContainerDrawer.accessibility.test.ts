@@ -99,6 +99,55 @@ describe('创建容器无障碍 DOM', () => {
     expect(document.querySelector('.advanced-body')).toBeNull()
   })
 
+  it('确认配置独立滚动且保留标题、全部字段与外部操作区', async () => {
+    await click('仅创建')
+    const dialog = document.querySelector<HTMLElement>('.create-confirmation-dialog')!
+    const header = dialog.querySelector<HTMLElement>('.el-dialog__header')!
+    const body = dialog.querySelector<HTMLElement>('.el-dialog__body')!
+    const footer = dialog.querySelector<HTMLElement>('.el-dialog__footer')!
+    const region = body.querySelector<HTMLElement>('[role="region"][aria-label="容器配置详情"]')!
+    expect(region.tabIndex).toBe(0)
+    region.focus()
+    expect(document.activeElement).toBe(region)
+    expect(region.contains(header)).toBe(false)
+    expect(region.contains(footer)).toBe(false)
+    expect([...region.querySelectorAll('dt')].map((node) => node.textContent)).toEqual([
+      '镜像', '容器名称', '挂载', '网络', '端口', '启动参数', '设备映射', '特权模式',
+      '增加 Capabilities', '移除 Capabilities', '硬件请求',
+    ])
+    expect(footer.contains(button('返回修改'))).toBe(true)
+    expect(footer.contains(button('确认创建'))).toBe(true)
+    expect(dialog.style.getPropertyValue('--el-dialog-margin-top')).toBe('16px')
+
+    // JSDOM 只验证布局声明合同；390px/桌面实际边界及滚动由 CI 浏览器检查。
+    function rule(selector: string) {
+      const found = [...styles.sheet!.cssRules].find((entry) => entry instanceof CSSStyleRule && entry.selectorText === selector) as CSSStyleRule
+      expect(found, selector).toBeDefined()
+      return found.style
+    }
+    const modal = rule('.create-confirmation-dialog.el-dialog')
+    expect(modal.display).toBe('flex')
+    expect(modal.flexDirection).toBe('column')
+    expect(modal.maxHeight).toBe('calc(100dvh - 32px)')
+    expect(drawerSource).toContain('max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px)')
+    expect(modal.boxSizing).toBe('border-box')
+    expect(modal.marginBottom).toBe('16px')
+    expect(rule('.create-confirmation-dialog .el-dialog__header,.create-confirmation-dialog .el-dialog__footer').flex).toBe('0 0 auto')
+    const bodyStyle = rule('.create-confirmation-dialog .el-dialog__body')
+    expect(bodyStyle.display).toBe('flex')
+    expect(bodyStyle.minHeight).toBe('0px')
+    expect(bodyStyle.overflow).toBe('hidden')
+    const scrollStyle = rule('.create-confirmation-dialog .create-preview')
+    expect(scrollStyle.gridAutoRows).toBe('max-content')
+    expect(scrollStyle.minHeight).toBe('0px')
+    expect(scrollStyle.overflow).toBe('auto')
+    expect(scrollStyle.getPropertyValue('overscroll-behavior')).toBe('contain')
+    expect(rule('.create-confirmation-dialog .create-preview:focus-visible').outlineOffset).toBe('-2px')
+    expect(rule('.create-confirmation-dialog .dialog-actions').flexWrap).toBe('wrap')
+    await click('返回修改')
+    expect(fetcher.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+
   it.each([
     ['确认容器配置', 'button'], ['确认容器配置', 'escape'],
     ['选择 NAS 路径', 'button'], ['选择 NAS 路径', 'escape'],

@@ -690,8 +690,8 @@ async function refreshUnresolvedInventory() {
     </div>
   </ElDialog>
 
-  <ElDialog v-model="previewOpen" title="确认容器配置" width="min(680px, 92vw)">
-    <div v-if="previewInput" class="create-preview">
+  <ElDialog v-model="previewOpen" class="create-confirmation-dialog" title="确认容器配置" width="min(680px, 92vw)" top="16px">
+    <div v-if="previewInput" class="create-preview" role="region" aria-label="容器配置详情" tabindex="0">
       <p class="preview-intro">请确认以下配置；取消不会创建任何 Docker 对象。</p>
       <dl class="preview-grid">
         <dt>镜像</dt><dd><code>{{ previewInput.image }}</code></dd>
@@ -763,5 +763,12 @@ textarea{width:100%;resize:vertical;padding:11px 12px;border:1px solid var(--ncp
 </style>
 
 <style>
+/* 确认内容独立滚动，标题和操作始终位于视口内；保留 Element Plus 的模态与焦点管理。 */
+.create-confirmation-dialog.el-dialog{display:flex;flex-direction:column;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);margin-bottom:16px;box-sizing:border-box}
+.create-confirmation-dialog .el-dialog__header,.create-confirmation-dialog .el-dialog__footer{flex:none}
+.create-confirmation-dialog .el-dialog__body{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.create-confirmation-dialog .create-preview{grid-auto-rows:max-content;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.create-confirmation-dialog .create-preview:focus-visible{outline:2px solid var(--ncp-primary);outline-offset:-2px}
+.create-confirmation-dialog .dialog-actions{flex-wrap:wrap}
 .create-container-drawer .el-drawer__header{margin-bottom:0;padding:18px 20px 14px;border-bottom:1px solid var(--ncp-line)}.create-container-drawer .el-drawer__body{padding:14px 18px;background:var(--ncp-surface-quiet)}.create-container-drawer .el-drawer__footer{padding:13px 20px;border-top:1px solid var(--ncp-line)}.create-container-drawer .el-input-number{width:100%}
 </style>
