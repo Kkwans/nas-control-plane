@@ -1,7 +1,7 @@
-import type { ContainerAction, ContainerActionResult, DockerProjectActionResult, DockerProjectContainerActionResult } from './system'
+import type { ComposeLifecycleResult, ComposeLifecycleServiceStatus, ContainerAction, ContainerActionResult, DockerProjectActionResult, DockerProjectContainerActionResult } from './system'
 import { isApiErrorResponse, NcpApiError, requestOptions } from './systemTransport'
 
-type ActionScope = 'container' | 'standalone'
+type ActionScope = 'container' | 'standalone' | 'compose'
 type ContainerIntent = Readonly<{ containerId: string; action: ContainerAction }>
 type ProjectIntent = Readonly<{ projectId: string; action: ContainerAction; containerIds: readonly string[] }>
 
@@ -67,6 +67,45 @@ export function decodeStandaloneActionReceipt(value: unknown, intent: ProjectInt
   } catch { throw new DockerActionOutcomeUnknownError('standalone') }
 }
 
+// Compose 的停止证据来自明确 State，而不是 Running=false。
+export function composeActionStateMatches(action: ContainerAction, state: string): boolean {
+  return action === 'stop' ? ['exited', 'created', 'dead', 'stopped'].includes(state) : state === 'running'
+}
+
+export function decodeComposeActionReceipt(value: unknown, intent: Readonly<{ projectId: string; action: ContainerAction }>): ComposeLifecycleResult {
+  try {
+    const input = record(value, ['projectId', 'action', 'state', 'completed', 'services', 'output'])
+    if (!intent.projectId || input.projectId !== intent.projectId || action(input.action) !== intent.action) return invalid()
+    const state = string(input.state)
+    const completed = boolean(input.completed)
+    const output = string(input.output)
+    if (!state.trim() || !Array.isArray(input.services)) return invalid()
+    const ids = new Set<string>()
+    const services: ComposeLifecycleServiceStatus[] = []
+    for (const raw of input.services) {
+      const item = record(raw, ['name', 'state', 'running'])
+      const name = string(item.name)
+      const serviceState = string(item.state)
+      const running = boolean(item.running)
+      const containerId = Object.hasOwn(item, 'containerId') ? string(item.containerId) : undefined
+      if (!name.trim() && !containerId?.trim()) return invalid()
+      if (!serviceState.trim() || running !== (serviceState === 'running')) return invalid()
+      if (containerId) {
+        if (ids.has(containerId)) return invalid()
+        ids.add(containerId)
+      }
+      services.push({ name, state: serviceState, running, ...(containerId !== undefined ? { containerId } : {}) })
+    }
+    const allRunning = services.length > 0 && services.every((item) => item.state === 'running')
+    const allStopped = services.length > 0 && services.every((item) => composeActionStateMatches('stop', item.state))
+    const allKnown = services.length > 0 && services.every((item) => item.state === 'running' || composeActionStateMatches('stop', item.state))
+    const observedState = allRunning ? 'running' : allStopped ? 'stopped' : allKnown ? 'degraded' : 'unknown'
+    if (['running', 'stopped', 'degraded', 'unknown'].includes(state) && state !== observedState) return invalid()
+    if (completed && (!services.length || !services.every((item) => composeActionStateMatches(intent.action, item.state)) || state !== (intent.action === 'stop' ? 'stopped' : 'running'))) return invalid()
+    return { projectId: intent.projectId, action: intent.action, state, completed, output, services }
+  } catch { throw new DockerActionOutcomeUnknownError('compose') }
+}
+
 const commonRejections: Record<string, readonly [number, string]> = {
   AUTH_UNAUTHORIZED: [401, '请先登录。'],
   AUTH_UNAVAILABLE: [503, '登录服务暂不可用。'],
@@ -77,6 +116,17 @@ const commonRejections: Record<string, readonly [number, string]> = {
 }
 const rejections: Record<ActionScope, Record<string, readonly [number, string]>> = {
   container: { ...commonRejections, DOCKER_CONTAINER_ACTION_INVALID: [400, '容器操作参数无效。'] },
+  compose: {
+    AUTH_UNAUTHORIZED: commonRejections.AUTH_UNAUTHORIZED!,
+    AUTH_UNAVAILABLE: commonRejections.AUTH_UNAVAILABLE!,
+    HTTP_CROSS_ORIGIN_REJECTED: commonRejections.HTTP_CROSS_ORIGIN_REJECTED!,
+    ROUTE_NOT_FOUND: commonRejections.ROUTE_NOT_FOUND!,
+    METHOD_NOT_ALLOWED: commonRejections.METHOD_NOT_ALLOWED!,
+    CONTROL_INPUT_INVALID: [400, '请求参数无效。'],
+    COMPOSE_LIFECYCLE_INVALID: [400, 'Compose 项目操作参数无效。'],
+    HTTP_REQUEST_BODY_TOO_LARGE: [413, '请求体超过大小限制。'],
+    HTTP_UNSUPPORTED_MEDIA_TYPE: [415, '请求必须使用 application/json 内容类型。'],
+  },
   standalone: {
     ...commonRejections,
     DOCKER_PROJECT_ACTION_INVALID: [400, 'Docker 独立容器项目参数无效。'],

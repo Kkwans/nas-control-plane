@@ -216,3 +216,89 @@ describe('DockerView 生命周期回执', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 })
+
+
+function composeInventory() { const value = inventory(); value.projects[0]!.kind = 'compose'; return value }
+function composeResult() { return { projectId: 'demo', action: 'restart', state: 'running', completed: true, output: 'private-command-output', services: [{ name: 'web', containerId: 'new-container', state: 'running', running: true }] } }
+async function readyCompose() {
+  fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response(composeResult()) : response(composeInventory()))
+  await mount()
+}
+describe('DockerView Compose 生命周期证据', () => {
+  it('完成只报告读回观察，不显示命令日志', async () => {
+    await readyCompose(); button('重启项目 demo-project').click(); await settle()
+    expect(ElMessage.success).toHaveBeenCalledWith('项目“demo-project”重启命令已受理，读回时服务均运行中。')
+    expect(host.textContent).not.toContain('private-command-output')
+    expect(posts()).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
+  })
+  it.each(['incomplete', 'wrong-project', 'verify-failed'])('未完成或未知保持警告与只读刷新 %s', async (mode) => {
+    await readyCompose()
+    fetcher.mockImplementation(async (_url, options) => {
+      if (options?.method !== 'POST') return response(composeInventory())
+      if (mode === 'verify-failed') return new Response(JSON.stringify({ code: 'COMPOSE_LIFECYCLE_VERIFY_FAILED', message: 'private-error 请重试', requestId: 'test' }), { status: 409 })
+      return response(mode === 'wrong-project' ? { ...composeResult(), projectId: 'other' } : { ...composeResult(), completed: false, state: 'stopped', services: [{ name: 'web', state: 'exited', running: false }] })
+    })
+    button('重启项目 demo-project').click(); await settle()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(ElMessage.warning).toHaveBeenCalled()
+    expect(host.querySelector('.action-error')?.textContent).toContain('只读核对')
+    expect(host.textContent).not.toMatch(/private-error|请重试|private-command-output/)
+    expect(posts()).toHaveLength(1)
+    expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
+  })
+  it('冻结确认前项目和配置，阻止重复点击', async () => {
+    await readyCompose()
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    const target = button('重启项目 demo-project'); target.click(); target.click(); await settle()
+    store.inventory!.projects[0]!.id = 'changed'; store.inventory!.projects[0]!.workingDirectory = '/changed'; store.inventory!.projects[0]!.configFiles.push('later.yaml')
+    confirmation.resolve(confirmed); await settle()
+    expect(ElMessageBox.confirm).toHaveBeenCalledOnce()
+    expect(posts()).toHaveLength(1)
+    expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'demo', action: 'restart', workingDirectory: '/srv/demo', configFiles: ['compose.yaml'] })
+    expect(posts()[0]![1]?.redirect).toBe('error')
+  })
+  it('未知回执遇到刷新失败仍保留原分类，不自动重发', async () => {
+    await readyCompose()
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...composeResult(), services: [] }) : response({ invalid: true }))
+    button('重启项目 demo-project').click(); await settle()
+    expect(host.querySelector('.action-error')?.textContent).toContain('可能已经执行')
+    expect(host.querySelector('.action-error')?.textContent).toContain('状态刷新失败')
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(15_000); await settle(); expect(posts()).toHaveLength(1)
+  })
+  it.each(['unmount', 'session'])('迟到回执在 %s 后不通知或刷新', async (mode) => {
+    await readyCompose()
+    const pending = deferred<Response>(); fetcher.mockReturnValueOnce(pending.promise)
+    button('重启项目 demo-project').click(); await settle()
+    if (mode === 'unmount') { app!.unmount(); app = undefined } else { invalidateSession(); beginSession() }
+    pending.resolve(response(composeResult())); await settle()
+    expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.warning).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(posts()).toHaveLength(1)
+  })
+})
+
+
+it('会话更换不重发旧项目请求，旧请求释放自身占用后新会话可操作', async () => {
+  await readyCompose()
+  const first = deferred<Response>()
+  fetcher.mockReturnValueOnce(first.promise)
+  button('重启项目 demo-project').click(); await settle()
+  invalidateSession(); beginSession()
+  expect(button('重启项目 demo-project').disabled).toBe(true)
+  button('重启项目 demo-project').click(); await settle()
+  expect(posts()).toHaveLength(1)
+  first.resolve(response(composeResult())); await settle()
+  expect(ElMessage.success).not.toHaveBeenCalled()
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(button('重启项目 demo-project').disabled).toBe(false)
+  const second = deferred<Response>()
+  fetcher.mockReturnValueOnce(second.promise)
+  button('重启项目 demo-project').click(); await settle()
+  expect(posts()).toHaveLength(2)
+  expect(button('重启项目 demo-project').disabled).toBe(true)
+  second.resolve(response(composeResult())); await settle()
+  expect(ElMessage.success).toHaveBeenCalledOnce()
+  expect(button('重启项目 demo-project').disabled).toBe(false)
+})

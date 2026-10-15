@@ -1,4 +1,4 @@
-import { decodeContainerActionReceipt, decodeStandaloneActionReceipt, requestDockerActionReceipt } from './dockerActionOutcome'
+import { decodeComposeActionReceipt, decodeContainerActionReceipt, decodeStandaloneActionReceipt, requestDockerActionReceipt } from './dockerActionOutcome'
 import { captureSession } from '@/session/sessionLifecycle'
 import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
@@ -376,21 +376,13 @@ export async function requestDockerProjectAction(
   fetcher: typeof fetch = fetch,
 ): Promise<DockerProjectActionResult | ComposeLifecycleResult> {
   if (project.kind === 'compose') {
-    return requestJson(
-      `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}/actions/${action}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: project.id,
-          workingDirectory: project.workingDirectory,
-          configFiles: project.configFiles,
-          action,
-        }),
-      },
-      isComposeLifecycleResult,
+    const intent = { projectId: project.id, action, workingDirectory: project.workingDirectory, configFiles: [...project.configFiles] }
+    return requestDockerActionReceipt(
+      `/api/v1/docker/compose/projects/${encodeURIComponent(intent.projectId)}/actions/${intent.action}`,
+      jsonRequest(intent),
+      'compose',
+      (payload) => decodeComposeActionReceipt(payload, intent),
       fetcher,
-      'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
     )
   }
   // 提交前复制标识和目标集合，等待响应时调用者的变化不能改变回执归属。
@@ -685,30 +677,6 @@ function isDockerHubTagsWireResult(value: unknown): value is DockerHubTagsWireRe
     typeof value.pageSize === 'number' &&
     Array.isArray(value.results) &&
     value.results.every(isDockerHubTagWire)
-}
-
-function isContainerAction(value: unknown): value is ContainerAction {
-  return value === 'start' || value === 'stop' || value === 'restart'
-}
-
-function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResult {
-  return (
-    isRecord(value) &&
-    typeof value.projectId === 'string' &&
-    isContainerAction(value.action) &&
-    typeof value.state === 'string' &&
-    typeof value.output === 'string' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.services) &&
-    value.services.every(
-      (service) =>
-        isRecord(service) &&
-        typeof service.name === 'string' &&
-        (service.containerId === undefined || typeof service.containerId === 'string') &&
-        typeof service.state === 'string' &&
-        typeof service.running === 'boolean',
-    )
-  )
 }
 
 function isDockerResources(value: unknown): value is DockerResources {

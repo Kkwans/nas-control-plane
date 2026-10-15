@@ -40,3 +40,19 @@
 官方依据：[Compose ps 文档](https://docs.docker.com/reference/cli/docker/compose/ps/) 列出 NDJSON 与 State；[v2.39.4 ps 实现](https://raw.githubusercontent.com/docker/compose/v2.39.4/pkg/compose/ps.go) 逐容器投影 Service/State；[v2.39.4 formatter](https://raw.githubusercontent.com/docker/compose/v2.39.4/cmd/formatter/container.go) 直接输出 State，没有 Running 布尔字段。数组为本仓库已支持格式，未以版本猜测替代兼容测试。
 
 本地验证接续：新增纯 parser 与 fake LifecycleRunner 回归在原生产文件 overlay 上实际失败（包括 null、缺失/矛盾 State、别名重复及未知状态误报）；修复后完整 `internal/compose` 测试与 race ×20、该包 vet、全部 cmd 编译通过，diff 检查通过。已检查包内测试仅使用 fake 与临时文件，不调用 OSRunner、Docker、helper 或监听器。独立审查无阻塞，并独立复跑生命周期/parser 聚焦测试通过；远端 CI 尚待后续提交核验，未作 NAS 或真实 Docker 验收声明。
+
+## Compose 前端回执与未知结果切片（2026-10-15）
+
+在后端观察状态修正 a9691719 之上，将 Compose 生命周期请求纳入已有专用传输：精确 200、禁止自动跳转、固定派发前 projectId/action/workingDirectory/configFiles，按本次项目与动作验证回执。配置决定真实 Compose 目标，因此不绑定旧清单 containerIds，也不以服务名称把回执副本重新绑定到旧容器。
+
+已知字段按自有属性重新投影，保留公开 output 字符串合同，但不展示或附带到错误。服务至少包含非空名称或 ID；允许缺省/空 ID、同名副本，拒绝重复非空 ID、空状态及 running/state 矛盾。completed=true 必须非空且全部服务达到动作的明确状态，汇总必须对应 running/stopped；completed=false 的明确汇总也须与服务观察一致，未来非空汇总/服务状态保持开放兼容并仅作未完成警告，不能成为成功证据。
+
+仅保留已核验的中间件拒绝、CONTROL_INPUT_INVALID/400、COMPOSE_LIFECYCLE_INVALID/400 与请求体 413/415 的固定文案。COMPOSE_LIFECYCLE_UNAVAILABLE 在 RPC service 中可由执行后的任意 provider 错误映射产生，不能当作派发前拒绝；VERIFY_FAILED、FAILED、超时和通道失败均为未知结果，禁止使用响应正文中的重试建议。Compose 路由没有明确暴露 protocol-mismatch/409，未把该组合加入其拒绝表。
+
+界面只报告命令受理与一次读回观察，不声称健康、稳定、配置完整性或重启次数；未完成/未知显示只读核对警告，刷新失败不改写原分类。保留确认前项目配置快照、会话/卸载保护及防重复派发，不新增未知锁、轮询、Job 或任何新写操作。
+
+本片本地验证：完整前端 3931 项测试/140 文件通过；Vue 类型检查、修改文件及完整 ESLint、生产构建及 540KiB 包预算通过，diff 检查通过。独立审查复跑类型检查与 API/组件相关 225 项测试通过，无剩余阻塞。全局 lint 首次运行遇到并行编写中的浏览器专项文件未使用符号，其作者完成后完整复跑通过；未运行浏览器、监听器、真实 Docker/Compose 或 NAS，本地结果不替代远端 CI/浏览器证据。
+
+收尾补充：项目操作 finally 仅释放自己持有的 pending 对象（保存 Vue ref 读取后的对象身份）。当前组件没有会话切换清空 busy 的路径，因此旧请求未结束时新会话操作仍被阻止，未声称存在可达的旧请求覆盖新 pending 竞态，也未新增会话重置机制。新增真实流程回归：切换会话后旧请求不重发、迟到结果不通知/刷新，原请求结束释放自身占用，随后新会话操作独立完成。补充后的组件 27 项测试、类型检查及修改文件 lint 通过；此前完整 3931 项结果对应补充前版本。
+
+最终所有权保护落地后复跑：完整前端 3932 项测试/140 文件、Vue 类型检查、生产构建与 540KiB 预算通过。新增 Compose 浏览器专项共 4 例，静态 ESLint、严格 TypeScript、Playwright 用例发现通过；覆盖 390/1440 宽度的真实确认框、完成观察与错配/409 未知结果、冻结配置及只读刷新不重放。截图、完整 axe、请求账本和源码哈希的实际浏览器证据等待提交后的 CI，未提前声明通过。确认框按钮保留实际尺寸记录与命中检查，44px 断言仅覆盖既有警告关闭按钮，未将默认确认框尺寸宣称为 44px 验收通过。

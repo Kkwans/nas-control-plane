@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
-import { dockerActionStateMatches, DockerActionOutcomeUnknownError } from '@/api/dockerActionOutcome'
+import { composeActionStateMatches, dockerActionStateMatches, DockerActionOutcomeUnknownError } from '@/api/dockerActionOutcome'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
@@ -206,23 +206,16 @@ function projectActionFailures(
       message: '项目回执未确认完成，请先只读核对状态，勿重复提交。',
     }))
   }
-  const expectedRunning = action !== 'stop'
   const failures = result.services
-    .filter((service) => service.running !== expectedRunning)
-    .map((service) => {
-      const container = targets.find((candidate) => candidate.id === service.containerId || candidate.serviceName === service.name || candidate.name === service.name)
-      return {
-        containerId: service.containerId || container?.id || service.name,
-        name: service.name || container?.name || service.containerId || '未命名服务',
-        message: `状态复核未达到“${action === 'stop' ? '已停止' : '运行中'}”（${service.state || '未知'}）。`,
-      }
-    })
-  if (!result.completed && !failures.length) {
-    return targets.map((container) => ({
-      containerId: container.id,
-      name: container.name || container.id.slice(0, 12),
-      message: '项目操作未完成，请刷新状态后重试。',
+    .map((service, index) => ({ service, index }))
+    .filter(({ service }) => !composeActionStateMatches(action, service.state))
+    .map(({ service, index }) => ({
+      containerId: `compose-service:${index}`,
+      name: service.name || service.containerId || '未命名服务',
+      message: `状态复核尚未达到目标；请先只读核对，勿重复提交。`,
     }))
+  if (!result.completed && !failures.length) {
+    return [{ containerId: `project:${result.projectId}`, name: '项目操作', scope: 'project' as const, message: '项目回执未确认完成，请先只读核对状态，勿重复提交。' }]
   }
   return failures
 }
@@ -306,6 +299,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
     return
   }
   projectActionPending.value = { projectId: project.id, action }
+  const pendingOwner = projectActionPending.value
   const failures: ProjectActionError[] = []
   try {
     if (dockerActionNeedsConfirmation(action)) {
@@ -334,7 +328,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       failures.push({
         containerId: `project:${project.id}`,
         name: '项目操作',
-        message: errorMessage(error, project.kind === 'standalone' ? new DockerActionOutcomeUnknownError('standalone').message : `项目${dockerActionLabel(action)}失败，请稍后重试。`),
+        message: errorMessage(error, new DockerActionOutcomeUnknownError(project.kind).message),
         scope: 'project',
       })
     }
@@ -342,16 +336,13 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
     if (!failures.length && result) failures.push(...projectActionFailures(result, actionTargets, action))
     if (failures.length) {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: failures }
-      if (project.kind === 'standalone') {
-        actionError.value = failures.some((failure) => failure.scope === 'project') ? failures[0]!.message : `项目${dockerActionLabel(action)}回执中有 ${failures.length} 个容器尚未确认达到目标；请先只读核对。`
-        ElMessage.warning(actionError.value)
-      } else if (failures.some((failure) => failure.scope === 'project')) ElMessage.error(failures.find((failure) => failure.scope === 'project')?.message ?? `项目${dockerActionLabel(action)}失败。`)
-      else ElMessage.warning(`项目${dockerActionLabel(action)}完成，但有 ${failures.length} 个容器失败。`)
+      actionError.value = failures.some((failure) => failure.scope === 'project') ? failures[0]!.message : (project.kind === 'standalone' ? `项目${dockerActionLabel(action)}回执中有 ${failures.length} 个容器尚未确认达到目标；请先只读核对。` : `项目${dockerActionLabel(action)}回执中有 ${failures.length} 个服务尚未确认达到目标；请先只读核对，勿重复提交。`)
+      ElMessage.warning(actionError.value)
     } else {
       projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
       ElMessage.success(project.kind === 'standalone'
         ? `项目“${project.name}”${dockerActionLabel(action)}命令已受理，读回时目标容器均${action === 'stop' ? '已停止' : '运行中'}。`
-        : `项目“${project.name}”已${dockerActionLabel(action)}`)
+        : `项目“${project.name}”${dockerActionLabel(action)}命令已受理，读回时服务均${action === 'stop' ? '处于非运行状态' : '运行中'}。`)
     }
     try {
       const refreshResult = await systemStore.refresh({ inventory: true, force: true })
@@ -360,7 +351,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       if (current()) actionError.value = [actionError.value, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
     }
   } finally {
-    if (viewActive) projectActionPending.value = null
+    if (viewActive && projectActionPending.value === pendingOwner) projectActionPending.value = null
   }
 }
 async function confirmDeleteProject(project: DockerProject) {
