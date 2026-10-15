@@ -236,7 +236,12 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 			return Catalog{}, MapError(ctx, source, "catalog_columns", columnErr)
 		}
 		tables[index].Columns = columns
-		enrichTable(ctx, db, source.Driver, &tables[index])
+		if err := enrichTable(ctx, db, source.Driver, &tables[index]); err != nil {
+			return Catalog{}, MapError(ctx, source, "catalog_metadata", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Catalog{}, MapError(ctx, source, "catalog", err)
 	}
 	return Catalog{Source: source, Tables: tables}, nil
 }
@@ -555,24 +560,39 @@ func listTables(ctx context.Context, db *sql.DB, source Source, credentials Cred
 	return result, rows.Err()
 }
 
-func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) {
+func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// 统计和定义允许缺失，但取消不能伪装成成功，也不能继续查询。
+	scan := func(query string, args []any, destinations ...any) error {
+		err := db.QueryRowContext(ctx, query, args...).Scan(destinations...)
+		if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
+		}
+		return err
+	}
 	switch driver {
 	case DriverSQLite:
 		var count int64
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name)).Scan(&count); err == nil {
+		if err := scan("SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name), nil, &count); err == nil {
 			table.RowCount = &count
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		var size sql.NullInt64
-		if err := db.QueryRowContext(ctx, "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", table.Name).Scan(&size); err == nil && size.Valid {
+		if err := scan("SELECT SUM(pgsize) FROM dbstat WHERE name = ?", []any{table.Name}, &size); err == nil && size.Valid {
 			table.SizeBytes = &size.Int64
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 	case DriverMySQL:
 		var rows, size sql.NullInt64
 		var created sql.NullString
-		if err := db.QueryRowContext(ctx, `SELECT table_rows, data_length + index_length,
+		if err := scan(`SELECT table_rows, data_length + index_length,
 			COALESCE(DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s'), '')
 			FROM information_schema.tables WHERE table_schema = ? AND table_name = ?`,
-			table.Schema, table.Name).Scan(&rows, &size, &created); err == nil {
+			[]any{table.Schema, table.Name}, &rows, &size, &created); err == nil {
 			if rows.Valid {
 				table.RowCount = &rows.Int64
 			}
@@ -580,28 +600,37 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) {
 				table.SizeBytes = &size.Int64
 			}
 			table.CreatedAt = created.String
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		var ignored, definition string
-		if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name)).Scan(&ignored, &definition); err == nil {
+		if err := scan("SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name), nil, &ignored, &definition); err == nil {
 			table.Definition = definition
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 	case DriverPostgreSQL:
 		var count, size sql.NullInt64
-		if err := db.QueryRowContext(ctx, `SELECT c.reltuples::bigint, pg_total_relation_size(c.oid)
+		if err := scan(`SELECT c.reltuples::bigint, pg_total_relation_size(c.oid)
 			FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = $1 AND c.relname = $2`, table.Schema, table.Name).Scan(&count, &size); err == nil {
+			WHERE n.nspname = $1 AND c.relname = $2`, []any{table.Schema, table.Name}, &count, &size); err == nil {
 			if count.Valid {
 				table.RowCount = &count.Int64
 			}
 			if size.Valid {
 				table.SizeBytes = &size.Int64
 			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		if strings.EqualFold(table.Type, "VIEW") {
-			_ = db.QueryRowContext(ctx, "SELECT pg_get_viewdef($1::regclass, true)",
-				table.Schema+"."+table.Name).Scan(&table.Definition)
+			err := scan("SELECT pg_get_viewdef($1::regclass, true)", []any{table.Schema + "." + table.Name}, &table.Definition)
+			if cause := tlsContextCause(ctx, err); cause != nil {
+				return cause
+			}
 		}
 	}
+	return ctx.Err()
 }
 
 func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string) ([]Column, error) {
