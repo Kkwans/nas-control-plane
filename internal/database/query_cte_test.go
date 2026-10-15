@@ -35,7 +35,6 @@ func TestCTEMainDMLWithoutReturning(t *testing.T) {
 		{"returning attribute", `WITH x AS (SELECT 1) INSERT INTO t SELECT x.returning FROM x`, false},
 		{"select", `WITH x AS (SELECT 1) SELECT * FROM x`, false},
 		{"merge", `WITH x AS (SELECT 1) MERGE INTO t USING x ON true WHEN MATCHED THEN DELETE`, false},
-		{"replace", `WITH x AS (SELECT 1) REPLACE INTO t VALUES(1)`, false},
 		{"search", `WITH RECURSIVE x AS (SELECT 1) SEARCH DEPTH FIRST BY id SET ord UPDATE t SET n=1`, false},
 		{"cycle", `WITH RECURSIVE x AS (SELECT 1) CYCLE id SET cycle USING path DELETE FROM t`, false},
 		{"direct dml", `UPDATE t SET n=1`, false},
@@ -289,6 +288,29 @@ func TestQueryCTERowsFinalizationNeverReplays(t *testing.T) {
 					t.Fatalf("byte truncation=%#v", result)
 				}
 			})
+		}
+	}
+}
+
+func TestCTEReplaceDialectBoundary(t *testing.T) {
+	for _, driver := range []Driver{DriverSQLite, DriverPostgreSQL, DriverMySQL} {
+		for _, tt := range []struct {
+			statement        string
+			withoutReturning bool
+		}{
+			{`WITH x AS (SELECT 1) REPLACE INTO t VALUES(1)`, true},
+			{`WITH x AS (SELECT 1) REPLACE INTO t VALUES('RETURNING') /*RETURNING*/`, true},
+			{`WITH x AS (SELECT 1) REPLACE INTO t VALUES(1) RETURNING id`, false},
+			{`WITH x AS (SELECT 1) REPLACE INTO t VALUES(1); SELECT 2`, false},
+			{`WITH x AS (SELECT 1) REPLACE INTO t VALUES(1) {unknown}`, false},
+		} {
+			want := driver == DriverSQLite && tt.withoutReturning
+			if got := cteMainDMLWithoutReturning(driver, tt.statement); got != want {
+				t.Fatalf("driver=%s got=%v want=%v SQL=%q", driver, got, want, tt.statement)
+			}
+			if got := returnsRows(driver, tt.statement); got != !want {
+				t.Fatalf("driver=%s rows=%v want=%v SQL=%q", driver, got, !want, tt.statement)
+			}
 		}
 	}
 }

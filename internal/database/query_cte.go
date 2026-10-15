@@ -64,7 +64,8 @@ func cteMainDMLWithoutReturning(driver Driver, statement string) bool {
 		}
 		token = scanner.next()
 	}
-	if !token.word("INSERT") && !token.word("UPDATE") && !token.word("DELETE") {
+	// SQLite 的 REPLACE 是 INSERT OR REPLACE 别名；其他方言不扩展识别。
+	if !token.word("INSERT") && !token.word("UPDATE") && !token.word("DELETE") && !(driver == DriverSQLite && token.word("REPLACE")) {
 		return false
 	}
 	depth, hasBody, ended := 0, false, false

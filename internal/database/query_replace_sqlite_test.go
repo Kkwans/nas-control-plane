@@ -25,3 +25,24 @@ func TestSQLiteReplaceReturningAutoWritesOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestSQLiteCTEReplaceWithoutReturningWritesOnce(t *testing.T) {
+	for _, mode := range []QueryResultMode{"", QueryResultModeAuto, QueryResultModeRows, QueryResultModeExec} {
+		t.Run(string(mode), func(t *testing.T) {
+			_, _, db := newQueryFixture(t)
+			if _, err := db.Exec(`INSERT INTO sample VALUES(1,0,'old'); CREATE TABLE audit(n INTEGER); CREATE TRIGGER count_insert AFTER INSERT ON sample BEGIN INSERT INTO audit VALUES(new.n); END`); err != nil {
+				t.Fatal(err)
+			}
+			statement := "/*leading*/ WITH x(n) AS (SELECT n+1 FROM sample WHERE id=1) RePlAcE INTO sample(id,n,label) SELECT 1,n,'RETURNING' FROM x; --tail"
+			result := returningSQLiteQuery(t, db, statement, mode, mode == QueryResultModeRows)
+			if len(result.Columns) != 0 || len(result.Rows) != 0 || result.RowsAffectedKnown != (mode != QueryResultModeRows) {
+				t.Fatalf("result=%#v", result)
+			}
+			if mode != QueryResultModeRows && result.RowsAffected != 1 {
+				t.Fatalf("affected=%d", result.RowsAffected)
+			}
+			assertFixtureScalar(t, db, `SELECT n FROM sample WHERE id=1`, 1)
+			assertFixtureScalar(t, db, `SELECT count(*) FROM audit`, 1)
+		})
+	}
+}
