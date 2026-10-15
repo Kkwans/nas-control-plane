@@ -27,7 +27,7 @@ function deferred() {
 
 // 只允许指定来源的静态 GET 与精确 API 白名单。创建许可仅供一次真实确认点击消费；
 // 未知请求、重发、WebSocket 均失败关闭，内存 SSE 不访问 Docker、NAS 或宿主机。
-async function fixture(page: Page, origin: string, expected: DockerContainerCreateInput, allowRootDirectory = false) {
+async function fixture(page: Page, origin: string, expected: DockerContainerCreateInput, allowRootDirectory = false, allowKnownNetwork = false) {
   await page.clock.setFixedTime(new Date(stamp))
   await page.addInitScript(() => {
     class SilentSource extends EventTarget {
@@ -53,6 +53,7 @@ async function fixture(page: Page, origin: string, expected: DockerContainerCrea
     ['/api/v1/docker/images', { collectedAt: stamp, images: [{ id: 'sha256:identity-fixture', repoTags: ['identity:latest'], repoDigests: [], sizeBytes: 1024, createdAt: stamp, containers: 0 }] }],
     ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
   ])
+  if (allowKnownNetwork) reads.set('/api/v1/docker/resources', { collectedAt: stamp, networks: [{ id: 'fixture-net-id', name: 'fixture-net', driver: 'bridge', scope: 'local', internal: false, subnets: ['172.29.0.0/24'], gateways: ['172.29.0.1'] }], volumes: [] })
   if (allowRootDirectory) reads.set('/api/v1/files/entries?path=%2F&limit=100', { path: '/', parent: '/', collectedAt: stamp, entries: [{ name: 'fixture.txt', path: '/fixture.txt', type: 'file', readable: true }] })
   page.on('pageerror', (error) => errors.push(error.message))
   await page.routeWebSocket('**', (socket) => { denied.push(`WS ${socket.url()}`); socket.close() })
@@ -622,6 +623,158 @@ for (const width of [390, 1440]) for (const scenario of resourceCases) {
         replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
         status: response.status(), response: await response.json() }, null, 2))
       await info.attach('strict-resource-restart-create-receipt', { path: receiptPath, contentType: 'application/json' })
+    } finally { api.release.resolve() }
+  })
+}
+
+// 网络预览直接核对提交快照；现有网络清单只替换已允许的精确资源 GET。
+const networkCases: Array<{ name: string; network: NonNullable<DockerContainerCreateInput['network']>; labels: string[]; preview: string[] }> = [
+  { name: 'existing-name-only', network: { name: 'fixture-net' }, labels: ['网络', '网络策略'],
+    preview: ['"fixture-net"', '连接现有网络（不创建或修改网络）'] },
+  { name: 'subnet-driver-gateway-fixed-ipv6',
+    network: { name: 'fixture-ipv6', driver: 'bridge', subnet: 'fd42:1234:5678:9abc::/64', gateway: 'fd42:1234:5678:9abc::1', ip: 'fd42:1234:5678:9abc::1234' },
+    labels: ['网络', '网络策略', '网络驱动', '子网', '网关', '容器固定 IP'],
+    preview: ['"fixture-ipv6"', '仅在同名网络不存在时创建；已有网络须匹配驱动、子网及显式网关，否则失败，不修改现有网络', '"bridge"', '"fd42:1234:5678:9abc::/64"', '"fd42:1234:5678:9abc::1"', '"fd42:1234:5678:9abc::1234"'] },
+]
+async function networkGeometry(page: Page, labels: string[]) {
+  return page.getByRole('dialog', { name: '确认容器配置', exact: true }).evaluate((dialog, labels) => {
+    const fields = labels.map((label) => {
+      const term = [...dialog.querySelectorAll('.preview-grid dt')].find((element) => element.textContent === label)!
+      const field = term.nextElementSibling!, bounds = field.getBoundingClientRect(), range = document.createRange()
+      range.selectNodeContents(field)
+      const lines = [...range.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+      const clips: Array<{ x: boolean; y: boolean; bounds: DOMRect }> = []
+      for (let ancestor: Element | null = field; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+        if (x || y) clips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+      }
+      const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT)
+      const characters: Array<{ value: string; bounds: ReturnType<DOMRect['toJSON']>; visible: boolean }> = []
+      while (walker.nextNode()) {
+        const node = walker.currentNode
+        const glyphClips = [...clips]
+        for (let ancestor = node.parentElement; ancestor && ancestor !== field; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor)
+          const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+          if (x || y) glyphClips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+        }
+        for (let index = 0; index < (node.textContent?.length || 0); index++) {
+          const glyph = document.createRange(); glyph.setStart(node, index); glyph.setEnd(node, index + 1)
+          const rect = glyph.getBoundingClientRect()
+          characters.push({ value: node.textContent![index], bounds: rect.toJSON(), visible: rect.width > 0 && rect.height > 0 && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1 && rect.left >= -1 && rect.right <= innerWidth + 1 && rect.top >= -1 && rect.bottom <= innerHeight + 1 && glyphClips.every((clip) => (!clip.x || rect.left >= clip.bounds.left - 1 && rect.right <= clip.bounds.right + 1) && (!clip.y || rect.top >= clip.bounds.top - 1 && rect.bottom <= clip.bounds.bottom + 1)) })
+        }
+      }
+      return { label, text: field.textContent, characters, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
+        clips: clips.map((clip) => ({ ...clip, bounds: clip.bounds.toJSON() })),
+        fullTextVisible: lines.length > 0 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && line.top >= bounds.top - 1 && line.bottom <= bounds.bottom + 1 && line.left >= -1 && line.right <= innerWidth + 1 && line.top >= -1 && line.bottom <= innerHeight + 1 && clips.every((clip) => (!clip.x || line.left >= clip.bounds.left - 1 && line.right <= clip.bounds.right + 1) && (!clip.y || line.top >= clip.bounds.top - 1 && line.bottom <= clip.bounds.bottom + 1))) }
+    })
+    return { fields, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
+      dialogBounds: dialog.getBoundingClientRect().toJSON(), focusInside: dialog.contains(document.activeElement) }
+  }, labels)
+}
+
+for (const width of [390, 1440]) for (const scenario of networkCases) {
+  test(`${width}px ${scenario.name} 网络确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+    const expected: DockerContainerCreateInput = { ...expectedInput(true), network: scenario.network }
+    const api = await fixture(page, new URL(baseURL!).origin, expected, false, true)
+    await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: '镜像', exact: true }).click()
+    await page.getByRole('button', { name: '从镜像 identity:latest 创建容器', exact: true }).filter({ visible: true }).click()
+    const drawer = page.locator('.create-container-drawer')
+    await expect(drawer).toBeVisible()
+    await expect.poll(() => api.requests.includes('GET /api/v1/docker/resources')).toBe(true)
+    await expect(drawer.getByText('正在读取 Docker 网络、卷和端口清单…', { exact: true })).toHaveCount(0)
+    await drawer.getByRole('switch', { name: '启用自定义网络', exact: true }).click()
+    if (scenario.network.subnet) {
+      await drawer.locator('.network-mode-switch').getByRole('switch').click()
+      await drawer.getByPlaceholder('例如 media-net', { exact: true }).fill(`  ${scenario.network.name}  `)
+      await drawer.getByPlaceholder('默认 bridge', { exact: true }).fill(`  ${scenario.network.driver}  `)
+      await drawer.getByPlaceholder('172.30.0.0/24', { exact: true }).fill(`  ${scenario.network.subnet}  `)
+      await drawer.getByPlaceholder('172.30.0.1', { exact: true }).fill(`  ${scenario.network.gateway}  `)
+      await drawer.getByPlaceholder('留空自动分配', { exact: true }).fill(`  ${scenario.network.ip}  `)
+    } else {
+      await expect(drawer.getByRole('combobox', { name: '选择现有 Docker 网络', exact: true })).toHaveCount(1)
+      await drawer.locator('label.field').filter({ has: page.getByRole('combobox', { name: '选择现有 Docker 网络', exact: true }) }).locator('.el-select__wrapper').click()
+      await page.getByRole('option', { name: 'fixture-net · bridge', exact: true }).click()
+    }
+    const opener = drawer.getByRole('button', { name: '创建并启动', exact: true })
+    await opener.focus(); await page.keyboard.press('Enter')
+    const preview = page.getByRole('dialog', { name: '确认容器配置', exact: true })
+    await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    const confirm = preview.getByRole('button', { name: '确认创建并启动', exact: true })
+    await confirm.focus(); await page.keyboard.press('Tab')
+    await expect(preview.locator('.el-dialog__headerbtn')).toBeFocused()
+    await page.keyboard.press('Shift+Tab'); await expect(confirm).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(preview).not.toBeVisible(); await expect(opener).toBeFocused()
+    expect(api.writes).toEqual([])
+    await page.keyboard.press('Enter'); await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    await page.evaluate(() => document.fonts.ready)
+    const scrollEvidence = await verifyConfigurationScroll(page)
+    await preview.locator('.preview-grid dt').filter({ hasText: new RegExp(`^${scenario.labels.at(-1)}$`) }).locator('xpath=following-sibling::dd[1]').scrollIntoViewIfNeeded()
+    await page.waitForTimeout(350)
+    const before = { ...await networkGeometry(page, scenario.labels), chrome: await modalChrome(page) }, requestsBefore = [...api.requests]
+    const prefix = `docker-create-network-${scenario.name}-${width}`
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const png = info.outputPath('ui-captures', `${prefix}.png`)
+    await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
+    const after = { ...await networkGeometry(page, scenario.labels), chrome: await modalChrome(page) }, axe = await new AxeBuilder({ page }).analyze(), afterAxe = { ...await networkGeometry(page, scenario.labels), chrome: await modalChrome(page) }
+    const captureState = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
+    const screenshotSha256 = createHash('sha256').update(await readFile(png)).digest('hex')
+    await writeFile(captureState, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+      evidenceKind: 'pre-create-network-preview', scrollEvidence, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      expectedInput: expected, expectedPreview: scenario.preview, screenshot: `${prefix}.png`, screenshotSha256,
+      beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests],
+      writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+      keyboard: { tabWrappedToClose: true, shiftTabWrappedToConfirm: true, escapeRestoredOpener: true } }, null, 2))
+    await info.attach(prefix, { path: png, contentType: 'image/png' })
+    await info.attach(`${prefix}-axe-state`, { path: captureState, contentType: 'application/json' })
+    for (const sample of [before, after, afterAxe]) {
+      assertModalChrome(sample.chrome)
+      expect(sample.fields.map((field) => field.label)).toEqual(scenario.labels)
+      expect(sample.fields.map((field) => field.text)).toEqual(scenario.preview)
+      expect(sample.fields).toHaveLength(scenario.labels.length)
+      expect(sample.fields.every((field) => field.characters.length > 0 && field.characters.every((glyph) => glyph.visible)), JSON.stringify(sample)).toBe(true)
+      expect(sample.fields.every((field) => field.fullTextVisible), JSON.stringify(sample)).toBe(true)
+      expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)
+      expect(sample.dialogBounds.left).toBeGreaterThanOrEqual(-1)
+      expect(sample.dialogBounds.right).toBeLessThanOrEqual(width + 1)
+      expect(sample.focusInside).toBe(true)
+    }
+    expect(after).toEqual(before); expect(afterAxe).toEqual(before)
+    expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+    expect(api.requests).toEqual(requestsBefore); expect(api.writes).toEqual([])
+    api.authorize()
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === createPath && response.request().method() === 'POST')
+    try {
+      await confirm.click()
+      await api.received.promise
+      expect(api.writes).toEqual([expected])
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
+      api.release.resolve()
+      const response = await responsePromise
+      expect(response.status()).toBe(201)
+      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
+      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      await expect(preview).not.toBeVisible()
+      await page.waitForTimeout(6000)
+      expect(api.writes).toEqual([expected])
+      expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
+      expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
+      await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+        evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
+        testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+        preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
+        replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+        status: response.status(), response: await response.json() }, null, 2))
+      await info.attach('strict-network-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })
 }

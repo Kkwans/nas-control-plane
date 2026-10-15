@@ -440,7 +440,7 @@ function validationMessage(input: DockerContainerCreateInput) {
   const portTargets = input.ports?.map((port) => `${port.containerPort}/${port.protocol ?? 'tcp'}`) ?? []
   if (new Set(portTargets).size !== portTargets.length) return '同一个容器端口和协议不能重复映射。'
   if (input.network && !input.network.name) return '启用网络配置后必须填写网络名称。'
-  if (form.networkCreateDedicated && input.network && !input.network.subnet) return '创建专用网络时必须填写子网。'
+  if (form.networkCreateDedicated && input.network && !input.network.subnet) return '创建或复用专用网络时必须填写子网。'
   if (input.network && ['host', 'none'].includes(input.network.name) && (input.network.driver || input.network.subnet || input.network.gateway || input.network.ip)) return 'host 和 none 网络不能配置驱动、子网、网关或固定 IP。'
   if (input.devices?.some((device) => !device.hostPath.startsWith('/') || !device.containerPath.startsWith('/'))) return '设备路径必须使用绝对路径。'
   const deviceTargets = input.devices?.map((device) => device.containerPath) ?? []
@@ -598,12 +598,12 @@ async function refreshUnresolvedInventory() {
       </section>
 
       <section class="form-section">
-        <SectionHeader title="网络与端口" description="连接现有网络，或使用子网配置创建专用网络" :icon="Network" heading-tag="h3">
+        <SectionHeader title="网络与端口" description="连接现有网络，或使用子网配置创建或复用专用网络" :icon="Network" heading-tag="h3">
           <template #actions><ElSwitch v-model="form.networkEnabled" aria-label="启用自定义网络" /></template>
         </SectionHeader>
         <div v-if="form.networkEnabled" class="form-grid">
           <label v-if="!form.networkCreateDedicated" class="field field--wide"><span>现有网络</span><NcpSelect :model-value="form.networkName" :options="networkOptions" accessible-label="选择现有 Docker 网络" filterable @update:model-value="setNetworkName" /></label>
-          <label class="switch-line network-mode-switch field--wide"><span><strong>创建专用网络（高级）</strong><small>仅填写子网时创建新的 Docker 网络；不会修改现有网络。</small></span><ElSwitch v-model="form.networkCreateDedicated" /></label>
+          <label class="switch-line network-mode-switch field--wide"><span><strong>创建或复用专用网络（高级）</strong><small>提供子网后，仅在同名网络不存在时创建；已有网络须匹配驱动、子网及显式网关，不会修改现有网络。</small></span><ElSwitch v-model="form.networkCreateDedicated" /></label>
           <template v-if="form.networkCreateDedicated">
             <label class="field"><span>专用网络名称</span><ElInput v-model="form.networkName" placeholder="例如 media-net" /></label>
             <label class="field"><span>驱动</span><ElInput v-model="form.networkDriver" placeholder="默认 bridge" /></label>
@@ -713,7 +713,16 @@ async function refreshUnresolvedInventory() {
             </li>
           </ol>
         </dd>
-        <dt>网络</dt><dd>{{ previewInput.network?.name || 'Docker 默认网络' }}<span v-if="previewInput.network?.subnet">（{{ previewInput.network.subnet }}）</span></dd>
+        <dt>网络</dt><dd><code v-if="previewInput.network">{{ JSON.stringify(previewInput.network.name) }}</code><template v-else>Docker 默认网络</template></dd>
+        <template v-if="previewInput.network">
+          <dt>网络策略</dt><dd>{{ previewInput.network.subnet ? '仅在同名网络不存在时创建；已有网络须匹配驱动、子网及显式网关，否则失败，不修改现有网络' : '连接现有网络（不创建或修改网络）' }}</dd>
+          <template v-if="previewInput.network.subnet">
+            <dt>网络驱动</dt><dd><code>{{ previewInput.network.driver ? JSON.stringify(previewInput.network.driver) : 'bridge（默认）' }}</code></dd>
+            <dt>子网</dt><dd><code>{{ JSON.stringify(previewInput.network.subnet) }}</code></dd>
+            <dt>网关</dt><dd><code v-if="previewInput.network.gateway">{{ JSON.stringify(previewInput.network.gateway) }}</code><template v-else>新建时由 Docker 分配；复用时保留已有网关</template></dd>
+            <dt>容器固定 IP</dt><dd><code v-if="previewInput.network.ip">{{ JSON.stringify(previewInput.network.ip) }}</code><template v-else>自动分配</template></dd>
+          </template>
+        </template>
         <dt>端口</dt><dd>
           <ol v-if="previewInput.ports?.length" class="path-mappings" aria-label="端口映射">
             <li v-for="(port, index) in previewInput.ports" :key="index">
