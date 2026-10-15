@@ -788,3 +788,161 @@ for (const width of [390, 1440]) for (const scenario of networkCases) {
     } finally { api.release.resolve() }
   })
 }
+
+async function gpuGeometry(page: Page) {
+  return page.getByRole('dialog', { name: '确认容器配置', exact: true }).evaluate((dialog) => {
+    const fields = [...dialog.querySelectorAll('ol[aria-label="GPU 请求详情"] > li > span')].map((field) => {
+      const label = field.textContent!.split('：')[0]
+      const bounds = field.getBoundingClientRect(), range = document.createRange()
+      range.selectNodeContents(field)
+      const lines = [...range.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+      const clips: Array<{ x: boolean; y: boolean; bounds: DOMRect }> = []
+      for (let ancestor: Element | null = field; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+        if (x || y) clips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+      }
+      const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT)
+      const characters: Array<{ value: string; bounds: ReturnType<DOMRect['toJSON']>; visible: boolean }> = []
+      while (walker.nextNode()) {
+        const node = walker.currentNode
+        const glyphClips = [...clips]
+        for (let ancestor = node.parentElement; ancestor && ancestor !== field; ancestor = ancestor.parentElement) {
+          const style = getComputedStyle(ancestor)
+          const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+          if (x || y) glyphClips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+        }
+        for (let index = 0; index < (node.textContent?.length || 0); index++) {
+          const glyph = document.createRange(); glyph.setStart(node, index); glyph.setEnd(node, index + 1)
+          const rect = glyph.getBoundingClientRect()
+          characters.push({ value: node.textContent![index], bounds: rect.toJSON(), visible: rect.width > 0 && rect.height > 0 && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1 && rect.left >= -1 && rect.right <= innerWidth + 1 && rect.top >= -1 && rect.bottom <= innerHeight + 1 && glyphClips.every((clip) => (!clip.x || rect.left >= clip.bounds.left - 1 && rect.right <= clip.bounds.right + 1) && (!clip.y || rect.top >= clip.bounds.top - 1 && rect.bottom <= clip.bounds.bottom + 1)) })
+        }
+      }
+      return { label, text: field.textContent, characters, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
+        clips: clips.map((clip) => ({ ...clip, bounds: clip.bounds.toJSON() })),
+        fullTextVisible: lines.length > 0 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && line.top >= bounds.top - 1 && line.bottom <= bounds.bottom + 1 && line.left >= -1 && line.right <= innerWidth + 1 && line.top >= -1 && line.bottom <= innerHeight + 1 && clips.every((clip) => (!clip.x || line.left >= clip.bounds.left - 1 && line.right <= clip.bounds.right + 1) && (!clip.y || line.top >= clip.bounds.top - 1 && line.bottom <= clip.bounds.bottom + 1))) }
+    })
+    return { fields, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
+      dialogBounds: dialog.getBoundingClientRect().toJSON(), focusInside: dialog.contains(document.activeElement) }
+  })
+}
+
+// GPU 预览分别核对提交原值与 Agent 的有效能力；空能力默认 gpu，数量 -1 表示全部。
+const gpuCases: Array<{ name: string; gpu: NonNullable<DockerContainerCreateInput['gpus']>[number]; driverInput: string; capabilitiesInput: string; preview: string[] }> = [
+  { name: 'automatic-driver-all-default-capabilities', gpu: { count: -1, capabilities: [] }, driverInput: '   ', capabilitiesInput: ' , , ',
+    preview: ['驱动：自动选择', '请求数量：全部（-1）', '有效能力：["gpu"]（默认）'] },
+  { name: 'explicit-driver-two-effective-lowercase-capabilities', gpu: { driver: 'Nvidia_1.test-driver', count: 2, capabilities: ['GPU', 'Compute', 'utility_1'] },
+    driverInput: '  Nvidia_1.test-driver  ', capabilitiesInput: ' GPU, Compute, utility_1, ',
+    preview: ['驱动："Nvidia_1.test-driver"', '请求数量：2 个', '有效能力：["gpu","compute","utility_1"]'] },
+]
+
+for (const width of [390, 1440]) for (const scenario of gpuCases) {
+  test(`${width}px ${scenario.name} GPU 确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+    const expected: DockerContainerCreateInput = { ...expectedInput(true), gpus: [scenario.gpu] }
+    const api = await fixture(page, new URL(baseURL!).origin, expected)
+    await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: '镜像', exact: true }).click()
+    await page.getByRole('button', { name: '从镜像 identity:latest 创建容器', exact: true }).filter({ visible: true }).click()
+    const drawer = page.locator('.create-container-drawer')
+    await expect(drawer).toBeVisible()
+    await expect.poll(() => api.requests.includes('GET /api/v1/docker/resources')).toBe(true)
+    await expect(drawer.getByText('正在读取 Docker 网络、卷和端口清单…', { exact: true })).toHaveCount(0)
+    await drawer.locator('.advanced-toggle').click()
+    await expect(drawer.locator('.advanced-toggle')).toHaveAttribute('aria-expanded', 'true')
+    const gpuRow = drawer.locator('.advanced-body .switch-line').filter({ has: page.getByText('GPU', { exact: true }) })
+    const gpuSwitch = gpuRow.getByRole('switch')
+    await expect(gpuSwitch).toHaveCount(1)
+    await expect(gpuSwitch).not.toBeChecked()
+    await gpuRow.locator('.el-switch__core').click()
+    await expect(gpuSwitch).toBeChecked()
+    expect(api.writes).toEqual([])
+    await drawer.getByPlaceholder('例如 nvidia；留空自动', { exact: true }).fill(scenario.driverInput)
+    await drawer.getByPlaceholder('gpu,compute,utility', { exact: true }).fill(scenario.capabilitiesInput)
+    const count = drawer.getByRole('spinbutton', { name: 'GPU 数量（-1 表示全部）', exact: true })
+    await expect(count).toHaveCount(1)
+    await count.fill(String(scenario.gpu.count))
+    await count.press('Tab')
+    await expect(count).toHaveValue(String(scenario.gpu.count))
+    const opener = drawer.getByRole('button', { name: '创建并启动', exact: true })
+    await opener.focus(); await page.keyboard.press('Enter')
+    const preview = page.getByRole('dialog', { name: '确认容器配置', exact: true })
+    await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    const confirm = preview.getByRole('button', { name: '确认创建并启动', exact: true })
+    await confirm.focus(); await page.keyboard.press('Tab')
+    await expect(preview.locator('.el-dialog__headerbtn')).toBeFocused()
+    await page.keyboard.press('Shift+Tab'); await expect(confirm).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(preview).not.toBeVisible(); await expect(opener).toBeFocused()
+    expect(api.writes).toEqual([])
+    await page.keyboard.press('Enter'); await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    const gpuDetails = preview.getByRole('list', { name: 'GPU 请求详情', exact: true })
+    await expect(gpuDetails.getByRole('listitem')).toHaveCount(1)
+    await expect(gpuDetails.locator('li > span')).toHaveText(scenario.preview)
+    await page.evaluate(() => document.fonts.ready)
+    const scrollEvidence = await verifyConfigurationScroll(page)
+    await preview.locator('.preview-grid dt').filter({ hasText: /^GPU 配置$/ }).locator('xpath=following-sibling::dd[1]').scrollIntoViewIfNeeded()
+    await page.waitForTimeout(350)
+    const before = { ...await gpuGeometry(page), chrome: await modalChrome(page) }, requestsBefore = [...api.requests]
+    const prefix = `docker-create-gpu-${scenario.name}-${width}`
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const png = info.outputPath('ui-captures', `${prefix}.png`)
+    await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
+    const after = { ...await gpuGeometry(page), chrome: await modalChrome(page) }, axe = await new AxeBuilder({ page }).analyze(), afterAxe = { ...await gpuGeometry(page), chrome: await modalChrome(page) }
+    const captureState = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
+    const screenshotSha256 = createHash('sha256').update(await readFile(png)).digest('hex')
+    await writeFile(captureState, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+      evidenceKind: 'pre-create-gpu-preview', scrollEvidence, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      expectedInput: expected, expectedPreview: scenario.preview, inputFields: { driver: scenario.driverInput, capabilities: scenario.capabilitiesInput }, screenshot: `${prefix}.png`, screenshotSha256,
+      beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests],
+      writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+      keyboard: { tabWrappedToClose: true, shiftTabWrappedToConfirm: true, escapeRestoredOpener: true } }, null, 2))
+    await info.attach(prefix, { path: png, contentType: 'image/png' })
+    await info.attach(`${prefix}-axe-state`, { path: captureState, contentType: 'application/json' })
+    for (const sample of [before, after, afterAxe]) {
+      assertModalChrome(sample.chrome)
+      expect(sample.fields.map((field) => field.label)).toEqual(['驱动', '请求数量', '有效能力'])
+      expect(sample.fields.map((field) => field.text)).toEqual(scenario.preview)
+      expect(sample.fields).toHaveLength(3)
+      expect(sample.fields.every((field) => field.characters.length > 0 && field.characters.every((glyph) => glyph.visible)), JSON.stringify(sample)).toBe(true)
+      expect(sample.fields.every((field) => field.fullTextVisible), JSON.stringify(sample)).toBe(true)
+      expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)
+      expect(sample.dialogBounds.left).toBeGreaterThanOrEqual(-1)
+      expect(sample.dialogBounds.right).toBeLessThanOrEqual(width + 1)
+      expect(sample.focusInside).toBe(true)
+    }
+    expect(after).toEqual(before); expect(afterAxe).toEqual(before)
+    expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+    expect(api.requests).toEqual(requestsBefore); expect(api.writes).toEqual([])
+    api.authorize()
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === createPath && response.request().method() === 'POST')
+    try {
+      await confirm.click()
+      await api.received.promise
+      expect(api.writes).toEqual([expected])
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
+      api.release.resolve()
+      const response = await responsePromise
+      expect(response.status()).toBe(201)
+      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
+      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      await expect(preview).not.toBeVisible()
+      await page.waitForTimeout(6000)
+      expect(api.writes).toEqual([expected])
+      expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
+      expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
+      await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+        evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
+        testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+        preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
+        replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+        status: response.status(), response: await response.json() }, null, 2))
+      await info.attach('strict-gpu-create-receipt', { path: receiptPath, contentType: 'application/json' })
+    } finally { api.release.resolve() }
+  })
+}

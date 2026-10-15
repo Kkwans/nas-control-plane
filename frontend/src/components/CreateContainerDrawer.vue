@@ -755,6 +755,16 @@ async function refreshUnresolvedInventory() {
         <dt>增加 Capabilities</dt><dd><code v-if="previewInput.capAdd?.length" class="capability-preview">{{ JSON.stringify(previewInput.capAdd) }}</code><template v-else>无</template></dd>
         <dt>移除 Capabilities</dt><dd><code v-if="previewInput.capDrop?.length" class="capability-preview">{{ JSON.stringify(previewInput.capDrop) }}</code><template v-else>无</template></dd>
         <dt>硬件请求</dt><dd>设备映射：{{ previewInput.devices?.length || 0 }} 项；GPU 请求：{{ previewInput.gpus?.length || 0 }} 项</dd>
+        <dt>GPU 配置</dt><dd>
+          <ol v-if="previewInput.gpus?.length" class="path-mappings" aria-label="GPU 请求详情">
+            <li v-for="(gpu, index) in previewInput.gpus" :key="index">
+              <span>驱动：<code v-if="gpu.driver">{{ JSON.stringify(gpu.driver) }}</code><template v-else>自动选择</template></span>
+              <span>请求数量：{{ gpu.count === -1 ? '全部（-1）' : `${gpu.count} 个` }}</span>
+              <span>有效能力：<code>{{ JSON.stringify(gpu.capabilities?.length ? gpu.capabilities.map((capability) => capability.trim().toLowerCase()) : ['gpu']) }}</code><template v-if="!gpu.capabilities?.length">（默认）</template></span>
+            </li>
+          </ol>
+          <template v-else>未启用</template>
+        </dd>
       </dl>
       <p v-if="previewInput.mounts?.length || previewInput.devices?.length" class="preview-intro">路径和卷名以双引号标示边界，保留空格；反斜杠、引号和控制字符按 JSON 转义显示。</p>
     </div>
