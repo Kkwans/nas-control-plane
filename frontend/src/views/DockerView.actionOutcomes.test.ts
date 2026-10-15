@@ -9,7 +9,8 @@ import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import { useSystemStore } from '@/stores/system'
 import DockerView from './DockerView.vue'
 
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ replace: vi.fn() }) }))
+const routeQuery = vi.hoisted(() => ({} as Record<string, string>))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery }), useRouter: () => ({ replace: vi.fn() }) }))
 vi.mock('@/stores/sites', () => ({ useSitesStore: () => ({ visibleSites: [] }) }))
 vi.mock('@/composables/useListPreference', async () => {
   const { ref } = await import('vue')
@@ -18,12 +19,11 @@ vi.mock('@/composables/useListPreference', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   const stub = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
-  return { ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('aside', [slots.header?.(), slots.default?.()]) : null }), ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 vi.mock('@/components/DockerImagePanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ContainerLogDrawer.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ComposeEditorDrawer.vue', () => ({ default: { render: () => null } }))
-vi.mock('@/components/ProjectDetailDrawer.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ListPageSizeControl.vue', () => ({ default: { render: () => null } }))
 
 const collectedAt = '2026-10-13T00:00:00.000Z'
@@ -66,6 +66,7 @@ async function mount() {
 }
 function selectContainers() { [...host.querySelectorAll<HTMLButtonElement>('.section-tabs button')].find((button) => button.textContent?.trim() === '容器')!.click() }
 beforeEach(() => {
+  delete routeQuery.project
   vi.clearAllMocks()
   vi.mocked(ElMessageBox.confirm).mockResolvedValue(confirmed)
   vi.useFakeTimers()
@@ -389,15 +390,16 @@ function focusMockDialog() {
 }
 
 // Mocked dialog tests cover application ownership and restoration guards only.
-// The unchanged Playwright suite exercises the actual Element Plus focus trap.
-describe.each(['compose', 'standalone'] as const)('项目取消焦点 %s', (kind) => {
+// The separate Playwright suite exercises the actual Element Plus focus trap.
+describe.each(['compose', 'standalone', 'container', 'drawer'] as const)('生命周期取消焦点 %s', (kind) => {
   it.each(['cancel', 'close'] as const)('在 %s 后恢复触发点，保持无写请求', async (decision) => {
     if (kind === 'compose') await readyCompose()
+    else if (kind === 'container' || kind === 'drawer') await readyContainerEntry(kind)
     else await ready(false)
     for (const action of ['停止', '重启']) {
       const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
       vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
-      const target = button(`${action}项目 demo-project`)
+      const target = button(kind === 'container' || kind === 'drawer' ? containerLabel(kind, action) : `${action}项目 demo-project`)
       target.focus(); target.click(); await settle()
       expect(target.disabled).toBe(true)
       focusMockDialog() // 模拟真实对话框已接管焦点，不替代浏览器焦点证据。
@@ -464,4 +466,108 @@ it('取消释放期间出现新的项目操作时不抢回焦点', async () => {
     expect(posts()).toHaveLength(0)
     second.reject('cancel'); await settle()
   } finally { observer.disconnect() }
+})
+
+function containerLabel(entry: 'container' | 'drawer', action: string) { return entry === 'drawer' ? `${action} demo-web` : `${action}容器` }
+async function readyContainerEntry(entry: 'container' | 'drawer') {
+  if (entry === 'drawer') routeQuery.project = 'demo'
+  await ready(entry === 'container')
+}
+
+describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s', (entry) => {
+  it.each(['stop', 'restart'] as const)('%s 明确确认一次，重复点击不重发', async (action) => {
+    await readyContainerEntry(entry)
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    const label = action === 'stop' ? '停止' : '重启'
+    const target = button(containerLabel(entry, label))
+    expect(target.parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
+    target.click(); target.click(); await settle()
+    expect(ElMessageBox.confirm).toHaveBeenCalledOnce()
+    expect(posts()).toHaveLength(0)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(target.parentElement?.dataset.tooltipDisabled).toBe('true')
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      action === 'stop' ? '将停止容器“demo-web”。容器、镜像和卷不会删除，之后可以再次启动。' : '将重启容器“demo-web”。容器、镜像和卷不会删除，期间服务会短暂中断。',
+      `确认${label}容器`,
+      { confirmButtonText: `确认${label}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info', customClass: 'ncp-container-action-confirmation' },
+    )
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...receipt(action === 'stop' ? 'stopped' : 'running'), action }) : response(inventory()))
+    confirmation.resolve(confirmed); await settle()
+    expect(posts()).toHaveLength(1)
+    expect(posts()[0]![0]).toBe(`/api/v1/docker/containers/demo-container/actions/${action}`)
+    expect(posts()[0]![1]?.body).toBeUndefined()
+    expect(ElMessage.success).toHaveBeenCalledOnce()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(target.parentElement?.dataset.tooltipDisabled).toBe('false')
+  })
+  it('启动无需确认，仅发送一次精确动作', async () => {
+    await readyContainerEntry(entry)
+    const observed = inventory(); observed.containers[0]!.state = 'stopped'
+    store.inventory = observed; await settle()
+    const target = button(containerLabel(entry, '启动'))
+    expect(target.parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...receipt(), action: 'start' }) : response(inventory()))
+    target.click(); target.click(); await settle()
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(posts()).toHaveLength(1)
+    expect(posts()[0]![0]).toBe('/api/v1/docker/containers/demo-container/actions/start')
+    expect(posts()[0]![1]?.body).toBeUndefined()
+    expect(ElMessage.success).toHaveBeenCalledOnce()
+  })
+  it.each(['stale-session', 'unmount', 'disconnected', 'disabled', 'unexpected-rejection', 'confirmed'] as const)('不向失效或非取消操作恢复焦点：%s', async (condition) => {
+    await readyContainerEntry(entry)
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    const target = button(containerLabel(entry, '重启'))
+    target.focus(); target.click(); await settle(); focusMockDialog()
+    const focus = vi.spyOn(target, 'focus')
+    if (condition === 'stale-session') { invalidateSession(); beginSession() }
+    if (condition === 'unmount') { app!.unmount(); app = undefined }
+    if (condition === 'disconnected') target.remove()
+    if (condition === 'disabled') {
+      // 独立的原生禁用来源仍须被恢复保护识别。
+      const observer = new MutationObserver(() => { if (!target.disabled) target.disabled = true })
+      observer.observe(target, { attributes: true, attributeFilter: ['disabled'] })
+      confirmation.reject('cancel'); await settle(); observer.disconnect()
+    } else if (condition === 'confirmed') confirmation.resolve(confirmed)
+    else confirmation.reject(condition === 'unexpected-rejection' ? new Error('dialog unavailable') : 'cancel')
+    await settle()
+    expect(focus).not.toHaveBeenCalled()
+    expect(posts()).toHaveLength(condition === 'confirmed' ? 1 : 0)
+    expect(fetcher).toHaveBeenCalledTimes(condition === 'confirmed' ? 3 : 1)
+  })
+  it('取消释放后新同名动作仍占用，旧操作不抢焦点', async () => {
+    await readyContainerEntry(entry)
+    const first = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    const second = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    const target = button(containerLabel(entry, '重启'))
+    target.focus(); target.click(); await settle(); focusMockDialog()
+    const focus = vi.spyOn(target, 'focus')
+    let started = false
+    const observer = new MutationObserver(() => {
+      if (!target.disabled && !started) { started = true; target.click() }
+    })
+    observer.observe(target, { attributes: true, attributeFilter: ['disabled'] })
+    try {
+      first.reject('cancel'); await settle()
+      expect(started).toBe(true)
+      expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
+      expect(target.disabled).toBe(true)
+      expect(focus).not.toHaveBeenCalled()
+      expect(posts()).toHaveLength(0)
+      second.reject('close'); await settle()
+      expect(target.disabled).toBe(false)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally { observer.disconnect() }
+  })
+  it('详情单容器未知回执仍关联当前项目且不重放', async () => {
+    await readyContainerEntry(entry)
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ invalid: true }) : response(inventory()))
+    button(containerLabel(entry, '重启')).click(); await settle(); await settle()
+    expect(posts()).toHaveLength(1)
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    if (entry === 'drawer') expect(host.querySelector('.detail-section [role="alert"]')?.textContent).toContain('可能已经')
+  })
 })

@@ -108,3 +108,15 @@ d2a8003 的实际移动端 wrong-project 截图显示未知结果正文上方仍
 浏览器专项保留全部原 Enter→取消/关闭/Escape、真实 Tab 陷阱/描边、原触发点恢复与零写请求断言，每个动作/宽度另增一次 Space→Escape，账本记录 activationKey。浏览器文件独立严格 TypeScript、ESLint、Playwright --list（原四项）及 diff 检查通过。没有本地浏览器执行、监听器、Docker/Compose 或 NAS；原生键盘、取消恢复、截图与完整 axe 的实际通过仍须远端 CI，不能以 jsdom 或静态检查冒充。
 
 最终全量复验：3970 项前端测试/142 文件及全量 ESLint 通过。原生 Enter 和 Space、取消/关闭/Escape 焦点恢复仍等待新提交 CI，未用组件桩通过替代真实键盘验收。
+
+## 单容器确认键盘入口与取消焦点恢复（2026-10-15）
+
+本片依据已验证的项目机制（597c398）检查同形单容器源码后实施：容器表格三处生命周期 tooltip 仍使用默认键盘触发，详情抽屉两处也未关闭该行为；单容器确认前同步禁用触发按钮，但缺少项目路径已有的取消焦点恢复。此处属于源码类比推导，尚无新的单容器浏览器失败证据，不将项目的既有浏览器故障冒称为容器实测故障。
+
+五处生命周期 tooltip 设置空 triggerKeys，抽屉两处同步按有效 actionPending 禁用提示。performAction 在占用前保存 activeElement，以每次调用独立 Symbol 标记私有 pending 所有者，避免同名动作字符串的所有权混淆；仅 cancel/close 释放自身锁后 nextTick 恢复，仍检查当前会话/视图、无任何有效 pending、目标连接且非 disabled。明确同意、意外拒绝、失效会话和卸载不主动恢复。启动仍免确认，停止/重启仍先同步占用再确认；精确回执、只读刷新、不自动重放和详情项目错误关联不变。
+
+单容器确认增加 ncp-container-action-confirmation 专属类，复用现有 Compose 的 44px 按钮、标题空间和 focus-visible 规则；每条选择器均由容器或 Compose 类限定，未修改全局弹窗。原生浏览器触达尺寸、键盘陷阱与焦点恢复仍由独立专项和远端 CI 核验。
+
+纯组件测试移除 DockerView 中的整个详情抽屉替身，仅保留 ElDrawer 外壳与 tooltip 属性观测，实际抽屉按钮经 emit 进入 performDetailAction/performAction。表格与抽屉均覆盖停止/重启 cancel/close 零 POST、零额外 GET 和焦点恢复，明确确认精确一次动作、启动免确认、工具提示属性、失效/断开/禁用/意外拒绝/成功不抢焦点，以及释放间隙新同名动作仍保持占用；详情未知回执继续显示关联项目告警。89 项定向组件测试、Vue 类型检查、修改文件 ESLint、生产构建与 540KiB 包预算通过。未运行本地浏览器、监听器、真实 Docker/Compose 或 NAS，未部署。组件桩不替代真实 Enter/Space、Escape、触达或完整 axe 验收。
+
+最终全量复验：3999 项前端测试/142 文件、Vue 类型检查、全量 ESLint、生产构建与包预算通过。新增四项隔离浏览器用例覆盖表格/移动列表和两档详情抽屉，原生 Enter/Space、32 次取消关闭/Escape 流程及每个入口停止/重启明确确认后的单次请求及启动免确认的单次请求；保持完整 axe 和产物账本。本地仅通过 E2E 严格类型、lint 和用例发现，实际浏览器证据等待 CI。单容器动作回执的 stopped 与清单 exited 状态已分开建模，未混用 Compose 状态约定。

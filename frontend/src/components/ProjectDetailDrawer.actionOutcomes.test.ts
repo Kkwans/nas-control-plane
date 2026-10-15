@@ -9,7 +9,7 @@ vi.mock('element-plus', async () => {
   return {
     // 保留具名标题与正文插槽，真实抽屉内容参与断言；不测传送和动画。
     ElDrawer: defineComponent({ setup: (_, { slots }) => () => h('aside', [slots.header?.(), slots.default?.()]) }),
-    ElTooltip: defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) }),
+    ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }),
   }
 })
 
@@ -70,5 +70,30 @@ describe('项目详情抽屉结果文案', () => {
     expect(alert.querySelector('p')?.textContent).toBe(message)
     expect(root.querySelector('.project-lifecycle [role="alert"]')).toBeNull()
     expect(root.textContent).not.toContain('容器操作失败')
+  })
+})
+
+// 使用真实抽屉按钮和 emit，工具提示仅提供属性观测。
+describe('单容器生命周期入口', () => {
+  it.each(['running', 'stopped'])('%s 按钮发出精确容器动作', async (state) => {
+    const onAction = vi.fn()
+    const root = await mount({ containers: [{ ...containers[0]!, state }], onAction })
+    const controls = root.querySelectorAll<HTMLButtonElement>('.container-card__actions button')
+    for (const control of [...controls].slice(0, 2)) {
+      expect(control.parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
+      expect(control.parentElement?.dataset.tooltipDisabled).toBe('false')
+      control.click()
+    }
+    expect(onAction.mock.calls).toEqual([['demo-container', state === 'running' ? 'stop' : 'start'], ['demo-container', 'restart']])
+  })
+  it('任意有效 pending 禁用两个动作及其工具提示', async () => {
+    const onAction = vi.fn()
+    const root = await mount({ actionPending: 'project:other:restart', onAction })
+    for (const control of [...root.querySelectorAll<HTMLButtonElement>('.container-card__actions button')].slice(0, 2)) {
+      expect(control.disabled).toBe(true)
+      expect(control.parentElement?.dataset.tooltipDisabled).toBe('true')
+      control.click()
+    }
+    expect(onAction).not.toHaveBeenCalled()
   })
 })

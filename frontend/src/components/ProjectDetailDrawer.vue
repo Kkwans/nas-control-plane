@@ -180,7 +180,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
               <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ presentDockerPorts(container.ports).map((port) => port.label).join('、') || '无公开端口' }}</dd></div>
             </dl>
             <div v-if="allowOperations" class="container-card__actions">
-              <ElTooltip :content="container.state === 'running' ? '停止容器' : '启动容器'">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending)" :content="container.state === 'running' ? '停止容器' : '启动容器'">
                 <button
                   :class="{ 'operation-button--danger': container.state === 'running' }"
                   class="operation-button"
@@ -194,7 +194,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
                   <Play v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip content="重启容器">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending)" content="重启容器">
                 <button class="operation-button" type="button" :disabled="Boolean(actionPending)" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
                   <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
                 </button>

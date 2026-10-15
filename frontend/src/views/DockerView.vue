@@ -54,6 +54,7 @@ const stateFilter = ref<StateFilter>('all')
 const containerStateFilter = ref<ContainerStateFilter>('all')
 const activeView = ref<DockerViewMode>('projects')
 const actionPending = ref<string | null>(null)
+let containerActionOwner: symbol | null = null
 const projectActionPending = ref<{ projectId: string; action: ContainerAction } | null>(null)
 const projectDeletePending = ref<string | null>(null)
 const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
@@ -230,6 +231,11 @@ async function performAction(containerId: string, action: ContainerAction) {
   const session = captureSession()
   const current = () => viewActive && isCurrentSession(session.generation)
   const container = inventory.value?.containers.find((item) => item.id === containerId)
+  // 在禁用按钮前保存触发点；私有所有者避免相同容器动作的旧调用释放新锁。
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  let dismissed = false
+  const pendingOwner = Symbol()
+  containerActionOwner = pendingOwner
   // 在确认框之前占用本次操作，避免多个确认框依次触发同一写操作。
   actionPending.value = `${containerId}:${action}`
   let failure: string | null = null
@@ -239,9 +245,12 @@ async function performAction(containerId: string, action: ContainerAction) {
         await ElMessageBox.confirm(
           dockerContainerActionConfirmation(container ?? { name: containerId, image: '' }, action),
           `确认${dockerActionLabel(action)}容器`,
-          { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' },
+          { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info', customClass: 'ncp-container-action-confirmation' },
         )
-      } catch { return null }
+      } catch (decision) {
+        dismissed = decision === 'cancel' || decision === 'close'
+        return null
+      }
     }
     if (!current()) return null
     actionError.value = null
@@ -273,7 +282,17 @@ async function performAction(containerId: string, action: ContainerAction) {
       if (current()) actionError.value = [failure, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
     }
   } finally {
-    if (viewActive) actionPending.value = null
+    if (viewActive && containerActionOwner === pendingOwner) {
+      containerActionOwner = null
+      actionPending.value = null
+      if (dismissed) {
+        // 等按钮重新启用后再恢复；旧会话或新操作不能抢回焦点。
+        await nextTick()
+        if (current() && !effectiveActionPending.value && returnFocus?.isConnected && !returnFocus.matches(':disabled')) {
+          returnFocus.focus({ preventScroll: true })
+        }
+      }
+    }
   }
   return failure
 }
@@ -626,11 +645,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* MessageBox is teleported; qualify every global rule with the Compose-only class. */
+/* MessageBox 传送到页面根部；每条规则仅限容器或 Compose 专属类。 */
+:global(.ncp-container-action-confirmation .el-message-box__header),
 :global(.ncp-compose-action-confirmation .el-message-box__header) { min-height: var(--ncp-touch-target); padding-right: calc(var(--ncp-touch-target) + 8px); }
+:global(.ncp-container-action-confirmation .el-message-box__headerbtn),
 :global(.ncp-compose-action-confirmation .el-message-box__headerbtn) { top: 4px; right: 4px; width: var(--ncp-touch-target); height: var(--ncp-touch-target); border-radius: 4px; }
+:global(.ncp-container-action-confirmation .el-message-box__btns .el-button),
 :global(.ncp-compose-action-confirmation .el-message-box__btns .el-button) { min-width: var(--ncp-touch-target); min-height: var(--ncp-touch-target); }
+:global(.ncp-container-action-confirmation .el-message-box__headerbtn:focus-visible),
 :global(.ncp-compose-action-confirmation .el-message-box__headerbtn:focus-visible),
+:global(.ncp-container-action-confirmation .el-message-box__btns .el-button:focus-visible),
 :global(.ncp-compose-action-confirmation .el-message-box__btns .el-button:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: 2px; }
 
 .docker-search { width: min(360px, 38vw); }
