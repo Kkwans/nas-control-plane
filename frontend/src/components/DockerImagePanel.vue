@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { ArrowDown, ArrowUp, ArrowUpDown, Box, Download, Eye, HardDrive, Image as ImageIcon, PackagePlus, RefreshCw, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElTooltip } from 'element-plus'
 
@@ -29,6 +29,8 @@ const systemStore = useSystemStore()
 let alive = true
 onBeforeUnmount(() => { alive = false })
 
+const pageRoot = shallowRef<HTMLElement>()
+const tooltipTarget = shallowRef<HTMLElement>()
 const mode = ref<ImageMode>('local')
 const removalTasksOpen = ref(false)
 const createImage = ref<DockerImageSummary | null>(null)
@@ -94,6 +96,8 @@ function sortIcon(key: 'name' | 'size' | 'created' | 'containers') {
 }
 
 onMounted(() => {
+  // 浮层保留在主区域语义内，并避开镜像表格的 overflow 裁切。
+  tooltipTarget.value = pageRoot.value?.closest<HTMLElement>('main, [role="main"]') ?? pageRoot.value ?? undefined
   void refresh()
   void loadDownloadJobs()
 })
@@ -101,7 +105,7 @@ onMounted(() => {
 
 <template>
   <TaskCenterDrawer v-if="removalTasksOpen" @close="removalTasksOpen = false" />
-  <section class="image-workspace">
+  <section ref="pageRoot" class="image-workspace">
     <header class="image-modebar">
       <SectionTabs v-model="mode" :tabs="imageModeTabs" accessible-label="镜像来源" />
       <div v-if="mode === 'local'" class="mode-actions">
@@ -110,14 +114,14 @@ onMounted(() => {
         </ElInput>
         <span v-if="selectedImageCount" class="selection-count">已选 {{ selectedImageCount }} 个</span>
         <ActionButton v-if="selectedImageCount" variant="danger" size="sm" :icon="Trash2" :loading="bulkRemovePending" @click="confirmRemoveSelected">批量删除</ActionButton>
-        <ElTooltip content="刷新本地镜像"><button class="icon-button" type="button" :disabled="loading" aria-label="刷新本地镜像" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="17" /></button></ElTooltip>
+        <ElTooltip :append-to="tooltipTarget" :disabled="loading" content="刷新本地镜像"><button class="icon-button" type="button" :disabled="loading" aria-label="刷新本地镜像" @click="refresh"><RefreshCw :class="{ spin: loading }" :size="17" /></button></ElTooltip>
       </div>
       <div v-else-if="mode === 'downloads'" class="mode-actions download-mode-actions">
         <ElInput v-model="downloadQuery" clearable aria-label="搜索镜像下载任务" placeholder="搜索镜像或任务消息">
           <template #prefix><Search :size="17" /></template>
         </ElInput>
         <NcpSelect v-model="downloadStatus" :options="downloadStatusOptions" accessible-label="下载任务状态" />
-        <ElTooltip content="刷新下载任务"><button class="icon-button" type="button" :disabled="downloadJobsLoading" :aria-busy="downloadJobsLoading" aria-label="刷新下载任务" @click="loadDownloadJobs"><RefreshCw :class="{ spin: downloadJobsLoading }" :size="17" /></button></ElTooltip>
+        <ElTooltip :append-to="tooltipTarget" :disabled="downloadJobsLoading" content="刷新下载任务"><button class="icon-button" type="button" :disabled="downloadJobsLoading" :aria-busy="downloadJobsLoading" aria-label="刷新下载任务" @click="loadDownloadJobs"><RefreshCw :class="{ spin: downloadJobsLoading }" :size="17" /></button></ElTooltip>
       </div>
     </header>
 
@@ -152,15 +156,15 @@ onMounted(() => {
             <div class="resource-name"><span><ImageIcon :size="18" /></span><div><strong>{{ displayName(image) }}</strong><small>{{ image.repoDigests[0] ?? '本地构建镜像' }}</small></div></div>
           </div>
           <code>{{ shortId(image.id) }}</code><span>{{ formatBytes(image.sizeBytes) }}</span><span>{{ dateLabel(image.createdAt) }}</span>
-          <ElTooltip :content="containerReferenceCount(image) ? `正在被 ${containerReferenceCount(image)} 个容器引用，不能强制删除` : '删除未使用的本地镜像'">
+          <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" :content="containerReferenceCount(image) ? `正在被 ${containerReferenceCount(image)} 个容器引用，不能强制删除` : '删除未使用的本地镜像'">
             <span class="usage-cell">
               <span v-if="containerReferenceCount(image)" class="usage-warning">{{ containerReferenceCount(image) }} 个容器使用中</span>
               <span v-else>未被引用</span>
             </span>
           </ElTooltip>
           <div class="image-row-actions">
-            <ElTooltip content="使用此镜像创建容器"><ListIconButton :icon="PackagePlus" :label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)" /></ElTooltip>
-            <ElTooltip :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ListIconButton :icon="Trash2" tone="danger" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)" /></ElTooltip>
+            <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" content="使用此镜像创建容器"><ListIconButton :icon="PackagePlus" :label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)" /></ElTooltip>
+            <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ListIconButton :icon="Trash2" tone="danger" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)" /></ElTooltip>
           </div>
         </div>
         <div v-if="!loading && !filteredImages.length" class="empty-state">没有匹配的本地镜像</div>

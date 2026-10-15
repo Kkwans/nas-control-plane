@@ -17,7 +17,7 @@ vi.mock('./NcpSelect.vue', () => ({ default: { render: () => null } }))
 vi.mock('./SectionTabs.vue', () => ({ default: defineComponent({ emits: ['update:modelValue'], setup(_, { emit }) { return () => h('button', { onClick: () => emit('update:modelValue', 'downloads') }, '下载任务') } }) }))
 vi.mock('element-plus', () => ({
   ElMessage: { warning: hooks.warning },
-  ElTooltip: defineComponent({ setup(_, { slots }) { return () => slots.default?.() } }),
+  ElTooltip: defineComponent({ props: ['appendTo', 'disabled', 'content'], setup(props, { slots }) { return () => h('span', { 'data-tooltip': props.content, 'data-tooltip-owner': (props.appendTo as HTMLElement | undefined)?.tagName, 'data-tooltip-disabled': String(Boolean(props.disabled)) }, slots.default?.()) } }),
   ElInput: defineComponent({ props: ['modelValue'], emits: ['update:modelValue'], setup(props, { emit }) { return () => h('input', { value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLInputElement).value) }) } }),
 }))
 
@@ -44,7 +44,7 @@ function downloadState() {
   }
 }
 let downloads: ReturnType<typeof downloadState>
-const mounted: { app: App; host: HTMLDivElement }[] = []
+const mounted: { app: App; host: HTMLElement }[] = []
 function job(status: JobSnapshot['status'] = 'running'): JobSnapshot {
   return { id: 'pull-1', type: 'docker-image-pull', status, reference: 'alpine:latest', message: '正在拉取镜像', progress: 50, downloadedBytes: 1024, speedBytes: 1024, createdAt: '2026-10-13T12:00:00Z', updatedAt: '2026-10-13T12:29:00Z' } as JobSnapshot
 }
@@ -70,6 +70,27 @@ beforeEach(() => {
 afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
 
 describe('DockerImagePanel 下载观察状态', () => {
+  it('镜像提示浮层归属主区域，删除确认及接收/未知期间关闭行提示', async () => {
+    const pending = ref(false)
+    const local = hooks.local() as Record<string, unknown>
+    const image = { id: `sha256:${'a'.repeat(64)}`, repoTags: ['alpine'], repoDigests: [], sizeBytes: 1, createdAt: '', containers: 0 }
+    Object.assign(local, { images: ref([image]), pagedImages: ref([image]), filteredImages: ref([image]), containerReferenceCount: () => 0, displayName: () => 'alpine', shortId: () => 'aaaa', isRemovePending: () => pending.value || Boolean((local.removeAdmissions as { value: Record<string, unknown> }).value[image.id]) })
+    const host = document.createElement('main'); const container = document.createElement('div'); host.append(container); document.body.append(host)
+    const app = createApp({ render: () => h(DockerImagePanel, { query: '', containers: [], pageSize: 20 }) })
+    app.mount(container); mounted.push({ app, host }); await nextTick()
+    const tooltips = [...host.querySelectorAll<HTMLElement>('[data-tooltip]')]
+    expect(tooltips.length).toBeGreaterThan(0)
+    expect(tooltips.every((tooltip) => tooltip.dataset.tooltipOwner === 'MAIN')).toBe(true)
+    const rowTooltips = [...host.querySelectorAll<HTMLElement>('.resource-row [data-tooltip]')]
+    expect(rowTooltips).toHaveLength(3)
+    expect(rowTooltips.every((tooltip) => tooltip.dataset.tooltipDisabled === 'false')).toBe(true)
+    pending.value = true; await nextTick()
+    expect(rowTooltips.every((tooltip) => tooltip.dataset.tooltipDisabled === 'true')).toBe(true)
+    for (const state of ['accepted', 'unknown']) {
+      (local.removeAdmissions as { value: unknown }).value = { [image.id]: { name: 'alpine', state } }; pending.value = false; await nextTick()
+      expect(rowTooltips.every((tooltip) => tooltip.dataset.tooltipDisabled === 'true')).toBe(true)
+    }
+  })
   it.each(['accepted', 'unknown'])('删除 %s 保留只读核验入口', async (state) => {
     const local = hooks.local() as { removeAdmissions: { value: unknown }; refresh: ReturnType<typeof vi.fn> }
     local.removeAdmissions.value = { 'sha256:fixture': { name: 'alpine', state, jobId: state === 'accepted' ? 'job-1' : undefined } }
