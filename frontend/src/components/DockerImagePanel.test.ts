@@ -70,6 +70,21 @@ beforeEach(() => {
 afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
 
 describe('DockerImagePanel 下载观察状态', () => {
+  it('批量未知结果只展示只读镜像核验，不声称存在后台任务', async () => {
+    const local = hooks.local() as { removeAdmissions: { value: unknown }; refresh: ReturnType<typeof vi.fn> }
+    local.removeAdmissions.value = { 'sha256:fixture': { name: 'alpine', state: 'unknown', kind: 'bulk' } }
+    const host = document.createElement('div'); document.body.append(host)
+    const app = createApp({ render: () => h(DockerImagePanel, { query: '', containers: [], pageSize: 20 }) })
+    app.mount(host); mounted.push({ app, host }); await nextTick()
+    const banner = host.querySelector('.removal-admission')!
+    expect(banner.textContent).toContain('批量删除结果未确认，请只读核对镜像，勿重复提交。')
+    expect(banner.textContent).not.toContain('任务')
+    expect([...banner.querySelectorAll('button')].map((item) => item.textContent)).toEqual(['只读刷新镜像'])
+    const before = local.refresh.mock.calls.length
+    ;(banner.querySelector('button') as HTMLButtonElement).click(); await nextTick()
+    expect(local.refresh.mock.calls.length).toBe(before + 1)
+  })
+
   it('镜像提示浮层归属主区域，删除确认及接收/未知期间关闭行提示', async () => {
     const pending = ref(false)
     const local = hooks.local() as Record<string, unknown>

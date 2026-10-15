@@ -12,14 +12,18 @@ import { useListPreference } from '@/composables/useListPreference'
 
 type ReadonlyRef<T> = Ref<T> | ComputedRef<T>
 export type ImageRemoveFailure = { id: string; name: string; message: string }
-type RemovalAdmission = { name: string; state: 'accepted' | 'unknown'; jobId?: string }
+type RemovalAdmission = { kind?: 'single-job' | 'bulk'; name: string; state: 'accepted' | 'unknown'; jobId?: string }
 // 页面重挂载不等于重新获得写入许可；同一登录会话保留不确定提交。
+let sessionBulkReservation = ref<{ token: symbol; ids: string[] } | null>(null)
 let admissionSession = -1
 let sessionAdmissions = ref<Record<string, RemovalAdmission>>({})
 function removalAdmissionsForSession(session: ReturnType<typeof captureSession>) {
   if (admissionSession !== session.generation) {
     admissionSession = session.generation
     sessionAdmissions = ref<Record<string, RemovalAdmission>>({})
+    sessionBulkReservation = ref(null)
+    const reservation = sessionBulkReservation
+    session.signal.addEventListener('abort', () => { reservation.value = null }, { once: true })
     const owned = sessionAdmissions
     session.signal.addEventListener('abort', () => { owned.value = {} }, { once: true })
   }
@@ -43,6 +47,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   if (options.active) watch(options.active, () => { generation += 1 }, { flush: 'sync' })
   onScopeDispose(() => { disposed = true; generation += 1 })
   const removeAdmissions = removalAdmissionsForSession(session)
+  const bulkReservation = sessionBulkReservation
   const singlePendingIds = ref<string[]>([])
   const images = ref<DockerImageSummary[]>([])
   const loading = ref(false)
@@ -77,7 +82,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   const allVisibleSelected = computed(() => visibleImageIds.value.length > 0 && visibleImageIds.value.every((id) => selectedImageIds.value.includes(id)))
   const someVisibleSelected = computed(() => visibleImageIds.value.some((id) => selectedImageIds.value.includes(id)))
   const selectedImageCount = computed(() => selectedImageIds.value.length)
-  const bulkRemovePending = computed(() => removePendingIds.value.length > 0)
+  const bulkRemovePending = computed(() => bulkReservation.value !== null)
 
   watch(() => [options.query.value, options.pageSize.value], () => { localPage.value = 1 })
   watch(localPageCount, (count) => {
@@ -110,7 +115,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   function isRemovePending(imageId: string) {
-    return removePendingIds.value.includes(imageId) || singlePendingIds.value.includes(imageId) || !!removeAdmissions.value[imageId]
+    return !!bulkReservation.value?.ids.includes(imageId) || removePendingIds.value.includes(imageId) || singlePendingIds.value.includes(imageId) || !!removeAdmissions.value[imageId]
   }
 
   async function toggleLocalSort(key: 'name' | 'size' | 'created' | 'containers') {
@@ -150,10 +155,6 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
     return Math.max(Number.isFinite(image.containers) ? image.containers : 0, inventoryCount)
   }
 
-  function failureMessage(caught: unknown) {
-    return caught instanceof NcpApiError ? caught.message : '镜像删除失败，请稍后重试。'
-  }
-
   async function confirmRemove(image: DockerImageSummary) {
     if (!active() || isRemovePending(image.id)) return
     const id = image.id
@@ -171,7 +172,7 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
         })
       } catch { return }
       const target = currentTarget()
-      if (!active() || !alive(owner) || !target || containerReferenceCount(target) > 0 || target.id !== id || removeAdmissions.value[id]) return
+      if (!active() || !alive(owner) || !target || containerReferenceCount(target) > 0 || target.id !== id || removeAdmissions.value[id] || bulkReservation.value?.ids.includes(id)) return
       removeAdmissions.value[id] = { name, state: 'unknown' }
       try {
         const job = await requestDockerImageRemoveJob(id)
@@ -198,53 +199,67 @@ export function useDockerLocalImages(options: UseDockerLocalImagesOptions) {
   }
 
   async function confirmRemoveImages(requested: DockerImageSummary[]) {
-    if (!requested.length) return
+    if (!active() || bulkReservation.value || !requested.length) return
+    const owner = generation
     const inUse = requested.filter((image) => containerReferenceCount(image) > 0)
     const removable = requested.filter((image) => containerReferenceCount(image) === 0)
+      .map((image) => ({ id: image.id, name: displayName(image), tags: JSON.stringify(image.repoTags) }))
     if (!removable.length) {
       ElMessage.warning('所选镜像都正在被容器引用，已跳过删除；不会强制删除。')
       return
     }
-    const skippedMessage = inUse.length
-      ? `其中 ${inUse.length} 个镜像正在被容器引用，会跳过且不会 force 删除。`
-      : ''
-    const names = removable.length === 1 ? `“${displayName(removable[0] as DockerImageSummary)}”` : `${removable.length} 个未被引用的镜像`
+    const ids = removable.map((image) => image.id)
+    if (new Set(ids).size !== ids.length || ids.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id) || isRemovePending(id))) return
+    const token = Symbol('bulk-removal')
+    bulkReservation.value = { token, ids }
+    removePendingIds.value = [...ids]
+    const valid = () => active() && alive(owner) && bulkReservation.value?.token === token
+    const currentTargets = () => removable.every((snapshot) => {
+      const matches = images.value.filter((image) => image.id === snapshot.id)
+      const target = matches[0]
+      return matches.length === 1 && target && JSON.stringify(target.repoTags) === snapshot.tags &&
+        containerReferenceCount(target) === 0 && !singlePendingIds.value.includes(snapshot.id) && !removeAdmissions.value[snapshot.id]
+    })
     try {
-      await ElMessageBox.confirm(`将从 NAS 删除 ${names}。${skippedMessage}`, '删除本地镜像', {
-        confirmButtonText: removable.length === 1 ? '确认删除' : `删除 ${removable.length} 个`, cancelButtonText: '取消', type: 'warning',
-      })
-    } catch { return }
-
-    if (removable.some((image) => isRemovePending(image.id))) return
-    removeFailures.value = []
-    removePendingIds.value = removable.map((image) => image.id)
-    try {
-      const batches: DockerImageSummary[][] = []
+      if (!currentTargets()) return
+      const skipped = inUse.length ? `其中 ${inUse.length} 个镜像正在被容器引用，会跳过且不会 force 删除。` : ''
+      const names = removable.length === 1 ? `“${removable[0]!.name}”（${removable[0]!.id}）` : `${removable.length} 个未被引用的镜像`
+      try {
+        await ElMessageBox.confirm(`将从 NAS 删除 ${names}。${skipped}`, '删除本地镜像', {
+          confirmButtonText: removable.length === 1 ? '确认删除' : `删除 ${removable.length} 个`, cancelButtonText: '取消', type: 'warning',
+        })
+      } catch { return }
+      if (!valid() || !currentTargets()) return
+      removeFailures.value = []
+      // 写入发出后，丢失响应不能证明未执行；跨页面保留不确定目标，禁止重复提交。
+      for (const image of removable) removeAdmissions.value[image.id] = { kind: 'bulk', name: image.name, state: 'unknown' }
+      const batches: (typeof removable)[] = []
       for (let index = 0; index < removable.length; index += 50) batches.push(removable.slice(index, index + 50))
       const results = await Promise.allSettled(batches.map((batch) => removeDockerImages(batch.map((image) => image.id))))
+      if (!valid()) return
       const failures: ImageRemoveFailure[] = []
       let succeededCount = 0
-      results.forEach((result, batchIndex) => {
-        const batch = batches[batchIndex] ?? []
-        if (result.status === 'rejected') {
-          failures.push(...batch.map((image) => ({ id: image.id, name: displayName(image), message: failureMessage(result.reason) })))
-          return
-        }
-        succeededCount += result.value.removedCount
-        const imageById = new Map(batch.map((image) => [image.id, image]))
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'rejected') continue
+        const batch = batches[index]!
         for (const item of result.value.items) {
-          if (item.removed) continue
-          const image = imageById.get(item.imageId)
-          if (!image) continue
-          failures.push({ id: image.id, name: displayName(image), message: item.errorCode ? `删除失败（${item.errorCode}）` : '镜像删除失败，请稍后重试。' })
+          const image = batch.find((image) => image.id === item.imageId)!
+          if (item.removed) {
+            succeededCount += 1
+            delete removeAdmissions.value[image.id]
+          } else if (item.errorCode === 'DOCKER_IMAGE_IN_USE') {
+            delete removeAdmissions.value[image.id]
+            failures.push({ id: image.id, name: image.name, message: '镜像正在被容器引用，已跳过删除；不会强制删除。' })
+          }
         }
-      })
+      }
       removeFailures.value = failures
       if (succeededCount) ElMessage.success(`已删除 ${succeededCount} 个本地镜像`)
-      if (failures.length) ElMessage.error(`${failures.length} 个镜像删除失败，请查看列表中的错误。`)
-      selectedImageIds.value = failures.map((failure) => failure.id)
+      if (failures.length) ElMessage.error(`${failures.length} 个镜像仍被引用，已跳过删除。`)
+      selectedImageIds.value = removable.filter((image) => removeAdmissions.value[image.id] || failures.some((failure) => failure.id === image.id)).map((image) => image.id)
       await refresh()
     } finally {
+      if (bulkReservation.value?.token === token) bulkReservation.value = null
       removePendingIds.value = []
     }
   }

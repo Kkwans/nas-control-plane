@@ -132,8 +132,8 @@ onMounted(() => {
         <button type="button" @click="removeFailures = []">关闭</button>
       </div>
       <div v-for="(admission, id) in removeAdmissions" :key="id" class="inline-error removal-admission" :class="{ 'removal-admission--unknown': admission.state === 'unknown' }" role="status">
-        <span>{{ admission.name }}（{{ id }}）：{{ admission.state === 'accepted' ? `删除任务已接收（${admission.jobId}），尚未确认删除完成。` : '删除任务可能已接收，结果尚未确认，请勿重复提交。' }}</span>
-        <button type="button" @click="removalTasksOpen = true">查看最近任务</button>
+        <span>{{ admission.name }}（{{ id }}）：{{ admission.kind === 'bulk' ? '批量删除结果未确认，请只读核对镜像，勿重复提交。' : admission.state === 'accepted' ? `删除任务已接收（${admission.jobId}），尚未确认删除完成。` : '删除任务可能已接收，结果尚未确认，请勿重复提交。' }}</span>
+        <button v-if="admission.kind !== 'bulk'" type="button" @click="removalTasksOpen = true">查看最近任务</button>
         <button type="button" :disabled="loading" @click="refresh">只读刷新镜像</button>
       </div>
       <section class="resource-table panel">
@@ -259,7 +259,7 @@ onMounted(() => {
 .job-state--deleted{border-color:#d5dce6;background:#edf1f5;color:#5f6f83}
 .job-state--failed{border-color:rgba(201,83,97,.28);background:#fcecef;color:#a83d4b}
 .job-state--interrupted{border-color:#e8c98b;background:#fff3d9;color:#996117}
-.resource-select-head{display:flex;min-width:0;align-items:center;gap:8px}.resource-name-cell{display:flex;min-width:0;align-items:center;gap:8px}.resource-select-head input,.resource-name-cell>input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--ncp-primary)}.usage-cell{display:grid;justify-items:center;gap:2px;line-height:1.25}.usage-warning{color:var(--ncp-danger-strong);font-size:.72rem;font-weight:720}.bulk-remove-error>div{min-width:0}.bulk-remove-error ul{margin:4px 0 0;padding-left:17px}.selection-count{white-space:nowrap;font-variant-numeric:tabular-nums}
+.resource-select-head{display:flex;min-width:0;align-items:center;gap:8px}.resource-name-cell{display:flex;min-width:0;align-items:center;gap:8px}.resource-select-head input,.resource-name-cell>input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--ncp-primary)}.usage-cell{display:grid;justify-items:center;gap:2px;line-height:1.25}.usage-warning{color:var(--ncp-danger-strong);font-size:.72rem;font-weight:720}.bulk-remove-error{flex-wrap:wrap;gap:8px}.bulk-remove-error>div{flex:1 1 240px;min-width:0;overflow-wrap:anywhere}.bulk-remove-error>button{min-width:44px;min-height:44px;padding:6px 10px;flex:0 0 auto}.bulk-remove-error ul{margin:4px 0 0;padding-left:17px}.selection-count{white-space:nowrap;font-variant-numeric:tabular-nums}
 @media(max-width:1050px){.resource-head,.resource-row{grid-template-columns:minmax(220px,1.4fr) 110px 85px 105px 105px 100px;gap:8px}}
 @media(max-width:820px){.resource-table{overflow-x:auto}.resource-head,.resource-row{min-width:780px}.tag-title{align-items:stretch;flex-direction:column}.tag-title :deep(.ncp-select){width:100%}.tag-picker dl{grid-template-columns:1fr}.tag-picker dl>div:nth-child(even){border-left:0}.tag-picker dl>div:nth-child(n+2){border-top:1px solid var(--ncp-line)}.tag-grid{grid-template-columns:1fr}}
 </style>

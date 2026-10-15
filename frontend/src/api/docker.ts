@@ -254,17 +254,36 @@ export async function removeDockerImages(
   imageIds: string[],
   fetcher: typeof fetch = fetch,
 ): Promise<DockerImageRemoveBatchResult> {
-  return requestJson(
-    '/api/v1/docker/images/remove-batch',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageIds }),
-    },
-    isDockerImageRemoveBatchResult,
-    fetcher,
-    'DOCKER_IMAGE_REMOVE_BATCH_RESPONSE_INVALID',
-  )
+  // 在首次异步等待前保存请求身份，防止调用方修改数组污染回执校验。
+  const requestedIds = Object.freeze([...imageIds])
+  let rejection: NcpApiError | undefined
+  try {
+    const response = await fetcher(
+      '/api/v1/docker/images/remove-batch',
+      requestOptions(jsonRequest({ imageIds: requestedIds })),
+    )
+    const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') throw new Error('回执媒体类型无效')
+    const payload: unknown = await response.json()
+    // 仅保留服务端在调用 Agent 前明确拒绝请求体的状态与错误码组合。
+    if (isApiErrorResponse(payload) && (
+      (response.status === 413 && payload.code === 'HTTP_REQUEST_BODY_TOO_LARGE') ||
+      (response.status === 415 && payload.code === 'HTTP_UNSUPPORTED_MEDIA_TYPE')
+    )) {
+      rejection = new NcpApiError(payload.code, payload.message, payload.requestId)
+      throw rejection
+    }
+    if (response.status !== 200) throw new Error('回执状态无效')
+    if (!isDockerImageRemoveBatchResult(payload, requestedIds)) throw new Error('回执与请求不一致')
+    return payload
+  } catch (caught) {
+    if (rejection && caught === rejection) throw rejection
+    // 请求可能已执行；任何不完整或矛盾的回执都不能作为再次删除的依据。
+    throw new NcpApiError(
+      'DOCKER_IMAGE_REMOVE_BATCH_OUTCOME_UNKNOWN',
+      '批量删除结果尚未确认，部分镜像可能已删除。请只读刷新核对，勿重复提交。',
+    )
+  }
 }
 
 export async function searchDockerHub(
@@ -604,21 +623,28 @@ function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveRe
   return isRecord(value) && typeof value.imageId === 'string' && value.removed === true
 }
 
-function isDockerImageRemoveBatchResult(value: unknown): value is DockerImageRemoveBatchResult {
-  return (
-    isRecord(value) &&
-    typeof value.removedCount === 'number' &&
-    typeof value.failedCount === 'number' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.items) &&
-    value.items.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.imageId === 'string' &&
-        typeof item.removed === 'boolean' &&
-        (item.errorCode === undefined || typeof item.errorCode === 'string'),
-    )
-  )
+function isDockerImageRemoveBatchResult(value: unknown, requestedIds: readonly string[]): value is DockerImageRemoveBatchResult {
+  if (!isRecord(value) || !Array.isArray(value.items) || value.items.length !== requestedIds.length ||
+    typeof value.removedCount !== 'number' || !Number.isSafeInteger(value.removedCount) || value.removedCount < 0 ||
+    typeof value.failedCount !== 'number' || !Number.isSafeInteger(value.failedCount) || value.failedCount < 0 ||
+    typeof value.completed !== 'boolean') return false
+
+  const remainingIds = new Set(requestedIds)
+  if (remainingIds.size !== requestedIds.length) return false
+  let removedCount = 0
+  for (const item of value.items) {
+    if (!isRecord(item) || typeof item.imageId !== 'string' || !remainingIds.delete(item.imageId) ||
+      typeof item.removed !== 'boolean') return false
+    if (item.removed) {
+      if (item.errorCode !== undefined && item.errorCode !== '') return false
+      removedCount += 1
+    } else if (typeof item.errorCode !== 'string' || !item.errorCode.trim()) {
+      return false
+    }
+  }
+  const failedCount = requestedIds.length - removedCount
+  return remainingIds.size === 0 && value.removedCount === removedCount &&
+    value.failedCount === failedCount && value.completed === (failedCount === 0)
 }
 
 function isDockerHubRepository(value: unknown): value is DockerHubRepository {
