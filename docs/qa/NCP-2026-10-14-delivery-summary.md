@@ -229,3 +229,14 @@
 - **写入次数与无障碍边界**：每个宽度的完成观察用例仅有一次停止 POST 和一次启动 POST；未知结果用例分别显式触发三个场景，各一次重启 POST，不是自动重放。完整 axe 的 14 份捕获均零 violation，但每份仍有 aria-valid-attr-value（一处弹出层引用）及 color-contrast（10–11 处，涉及渐变、短文本或重叠）incomplete。四张成功提示 PNG 可见预期深绿文字和浅绿背景，纯色对比约 5.9246:1；390px 启动提示文字仍被 axe 标记部分重叠、需人工审查，不能称自动对比度检查全部通过。静态像素、几何与键盘复核不替代屏幕阅读器、缩放、其他浏览器引擎、动态状态或全面无障碍验收。
 
 以上为源码、模拟驱动、临时 SQLite、fake 执行器/Agent 与 CI 浏览器 fixture 的隔离验证。没有真实 journalctl、Docker/Compose、NAS、数据库 TLS 握手或原生多会话实机验收，没有部署、发布或生产操作。
+
+## Docker 容器键盘与详情体验收尾（2026-10-15 22:26 UTC）
+
+- [2c222b6](https://github.com/Kkwans/nas-control-plane/commit/2c222b64081c4e3791e3279029b6d58c03d655c6) 恢复单容器生命周期原生键盘激活、取消后归还焦点，并为确认框提供44px操作区；[2ae07ed](https://github.com/Kkwans/nas-control-plane/commit/2ae07ed4555b454917d80714f81f546f780dbb2c) 恢复列表与项目抽屉详情入口的原生激活，不改变操作请求和权限。首次容器专项实际 CI 保留459通过/2抽屉失败：完整 axe 发现缺失标题关联、健康状态对比度4.39:1和标题层级缺口，不能把中断前未执行取消解释成焦点恢复失败。
+- [3e5d3d8](https://github.com/Kkwans/nas-control-plane/commit/3e5d3d817e9459c4f704e7ec891b1c984650431c) 正式消费两个抽屉的标题ID、恢复h2，并限制项目副标题选择器，避免覆盖状态语义色。[CI 38809245522](https://github.com/Kkwans/nas-control-plane/actions/runs/38809245522) 全绿：4019单元/144文件、461E2E。四个生命周期场景共32次取消全部完成并恢复焦点；八份完整axe零违规，仍保留incomplete。
+- [f14be5e](https://github.com/Kkwans/nas-control-plane/commit/f14be5ec24f1854ced72a0de7b24793f3e61faa6) 新增390/1440×列表/项目抽屉四个只读详情浏览器场景。首次[CI 38809345663](https://github.com/Kkwans/nas-control-plane/actions/runs/38809345663) 保留461通过/4失败：INFO文字4.11:1及传送到body后的重复banner。八次键盘激活、Escape关闭与恢复均完成，每次精确两个GET，零写请求；axe软断言保持失败同时保留后续独立证据。
+- [3923d0a](https://github.com/Kkwans/nas-control-plane/commit/3923d0a042a974d4f1b6edfa1bab680f408b4745) 使用既有Teleport→未命名section→原生ElDrawer模式保留标题、关闭和焦点合同，INFO改局部strong色，静态对比度5.76:1。[CI 38812226434](https://github.com/Kkwans/nas-control-plane/actions/runs/38812226434) 全绿：4022单元/144文件、465E2E。395源码散列与24制品散列匹配，八张实际截图目检无目标裁切重叠，完整axe零违规。实际关闭按钮仍为32×22，保留为下一片明确缺口。
+- [6a31269](https://github.com/Kkwans/nas-control-plane/commit/6a312696996bc50a4addf8388f9e6d49078763e3) 将详情原生关闭按钮局部扩大到44×44，标题间隔12px，保留2px可见焦点环。新增原生按钮Enter/Space和角内点击关闭证据，原Escape循环不删除。[CI 38815054495](https://github.com/Kkwans/nas-control-plane/actions/runs/38815054495) 全绿：4025单元/145文件、465E2E，Go/Compose通过，发布跳过。
+- 最新[证据分片2](https://github.com/Kkwans/nas-control-plane/actions/runs/38815054495/artifacts/12010783370)与[分片3](https://github.com/Kkwans/nas-control-plane/actions/runs/38815054495/artifacts/12010992959)的396源码散列及60制品散列全部匹配精确提交，工作树干净。20循环全部完成并恢复焦点，合计40目标GET且每循环详情/日志各一次，零写请求、拒绝请求及页面错误；20捕获期间请求稳定。所有关闭区域44×44、标题间距12px，80个角内采样点均命中，无根节点横向溢出；20份焦点均可见且2px solid。20张PNG分为5组不同字节图，逐组目检无标题、信息卡或日志裁切重叠。
+
+20份完整axe均零violation，但仍各有aria-valid-attr-value（一节点）和color-contrast（十节点）incomplete，涉及底层页面弹出层引用、渐变和短数字，不能据此宣称全面无障碍认证。初始触发器通过focus()定位，未证明从页面起点完整Tab可达性；未覆盖屏幕阅读器、缩放或其他引擎。移动全页截图在844px视口以下显示底层页面，属于固定抽屉与全页截图范围，不是已确认的视口内泄漏。全部验证仍为隔离组件与CI fixture，未进行NAS实机操作或验收。
