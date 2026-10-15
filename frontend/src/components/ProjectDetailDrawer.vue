@@ -199,7 +199,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
                   <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip content="查看容器详情与日志">
+              <ElTooltip :trigger-keys="[]" content="查看容器详情与日志">
                 <button class="operation-button" type="button" :aria-label="`查看 ${container.name} 详情与日志`" @click="emit('details', container)">
                   <Info :size="17" />
                 </button>

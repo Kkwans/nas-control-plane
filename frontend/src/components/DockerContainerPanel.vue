@@ -98,7 +98,7 @@ function stateTone(container: DockerContainer) {
         <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending)" :append-to="tooltipAppendTo" content="重启容器" placement="top">
           <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(actionPending) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
         </ElTooltip>
-        <ElTooltip :append-to="tooltipAppendTo" content="查看容器详情与日志" placement="top">
+        <ElTooltip :trigger-keys="[]" :append-to="tooltipAppendTo" content="查看容器详情与日志" placement="top">
           <ListIconButton :icon="Info" label="查看容器详情与日志" @click="emit('details', container)" />
         </ElTooltip>
       </div>

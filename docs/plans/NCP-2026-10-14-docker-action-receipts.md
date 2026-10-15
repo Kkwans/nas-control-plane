@@ -120,3 +120,17 @@ d2a8003 的实际移动端 wrong-project 截图显示未知结果正文上方仍
 纯组件测试移除 DockerView 中的整个详情抽屉替身，仅保留 ElDrawer 外壳与 tooltip 属性观测，实际抽屉按钮经 emit 进入 performDetailAction/performAction。表格与抽屉均覆盖停止/重启 cancel/close 零 POST、零额外 GET 和焦点恢复，明确确认精确一次动作、启动免确认、工具提示属性、失效/断开/禁用/意外拒绝/成功不抢焦点，以及释放间隙新同名动作仍保持占用；详情未知回执继续显示关联项目告警。89 项定向组件测试、Vue 类型检查、修改文件 ESLint、生产构建与 540KiB 包预算通过。未运行本地浏览器、监听器、真实 Docker/Compose 或 NAS，未部署。组件桩不替代真实 Enter/Space、Escape、触达或完整 axe 验收。
 
 最终全量复验：3999 项前端测试/142 文件、Vue 类型检查、全量 ESLint、生产构建与包预算通过。新增四项隔离浏览器用例覆盖表格/移动列表和两档详情抽屉，原生 Enter/Space、32 次取消关闭/Escape 流程及每个入口停止/重启明确确认后的单次请求及启动免确认的单次请求；保持完整 axe 和产物账本。本地仅通过 E2E 严格类型、lint 和用例发现，实际浏览器证据等待 CI。单容器动作回执的 stopped 与清单 exited 状态已分开建模，未混用 Compose 状态约定。
+
+## 容器详情与日志只读键盘入口（2026-10-15）
+
+基于 Element Plus 默认 tooltip 会拦截 Enter/Space 的既有源码机制，检查发现容器表格和项目详情抽屉的“查看容器详情与日志”入口仍使用默认 triggerKeys。本片是源码类比推导的只读导航修正，尚未复现新的实际浏览器失败，不借用生命周期确认故障作为详情入口的实测证据。
+
+生产改动仅为 DockerContainerPanel 与 ProjectDetailDrawer 两处详情 tooltip 增加空 triggerKeys，保留原生按钮键盘激活；tooltip 的悬停、文案、位置、挂载目标及详情 emit 均不变。移动容器卡片继续使用无 tooltip 的原生详情按钮。详情入口在有效 actionPending 期间仍可使用，不新增 disabled 或 pending 门禁，也不改生命周期动作、确认、回执、请求或焦点恢复。
+
+新增面板组件回归并扩展抽屉回归，检查桌面包裹与移动未包裹合同、详情触发精确一次 details(container) 且保留原对象、零 action/project-action，以及无 pending、本容器 pending 和其他项目 pending 下的原行为；保留既有生命周期禁用检查。组件桩仅观测工具提示属性，不模拟 Enter/Space 的浏览器默认激活，也不将 jsdom 点击误称真实键盘验证。
+
+面板、抽屉及 DockerView.actionOutcomes 共 104 项定向测试、修改文件 ESLint、Vue 类型检查、生产构建和 540KiB 包预算通过，diff 空白检查通过。独立浏览器专项另行覆盖原生键盘与只读请求账本；本地未运行浏览器、监听器、Docker/Compose 或 NAS，未提交或部署，真实键盘及完整 axe 结果仍待后续 CI。
+
+并行容器 CI 已报告既有详情抽屉的三类无障碍问题，正在独立只读诊断；本片不扩大到这些修复。新的只读浏览器专项若进入同一抽屉，完整 axe 仍可能被这些既有问题阻塞；上述纯测试及静态构建通过不代表抽屉无障碍验收通过。
+
+本片最终全量 4014 项前端测试/143 文件与 Vue 类型检查通过；新的只读浏览器专项尚在独立编写，未纳入本片、未声称浏览器验收。已知抽屉无障碍问题另片修复。

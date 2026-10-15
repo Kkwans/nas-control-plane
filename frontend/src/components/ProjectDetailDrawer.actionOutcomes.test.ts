@@ -97,3 +97,28 @@ describe('单容器生命周期入口', () => {
     expect(onAction).not.toHaveBeenCalled()
   })
 })
+
+// 不模拟原生键盘默认动作；这里只观测空 triggerKeys 与真实只读 emit，浏览器专项验证 Enter/Space。
+describe('详情抽屉中的只读容器详情入口', () => {
+  it.each([null, 'demo-container:stop', 'project:other:restart'])('pending=%s 不影响详情入口或增加生命周期事件', async (actionPending) => {
+    const onDetails = vi.fn()
+    const onAction = vi.fn()
+    const onProjectAction = vi.fn()
+    const root = await mount({ actionPending, onDetails, onAction, 'onProject-action': onProjectAction })
+    const controls = [...root.querySelectorAll<HTMLButtonElement>('.container-card__actions button')]
+    expect(controls).toHaveLength(3)
+    const details = controls[2]!
+    expect(details.type).toBe('button')
+    expect(details.getAttribute('aria-label')).toBe('查看 demo-web 详情与日志')
+    expect(details.disabled).toBe(false)
+    expect(details.parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
+    expect(details.parentElement?.dataset.tooltipDisabled).toBe('false')
+    expect(controls[0]!.disabled).toBe(Boolean(actionPending))
+    expect(controls[1]!.disabled).toBe(Boolean(actionPending))
+    details.click()
+    expect(onDetails.mock.calls).toEqual([[containers[0]]])
+    expect(onDetails.mock.calls[0]![0]).toBe(containers[0])
+    expect(onAction).not.toHaveBeenCalled()
+    expect(onProjectAction).not.toHaveBeenCalled()
+  })
+})
