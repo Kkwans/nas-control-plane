@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
@@ -135,7 +134,7 @@ func (api *handler) resolveDockerArtifactStates(ctx context.Context, jobs []jobS
 	references := make(map[string]struct{})
 	for _, image := range inventory.Images {
 		for _, reference := range append(image.RepoTags, image.RepoDigests...) {
-			normalized := strings.TrimPrefix(strings.TrimSpace(reference), "docker.io/")
+			normalized := dockerArtifactReferenceKey(reference)
 			if normalized != "" {
 				references[normalized] = struct{}{}
 			}
@@ -146,7 +145,11 @@ func (api *handler) resolveDockerArtifactStates(ctx context.Context, jobs []jobS
 		if job.Type != "docker-image-pull" || job.Status != "completed" {
 			continue
 		}
-		reference := strings.TrimPrefix(strings.TrimSpace(job.Reference), "docker.io/")
+		reference := dockerArtifactReferenceKey(job.Reference)
+		if reference == "" {
+			job.ArtifactState = jobArtifactUnknown
+			continue
+		}
 		if _, present := references[reference]; present {
 			job.ArtifactState = jobArtifactPresent
 		} else {

@@ -14,6 +14,7 @@ import {
   subscribeJob,
   type JobSubscription,
 } from '@/api/docker'
+import { dockerArtifactReferenceKey } from '@/utils/dockerArtifactReference'
 import { captureSession } from '@/session/sessionLifecycle'
 import { useListPreference } from '@/composables/useListPreference'
 
@@ -143,8 +144,9 @@ export function useDockerImageDownloads(
   }
 
   function localImageForJob(job: JobSnapshot) {
-    const reference = (job.reference ?? '').replace(/^docker\.io\//, '')
-    return images.value.find((image) => image.repoTags.some((tag) => tag === reference || tag.replace(/^docker\.io\//, '') === reference))
+    const reference = dockerArtifactReferenceKey(job.reference)
+    if (!reference) return undefined
+    return images.value.find((image) => [...image.repoTags, ...image.repoDigests].some((candidate) => dockerArtifactReferenceKey(candidate) === reference))
   }
 
   function downloadState(job: JobSnapshot) {

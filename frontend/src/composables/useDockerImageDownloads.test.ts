@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import referenceCases from '../../../testdata/docker-artifact-reference-cases.json'
+import { dockerArtifactReferenceKey } from '@/utils/dockerArtifactReference'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, ref } from 'vue'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
@@ -85,6 +87,23 @@ describe('下载生命周期呈现', () => {
 
 describe('下载结果与本地镜像核实', () => {
   const image: DockerImageSummary = { id: 'sha256:local', repoTags: ['docker.io/library/alpine:latest'], repoDigests: [], sizeBytes: 1024, createdAt: '', containers: 0 }
+
+  it.each(referenceCases)('$name', ({ reference, candidate, present, valid }) => {
+    const key = dockerArtifactReferenceKey(reference)
+    expect(Boolean(key)).toBe(valid)
+    expect(Boolean(key) && key === dockerArtifactReferenceKey(candidate)).toBe(present)
+    for (const digested of [false, true]) {
+      const state = setup(ref([{ ...image, repoTags: digested ? [] : [candidate], repoDigests: digested ? [candidate] : [], sizeBytes: 1024 }]))
+      const completed = job({ status: 'completed', reference, totalBytes: 0 })
+      expect(state.downloadArtifactLabel(completed)).toBe(present ? '镜像存在' : '镜像未核实')
+      expect(state.effectiveTotal(completed)).toBe(present ? 1024 : 0)
+    }
+  })
+
+  it('Docker Hub 官方镜像完整名称匹配熟悉名称清单', () => {
+    const state = setup(ref([{ ...image, repoTags: ['alpine:latest'] }]))
+    expect(state.downloadArtifactLabel(job({ status: 'completed', reference: 'docker.io/library/alpine:latest' }))).toBe('镜像存在')
+  })
 
   it('已完成但缺少本地镜像清单时不推断镜像已删除', () => {
     const state = setup()
