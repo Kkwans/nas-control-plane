@@ -197,3 +197,17 @@
 - **仍未解释的移动偶发失败**：#368 的 390px/200% 摘要在三阶段几何稳定，位于视口内并通过命中；#367 未改布局也有同样的通过记录。由于 #366 缺少制品，最初视口比例 0 的根因仍未知，两次通过不能证明该偶发问题已根治。
 
 历史仅显示最后成功保存的状态，可能落后于执行，也不证明当前资源状态；跨页没有快照或总数保证，1 MiB 是响应预算而非进程内存上限。异常记录明确失败，历史清理、导出和执行动作不在本片范围。以上仍是临时 SQLite、fake 与 CI 浏览器 fixture 验证；真实 NAS、Docker/Agent socket、数据库 TLS 握手及原生多会话仍未验收，没有部署、发布或生产操作。
+
+
+## 数据库操作边界与历史字号时序复验（2026-10-15 18:59 UTC）
+
+最新已推送代码为 [9aa04d1](https://github.com/Kkwans/nas-control-plane/commit/9aa04d1d018ae93bca7ae0c4fe213da4687079ee)。以下接续前述历史交付，区分数据库修复、既有浏览器用例的重复失败与测试时序修复后的结果。
+
+- **数据库共享操作预算**：[11351ce](https://github.com/Kkwans/nas-control-plane/commit/11351ce0f92a506a199701ba28f2d6435dee97d9) 为同一 Manager 的连接池拥有操作提供固定四个许可，普通与 TLS 路径共享，满额立即拒绝而不排队；连接池关闭后才幂等释放许可。`operation_busy` 经 RPC Unavailable 映射为 HTTP 503，并同步 OpenAPI；读取失败保留原状态，写入仍按结果未知处理，不自动重试或重放。该固定值不是 NAS 实测容量，也不是跨 Manager 或全服务并发上限。完整数据库 race、三轮定向检查及本地 3852 项前端单元（140 文件）、lint、类型检查、构建与包预算通过。
+- **目录补充读取的取消语义**：[10368c2](https://github.com/Kkwans/nas-control-plane/commit/10368c23cd14826bf61188987d6ae7c2315d006a) 不再将统计或定义读取中的取消、超时伪装为部分成功，保留既有超时分类与普通可选信息错误的兼容行为；覆盖包装错误、成功扫描期间取消、空目录及连接池/许可回收。基线复现失败后，完整数据库 race（8.981 秒）、独立十轮定向 race、构建和 vet 通过。
+- **行写入回执不能伪装成功**：[38b14ba](https://github.com/Kkwans/nas-control-plane/commit/38b14ba709f14e430be876aa245ffb8e569442be) 修复忽略 `RowsAffected` 错误的问题，只接受 0 至 2^53−1 的整数，合法零值仍保留；无效、缺失或读取异常的回执经 RPC Internal 映射为 HTTP 502，并提示写入可能已生效、需要只读核对。仅隔离回执读取时的 panic，不包围执行、不承诺回滚，也不重放；稳定错误不携带底层敏感异常。完整数据库 race（15.055 秒）、独立三轮定向检查、RPC/HTTP/OpenAPI 回归及本地 3855 项前端单元（140 文件）、lint、类型检查、构建与包预算通过。[CI 38786446718](https://github.com/Kkwans/nas-control-plane/actions/runs/38786446718) 全部适用检查通过：3855 单元/140 文件、453 浏览器用例及 Go/Compose，发布跳过；此时尚无字体时序屏障，不能据该次通过认定偶发问题已修复。
+- **保留重复失败与可核验原因**：此前 11351ce 的 [CI 38784406471](https://github.com/Kkwans/nas-control-plane/actions/runs/38784406471) 与 10368c2 的 [CI 38785361652](https://github.com/Kkwans/nas-control-plane/actions/runs/38785361652) 均为 452 项浏览器通过、一项 390px/200% 字号摘要可见性失败；3852 单元/140 文件及 Go/Compose 通过。首份失败制品中的 376 项源码哈希与提交一致、CI 工作树干净；捕获前半段仍记录根字号 15px、摘要 y=471px/h=44px，同一阶段稍后的目标已变为 y=1162px/h=60px，后续根字号为 30px，说明滚动发生在字号重排之前。该证据解释本次捕获混入旧字号布局；原 #366 没有制品，仍不能反推其具体失败现场。
+- **只修正测试就绪条件**：9aa04d1 先等待计算字号符合预期，再等待字体就绪，之后沿用原单次滚动；对截图前、截图后及完整 axe 后三阶段增加字号与目标控件几何一致断言。没有修改产品 CSS、重复滚动兜底或缩小可见性、命中及 axe 检查。[CI 38787383741](https://github.com/Kkwans/nas-control-plane/actions/runs/38787383741) 全部适用检查通过：3855 单元/140 文件、453 浏览器用例及 Go/Compose，发布跳过。该次通过验证了新增就绪条件下的回归结果，不证明所有潜在偶发问题永久消除。
+- **最终制品与字号证据**：[制品分片 6](https://github.com/Kkwans/nas-control-plane/actions/runs/38787383741/artifacts/11998344883)、[分片 7](https://github.com/Kkwans/nas-control-plane/actions/runs/38787383741/artifacts/12000105132) 与[分片 8](https://github.com/Kkwans/nas-control-plane/actions/runs/38787383741/artifacts/11999246440) 中 40 张实际 PNG、40 份捕获状态及六份最终请求记录已复核；376 项源码哈希与 9aa04d1 一致，CI 工作树干净，PNG 与状态哈希匹配。32 组字号捕获的三个阶段均保持预期 15px/30px；390px/200% 摘要三个阶段均为 x=31px、y=503.03125px、宽 328px、高 60px，位于视口内并通过中心命中，实际图片可见聚焦摘要与长 ID 折行。六份请求记录全部为 GET，历史请求序列与预期一致，无未知请求、页面错误或任务/历史流订阅。完整 axe 零违规，仍保留 color-contrast、heading-order incomplete 人工审查项，不代表全面无障碍合格。
+
+以上为源码、模拟驱动、临时库及 CI 浏览器 fixture 的隔离验证；真实 NAS、Docker/Agent socket、数据库 TLS 握手及原生多会话仍未验收。没有部署、发布或生产操作。
