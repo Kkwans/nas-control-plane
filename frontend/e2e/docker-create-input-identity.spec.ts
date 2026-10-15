@@ -200,7 +200,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, defaultCommand:
     expect(sample.whiteSpace).toBe('pre-wrap')
     expect(sample.pathPreviews.map((path) => path.text)).toEqual(defaultCommand ? [] : [mount.source, mount.target, device.hostPath, device.containerPath].map((path) => JSON.stringify(path)))
     for (const path of sample.pathPreviews) {
-      expect(path.whiteSpace).toBe('pre-wrap'); expect(path.fitsLabel, JSON.stringify(path)).toBe(true)
+      expect(path.whiteSpace).toBe('break-spaces'); expect(path.fitsLabel, JSON.stringify(path)).toBe(true)
       expect(path.spaces.every((width) => width > 0)).toBe(true)
     }
     expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)

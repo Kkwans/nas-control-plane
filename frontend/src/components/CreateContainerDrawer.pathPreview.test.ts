@@ -99,15 +99,22 @@ function paths(label: string) {
 }
 
 describe('创建确认的精确路径预览', () => {
-  it('路径样式保留连续空白并允许长路径换行（静态合同，不替代浏览器验证）', () => {
-    expect(drawerSource).toMatch(/\.path-preview\s*\{[^}]*white-space:pre-wrap[^}]*overflow-wrap:anywhere/)
+  it('路径独占标签内一行，连续及行尾空白参与换行而不悬挂溢出（静态合同）', () => {
+    // break-spaces 保留原文且让每个空格占据行内宽度；实际字形边界由 CI 浏览器检查。
+    const declaration = drawerSource.match(/\.path-preview\s*\{([^}]*)\}/)?.[1]
+    expect(declaration).toBeDefined()
+    const code = document.createElement('code')
+    code.style.cssText = declaration!
+    expect(code.style.display).toBe('block')
+    expect(code.style.whiteSpace).toBe('break-spaces')
+    expect(code.style.overflowWrap).toBe('anywhere')
   })
 
   it.each([false, true])('分行标明挂载和设备的精确边界，预览不修改提交，runContainer=%s', async (runContainer) => {
     await mount()
     const mounts = []
     const devices = []
-    for (const suffix of ['', '  ', '\t', '\u00a0', '\u3000', '\\"<b>']) {
+    for (const suffix of ['', '  ', ' '.repeat(48), '\t', '\u00a0', '\u3000', '\\"<b>']) {
       const index = mounts.length
       await click('添加挂载')
       await edit(index, '/volume2/data', '/  source' + suffix, 'mount')
