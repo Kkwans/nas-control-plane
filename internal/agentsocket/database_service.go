@@ -338,6 +338,8 @@ func databaseResponse(result any, err error) (*structpb.Struct, error) {
 			grpcCode = codes.Aborted
 		case ncpdatabase.CodeResultTooLarge:
 			grpcCode = codes.ResourceExhausted
+		case ncpdatabase.CodeMutationReceiptInvalid:
+			grpcCode = codes.Internal
 		}
 		return nil, grpcstatus.Error(grpcCode, string(code))
 	}

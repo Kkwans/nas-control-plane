@@ -821,7 +821,25 @@ func execMutation(ctx context.Context, db *sql.DB, statement string, args []any)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	affected, _ := result.RowsAffected()
+	return mutationReceipt(result)
+}
+
+// 只隔离驱动回执读取；ExecContext 已经完成，不恢复或重放执行，也不承诺回滚。
+// database/sql 会把 nil driver.Result 包成非 nil sql.Result，因此还须隔离读取时的 panic。
+func mutationReceipt(result sql.Result) (receipt MutationResult, err error) {
+	invalid := func() error { return &DatabaseError{Code: CodeMutationReceiptInvalid, Operation: "mutation_receipt"} }
+	defer func() {
+		if recover() != nil {
+			receipt, err = MutationResult{}, invalid()
+		}
+	}()
+	if result == nil {
+		return MutationResult{}, invalid()
+	}
+	affected, countErr := result.RowsAffected()
+	if countErr != nil || affected < 0 || affected > maxSafeRowsAffected {
+		return MutationResult{}, invalid()
+	}
 	return MutationResult{RowsAffected: affected}, nil
 }
 

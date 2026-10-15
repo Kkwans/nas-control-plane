@@ -45,6 +45,7 @@ func TestDatabaseRPCStableCodesSurviveCoordinatorMapping(t *testing.T) {
 		ncpdatabase.CodeAuthFailed, ncpdatabase.CodeCredentialsRequired,
 		ncpdatabase.CodePermissionDenied, ncpdatabase.CodeDatabaseNotFound,
 		ncpdatabase.CodeTimeout, ncpdatabase.CodeResultTooLarge, ncpdatabase.CodeOperationBusy,
+		ncpdatabase.CodeMutationReceiptInvalid,
 		ncpdatabase.CodeUnreachable, ncpdatabase.CodeSQLInvalid,
 		ncpdatabase.CodeResultModeUnsupported, ncpdatabase.CodeConstraintFailed,
 		ncpdatabase.CodeAgentUnavailable, ncpdatabase.CodeCredentialStoreUnavailable,

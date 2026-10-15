@@ -898,6 +898,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
           content:
@@ -944,6 +950,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
           content:
@@ -990,6 +1002,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
           content:
@@ -3144,9 +3162,10 @@ components:
               description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseMutationResult:
       type: object
+      description: 有效驱动回执；零为合法计数，不证明目标行发生变化。回执无效时不返回成功，且不能据此重放写入。
       required: [rowsAffected]
       properties:
-        rowsAffected: { type: integer, format: int64, minimum: 0 }
+        rowsAffected: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
     ResourceAlertsSnapshot:
       type: object
       required: [enabled, observedAt, startedAt, rules]

@@ -103,6 +103,17 @@ describe.each(['update', 'delete'] as const)('数据库 %s 发送边界', (opera
     await expect(write(input)).rejects.toBeInstanceOf(DatabaseRowWriteOutcomeUnknownError)
   })
 
+  it('HTTP 502 的无效写入回执保持结果未知且不会重新派发', async () => {
+    const fetcher = useResponse(response(envelope('mutation_receipt_invalid'), 502))
+    const error = await write(input).catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(DatabaseRowWriteOutcomeUnknownError)
+    expect(error).toMatchObject({ code: 'DATABASE_ROW_WRITE_OUTCOME_UNKNOWN' })
+    expect(String(error)).not.toContain('secret')
+    expect(JSON.stringify(error)).not.toMatch(/secret|source-a|sample/)
+    expect((error as Error).cause).toBeUndefined()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
   it.each([new TypeError('credential-secret'), new DOMException('raw-diagnostic-secret', 'AbortError'), new NcpApiError('DATABASE_INPUT_INVALID', 'raw-diagnostic-secret')])('发送后的异常只保留固定安全错误', async (cause) => {
     const fetcher = vi.fn<typeof fetch>().mockRejectedValue(cause)
     vi.stubGlobal('fetch', fetcher)
