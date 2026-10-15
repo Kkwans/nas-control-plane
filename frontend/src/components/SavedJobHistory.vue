@@ -46,7 +46,7 @@ const stateLabels = new Map([['queued', '排队中'], ['running', '执行中'], 
       </div>
       <button v-if="error && !unsupported && !unauthorized" type="button" :disabled="loading" @click="focusPanel(); retry()">重试同一读取</button>
     </div>
-    <div class="history-list" :aria-busy="loading" aria-label="已保存历史列表">
+    <section class="history-list" :aria-busy="loading" aria-label="已保存历史列表">
       <p v-if="page && !page.items.length" class="history-empty">本次查询没有更多已保存记录。可回到最新页重新读取。</p>
       <article v-for="job in page?.items" :key="job.id" class="history-record" :aria-label="job.reference || job.id">
         <div class="history-top"><span>{{ jobTypeLabel(job.type) }}</span><span class="history-status">保存状态：{{ stateLabels.get(job.status) ?? job.status }}</span></div>
@@ -63,7 +63,7 @@ const stateLabels = new Map([['queued', '排队中'], ['running', '执行中'], 
           <div v-if="job.cancellationStatus"><dt>保存的取消状态</dt><dd>{{ job.cancellationStatus }}</dd></div>
         </dl></details>
       </article>
-    </div>
+    </section>
     <div class="history-pagination">
       <p>逐页读取，不保证跨页快照；新记录请回到最新页查看。</p>
       <div><button type="button" :disabled="loading" @click="focusPanel(); latest()"><RefreshCw :size="16" aria-hidden="true" />回到最新页</button><button type="button" :disabled="loading || !!error || !page?.nextCursor" @click="focusPanel(); next()">下一页<ArrowRight :size="16" aria-hidden="true" /></button></div>

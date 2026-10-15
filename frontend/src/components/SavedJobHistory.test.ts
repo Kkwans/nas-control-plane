@@ -40,6 +40,15 @@ describe('保存历史只读呈现', () => {
     api.read.mockRejectedValue(new NcpApiError(code, '固定错误')); await mount(); expect(host.textContent).toContain('固定错误'); expect(host.textContent).toContain('最后保存'); expect(host.textContent).not.toContain('没有更多')
     expect(!!button('重试同一读取')).toBe(code !== 'JOB_HISTORY_UNSUPPORTED')
   })
+  it.each(['JOB_HISTORY_UNSUPPORTED', 'JOB_HISTORY_UNAVAILABLE', 'empty'])('空列表 %s 仍使用可命名 region 语义', async code => {
+    if (code === 'empty') api.read.mockResolvedValue({ source: 'persisted', items: [] })
+    else api.read.mockRejectedValue(new NcpApiError(code, '读取失败'))
+    await mount()
+    const list = host.querySelector('[aria-label="已保存历史列表"]')!
+    expect(list.tagName).toBe('SECTION')
+    expect(list.getAttribute('aria-busy')).toBe('false')
+    expect(list.querySelectorAll('article')).toHaveLength(0)
+  })
   it('关闭的同一时刻先撤销所有权，迟到401不触发会话刷新', async () => {
     let reject!: (e: Error) => void; api.read.mockReturnValue(new Promise((_a, b) => { reject = b }))
     const active = await mount(); active.value = false; reject(new NcpApiError('AUTH_UNAUTHORIZED', 'invalid')); await flush()

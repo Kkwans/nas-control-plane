@@ -101,11 +101,12 @@ async function provenance() {
   const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend/src', 'frontend/e2e', 'frontend/index.html', 'frontend/package.json', 'frontend/pnpm-lock.yaml', 'frontend/vite.config.ts', 'frontend/playwright.config.ts']).split('\n').filter(Boolean)
   return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async file => [file, hash(await readFile(resolve(root, file)))]))) }
 }
-async function measure(page: Page, control?: Locator) {
-  if (control) await control.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }))
-  return drawer(page).evaluate(element => {
+async function measure(page: Page, control?: Locator, scroll = true) {
+  if (control && scroll) await control.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }))
+  const panel = await drawer(page).evaluate(element => {
     const box = element.getBoundingClientRect()
     return {
+      activeElement: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label'), className: document.activeElement?.className },
       bounds: box.toJSON(), rootFontSize: getComputedStyle(document.documentElement).fontSize,
       root: { width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
       controls: [...element.querySelectorAll('button,input,select,summary')].map(control => {
@@ -118,6 +119,16 @@ async function measure(page: Page, control?: Locator) {
       }),
     }
   })
+  const target = control ? await control.evaluate(element => {
+    const rect = element.getBoundingClientRect(), hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    const ancestors = []
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent)
+      ancestors.push({ tag: parent.tagName, className: parent.className, bounds: parent.getBoundingClientRect().toJSON(), scrollTop: parent.scrollTop, scrollLeft: parent.scrollLeft, scrollHeight: parent.scrollHeight, clientHeight: parent.clientHeight, scrollWidth: parent.scrollWidth, clientWidth: parent.clientWidth, overflowX: style.overflowX, overflowY: style.overflowY, display: style.display, flex: style.flex })
+    }
+    return { tag: element.tagName, label: element.getAttribute('aria-label') ?? element.textContent, bounds: rect.toJSON(), centerHit: !!hit && element.contains(hit), hitElement: hit ? { tag: hit.tagName, className: hit.className } : null, ancestors }
+  }) : null
+  return { ...panel, target }
 }
 async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, control?: Locator) {
   await page.evaluate(() => document.fonts.ready)
@@ -126,12 +137,13 @@ async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, 
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = info.outputPath('ui-captures', `${name}.png`)
   await page.screenshot({ path: png, animations: 'disabled' })
-  const after = await measure(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page)
+  const after = await measure(page, control, false), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, control, false)
   const state = `${name}-capture-state.json`, statePath = info.outputPath('ui-captures', state)
   await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, testTitle: info.title, phase, screenshot: `${name}.png`, screenshotSha256: hash(await readFile(png)), before, after, afterAxe, axe, requestLedger: [...api.requests] }, null, 2))
   api.captures.push({ state, sha256: hash(await readFile(statePath)) })
   await info.attach(name, { path: png, contentType: 'image/png' })
   await info.attach(`${name}-state`, { path: statePath, contentType: 'application/json' })
+  try {
   expect(axe.violations).toEqual([])
   expect(after.root.scrollWidth).toBeLessThanOrEqual(after.root.width + 1)
   expect(after.bounds.left).toBeGreaterThanOrEqual(-1)
@@ -141,6 +153,13 @@ async function capture(page: Page, info: TestInfo, api: Fixture, phase: string, 
     await expect(control).toBeInViewport({ ratio: 1 })
     const metrics = await control.evaluate(element => { const rect = element.getBoundingClientRect(), hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return { width: rect.width, height: rect.height, hit: !!hit && element.contains(hit) } })
     expect(metrics.width).toBeGreaterThanOrEqual(44); expect(metrics.height).toBeGreaterThanOrEqual(44); expect(metrics.hit).toBe(true)
+  }
+  } catch (error) {
+    // Bounded fixture-only geometry survives an artifact-upload failure. No headers,
+    // credentials or external content are included, and assertions remain unchanged.
+    const diagnostic = (frame: typeof before) => ({ focus: frame.activeElement, target: frame.target ? { ...frame.target, label: frame.target.label?.slice(0, 160), ancestors: frame.target.ancestors.slice(0, 12).map(ancestor => ({ ...ancestor, className: ancestor.className.slice(0, 160) })) } : null })
+    console.error('JOB_HISTORY_CAPTURE_FAILURE', JSON.stringify({ fixtureOnly: true, name, before: diagnostic(before), after: diagnostic(after), afterAxe: diagnostic(afterAxe), axeViolations: axe.violations.slice(0, 12).map(item => ({ id: item.id, impact: item.impact, targets: item.nodes.slice(0, 8).map(node => node.target) })) }))
+    throw error
   }
 }
 async function finish(page: Page, info: TestInfo, api: Fixture) {
