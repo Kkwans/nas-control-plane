@@ -240,3 +240,11 @@
 - 最新[证据分片2](https://github.com/Kkwans/nas-control-plane/actions/runs/38815054495/artifacts/12010783370)与[分片3](https://github.com/Kkwans/nas-control-plane/actions/runs/38815054495/artifacts/12010992959)的396源码散列及60制品散列全部匹配精确提交，工作树干净。20循环全部完成并恢复焦点，合计40目标GET且每循环详情/日志各一次，零写请求、拒绝请求及页面错误；20捕获期间请求稳定。所有关闭区域44×44、标题间距12px，80个角内采样点均命中，无根节点横向溢出；20份焦点均可见且2px solid。20张PNG分为5组不同字节图，逐组目检无标题、信息卡或日志裁切重叠。
 
 20份完整axe均零violation，但仍各有aria-valid-attr-value（一节点）和color-contrast（十节点）incomplete，涉及底层页面弹出层引用、渐变和短数字，不能据此宣称全面无障碍认证。初始触发器通过focus()定位，未证明从页面起点完整Tab可达性；未覆盖屏幕阅读器、缩放或其他引擎。移动全页截图在844px视口以下显示底层页面，属于固定抽屉与全页截图范围，不是已确认的视口内泄漏。全部验证仍为隔离组件与CI fixture，未进行NAS实机操作或验收。
+
+## 镜像任务结果与当前引用核对（2026-10-15 23:18 UTC）
+
+- [ed52973](https://github.com/Kkwans/nas-control-plane/commit/ed5297303b3f7642a14f83ac1dca0ebf00023b35) 修复拉取完成回执缺少目标归属检查。纯fake基线证明请求alpine:latest但返回nginx:latest/completed可错误标记任务完成及制品存在。现在普通/流式RPC和HTTP任务入口均按现有规范化合同精确绑定冻结请求；错配、空白、未完成回执保持interrupted及artifact unknown，不自动重拉。进度、取消/超时、已有终态和仅重存待保存结果的行为保留。聚焦race×20、独立复验、构建、vet、OpenAPI测试通过；[CI 38818194191](https://github.com/Kkwans/nas-control-plane/actions/runs/38818194191) 全绿：4025单元/145文件、465E2E及Go/Compose，发布跳过。
+- [b7c4eab](https://github.com/Kkwans/nas-control-plane/commit/b7c4eab6657273803a448e4fc877c99577bbfc79) 单独修正当前引用存在性：Docker Hub默认域/index.docker.io/library别名按官方规则统一，前端同时查RepoTags和RepoDigests。保留第三方registry、端口、大小写、完整tag+digest，不补latest；无效或不在保守子集的任务引用为unknown。Go复用已安装reference v0.6.0，TS专用纯比较函数由86条共享fixture约束；独立10406组定向及固定种子差分输入无差异，不代表穷尽所有字符串。P1严格回执比较未放宽，当前tag存在不能证明仍是原历史镜像ID。
+- 基线两端均复现别名错判；修复后4112单元/145文件、Go聚焦race、lint、类型检查、构建及预算通过。[CI 38820801024](https://github.com/Kkwans/nas-control-plane/actions/runs/38820801024) 精确SHA终态全绿：4112单元、465E2E及Go/Compose，发布跳过。前端无视觉改动，不重复将旧截图算作新专项视觉证据。依赖只将既有reference v0.6.0标注为直接依赖，版本与go.sum未变。
+
+以上仍为纯fake/structpb/临时存储与CI fixture验证，无真实镜像拉取、Docker或NAS实机验收。
