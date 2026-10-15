@@ -78,8 +78,8 @@ func (api *handler) runImagePull(ctx context.Context, jobID string, input docker
 		api.jobs.update(jobID, "failed", "镜像拉取失败", "请检查镜像引用、仓库连接与 Agent 日志。", 100)
 		return
 	}
-	if !result.Completed || strings.TrimSpace(result.Reference) == "" {
-		api.jobs.update(jobID, "interrupted", "未收到可信完成确认，请核对镜像状态", "", 0)
+	if docker.ValidateImagePullResult(input, result) != nil {
+		api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "未收到可信完成确认，请核对镜像状态")
 		return
 	}
 	api.jobs.update(jobID, "completed", "镜像拉取完成", "", 100)

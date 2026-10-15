@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	pathpkg "path"
 	"strings"
@@ -371,14 +370,7 @@ func PullDockerImage(ctx context.Context, socketPath string, request docker.Imag
 	if err != nil {
 		return docker.ImagePullResult{}, rpcError(err)
 	}
-	var result docker.ImagePullResult
-	if err := decodeDashboardResponse(response, &result); err != nil {
-		return docker.ImagePullResult{}, err
-	}
-	if result.Reference == "" || !result.Completed {
-		return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull result is incomplete"))
-	}
-	return result, nil
+	return decodeImagePullResponse(response, request)
 }
 
 func PullDockerImageWithProgress(ctx context.Context, socketPath string, request docker.ImagePullRequest, onProgress func(docker.ImagePullProgress)) (docker.ImagePullResult, error) {
@@ -395,31 +387,7 @@ func PullDockerImageWithProgress(ctx context.Context, socketPath string, request
 	if err != nil {
 		return docker.ImagePullResult{}, rpcError(err)
 	}
-	for {
-		message, receiveError := stream.Recv()
-		if errors.Is(receiveError, io.EOF) {
-			break
-		}
-		if receiveError != nil {
-			return docker.ImagePullResult{}, rpcError(receiveError)
-		}
-		fields := message.GetFields()
-		if fields["type"].GetStringValue() == "completed" {
-			return docker.ImagePullResult{
-				Reference: fields["reference"].GetStringValue(),
-				Completed: fields["completed"].GetBoolValue(),
-			}, nil
-		}
-		if onProgress != nil {
-			onProgress(docker.ImagePullProgress{
-				LayerID: fields["layerId"].GetStringValue(),
-				Status:  fields["status"].GetStringValue(),
-				Current: int64(fields["current"].GetNumberValue()),
-				Total:   int64(fields["total"].GetNumberValue()),
-			})
-		}
-	}
-	return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull stream ended without completion"))
+	return receiveImagePullStream(stream, request, onProgress)
 }
 
 func RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {
