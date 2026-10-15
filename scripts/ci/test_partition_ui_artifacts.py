@@ -3,6 +3,7 @@
 import hashlib
 from pathlib import Path
 import tempfile
+import re
 import subprocess
 import sys
 import unittest
@@ -67,24 +68,50 @@ class PartitionTests(unittest.TestCase):
             partition(self.source, self.destination, part_bytes=4)
         self.assertFalse(self.destination.exists())
 
-    def test_eight_parts_are_allowed_but_ninth_fails_without_partial_copy(self):
+    def test_sixteen_parts_are_allowed_but_seventeenth_fails_without_partial_copy(self):
+        self.assertEqual(MAX_PARTS, 16)
         for number in range(MAX_PARTS):
             self.write(f"run/ui-captures/{number}.png", b"12")
         self.assertEqual(partition(self.source, self.destination, part_bytes=2), MAX_PARTS)
-        self.write("run/ui-captures/8.png", b"12")
+        self.write(f"run/ui-captures/{MAX_PARTS}.png", b"12")
         destination = self.destination.with_name("overflow")
-        with self.assertRaisesRegex(ValueError, "8 个分片"):
+        with self.assertRaisesRegex(ValueError, f"{MAX_PARTS} 个分片"):
             partition(self.source, destination, part_bytes=2)
         self.assertFalse(destination.exists())
 
     def test_many_empty_files_are_bounded_by_zip_metadata(self):
-        for number in range(20):
+        for number in range(2 * MAX_PARTS + 1):
             self.write(f"run/ui-captures/{number:02d}.png", b"")
-        # 缩小元数据预算，验证零字节文件仍会拆分并触发八片上限。
+        # 缩小元数据预算，验证零字节文件仍会拆分并触发分片数量上限。
         with patch("partition_ui_artifacts.METADATA_BYTES", 2400):
-            with self.assertRaisesRegex(ValueError, "8 个分片"):
+            with self.assertRaisesRegex(ValueError, f"{MAX_PARTS} 个分片"):
                 partition(self.source, self.destination)
         self.assertFalse(self.destination.exists())
+
+    def test_workflow_upload_slots_match_partition_limit(self):
+        workflow = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+        steps = re.findall(
+            r"^      - name: Upload fixture UI screenshots part (\d+)\n"
+            r"((?:^        .*\n|^\n)*)",
+            workflow.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+        self.assertEqual([int(number) for number, _ in steps], list(range(1, MAX_PARTS + 1)))
+        for number, body in steps:
+            with self.subTest(part=number):
+                self.assertIn(
+                    "        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' "
+                    "&& fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= " + number + " }}\n",
+                    body,
+                )
+                for line in [
+                    "        uses: actions/upload-artifact@v4",
+                    "          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-" + number,
+                    "          path: ${{ runner.temp }}/ncp-ui-artifacts/part-" + number + "/",
+                    "          if-no-files-found: error",
+                    "          retention-days: 14",
+                ]:
+                    self.assertIn(line + "\n", body)
 
     def test_symlink_directory_is_not_followed(self):
         outside = self.source.parent / "outside"
