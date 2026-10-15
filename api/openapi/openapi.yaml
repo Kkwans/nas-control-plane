@@ -4108,9 +4108,15 @@ components:
       required: [name]
       properties:
         name: { type: string, minLength: 1 }
-        driver: { type: string }
-        subnet: { type: string }
-        gateway: { type: string }
+        driver:
+          type: string
+          description: 提供 subnet 时用于创建或校验同名网络，省略时按 bridge 校验；不提供 subnet 时仅连接现有网络，不应用此字段。
+        subnet:
+          type: string
+          description: 提供时仅在同名网络不存在时创建；已有网络必须具有相同驱动和此子网，否则创建容器失败，不修改现有网络。省略时仅按名称连接现有网络。
+        gateway:
+          type: string
+          description: 必须同时提供 subnet；显式提供时，已有网络的匹配子网条目必须具有此网关。省略时允许复用已有网关，创建新网络时由 Docker 分配。
         ip: { type: string }
     DockerContainerPortInput:
       type: object

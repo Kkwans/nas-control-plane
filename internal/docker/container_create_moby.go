@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	mobycontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	mobynetwork "github.com/moby/moby/api/types/network"
@@ -99,8 +100,15 @@ func (g *mobyContainerControlGateway) CreateContainer(ctx context.Context, spec 
 	}
 	createdNetwork := ""
 	if spec.Network != nil && spec.Network.Subnet != "" {
+		driver := spec.Network.Driver
+		if driver == "" {
+			driver = "bridge"
+		}
 		inspection, inspectErr := g.client.NetworkInspect(ctx, spec.Network.Name, client.NetworkInspectOptions{})
 		if inspectErr != nil {
+			if !errdefs.IsNotFound(inspectErr) {
+				return ContainerSnapshot{}, inspectErr
+			}
 			subnet, parseErr := netip.ParsePrefix(spec.Network.Subnet)
 			if parseErr != nil {
 				return ContainerSnapshot{}, parseErr
@@ -117,10 +125,6 @@ func (g *mobyContainerControlGateway) CreateContainer(ctx context.Context, spec 
 				enabled := true
 				enableIPv6 = &enabled
 			}
-			driver := spec.Network.Driver
-			if driver == "" {
-				driver = "bridge"
-			}
 			created, createErr := g.client.NetworkCreate(ctx, spec.Network.Name, client.NetworkCreateOptions{
 				Driver: driver, Scope: "local", EnableIPv6: enableIPv6,
 				IPAM: &mobynetwork.IPAM{Driver: "default", Config: []mobynetwork.IPAMConfig{{Subnet: subnet, Gateway: gateway}}},
@@ -129,8 +133,10 @@ func (g *mobyContainerControlGateway) CreateContainer(ctx context.Context, spec 
 				return ContainerSnapshot{}, createErr
 			}
 			createdNetwork = created.ID
-		} else if !networkHasSubnet(inspection.Network.IPAM.Config, spec.Network.Subnet) {
-			return ContainerSnapshot{}, errors.New("existing network subnet does not match request")
+		} else if inspection.Network.Driver != driver {
+			return ContainerSnapshot{}, errors.New("existing network driver does not match request")
+		} else if !networkHasRequestedIPAM(inspection.Network.IPAM.Config, spec.Network.Subnet, spec.Network.Gateway) {
+			return ContainerSnapshot{}, errors.New("existing network subnet or gateway does not match request")
 		}
 	}
 	created, err := g.client.ContainerCreate(ctx, options)
@@ -170,13 +176,20 @@ func (g *mobyContainerControlGateway) rollbackCreatedResources(containerID, netw
 	}
 }
 
-func networkHasSubnet(config []mobynetwork.IPAMConfig, requested string) bool {
+func networkHasRequestedIPAM(config []mobynetwork.IPAMConfig, requested, gateway string) bool {
 	want, err := netip.ParsePrefix(requested)
 	if err != nil {
 		return false
 	}
+	var wantGateway netip.Addr
+	if gateway != "" {
+		wantGateway, err = netip.ParseAddr(gateway)
+		if err != nil {
+			return false
+		}
+	}
 	for _, item := range config {
-		if item.Subnet == want {
+		if item.Subnet == want && (gateway == "" || item.Gateway == wantGateway) {
 			return true
 		}
 	}
