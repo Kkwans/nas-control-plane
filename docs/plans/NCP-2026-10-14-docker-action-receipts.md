@@ -86,3 +86,13 @@ d2a8003 的远端 CI 38797308036 已消除前次五项夹具失败；本轮 455 
 新增两项纯样式合同测试，解析实际安装的 Element CSS 与本项目样式，核对覆盖范围、文字/图标消费链、背景链及普通字号对比度。两项测试、修改文件 ESLint、Vue 类型检查、生产构建与 540KiB 包预算通过。未改浏览器用例、完整 axe、几何或请求账本检查；未运行本地浏览器、监听器、Docker/Compose 或 NAS，未部署。修正后的实际浏览器像素及完整 axe 仍须后续远端 CI 验证。
 
 最终全量复验：3949 项前端测试/141 文件及全量 ESLint 通过；浏览器结果仍待新提交的 CI。
+
+## 项目与容器结果标题一致性（2026-10-15）
+
+d2a8003 的实际移动端 wrong-project 截图显示未知结果正文上方仍写“项目操作失败”。projectActionErrors 的 scope 只标识展示范围，不能证明操作失败；同一列表也容纳读回未达目标和 completed=false、全部目标状态已匹配的兜底结果。因此将 DockerView 桌面行、移动卡片和 ProjectDetailDrawer 三处标题统一为“项目操作需核对”，移除抽屉按 scope 推断失败标题的 computed。单容器未知结果也能进入抽屉 containerActionError，故该独立标题改为“容器操作需核对”。正文、分类、颜色、动作与请求逻辑均未改变。
+
+抽屉仅 Compose 说明改为“通过 Compose 执行，需核对的结果会保留在这里。”，standalone 保留原有逐项执行说明。真实 DockerView 组件回归同时断言桌面及移动 DOM 的标题与正文，覆盖 incomplete、wrong-project、VERIFY_FAILED、completed=false 且全部服务匹配，以及 standalone 状态未达目标与全目标匹配兜底。新增真实抽屉组件回归使用保留 header/default 插槽的 ElDrawer stub，覆盖项目未知、服务状态未达目标、standalone、无错误、allowOperations=false 和单容器未知结果。
+
+本片 48 项定向组件测试通过，Vue 类型检查、修改文件 ESLint、生产构建及 540KiB 包预算通过，diff 空白检查通过。未运行本地浏览器、监听器、Docker/Compose 或 NAS；实际浏览器标题断言及截图由后续专项补充，未将纯 DOM 测试等同可见性、布局或完整 axe 验收。没有修改确认框与焦点逻辑。
+
+最终全量复验：3958 项前端测试/142 文件、生产构建和 540KiB 包预算通过；此片只修正文案，不将待核验的原生键盘焦点问题声明为已解决。

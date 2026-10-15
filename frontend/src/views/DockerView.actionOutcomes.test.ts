@@ -232,17 +232,23 @@ describe('DockerView Compose 生命周期证据', () => {
     expect(posts()).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
   })
-  it.each(['incomplete', 'wrong-project', 'verify-failed'])('未完成或未知保持警告与只读刷新 %s', async (mode) => {
+  it.each(['incomplete', 'wrong-project', 'verify-failed', 'all-target-incomplete'])('未完成或未知保持警告与只读刷新 %s', async (mode) => {
     await readyCompose()
     fetcher.mockImplementation(async (_url, options) => {
       if (options?.method !== 'POST') return response(composeInventory())
       if (mode === 'verify-failed') return new Response(JSON.stringify({ code: 'COMPOSE_LIFECYCLE_VERIFY_FAILED', message: 'private-error 请重试', requestId: 'test' }), { status: 409 })
-      return response(mode === 'wrong-project' ? { ...composeResult(), projectId: 'other' } : { ...composeResult(), completed: false, state: 'stopped', services: [{ name: 'web', state: 'exited', running: false }] })
+      return response(mode === 'wrong-project' ? { ...composeResult(), projectId: 'other' } : mode === 'all-target-incomplete' ? { ...composeResult(), completed: false } : { ...composeResult(), completed: false, state: 'stopped', services: [{ name: 'web', state: 'exited', running: false }] })
     })
     button('重启项目 demo-project').click(); await settle()
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(ElMessage.warning).toHaveBeenCalled()
     expect(host.querySelector('.action-error')?.textContent).toContain('只读核对')
+    for (const selector of ['.project-row-feedback', '.docker-mobile-list .project-action-errors']) {
+      const feedback = host.querySelector(selector)!
+      expect(feedback.querySelector('strong')?.textContent).toBe('项目操作需核对')
+      expect(feedback.textContent).not.toMatch(/项目操作失败|部分容器操作失败/)
+      expect(feedback.querySelector('li')?.textContent).toContain(mode === 'incomplete' ? '状态复核尚未达到目标' : mode === 'all-target-incomplete' ? '项目回执未确认完成' : '可能已经执行')
+    }
     expect(host.textContent).not.toMatch(/private-error|请重试|private-command-output/)
     expect(posts()).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
@@ -357,4 +363,20 @@ describe.each(['compose', 'standalone'] as const)('项目确认范围与取消�
       expect(posts()).toHaveLength(1)
     })
   })
+})
+
+
+it.each(['mismatch', 'all-target-incomplete'])('独立容器组列表两处保留核对标题 %s', async (mode) => {
+  await ready(false)
+  fetcher.mockImplementation(async (_url, options) => options?.method === 'POST'
+    ? response({ ...projectReceipt(mode === 'mismatch' ? 'stopped' : 'running'), completed: false })
+    : response(inventory()))
+  button('重启项目 demo-project').click(); await settle()
+  for (const selector of ['.project-row-feedback', '.docker-mobile-list .project-action-errors']) {
+    const feedback = host.querySelector(selector)!
+    expect(feedback.querySelector('strong')?.textContent).toBe('项目操作需核对')
+    expect(feedback.querySelector('li')?.textContent).toContain(mode === 'mismatch' ? '读回时尚未达到目标状态' : '项目回执未确认完成')
+  }
+  expect(ElMessage.success).not.toHaveBeenCalled()
+  expect(posts()).toHaveLength(1)
 })

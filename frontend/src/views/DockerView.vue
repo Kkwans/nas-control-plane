@@ -528,7 +528,7 @@ onMounted(() => {
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-row-feedback" role="alert">
-            <strong>{{ project.kind === 'standalone' ? '项目操作需核对' : projectErrorsFor(project.id).some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败' }}</strong>
+            <strong>项目操作需核对</strong>
             <ul><li v-for="failure in projectErrorsFor(project.id)" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
           </div>
         </div>
@@ -564,7 +564,7 @@ onMounted(() => {
             </ElTooltip>
           </div>
           <div v-if="projectErrorsFor(project.id).length" class="project-action-errors" role="alert">
-            <strong>{{ project.kind === 'standalone' ? '项目操作需核对' : projectErrorsFor(project.id).some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败' }}</strong>
+            <strong>项目操作需核对</strong>
             <ul><li v-for="failure in projectErrorsFor(project.id)" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
           </div>
         </article>
