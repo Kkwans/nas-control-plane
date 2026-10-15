@@ -27,3 +27,16 @@
 已实现上述前端切片，包含16项实际组件/隔离请求回归。完整前端3521项测试/121文件通过，lint、Vue类型检查、生产构建与540KiB包预算通过。旧MIME合同测试曾把无body单容器动作的意外415当成已证明未执行；根据HTTP源码该路由不解析JSON，现严格归类未知结果，并保留一次请求、无body、无Content-Type及同源凭据断言。独立项目的合法415拒绝语义不变。
 
 浏览器新增专项与本次远端CI尚待核验；前一数据库TLS修复beb86a9的CI38612535338已通过3411单测、413浏览器，14组实际截图与完整axe零violation但仍有incomplete，不能替代本模块浏览器证据。没有运行真实Docker、Compose或NAS，也没有部署。
+
+## Compose 生命周期观察状态首片（2026-10-15，实施前边界）
+
+先独立修正 Agent 内 `parseComposePS` 与生命周期观察判定，随后另片收敛前端回执归属与未知结果提示。当前零值记录、缺失 State 和未知状态的 `Running=false` 可被当作停止，不能据此宣告完成。
+
+- 保留现有数组及 NDJSON；State 必须显式为非空字符串，可选 Running 出现时必须为 bool。明确 running/false 或 stopped、exited、created、dead/true 的矛盾整体拒绝；不以 Running 补造 State。拒绝 null、坏字段类型、ID 与显示名均为空的记录、重复非空 ID，以及已知语义字段的重复键或大小写别名；允许普通未知 CLI 字段。Service 回退 Name（去单个前导 `/`），同服务名多副本保留，不新增 ID 长度约束。
+- start/restart 只由全部明确 running 确认；stop 只由全部 exited、created、dead 或既有兼容 stopped 确认。这仅表示观察到非运行，不代表健康停止。paused、restarting、removing、未来未知或缺失状态不能确认任何动作，汇总不伪装为 stopped；空集合仍不能确认完成。Manager 的具名 fake/provider 继续兼容缺省 Running，但必须以 State 判定。
+- 不改命令、查询次数、公开字段、RPC/HTTP 合同、重试或部署。命令完成与一次状态观察不证明服务健康、稳定、配置服务完整性或重启次数；VERIFY_FAILED 可能发生于命令之后。前端后续另片去除旧重试建议、绑定冻结 project/action 并拒绝重定向重发。
+- 先以纯 parser 与 fake LifecycleRunner 在原生产代码复现失败，再修复和运行定向 race、编译/vet；不运行 Docker、helper、监听器、浏览器或 NAS。独立审查与实际验证结果接续记录，不把本段计划当成已通过。
+
+官方依据：[Compose ps 文档](https://docs.docker.com/reference/cli/docker/compose/ps/) 列出 NDJSON 与 State；[v2.39.4 ps 实现](https://raw.githubusercontent.com/docker/compose/v2.39.4/pkg/compose/ps.go) 逐容器投影 Service/State；[v2.39.4 formatter](https://raw.githubusercontent.com/docker/compose/v2.39.4/cmd/formatter/container.go) 直接输出 State，没有 Running 布尔字段。数组为本仓库已支持格式，未以版本猜测替代兼容测试。
+
+本地验证接续：新增纯 parser 与 fake LifecycleRunner 回归在原生产文件 overlay 上实际失败（包括 null、缺失/矛盾 State、别名重复及未知状态误报）；修复后完整 `internal/compose` 测试与 race ×20、该包 vet、全部 cmd 编译通过，diff 检查通过。已检查包内测试仅使用 fake 与临时文件，不调用 OSRunner、Docker、helper 或监听器。独立审查无阻塞，并独立复跑生命周期/parser 聚焦测试通过；远端 CI 尚待后续提交核验，未作 NAS 或真实 Docker 验收声明。

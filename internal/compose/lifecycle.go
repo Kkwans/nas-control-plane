@@ -1,10 +1,12 @@
 package compose
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"strings"
@@ -163,11 +165,8 @@ func normalizeServiceStatuses(services []LifecycleServiceStatus) []LifecycleServ
 		service.Name = strings.TrimSpace(service.Name)
 		service.ContainerID = strings.TrimSpace(service.ContainerID)
 		service.State = strings.ToLower(strings.TrimSpace(service.State))
-		if service.State == "running" {
-			service.Running = true
-		} else if service.State == "stopped" || service.State == "exited" || service.State == "created" || service.State == "dead" {
-			service.Running = false
-		}
+		// Running 是公开投影，不作为未知或缺失 State 的完成证据。
+		service.Running = service.State == "running"
 		result = append(result, service)
 	}
 	sort.SliceStable(result, func(left, right int) bool {
@@ -179,13 +178,31 @@ func normalizeServiceStatuses(services []LifecycleServiceStatus) []LifecycleServ
 	return result
 }
 
+// 明确的非运行观察不等同于健康停止；保留既有 stopped 兼容值。
+func lifecycleStoppedState(state string) bool {
+	switch state {
+	case "stopped", "exited", "created", "dead":
+		return true
+	default:
+		return false
+	}
+}
+
 func lifecycleMatchesAction(action LifecycleAction, services []LifecycleServiceStatus) bool {
 	if len(services) == 0 {
 		return false
 	}
-	wantRunning := action != LifecycleActionStop
 	for _, service := range services {
-		if service.Running != wantRunning {
+		switch action {
+		case LifecycleActionStart, LifecycleActionRestart:
+			if service.State != "running" {
+				return false
+			}
+		case LifecycleActionStop:
+			if !lifecycleStoppedState(service.State) {
+				return false
+			}
+		default:
 			return false
 		}
 	}
@@ -198,8 +215,10 @@ func lifecycleState(services []LifecycleServiceStatus) string {
 	}
 	running := 0
 	for _, service := range services {
-		if service.Running {
+		if service.State == "running" {
 			running++
+		} else if !lifecycleStoppedState(service.State) {
+			return "unknown"
 		}
 	}
 	if running == 0 {
@@ -261,6 +280,81 @@ type composePSRecord struct {
 	Running *bool  `json:"Running"`
 }
 
+// 已知字段使用精确名称，拒绝重复键与大小写别名；CLI 的其他字段保持兼容。
+// 不使用 struct 的零值解码作为证据，否则 null/缺省会被误判为停止。
+func (record *composePSRecord) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return errors.New("compose ps record is not an object")
+	}
+	var decoded composePSRecord
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return errors.New("compose ps record key is invalid")
+		}
+		key, ok := token.(string)
+		if !ok {
+			return errors.New("compose ps record key is invalid")
+		}
+		canonical := ""
+		for _, known := range []string{"ID", "Name", "Service", "State", "Running"} {
+			if strings.EqualFold(key, known) {
+				canonical = known
+				break
+			}
+		}
+		if canonical != "" && (key != canonical || seen[canonical]) {
+			return errors.New("compose ps record has ambiguous fields")
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return errors.New("compose ps record value is invalid")
+		}
+		if canonical == "" {
+			continue
+		}
+		seen[canonical] = true
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return errors.New("compose ps record field is null")
+		}
+		var target any
+		switch canonical {
+		case "ID":
+			target = &decoded.ID
+		case "Name":
+			target = &decoded.Name
+		case "Service":
+			target = &decoded.Service
+		case "State":
+			target = &decoded.State
+		case "Running":
+			target = &decoded.Running
+		}
+		if err := json.Unmarshal(raw, target); err != nil {
+			return errors.New("compose ps record field type is invalid")
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return errors.New("compose ps record is incomplete")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("compose ps record has trailing data")
+	}
+	decoded.State = strings.ToLower(strings.TrimSpace(decoded.State))
+	if !seen["State"] || decoded.State == "" {
+		return errors.New("compose ps record state is missing")
+	}
+	if decoded.Running != nil && ((decoded.State == "running" && !*decoded.Running) ||
+		(lifecycleStoppedState(decoded.State) && *decoded.Running)) {
+		return errors.New("compose ps record state is contradictory")
+	}
+	*record = decoded
+	return nil
+}
+
 func parseComposePS(output string) ([]LifecycleServiceStatus, error) {
 	output = strings.TrimSpace(output)
 	if output == "" {
@@ -281,26 +375,30 @@ func parseComposePS(output string) ([]LifecycleServiceStatus, error) {
 			records = append(records, record)
 		}
 	}
+	if records == nil {
+		return nil, errors.New("compose ps output is not a record collection")
+	}
 	result := make([]LifecycleServiceStatus, 0, len(records))
+	seenIDs := make(map[string]bool)
 	for _, record := range records {
 		state := strings.ToLower(strings.TrimSpace(record.State))
 		running := state == "running"
-		if record.Running != nil {
-			running = *record.Running
-		}
 		name := strings.TrimSpace(record.Service)
 		if name == "" {
 			name = strings.TrimPrefix(strings.TrimSpace(record.Name), "/")
 		}
-		if state == "" {
-			if running {
-				state = "running"
-			} else {
-				state = "stopped"
+		id := strings.TrimSpace(record.ID)
+		if id == "" && name == "" {
+			return nil, errors.New("compose ps record identity is missing")
+		}
+		if id != "" {
+			if seenIDs[id] {
+				return nil, errors.New("compose ps record identity is repeated")
 			}
+			seenIDs[id] = true
 		}
 		result = append(result, LifecycleServiceStatus{
-			Name: name, ContainerID: strings.TrimSpace(record.ID), State: state, Running: running,
+			Name: name, ContainerID: id, State: state, Running: running,
 		})
 	}
 	return result, nil
