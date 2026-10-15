@@ -92,7 +92,7 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 	streamQuery := streamRequest.URL.Query()
 	streamQuery.Set("since", time.Now().UTC().Format(time.RFC3339Nano))
 	streamRequest.URL.RawQuery = streamQuery.Encode()
-	seen := make(map[string]struct{})
+	var seen recentLogIDs
 	send := func() bool {
 		if request.Context().Err() != nil {
 			return false
@@ -108,10 +108,9 @@ func (api *handler) logEvents(response http.ResponseWriter, request *http.Reques
 			incremental := make([]logEntry, 0, len(result.Entries))
 			var latest time.Time
 			for _, entry := range result.Entries {
-				if _, exists := seen[entry.ID]; exists {
+				if seen.duplicate(entry.ID) {
 					continue
 				}
-				seen[entry.ID] = struct{}{}
 				incremental = append(incremental, entry)
 				if entry.Timestamp.After(latest) {
 					latest = entry.Timestamp

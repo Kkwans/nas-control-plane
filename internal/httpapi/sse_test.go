@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -564,5 +565,117 @@ func TestSSEStreamsSlowWritesAndFlushesHonorBudget(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// 仅使用假 Agent、假 ticker 和内存 writer；不启动监听器或宿主机命令。
+func TestSSELogRecentDedupWindowAndCursor(t *testing.T) {
+	api, agent, _, _, tickers := sseFixture()
+	at := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	type step struct {
+		page journal.Page
+		err  error
+		want []string
+	}
+	var steps []step
+	for start := 0; start < logDedupMaxIDs; start += 200 {
+		var entries []journal.Entry
+		var ids []string
+		for i := start; i < start+200 && i < logDedupMaxIDs; i++ {
+			id := fmt.Sprintf("id-%d", i)
+			entries = append(entries, journal.Entry{Cursor: id, Timestamp: at.Add(time.Duration(i) * time.Second), Message: "fixture"})
+			ids = append(ids, id)
+		}
+		steps = append(steps, step{page: journal.Page{Entries: entries, NextCursor: fmt.Sprint(start)}, want: ids})
+	}
+	page := func(cursor string, ids ...string) journal.Page {
+		var entries []journal.Entry
+		for _, id := range ids {
+			entries = append(entries, journal.Entry{Cursor: id, Timestamp: at.Add(time.Hour), Message: "fixture"})
+		}
+		return journal.Page{Entries: entries, NextCursor: cursor}
+	}
+	oversized := strings.Repeat("x", logDedupMaxBytes+1)
+	steps = append(steps,
+		step{page: page("ignored-heartbeat", "id-0", "id-2047")},
+		step{err: errors.New("fixture unavailable")},
+		step{page: page("new", "new"), want: []string{"new"}},
+		step{page: page("replay", "id-0", "id-0", "id-2047"), want: []string{"id-0"}},
+		step{page: page("oversized", oversized, oversized), want: []string{oversized, oversized}},
+		step{page: page("empty", "", ""), want: []string{""}},
+	)
+	var expectedCursor string
+	var expectedSince *time.Time
+	index := 0
+	agent.read = func(_ context.Context, query journal.Query) (journal.Page, error) {
+		if index >= len(steps) {
+			t.Error("unexpected poll")
+			return journal.Page{}, errors.New("extra poll")
+		}
+		if query.Cursor != expectedCursor {
+			t.Errorf("cursor=%q want=%q", query.Cursor, expectedCursor)
+		}
+		if query.Since == nil || expectedSince != nil && !query.Since.Equal(*expectedSince) {
+			t.Error("since advancement changed")
+		}
+		current := steps[index]
+		index++
+		if len(current.want) > 0 {
+			expectedCursor = current.page.NextCursor
+			latest := current.page.Entries[len(current.page.Entries)-1].Timestamp.Add(time.Nanosecond)
+			expectedSince = &latest
+		}
+		return current.page, current.err
+	}
+	writer := sseWriter()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := sseStart(sseEndpoints[1], api, writer, ctx)
+	if got := writer.frame(t); got != "retry: 300000\n\n" {
+		t.Fatal(got)
+	}
+	var ticker *metricsTicker
+	for i, current := range steps {
+		if i > 0 {
+			ticker.ticks <- at
+		}
+		frame := writer.frame(t)
+		if current.err != nil {
+			if frame != "event: unavailable\ndata: {}\n\n" {
+				t.Fatal("unavailable frame changed")
+			}
+		} else if len(current.want) == 0 {
+			if frame != ": heartbeat\n\n" {
+				t.Fatal("duplicate-only poll did not heartbeat")
+			}
+		} else {
+			const prefix = "event: logs\ndata: "
+			if !strings.HasPrefix(frame, prefix) || !strings.HasSuffix(frame, "\n\n") {
+				t.Fatal("logs framing changed")
+			}
+			var result logResponse
+			if err := json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(frame, prefix), "\n\n")), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Entries) != len(current.want) {
+				t.Fatalf("step %d: entries=%d want=%d", i, len(result.Entries), len(current.want))
+			}
+			for j, entry := range result.Entries {
+				if entry.ID != current.want[j] {
+					t.Fatalf("step %d entry %d: unexpected ID", i, j)
+				}
+			}
+			if result.NextCursor != current.page.NextCursor {
+				t.Fatal("wire cursor changed")
+			}
+		}
+		if i == 0 {
+			ticker = tickers.next(t)
+		}
+	}
+	cancel()
+	metricsAwaitDone(t, done)
+	if !ticker.stopped.Load() || int(agent.calls.Load()) != len(steps) {
+		t.Fatal("stream cancellation leaked polling")
 	}
 }
