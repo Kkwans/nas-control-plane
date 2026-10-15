@@ -32,7 +32,7 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
   await startButton.click()
   await expect(page.locator('.el-message-box')).toHaveCount(0)
   await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/backup-stack/actions/start'))).toBe(true)
-  await expect(page.getByText('项目“备份任务”已启动', { exact: true })).toBeVisible()
+  await expect(page.getByText('项目“备份任务”启动命令已受理，读回时服务均运行中。', { exact: true })).toBeVisible()
 
   const stopButton = page.getByRole('button', { name: '停止项目 媒体服务', exact: true })
   await expect(stopButton).toBeEnabled()

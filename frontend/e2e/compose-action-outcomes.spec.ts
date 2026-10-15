@@ -29,16 +29,12 @@ async function fixture(page: Page, origin: string) {
   await page.clock.install({ time: new Date(stamp) })
   // 使用已打开的静默内存流，禁止通用初始快照替换本例目标。
   await page.addInitScript(() => {
-    const sources = new Set<SilentSource>()
     class SilentSource extends EventTarget {
       static readonly CONNECTING = 0; static readonly OPEN = 1; static readonly CLOSED = 2
       readyState = 1; onopen: (() => void) | null = null; onerror: (() => void) | null = null
-      constructor(readonly url: string) { super(); sources.add(this); queueMicrotask(() => { this.onopen?.(); this.dispatchEvent(new Event('open')) }) }
-      close() { this.readyState = 2; sources.delete(this) }
+      constructor(readonly url: string) { super(); queueMicrotask(() => { this.onopen?.(); this.dispatchEvent(new Event('open')) }) }
+      close() { this.readyState = 2 }
     }
-    window.addEventListener('ncp:compose-fixture', (event) => {
-      for (const source of sources) source.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify((event as CustomEvent).detail) }))
-    })
     window.EventSource = SilentSource as unknown as typeof EventSource
   })
   const requests: RequestRecord[] = [], denied: string[] = [], errors: string[] = []
@@ -95,11 +91,9 @@ async function fixture(page: Page, origin: string) {
   return {
     requests, denied, errors, writes,
     allow(mode: Mode, action: Action) { expect(allowed).toBeUndefined(); allowed = { mode, action } },
-    async publish(changed: boolean) {
+    stageInventory(changed: boolean) {
       currentInventory = structuredClone(inventory)
       if (changed) Object.assign(currentInventory.projects[0]!, { name: '清单已变化的项目', workingDirectory: '/fixture/changed', configFiles: ['/fixture/changed/compose.yaml'] })
-      const collectedAt = new Date(await page.evaluate(() => Date.now())).toISOString()
-      await page.evaluate((docker) => window.dispatchEvent(new CustomEvent('ncp:compose-fixture', { detail: { collectedAt: docker.collectedAt, docker } })), { ...currentInventory, collectedAt })
     },
   }
 }
@@ -142,9 +136,8 @@ type Artifact = { file: string; sha256: string }
 const evidence = new WeakMap<Page, { api: Fixture; artifacts: Artifact[] }>()
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string): Promise<void> {
-  // 固定短时虚拟时钟，防止完成提示在截图与完整 axe 之间自动消失。
+  // 保持时钟运行，完整 axe 依赖异步计时器；完成提示由真实 hover 暂停自动关闭。
   await waitForPageReady(page)
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100))
   await page.evaluate(() => document.fonts.ready)
   await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }))
   const beforeCapture = await geometry(page), requestsBefore = structuredClone(api.requests)
@@ -198,7 +191,6 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
     }
   }
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
-  await page.clock.resume()
 }
 async function finalLedger(info: TestInfo, api: Fixture, artifacts: Artifact[]) {
   const requests = structuredClone(api.requests)
@@ -237,32 +229,39 @@ for (const width of [390, 1440]) {
         await expect(dialog).toHaveCount(0)
       }
       const success = page.locator('.el-message--success')
+      // Element Plus 的公开鼠标交互暂停本条提示，不改写页面/axe 计时器。
+      await success.hover()
       await expect(success).toContainText(action === 'stop' ? '读回时服务均处于非运行状态' : '读回时服务均运行中')
       await expect(success).not.toContainText(/健康|可用|部署成功/)
       await expect(page.locator('.action-error')).toHaveCount(0)
       await expect.poll(() => api.requests.slice(before).filter((entry) => entry.method === 'GET' && entry.path === '/api/v1/docker/inventory').length).toBe(1)
       expect(api.writes).toHaveLength(writesBefore + 1)
       await capture(page, info, api, `${action}-completed`)
+      await page.mouse.move(0, 0)
       await page.clock.fastForward(6000)
       await expect(page.locator('.el-message')).toHaveCount(0)
       expect(api.requests.slice(before).filter((entry) => entry.method !== 'GET')).toEqual([api.writes[writesBefore]])
     }
   })
-  test(`${width}px Compose 错配回执和 409 核验失败保持未知，冻结确认快照且只读核对不重放`, async ({ page, baseURL }, info) => {
+  test(`${width}px Compose 错配回执和 409 核验失败保持未知，确认配置且只读核对不重放`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     const api = await open(page, baseURL!, width), artifacts: Artifact[] = []
     evidence.set(page, { api, artifacts })
     for (const mode of ['wrong-project', 'wrong-action', 'verify-failed'] as const) {
-      await api.publish(false)
+      api.stageInventory(false)
+      if (mode !== 'wrong-project') {
+        // 新一轮经真实页面重载读取原始配置，不把暂存响应冒充已更新的客户端状态。
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await expect(actionButton(page, 'restart')).toBeEnabled()
+      }
       const before = api.requests.length, writesBefore = api.writes.length
       api.allow(mode, 'restart'); await actionButton(page, 'restart').click()
       const dialog = page.locator('.el-message-box')
       await expect(dialog).toBeVisible(); await expect(dialog).toContainText(name)
       expect(api.writes).toHaveLength(writesBefore)
-      // 确认期间注入另一份配置清单；请求必须仍然引用原始目录和有序文件数组。
-      await page.clock.fastForward(100)
-      await api.publish(true)
-      await expect(page.getByText('清单已变化的项目', { exact: true }).filter({ visible: true })).toBeVisible()
+      // /docker 没有实时订阅：仅安排操作后的真实 GET 返回变化清单。
+      // 确认期间客户端清单变更的冻结快照证据由 DockerView.actionOutcomes.test.ts 覆盖。
+      api.stageInventory(true)
       await expect(dialog).toContainText(name); await expect(dialog).not.toContainText('清单已变化的项目')
       await dialog.getByRole('button', { name: '确认重启', exact: true }).click()
       await expect(dialog).toHaveCount(0)
@@ -271,6 +270,7 @@ for (const width of [390, 1440]) {
       await expect(page.locator('.el-message--success')).toHaveCount(0)
       await expect(page.locator('main')).not.toContainText('fixture-private-output-must-not-render')
       await expect.poll(() => api.requests.slice(before).filter((entry) => entry.method === 'GET' && entry.path === '/api/v1/docker/inventory').length).toBe(1)
+      await expect(page.getByText('清单已变化的项目', { exact: true }).filter({ visible: true })).toBeVisible()
       await page.clock.fastForward(6000)
       await expect(page.locator('.el-message')).toHaveCount(0)
       await expect(page.locator('.action-error')).toContainText('结果尚未确认')
