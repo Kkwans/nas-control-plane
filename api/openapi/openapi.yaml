@@ -2107,6 +2107,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/job-history:
+    get:
+      operationId: listJobHistory
+      summary: 分页读取最后保存的任务历史
+      description: |
+        只读持久摘要，可能落后于当前执行，不代表当前资源状态。不查询 Agent，不提供任务动作。
+        按创建时间秒及 ID 倒序 keyset 遍历，无跨页快照保证或总数。并发创建须回到最新页查看，并发删除可使后续页变短。
+        RawQuery 最多 8192 字节；未知或重复参数、坏转义、分号字段均拒绝。完整 JSON 最多 1 MiB，超限不返回部分页面。
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - name: type
+          in: query
+          description: 省略或空串为全部；非空按原值精确匹配，不 trim。最多 128 UTF-8 字节，不接受控制字符，允许未来类型。
+          schema: { type: string, maxLength: 128 }
+        - name: limit
+          in: query
+          description: 省略取 50；显式值仅接受十进制整数 1–100。
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: 服务端返回的版本化、不透明游标，与 type 逐字绑定；最多 2048 字节。不得重新编码，空串无效。不是权限票据。
+          schema: { type: string, minLength: 1, maxLength: 2048 }
+      responses:
+        '200':
+          description: 最后保存的有界摘要页；Cache-Control 为 no-store
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobHistoryPage' }
+        '400':
+          description: JOB_HISTORY_INVALID_QUERY；参数或游标无效，不回退到默认查询
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: AUTH_UNAUTHORIZED；需要有效 Root 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '501':
+          description: JOB_HISTORY_UNSUPPORTED；实际 JobEngine 没有支持历史读取的持久层
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: JOB_HISTORY_UNAVAILABLE、JOB_HISTORY_CORRUPT 或 JOB_HISTORY_TOO_LARGE；读取失败、无法表示的数据或编码超限。不是空历史，不自动重试执行任务。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /api/v1/jobs:
     get:
       operationId: listJobs
@@ -4060,6 +4112,44 @@ components:
       properties:
         reference: { type: string }
         completed: { type: boolean }
+    JobHistoryPage:
+      type: object
+      additionalProperties: false
+      required: [source, items]
+      properties:
+        source: { type: string, enum: [persisted] }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/JobHistoryEntry' }
+        nextCursor:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: 只有读取到额外记录时存在，锚点是最后一条已返回记录；不保证下一页仍有记录。
+    JobHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, type, status, message, createdAt, updatedAt]
+      description: |
+        最后一次成功保存的摘要，不提供取消、重试、删除或产物证据。
+        字符串上限按 UTF-8 字节另行校验；超限或非法 UTF-8 使整页明确失败，不截断。
+        status/type 为开放字符串，保留未来类型与状态；queued/running 不证明任务仍在执行。
+      properties:
+        id: { type: string, minLength: 1, maxLength: 256 }
+        type: { type: string, minLength: 1, maxLength: 128 }
+        status: { type: string, minLength: 1, maxLength: 64 }
+        reference: { type: string, maxLength: 4096 }
+        message: { type: string, maxLength: 8192 }
+        error: { type: string, maxLength: 8192 }
+        errorCode: { type: string, maxLength: 128 }
+        cancellationStatus: { type: string, maxLength: 64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt:
+          type: string
+          format: date-time
+          description: 已保存记录的更新时间，不是当前采样或响应时间。
+        completedAt: { type: string, format: date-time }
     JobSnapshot:
       type: object
       required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]

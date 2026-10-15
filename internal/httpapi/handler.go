@@ -345,6 +345,7 @@ func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.H
 			protected.Get("/jobs/{jobID}", api.jobStatus)
 			protected.With(api.requireLiveSession).Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Get("/jobs", api.listJobs)
+			protected.Get("/job-history", api.listJobHistory)
 			protected.Post("/jobs/{jobID}/retry", api.retryJob)
 			protected.Post("/jobs/{jobID}/cancel", api.cancelJob)
 			protected.Delete("/jobs/{jobID}", api.deleteJob)
