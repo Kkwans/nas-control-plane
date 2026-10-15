@@ -13,7 +13,7 @@ const id = 'media-api-id', name = 'media-api', detailPath = `/api/v1/docker/cont
 const collectedAt = '2026-08-24T02:00:00.000Z'
 type Surface = 'list' | 'project-drawer'
 type RequestRecord = { method: string; path: string; query: string }
-type Cycle = { key: string; requests: RequestRecord[]; focus: unknown[]; restored: boolean; completed: boolean }
+type Cycle = { key: string; closeAction: string; requests: RequestRecord[]; focus: unknown[]; restored: boolean; completed: boolean }
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 async function fixture(page: Page, origin: string) {
   await installMockApi(page, { manualRealtime: true })
@@ -60,7 +60,7 @@ async function provenance() {
   const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend']).split('\n').filter(Boolean)
   return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), trackedDiffSha256: hash(git(['diff', 'HEAD', '--binary', '--', 'frontend'])), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async (file) => [file, hash(await readFile(resolve(root, file)))]))) }
 }
-const basis = { fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'source-inferred; no pre-fix browser failure claimed' }
+const basis = { fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'keyboard entry originally source-inferred; close target measured 32x22 in CI 38812226434 at 3923d0a' }
 const drawer = (page: Page) => page.locator('.container-detail-drawer')
 function trigger(page: Page, surface: Surface) {
   if (surface === 'project-drawer') return page.locator('.project-drawer').getByRole('button', { name: `查看 ${name} 详情与日志`, exact: true })
@@ -73,11 +73,18 @@ async function geometry(page: Page) {
     const selectors = ['.container-detail-drawer', '.container-detail-drawer .drawer-heading', '.container-detail-drawer .el-drawer__close-btn', '.container-detail-drawer .facts-grid', '.container-detail-drawer .network-grid', '.container-detail-drawer .logs-block', '.project-drawer']
     return {
       viewport: { width: innerWidth, height: innerHeight }, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
-      focus: { tag: active?.tagName, label: active?.getAttribute('aria-label'), text: active?.textContent, inDetails: Boolean(active?.closest('.container-detail-drawer')), inProject: Boolean(active?.closest('.project-drawer')), focusVisible: active?.matches(':focus-visible'), outlineWidth: style?.outlineWidth, outlineStyle: style?.outlineStyle },
+      focus: { tag: active?.tagName, label: active?.getAttribute('aria-label'), text: active?.textContent, inDetails: Boolean(active?.closest('.container-detail-drawer')), inProject: Boolean(active?.closest('.project-drawer')), focusVisible: active?.matches(':focus-visible'), outlineWidth: style?.outlineWidth, outlineStyle: style?.outlineStyle, outlineColor: style?.outlineColor, outlineOffset: style?.outlineOffset, nativeClose: Boolean(active?.matches('.container-detail-drawer button.el-drawer__close-btn')) },
       controls: selectors.flatMap((selector) => [...document.querySelectorAll<HTMLElement>(selector)].map((element) => {
         const bounds = element.getBoundingClientRect(), style = getComputedStyle(element)
         const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
-        return { selector, bounds: bounds.toJSON(), text: element.textContent, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, visible: bounds.width > 0 && bounds.height > 0 && style.visibility !== 'hidden', centerHit: Boolean(hit && (hit === element || element.contains(hit))) }
+        const hitPoints = selector.endsWith('.el-drawer__close-btn') ? [
+          [bounds.left + 2, bounds.top + 2], [bounds.right - 2, bounds.top + 2],
+          [bounds.left + 2, bounds.bottom - 2], [bounds.right - 2, bounds.bottom - 2],
+        ].map(([x, y]) => {
+          const target = document.elementFromPoint(x!, y!)
+          return { x, y, hit: Boolean(target && (target === element || element.contains(target))) }
+        }) : []
+        return { selector, hitPoints, bounds: bounds.toJSON(), text: element.textContent, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, visible: bounds.width > 0 && bounds.height > 0 && style.visibility !== 'hidden', centerHit: Boolean(hit && (hit === element || element.contains(hit))) }
       })).filter((control) => control.visible),
     }
   })
@@ -112,6 +119,22 @@ async function capture(page: Page, info: TestInfo, key: string) {
     expect(control.bounds.right).toBeLessThanOrEqual(after.viewport.width + 1)
     expect(control.scrollWidth).toBeLessThanOrEqual(control.clientWidth + 1)
   }
+  const close = after.controls.find(control => control.selector.endsWith('.el-drawer__close-btn'))!
+  const heading = after.controls.find(control => control.selector.endsWith('.drawer-heading'))!
+  expect(close).toBeDefined()
+  expect(close.bounds.width).toBeGreaterThanOrEqual(44)
+  expect(close.bounds.height).toBeGreaterThanOrEqual(44)
+  expect(close.bounds.top).toBeGreaterThanOrEqual(0)
+  expect(close.bounds.bottom).toBeLessThanOrEqual(after.viewport.height)
+  expect(close.bounds.left - heading.bounds.right).toBeGreaterThanOrEqual(12)
+  expect(close.centerHit).toBe(true)
+  expect(close.hitPoints).toHaveLength(4)
+  expect(close.hitPoints.every(point => point.hit)).toBe(true)
+  expect(after.focus.nativeClose).toBe(true)
+  expect(after.focus.focusVisible).toBe(true)
+  expect(Number.parseFloat(after.focus.outlineWidth!)).toBeGreaterThanOrEqual(2)
+  expect(after.focus.outlineStyle).toBe('solid')
+  expect(after.focus.outlineColor).not.toBe('rgba(0, 0, 0, 0)')
   // Full-page axe is deliberately unfiltered, including existing drawer issues.
   expect.soft(axe.violations, JSON.stringify(axe.violations)).toEqual([])
 }
@@ -129,7 +152,7 @@ test.afterEach(async ({ page }, info) => {
 })
 for (const width of [1440, 390]) for (const surface of ['list', 'project-drawer'] as const) {
   test(`${width}px ${surface} readonly container details native Enter Space Escape`, async ({ page, baseURL }, info) => {
-    test.setTimeout(120_000)
+    test.setTimeout(180_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const api = await fixture(page, new URL(baseURL!).origin)
     const saved = { api, surface, cycles: [] as Cycle[], artifacts: [] as { file: string; sha256: string }[] }
@@ -137,9 +160,13 @@ for (const width of [1440, 390]) for (const surface of ['list', 'project-drawer'
     await page.goto(surface === 'list' ? '/docker' : '/docker?project=media-stack', { waitUntil: 'domcontentloaded' })
     if (surface === 'list') await page.getByRole('button', { name: '容器', exact: true }).click()
     else await expect(page.locator('.project-drawer')).toBeVisible()
-    for (const key of ['Enter', 'Space']) {
+    for (const { key, closeAction } of [
+      { key: 'Enter', closeAction: 'Escape' }, { key: 'Space', closeAction: 'Escape' },
+      { key: 'Enter', closeAction: 'Enter' }, { key: 'Space', closeAction: 'Space' },
+      { key: 'Enter', closeAction: 'edge-click' },
+    ]) {
       const button = trigger(page, surface), before = api.requests.length
-      const cycle: Cycle = { key, requests: [], focus: [], restored: false, completed: false }
+      const cycle: Cycle = { key, closeAction, requests: [], focus: [], restored: false, completed: false }
       saved.cycles.push(cycle)
       try {
         await expect(button).toBeEnabled()
@@ -161,12 +188,15 @@ for (const width of [1440, 390]) for (const surface of ['list', 'project-drawer'
           expect(sample.focus.focusVisible).toBe(true)
         }
         if (surface === 'project-drawer') await expect(page.locator('.project-drawer')).toBeVisible()
-        await capture(page, info, key)
-        await page.keyboard.press('Escape')
+        const close = drawer(page).locator('button.el-drawer__close-btn')
+        await expect(close).toBeFocused()
+        await capture(page, info, `${key}-close-${closeAction}`)
+        if (closeAction === 'edge-click') await close.click({ position: { x: 2, y: 2 } })
+        else await page.keyboard.press(closeAction)
         await expect(drawer(page)).not.toBeVisible()
         if (surface === 'project-drawer') await expect(page.locator('.project-drawer')).toBeVisible()
         await expect(button).toBeFocused()
-        cycle.focus.push({ navigation: 'Escape', ...(await geometry(page)).focus })
+        cycle.focus.push({ navigation: closeAction, ...(await geometry(page)).focus })
         cycle.restored = true
         const reads = api.requests.slice(before).filter((entry) => entry.path.startsWith('/api/v1/docker/containers/'))
         expect(reads).toHaveLength(2)

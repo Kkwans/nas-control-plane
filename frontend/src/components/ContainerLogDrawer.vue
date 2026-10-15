@@ -133,5 +133,5 @@ function restartPolicyLabel(value?: string) {
 </style>
 
 <style>
-.container-detail-drawer .el-drawer__header{margin-bottom:0;padding:17px 20px 14px;border-bottom:1px solid var(--ncp-line)}.container-detail-drawer .el-drawer__body{padding:18px 20px}@media(max-width:700px){.container-detail-drawer .el-drawer__body{padding:15px 14px}}
+.container-detail-drawer .el-drawer__header{gap:12px;margin-bottom:0;padding:17px 20px 14px;border-bottom:1px solid var(--ncp-line)}.container-detail-drawer .el-drawer__close-btn{box-sizing:border-box;min-width:44px;min-height:44px;flex:0 0 auto;align-items:center;justify-content:center}.container-detail-drawer .el-drawer__close-btn:focus-visible{outline:2px solid var(--ncp-primary);outline-offset:2px}.container-detail-drawer .el-drawer__body{padding:18px 20px}@media(max-width:700px){.container-detail-drawer .el-drawer__body{padding:15px 14px}}
 </style>
