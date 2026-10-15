@@ -302,3 +302,59 @@ it('会话更换不重发旧项目请求，旧请求释放自身占用后新会�
   expect(ElMessage.success).toHaveBeenCalledOnce()
   expect(button('重启项目 demo-project').disabled).toBe(false)
 })
+
+// These tests exercise the real action gate with a mocked dialog decision; geometry
+// and native focus/keyboard behavior belong to the separate browser evidence suite.
+describe.each(['compose', 'standalone'] as const)('项目确认范围与取消门禁 %s', (kind) => {
+  it.each(['stop', 'restart'] as const)('确认 %s 文案与专属样式，明确确认后仅派发一次', async (action) => {
+    if (kind === 'compose') await readyCompose()
+    else await ready(false)
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    const label = action === 'stop' ? '停止' : '重启'
+    const target = button(`${label}项目 demo-project`)
+    target.click(); target.click(); await settle()
+    expect(ElMessageBox.confirm).toHaveBeenCalledOnce()
+    expect(posts()).toHaveLength(0)
+    const [message, title, options] = vi.mocked(ElMessageBox.confirm).mock.calls[0]!
+    expect(title).toBe(`确认${label}项目`)
+    const commonOptions = { confirmButtonText: `确认${label}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' }
+    if (kind === 'compose') {
+      const interruption = action === 'stop' ? '服务会中断' : '期间服务会短暂中断'
+      expect(message).toBe(`将通过 Compose ${label}项目“demo-project”。确认前最近一次清单观察到该项目 1 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`)
+      expect(options).toEqual({ ...commonOptions, customClass: 'ncp-compose-action-confirmation' })
+    } else {
+      expect(message).toBe(action === 'stop'
+        ? '将停止项目“demo-project”的 1 个容器。容器会停止，但镜像、卷、Compose 文件和工作目录不会删除。'
+        : '将重启项目“demo-project”的 1 个容器。容器会逐项重启，镜像、卷、Compose 文件和工作目录不会删除。')
+      expect(options).toEqual(commonOptions)
+    }
+    fetcher.mockImplementation(async (_url, init) => {
+      if (init?.method !== 'POST') return response(kind === 'compose' ? composeInventory() : inventory())
+      const state = action === 'stop' ? 'stopped' : 'running'
+      return response(kind === 'compose'
+        ? { ...composeResult(), action, state, services: [{ name: 'web', state: action === 'stop' ? 'exited' : 'running', running: action !== 'stop' }] }
+        : { ...projectReceipt(state), action, containers: [{ ...receipt(state), action, success: true }] })
+    })
+    confirmation.resolve(confirmed); await settle()
+    expect(posts()).toHaveLength(1)
+    expect(JSON.parse(String(posts()[0]![1]?.body)).action).toBe(action)
+    expect(ElMessage.success).toHaveBeenCalledOnce()
+  })
+
+  describe.each(['cancel', 'close'])('%s 不代表同意', (decision) => {
+    it.each(['stop', 'restart'] as const)('%s 不派发或刷新，随后仍可确认', async (action) => {
+      if (kind === 'compose') await readyCompose()
+      else await ready(false)
+      vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce(decision)
+      const label = `${action === 'stop' ? '停止' : '重启'}项目 demo-project`
+      button(label).click(); await settle()
+      expect(posts()).toHaveLength(0)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(ElMessage.success).not.toHaveBeenCalled()
+      expect(button(label).disabled).toBe(false)
+      button(label).click(); await settle()
+      expect(posts()).toHaveLength(1)
+    })
+  })
+})

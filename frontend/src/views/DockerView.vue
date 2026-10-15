@@ -307,7 +307,12 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
         await ElMessageBox.confirm(
           dockerProjectActionConfirmation(project, action, actionTargets.length),
           `确认${dockerActionLabel(action)}项目`,
-          { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' },
+          {
+            confirmButtonText: `确认${dockerActionLabel(action)}`,
+            cancelButtonText: '取消',
+            type: action === 'stop' ? 'warning' : 'info',
+            ...(project.kind === 'compose' ? { customClass: 'ncp-compose-action-confirmation' } : {}),
+          },
         )
       } catch { return }
     }
@@ -606,6 +611,13 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* MessageBox is teleported; qualify every global rule with the Compose-only class. */
+:global(.ncp-compose-action-confirmation .el-message-box__header) { min-height: var(--ncp-touch-target); padding-right: calc(var(--ncp-touch-target) + 8px); }
+:global(.ncp-compose-action-confirmation .el-message-box__headerbtn) { top: 4px; right: 4px; width: var(--ncp-touch-target); height: var(--ncp-touch-target); border-radius: 4px; }
+:global(.ncp-compose-action-confirmation .el-message-box__btns .el-button) { min-width: var(--ncp-touch-target); min-height: var(--ncp-touch-target); }
+:global(.ncp-compose-action-confirmation .el-message-box__headerbtn:focus-visible),
+:global(.ncp-compose-action-confirmation .el-message-box__btns .el-button:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: 2px; }
+
 .docker-search { width: min(360px, 38vw); }
 .docker-view-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--ncp-line); border-radius: 10px; background: #fff; }
 .docker-view-tabs button { display: flex; min-height: 38px; align-items: center; gap: 6px; padding: 0 13px; border-radius: 7px; background: transparent; color: var(--ncp-text-muted); font-size: .82rem; font-weight: 720; white-space: nowrap; }

@@ -104,6 +104,7 @@ async function provenance() {
   const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend']).split('\n').filter(Boolean)
   return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), trackedDiffSha256: createHash('sha256').update(git(['diff', 'HEAD', '--binary', '--', 'frontend'])).digest('hex'), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async (file) => [file, createHash('sha256').update(await readFile(resolve(root, file))).digest('hex')]))) }
 }
+const confirmation = (page: Page) => page.locator('.ncp-compose-action-confirmation')
 const actionButton = (page: Page, action: Action, projectName = name) => {
   const label = { start: '启动', stop: '停止', restart: '重启' }[action]
   return page.viewportSize()!.width === 390
@@ -112,7 +113,7 @@ const actionButton = (page: Page, action: Action, projectName = name) => {
 }
 async function geometry(page: Page) {
   return page.evaluate(() => {
-    const selectors = ['.action-error', '.action-error > span', '.action-error button', '.el-message', '.el-message__content', '.el-message-box', '.el-message-box__message', '.el-message-box button', '[role="tooltip"]']
+    const selectors = ['.action-error', '.action-error > span', '.action-error button', '.el-message', '.el-message__content', '.el-message-box', '.el-message-box__message', '.el-message-box__title', '.el-message-box__headerbtn', '.el-message-box button', '[role="tooltip"]']
     return {
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
       root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
@@ -126,19 +127,26 @@ async function geometry(page: Page) {
         const hit = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
         return { selector, tag: element.tagName, text: element.textContent, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
           visible: bounds.width > 0 && bounds.height > 0 && style.visibility !== 'hidden' && element.getAttribute('aria-hidden') !== 'true',
-          textContained: element.scrollWidth <= element.clientWidth + 1 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1),
+          textContained: element.scrollWidth <= element.clientWidth + 1 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && (element.tagName !== 'BUTTON' || (line.top >= bounds.top - 1 && line.bottom <= bounds.bottom + 1))),
           centerHit: Boolean(hit && (hit === element || element.contains(hit))), noWrap: style.whiteSpace === 'nowrap', inMain: Boolean(element.closest('main, [role="main"]')) }
       })).filter((control) => control.visible),
     }
   })
 }
 type Artifact = { file: string; sha256: string }
-const evidence = new WeakMap<Page, { api: Fixture; artifacts: Artifact[] }>()
+type Dismissal = { action: Action; method: 'cancel' | 'close' | 'escape'; requests: RequestRecord[]; focusCycle: { key: string; contained: boolean; control: string; focusVisible: boolean; outlineWidth: number; outlineStyle: string; outlineColor: string }[]; restored: boolean; completed: boolean }
+const evidence = new WeakMap<Page, { api: Fixture; artifacts: Artifact[]; dismissals: Dismissal[] }>()
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string): Promise<void> {
   // 保持时钟运行，完整 axe 依赖异步计时器；完成提示由真实 hover 暂停自动关闭。
   await waitForPageReady(page)
   await page.evaluate(() => document.fonts.ready)
+  if (state.endsWith('-confirmation')) {
+    await expect(confirmation(page)).toContainText(name)
+    await expect(confirmation(page)).toContainText('确认前最近一次清单观察到该项目 1 个容器')
+    await expect(confirmation(page)).toContainText('实际操作范围由执行时的 Compose 配置决定')
+    await expect(confirmation(page)).not.toContainText('逐项重启')
+  }
   await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }))
   const beforeCapture = await geometry(page), requestsBefore = structuredClone(api.requests)
   const prefix = `compose-action-outcome-${state}-${page.viewportSize()!.width}`
@@ -166,12 +174,20 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
     expect(sample.semantic).toEqual(beforeCapture.semantic)
     expect(sample.focus).toEqual(beforeCapture.focus)
     expect(sample.scroll).toEqual(beforeCapture.scroll)
-    if (state !== 'stop-confirmation' && !state.endsWith('completed') && sample.viewport.width === 1440) {
+    if (!state.endsWith('-confirmation') && !state.endsWith('completed') && sample.viewport.width === 1440) {
       const tooltips = sample.controls.filter((control) => control.selector === '[role="tooltip"]')
       expect(tooltips).toHaveLength(1); expect(sample.tooltipTrigger).toBeDefined()
       const tip = tooltips[0]!.bounds, trigger = sample.tooltipTrigger!
       expect(trigger.top - tip.bottom).toBeGreaterThanOrEqual(0); expect(trigger.top - tip.bottom).toBeLessThanOrEqual(24)
       expect(Math.abs((trigger.left + trigger.right - tip.left - tip.right) / 2)).toBeLessThanOrEqual(4)
+    }
+    if (state.endsWith('-confirmation')) {
+      const buttons = sample.controls.filter((control) => control.selector === '.el-message-box button')
+      expect(buttons).toHaveLength(3)
+      const title = sample.controls.find((control) => control.selector === '.el-message-box__title')!
+      const close = sample.controls.find((control) => control.selector === '.el-message-box__headerbtn')!
+      expect(title).toBeDefined(); expect(close).toBeDefined()
+      expect(title.bounds.right).toBeLessThanOrEqual(close.bounds.left)
     }
     for (const control of sample.controls) {
       expect(control.textContained, JSON.stringify(control)).toBe(true)
@@ -179,9 +195,11 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
       expect(control.bounds.right).toBeLessThanOrEqual(sample.viewport.width + 1)
       if (control.selector === '.action-error > span' && sample.viewport.width === 390) expect(control.lines.length).toBeGreaterThan(1)
       if (control.selector === '.el-message-box button') {
-        expect(control.bounds.width, JSON.stringify(control)).toBeGreaterThan(0)
-        expect(control.bounds.height, JSON.stringify(control)).toBeGreaterThan(0)
+        expect(control.bounds.width, JSON.stringify(control)).toBeGreaterThanOrEqual(44)
+        expect(control.bounds.height, JSON.stringify(control)).toBeGreaterThanOrEqual(44)
         expect(control.centerHit, JSON.stringify(control)).toBe(true)
+        expect(control.bounds.top).toBeGreaterThanOrEqual(0)
+        expect(control.bounds.bottom).toBeLessThanOrEqual(sample.viewport.height + 1)
       }
       if (control.selector === '.action-error button') {
         expect(control.bounds.width).toBeGreaterThanOrEqual(44); expect(control.bounds.height).toBeGreaterThanOrEqual(44)
@@ -192,11 +210,60 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
   }
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
 }
-async function finalLedger(info: TestInfo, api: Fixture, artifacts: Artifact[]) {
+async function verifyDismissals(page: Page, api: Fixture, action: 'stop' | 'restart') {
+  for (const method of ['cancel', 'close', 'escape'] as const) {
+    const trigger = actionButton(page, action), before = api.requests.length, writesBefore = api.writes.length
+    const record: Dismissal = { action, method, requests: [], focusCycle: [], restored: false, completed: false }
+    evidence.get(page)!.dismissals.push(record)
+    try {
+      // 明确从键盘焦点进入，才可核实 Element Plus 真实焦点恢复而非页面碰巧聚焦。
+      await trigger.focus()
+      await trigger.press('Enter')
+      const dialog = confirmation(page)
+      await expect(dialog).toBeVisible()
+      await expect(dialog.getByRole('button')).toHaveCount(3)
+      await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+      const focusCycle = record.focusCycle
+      for (const key of ['Tab', 'Tab', 'Tab', 'Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab', 'Shift+Tab']) {
+        await page.keyboard.press(key)
+        const focused = await dialog.evaluate((element, key) => {
+          const active = document.activeElement!, style = getComputedStyle(active)
+          return { key, contained: element.contains(active), control: active.classList.contains('el-message-box__headerbtn') ? 'close' : active.textContent!.trim(),
+            focusVisible: active.matches(':focus-visible'), outlineWidth: Number.parseFloat(style.outlineWidth), outlineStyle: style.outlineStyle, outlineColor: style.outlineColor }
+        }, key)
+        focusCycle.push(focused)
+        expect(focused.contained).toBe(true)
+        expect(focused.focusVisible).toBe(true)
+        expect(focused.outlineWidth).toBeGreaterThanOrEqual(2)
+        expect(focused.outlineStyle).toBe('solid')
+        expect(focused.outlineColor).not.toMatch(/^(transparent|rgba\(0, 0, 0, 0\))$/)
+      }
+      expect(new Set(focusCycle.map((focused) => focused.control))).toEqual(new Set(['close', '取消', action === 'stop' ? '确认停止' : '确认重启']))
+      if (method === 'escape') await page.keyboard.press('Escape')
+      else if (method === 'close') await dialog.locator('.el-message-box__headerbtn').click()
+      else await dialog.getByRole('button', { name: '取消', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      await expect(trigger).toBeEnabled()
+      record.restored = await trigger.evaluate((element) => element === document.activeElement)
+      record.requests = structuredClone(api.requests.slice(before))
+      await expect(trigger).toBeFocused()
+      record.restored = true
+      expect(record.requests.filter((entry) => entry.method !== 'GET')).toEqual([])
+      expect(api.writes).toHaveLength(writesBefore)
+      expect(api.denied).toEqual([])
+      await expect(page.locator('.el-message, .action-error')).toHaveCount(0)
+      record.completed = true
+    } finally {
+      // 失败也保留已观察到的键盘轨迹与本轮请求，便于 CI 诊断。
+      record.requests = structuredClone(api.requests.slice(before))
+    }
+  }
+}
+async function finalLedger(info: TestInfo, api: Fixture, artifacts: Artifact[], dismissals: Dismissal[]) {
   const requests = structuredClone(api.requests)
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const file = info.outputPath('ui-captures', 'compose-final-request-ledger-capture-state.json')
-  await writeFile(file, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts,
+  await writeFile(file, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts, dismissals,
     requests, requestsSha256: hash(JSON.stringify(requests)), writes: api.writes, denied: api.denied, errors: api.errors }, null, 2))
   await info.attach('compose-final-request-ledger', { path: file, contentType: 'application/json' })
   expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
@@ -211,18 +278,20 @@ async function open(page: Page, baseURL: string, width: number) {
 }
 test.afterEach(async ({ page }, info) => {
   const saved = evidence.get(page)
-  if (saved) await finalLedger(info, saved.api, saved.artifacts)
+  if (saved) await finalLedger(info, saved.api, saved.artifacts, saved.dismissals)
 })
 for (const width of [390, 1440]) {
   test(`${width}px Compose 完成回执只表述读回状态，重建副本不绑定提交前容器`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     const api = await open(page, baseURL!, width), artifacts: Artifact[] = []
-    evidence.set(page, { api, artifacts })
+    evidence.set(page, { api, artifacts, dismissals: [] })
+    // 每种危险操作分别验证真实取消、关闭与 Escape，未授权任何写请求。
+    for (const action of ['stop', 'restart'] as const) await verifyDismissals(page, api, action)
     for (const action of ['stop', 'start'] as const) {
       const before = api.requests.length, writesBefore = api.writes.length
       api.allow('completed', action); await actionButton(page, action).click()
       if (action === 'stop') {
-        const dialog = page.locator('.el-message-box')
+        const dialog = confirmation(page)
         await expect(dialog).toBeVisible(); expect(api.writes).toHaveLength(writesBefore)
         await capture(page, info, api, 'stop-confirmation')
         await dialog.getByRole('button', { name: '确认停止', exact: true }).click()
@@ -246,7 +315,7 @@ for (const width of [390, 1440]) {
   test(`${width}px Compose 错配回执和 409 核验失败保持未知，确认配置且只读核对不重放`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     const api = await open(page, baseURL!, width), artifacts: Artifact[] = []
-    evidence.set(page, { api, artifacts })
+    evidence.set(page, { api, artifacts, dismissals: [] })
     for (const mode of ['wrong-project', 'wrong-action', 'verify-failed'] as const) {
       api.stageInventory(false)
       if (mode !== 'wrong-project') {
@@ -256,11 +325,12 @@ for (const width of [390, 1440]) {
       }
       const before = api.requests.length, writesBefore = api.writes.length
       api.allow(mode, 'restart'); await actionButton(page, 'restart').click()
-      const dialog = page.locator('.el-message-box')
+      const dialog = confirmation(page)
       await expect(dialog).toBeVisible(); await expect(dialog).toContainText(name)
       expect(api.writes).toHaveLength(writesBefore)
       // /docker 没有实时订阅：仅安排操作后的真实 GET 返回变化清单。
       // 确认期间客户端清单变更的冻结快照证据由 DockerView.actionOutcomes.test.ts 覆盖。
+      if (mode === 'wrong-project') await capture(page, info, api, 'restart-confirmation')
       api.stageInventory(true)
       await expect(dialog).toContainText(name); await expect(dialog).not.toContainText('清单已变化的项目')
       await dialog.getByRole('button', { name: '确认重启', exact: true }).click()

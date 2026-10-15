@@ -48,6 +48,10 @@ export function dockerProjectActionConfirmation(
   action: ContainerAction,
   targetCount: number,
 ) {
+  if (project.kind === 'compose') {
+    const interruption = action === 'stop' ? '服务会中断' : '期间服务会短暂中断'
+    return `将通过 Compose ${dockerActionLabel(action)}项目“${project.name}”。确认前最近一次清单观察到该项目 ${targetCount} 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`
+  }
   const countLabel = `${targetCount} 个容器`
   if (action === 'stop') {
     return `将停止项目“${project.name}”的 ${countLabel}。容器会停止，但镜像、卷、Compose 文件和工作目录不会删除。`
