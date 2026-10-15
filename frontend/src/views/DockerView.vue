@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
@@ -298,6 +298,9 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
     ElMessage.info(`项目“${project.name}”已经${action === 'start' ? '全部运行' : action === 'stop' ? '全部停止' : '没有可重启的容器'}`)
     return
   }
+  // 原生 disabled 会先移走焦点，需在占用操作前保存真实键盘触发点。
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  let dismissed = false
   projectActionPending.value = { projectId: project.id, action }
   const pendingOwner = projectActionPending.value
   const failures: ProjectActionError[] = []
@@ -314,7 +317,10 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
             ...(project.kind === 'compose' ? { customClass: 'ncp-compose-action-confirmation' } : {}),
           },
         )
-      } catch { return }
+      } catch (decision) {
+        dismissed = decision === 'cancel' || decision === 'close'
+        return
+      }
     }
     if (!current()) return
     projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
@@ -356,7 +362,16 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       if (current()) actionError.value = [actionError.value, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
     }
   } finally {
-    if (viewActive && projectActionPending.value === pendingOwner) projectActionPending.value = null
+    if (viewActive && projectActionPending.value === pendingOwner) {
+      projectActionPending.value = null
+      if (dismissed) {
+        // 等按钮重新启用后再恢复；旧会话或新操作不能抢回焦点。
+        await nextTick()
+        if (current() && !effectiveActionPending.value && returnFocus?.isConnected && !returnFocus.matches(':disabled')) {
+          returnFocus.focus({ preventScroll: true })
+        }
+      }
+    }
   }
 }
 async function confirmDeleteProject(project: DockerProject) {
@@ -512,13 +527,13 @@ onMounted(() => {
             <span class="path-cell">{{ project.workingDirectory || '自动发现' }}</span>
           </ElTooltip>
           <div class="project-actions" @click.stop>
-            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="启动项目" placement="top">
+            <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="启动项目" placement="top">
               <ListIconButton :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" :label="`启动项目 ${project.name}`" @click="performProjectAction(project, 'start')" />
             </ElTooltip>
-            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="停止项目" placement="top">
+            <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="停止项目" placement="top">
               <ListIconButton :icon="Square" tone="danger" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" :label="`停止项目 ${project.name}`" @click="performProjectAction(project, 'stop')" />
             </ElTooltip>
-            <ElTooltip :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="重启项目" placement="top">
+            <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="重启项目" placement="top">
               <ListIconButton :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')" />
             </ElTooltip>
             <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">

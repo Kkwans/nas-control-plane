@@ -134,7 +134,7 @@ async function geometry(page: Page) {
   })
 }
 type Artifact = { file: string; sha256: string }
-type Dismissal = { action: Action; method: 'cancel' | 'close' | 'escape'; requests: RequestRecord[]; focusCycle: { key: string; contained: boolean; control: string; focusVisible: boolean; outlineWidth: number; outlineStyle: string; outlineColor: string }[]; restored: boolean; completed: boolean }
+type Dismissal = { action: Action; activationKey: 'Enter' | 'Space'; method: 'cancel' | 'close' | 'escape'; requests: RequestRecord[]; focusCycle: { key: string; contained: boolean; control: string; focusVisible: boolean; outlineWidth: number; outlineStyle: string; outlineColor: string }[]; restored: boolean; completed: boolean }
 const evidence = new WeakMap<Page, { api: Fixture; artifacts: Artifact[]; dismissals: Dismissal[] }>()
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string): Promise<void> {
@@ -211,14 +211,14 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
 }
 async function verifyDismissals(page: Page, api: Fixture, action: 'stop' | 'restart') {
-  for (const method of ['cancel', 'close', 'escape'] as const) {
+  for (const [method, activationKey] of [['cancel', 'Enter'], ['close', 'Enter'], ['escape', 'Enter'], ['escape', 'Space']] as const) {
     const trigger = actionButton(page, action), before = api.requests.length, writesBefore = api.writes.length
-    const record: Dismissal = { action, method, requests: [], focusCycle: [], restored: false, completed: false }
+    const record: Dismissal = { action, method, activationKey, requests: [], focusCycle: [], restored: false, completed: false }
     evidence.get(page)!.dismissals.push(record)
     try {
       // 明确从键盘焦点进入，才可核实 Element Plus 真实焦点恢复而非页面碰巧聚焦。
       await trigger.focus()
-      await trigger.press('Enter')
+      await trigger.press(activationKey)
       const dialog = confirmation(page)
       await expect(dialog).toBeVisible()
       await expect(dialog.getByRole('button')).toHaveCount(3)

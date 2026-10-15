@@ -18,7 +18,7 @@ vi.mock('@/composables/useListPreference', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   const stub = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
-  return { ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 vi.mock('@/components/DockerImagePanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ContainerLogDrawer.vue', () => ({ default: { render: () => null } }))
@@ -38,8 +38,9 @@ function inventory(offset = 0, empty = false): DockerInventory {
 function response(value: unknown) { return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((yes) => { resolve = yes })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
 }
 class FakeEventSource extends EventTarget {
   static sources: FakeEventSource[] = []
@@ -379,4 +380,88 @@ it.each(['mismatch', 'all-target-incomplete'])('独立容器组列表两处保�
   }
   expect(ElMessage.success).not.toHaveBeenCalled()
   expect(posts()).toHaveLength(1)
+})
+
+function focusMockDialog() {
+  const dialogControl = document.createElement('button')
+  host.append(dialogControl)
+  dialogControl.focus()
+}
+
+// Mocked dialog tests cover application ownership and restoration guards only.
+// The unchanged Playwright suite exercises the actual Element Plus focus trap.
+describe.each(['compose', 'standalone'] as const)('项目取消焦点 %s', (kind) => {
+  it.each(['cancel', 'close'] as const)('在 %s 后恢复触发点，保持无写请求', async (decision) => {
+    if (kind === 'compose') await readyCompose()
+    else await ready(false)
+    for (const action of ['停止', '重启']) {
+      const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+      vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+      const target = button(`${action}项目 demo-project`)
+      target.focus(); target.click(); await settle()
+      expect(target.disabled).toBe(true)
+      focusMockDialog() // 模拟真实对话框已接管焦点，不替代浏览器焦点证据。
+      expect(document.activeElement).not.toBe(target)
+      confirmation.reject(decision); await settle()
+      expect(target.disabled).toBe(false)
+      expect(document.activeElement).toBe(target)
+      expect(posts()).toHaveLength(0)
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+it('项目生命周期工具提示不拦截原生 Enter/Space', async () => {
+  await readyCompose()
+  for (const action of ['启动', '停止', '重启']) {
+    expect(button(`${action}项目 demo-project`).parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
+  }
+})
+it.each(['stale-session', 'unmount', 'disconnected', 'disabled', 'unexpected-rejection', 'confirmed'] as const)('不向失效或非取消操作恢复焦点：%s', async (condition) => {
+  await readyCompose()
+  const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+  vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+  const target = button('停止项目 demo-project')
+  target.focus(); target.click(); await settle(); focusMockDialog()
+  const focus = vi.spyOn(target, 'focus')
+  if (condition === 'stale-session') { invalidateSession(); beginSession() }
+  if (condition === 'unmount') { app!.unmount(); app = undefined }
+  if (condition === 'disconnected') target.remove()
+  if (condition === 'disabled') {
+    const observed = composeInventory()
+    observed.containers[0]!.state = 'stopped'
+    observed.projects[0]!.state = 'stopped'
+    observed.projects[0]!.runningCount = 0
+    store.inventory = observed; await settle()
+  }
+  if (condition === 'confirmed') confirmation.resolve(confirmed)
+  else confirmation.reject(condition === 'unexpected-rejection' ? new Error('dialog unavailable') : 'cancel')
+  await settle()
+  expect(focus).not.toHaveBeenCalled()
+  expect(posts()).toHaveLength(condition === 'confirmed' ? 1 : 0)
+})
+it('取消释放期间出现新的项目操作时不抢回焦点', async () => {
+  await readyCompose()
+  const first = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+  const second = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+  vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+  const stop = button('停止项目 demo-project'), restart = button('重启项目 demo-project')
+  stop.focus(); stop.click(); await settle(); focusMockDialog()
+  const focus = vi.spyOn(stop, 'focus')
+  let started = false
+  const observer = new MutationObserver(() => {
+    if (!stop.disabled && !started) {
+      started = true
+      restart.click()
+    }
+  })
+  observer.observe(stop, { attributes: true, attributeFilter: ['disabled'] })
+  try {
+    first.reject('cancel'); await settle()
+    expect(started).toBe(true)
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
+    expect(restart.disabled).toBe(true)
+    expect(focus).not.toHaveBeenCalled()
+    expect(posts()).toHaveLength(0)
+    second.reject('cancel'); await settle()
+  } finally { observer.disconnect() }
 })

@@ -96,3 +96,15 @@ d2a8003 的实际移动端 wrong-project 截图显示未知结果正文上方仍
 本片 48 项定向组件测试通过，Vue 类型检查、修改文件 ESLint、生产构建及 540KiB 包预算通过，diff 空白检查通过。未运行本地浏览器、监听器、Docker/Compose 或 NAS；实际浏览器标题断言及截图由后续专项补充，未将纯 DOM 测试等同可见性、布局或完整 axe 验收。没有修改确认框与焦点逻辑。
 
 最终全量复验：3958 项前端测试/142 文件、生产构建和 540KiB 包预算通过；此片只修正文案，不将待核验的原生键盘焦点问题声明为已解决。
+
+## 项目确认键盘入口与取消焦点恢复（2026-10-15）
+
+实际 CI 38798198042 / aec85202265a7892301fc148658f854e4cc6da1c 的两个失败不再归为同一问题：1440px 完成回执用例在首个 stop/cancel 的 Enter 后未出现确认框；390px 同轮已完成八步 Tab/Shift+Tab 陷阱与焦点描边检查，但取消后未恢复原触发点。两份原始账本均无写请求、拒绝请求或页面错误；未到完成提示截图阶段。
+
+静态源码核对确认两个产品机制：Element Plus 2.14.3 tooltip 默认拦截 Enter/Space 并 preventDefault，桌面项目生命周期按钮正是直接 tooltip 触发点；项目 pending 在确认前同步占用，使原生按钮 disabled，Element 的延后焦点捕获和释放时点均无法可靠恢复该按钮。三处项目生命周期 tooltip 设置空 triggerKeys，保留按钮原生键盘激活。项目操作在占用前保存实际 activeElement，仅 cancel/close（含 Escape 的 cancel）后释放本次 pending 对象，等待 nextTick 重新启用，再检查当前会话/视图、无任何有效 pending、目标仍连接且非 disabled 后恢复。确认成功、网络结束、意外拒绝、卸载或失效会话不主动恢复；保留原同步重复操作门禁，不扩展单容器路径。
+
+新增纯组件回归覆盖 Compose/standalone 的停止/重启取消与关闭恢复，失效会话、卸载、断开/禁用目标、意外拒绝、确认成功，以及释放后 nextTick 间隙有新操作时不抢回焦点；tooltip 的空键数组作属性合同检查。54 项 actionOutcomes 测试通过，独立复核三份相关组件文件共 66 项通过；Vue 类型检查、修改文件 ESLint、生产构建及 540KiB 包预算通过。
+
+浏览器专项保留全部原 Enter→取消/关闭/Escape、真实 Tab 陷阱/描边、原触发点恢复与零写请求断言，每个动作/宽度另增一次 Space→Escape，账本记录 activationKey。浏览器文件独立严格 TypeScript、ESLint、Playwright --list（原四项）及 diff 检查通过。没有本地浏览器执行、监听器、Docker/Compose 或 NAS；原生键盘、取消恢复、截图与完整 axe 的实际通过仍须远端 CI，不能以 jsdom 或静态检查冒充。
+
+最终全量复验：3970 项前端测试/142 文件及全量 ESLint 通过。原生 Enter 和 Space、取消/关闭/Escape 焦点恢复仍等待新提交 CI，未用组件桩通过替代真实键盘验收。
