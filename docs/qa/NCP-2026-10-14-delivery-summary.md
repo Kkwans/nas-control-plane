@@ -168,3 +168,17 @@
 - **完整回归与边界**：全部 26 组捕获链、既有 20 组创建回执及两份键盘 JSON 已重新核验 364 项源码哈希、干净的 CI 工作树、归档/PNG/关联哈希与几何。既有创建图中 17 张与前轮逐图审查版本字节相同，另三张变化图重新目视检查通过；仍保持精确一次创建 POST、201、六秒无重放及键盘零写入。完整 axe 零违规；接收界面保留 aria-valid-attr-value、color-contrast incomplete，完成任务读回另有 aria-prohibited-attr incomplete，仍需人工审查，不能称全面无障碍合格。
 
 本片完成的是源码、fake 后端与 CI 浏览器 fixture 的隔离验证；不提供跨请求幂等，不代表真实 Docker/Agent socket、NAS 或真实持久库重启集成验收。没有部署、发布或生产操作。
+
+
+## 批量删除回执、项目状态与最近任务性能（2026-10-15 04:08 UTC）
+
+最新已推送代码为 [5284ef3](https://github.com/Kkwans/nas-control-plane/commit/5284ef374d31869c43d96c25bc7681085da19344)。以下分别记录批量流程的实际制品复验与最新性能提交的完整 CI 结果；上文历史记录保持不变。
+
+- **批量镜像删除确认与回执**：[86b566a](https://github.com/Kkwans/nas-control-plane/commit/86b566aac2c27676f5063a6d5f679bc8839281af) 在确认前预留同会话目标、冻结镜像身份，确认后重新核对页面、会话与引用状态，并联锁单项/批量操作。前端与 Agent RPC 严格核验目标集合、计数及错误语义；未知结果跨页面重挂载保留同会话锁，只读刷新不解除风险。保留同步接口、每批最多 50 项及非强制删除，**没有将批量删除改为持久 Job，也不提供跨请求幂等**。[1dae796](https://github.com/Kkwans/nas-control-plane/commit/1dae796277b095dde64ca68e3ab95677a4afc2ab) 增加 `redirect: error`，阻止 307/308 自动重放 POST，并将异常重定向回执归为未知而不重试。本地全量通过 3743 项前端单元（135 文件）；重定向切片通过 220 项定向 API 测试、lint 与类型检查，批量切片的纯 RPC 定向 race、构建和 vet 通过。
+- **独立项目完成状态**：[0244ed9](https://github.com/Kkwans/nas-control-plane/commit/0244ed98037c98a35ce1a64fec6f608b899c2c87) 要求启动/重启读回 running、停止读回 stopped，才将该容器项标为成功；状态不符保留实际观察与稳定错误码，项目汇总不再误报 completed。不增加动作重试或额外读取。纯 fake 回归、生命周期定向 race 20 轮、OpenAPI、vet 和构建通过，不替代真实运行健康验收。
+- **批量流程完整 CI 与实际证据**：0244ed9 的 [CI #362 / 38677740189](https://github.com/Kkwans/nas-control-plane/actions/runs/38677740189) 全部适用检查通过：135 文件、3753 单元测试、447 浏览器用例、11 项制品分片测试及 Go/Compose。[制品分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38677740189/artifacts/11947762227) 与[分片 5](https://github.com/Kkwans/nas-control-plane/actions/runs/38677740189/artifacts/11947482402) 中六张新增实际 PNG、四份最终请求记录及关联捕获链已复核，366 项源码哈希与该提交一致，记录的 CI 工作树干净，归档、PNG 和关联哈希匹配。390/1440 混合结果明确显示一项删除、一项因引用跳过，`completed: false`；390px 外来目标及 1440px 重复目标回执均被拒绝，原两个目标保持结果未知，未显示任务已接收。完整 ID 可见折行，稳定几何、44px 最小按钮及命中检查通过。
+- **写入与无障碍边界**：四份记录均保持确认时冻结的两个 ID，即使选择随后变化也不替换请求目标；各自仅一次批量 POST、200 JSON 回执，后续均为只读 GET，镜像列表共读取三次，六秒内无重放、降级写入或 Job 创建，无未知请求或页面错误。上述六张图完整 axe 零违规，仍保留 aria-valid-attr-value、color-contrast 两类 incomplete 人工审查项，不代表全面无障碍验收。
+- **最近持久任务读取性能**：5284ef3 拆开混合与精确类型查询，新增含完整时间和 ID 次排序的两个索引，保留原索引、完整历史记录与既有限额。固定 modernc SQLite 的临时库验证了生产 SQL 查询计划、与旧查询的结果等价、取消及旧结构重复迁移；完整 controlstore race（58.565 秒）、vet 和全部 cmd 构建通过。十万条历史的本地暖缓存单次样本中，混合读取由 430.18ms 降至 2.31ms，指定类型由 141.71ms 降至 2.36ms。样本不包含索引创建，不代表 NAS、冷缓存或并发负载；新增索引仍有首次迁移、写入和磁盘成本，不据此声称整体启动耗时有界。
+- **最新性能提交 CI 已通过**：04:08 UTC 确认 5284ef3 的 [CI #363 / 38678326726](https://github.com/Kkwans/nas-control-plane/actions/runs/38678326726) 全部适用检查通过：135 文件、3753 单元测试、447 浏览器用例、11 项制品分片测试及 Go/Compose，发布步骤跳过。此处已核验终态与日志计数；上面的实际图片及请求记录复核仍对应 #362 / 0244ed9，不宣称已独立复核 #363 的制品。
+
+以上为源码、纯 fake/内存传输、临时 SQLite 和 CI 浏览器 fixture 证据；真实 Docker/Agent socket、NAS、真实数据库 TLS 握手及原生多会话仍未验收。没有部署、发布或生产操作。
