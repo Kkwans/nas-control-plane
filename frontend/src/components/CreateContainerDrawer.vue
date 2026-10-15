@@ -563,10 +563,10 @@ async function refreshUnresolvedInventory() {
         <div class="form-grid">
           <label class="field field--wide"><span>镜像</span><ElInput :model-value="imageReference" disabled /></label>
           <label class="field field--wide"><span>容器名称</span><ElInput v-model="form.name" maxlength="128" placeholder="例如 mysql-1" /></label>
-          <label class="field"><span>CPU 限制（核）</span><ElInputNumber v-model="form.cpu" :min="0.01" :max="256" :step="0.25" controls-position="right" placeholder="无限制" /></label>
-          <label class="field"><span>内存限制（MiB）</span><ElInputNumber v-model="form.memoryMiB" :min="4" :max="1048576" :step="128" controls-position="right" placeholder="无限制" /></label>
+          <label class="field"><span>CPU 限制（核）</span><ElInputNumber v-model="form.cpu" aria-label="CPU 限制（核）" :min="0.01" :max="256" :step="0.25" controls-position="right" placeholder="无限制" /></label>
+          <label class="field"><span>内存限制（MiB）</span><ElInputNumber v-model="form.memoryMiB" aria-label="内存限制（MiB）" :min="4" :max="1048576" :step="128" controls-position="right" placeholder="无限制" /></label>
           <label class="field"><span>重启策略</span><NcpSelect :model-value="form.restartPolicy" :options="restartPolicyOptions" accessible-label="容器重启策略" @update:model-value="form.restartPolicy = $event as NonNullable<DockerContainerCreateInput['restartPolicy']>" /></label>
-          <label v-if="form.restartPolicy === 'on-failure'" class="field"><span>最大重试次数</span><ElInputNumber v-model="form.restartMaxRetries" :min="0" :max="1000" controls-position="right" /></label>
+          <label v-if="form.restartPolicy === 'on-failure'" class="field"><span>最大重试次数</span><ElInputNumber v-model="form.restartMaxRetries" aria-label="最大重试次数" :min="0" :max="1000" controls-position="right" /></label>
         </div>
       </section>
 

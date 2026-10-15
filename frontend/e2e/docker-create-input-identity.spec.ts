@@ -545,7 +545,7 @@ for (const width of [390, 1440]) for (const scenario of resourceCases) {
       await drawer.getByRole('spinbutton', { name: '内存限制（MiB）', exact: true }).fill(String(scenario.memoryMiB))
     }
     await expect(drawer.getByRole('combobox', { name: '容器重启策略', exact: true })).toHaveCount(1)
-    await drawer.locator('label.field').filter({ has: drawer.getByRole('combobox', { name: '容器重启策略', exact: true }) }).locator('.el-select__wrapper').click()
+    await drawer.locator('label.field').filter({ has: page.getByRole('combobox', { name: '容器重启策略', exact: true }) }).locator('.el-select__wrapper').click()
     await page.getByRole('option', { name: '失败时重启', exact: true }).click()
     await drawer.getByRole('spinbutton', { name: '最大重试次数', exact: true }).fill(String(scenario.retries))
     const opener = drawer.getByRole('button', { name: '创建并启动', exact: true })

@@ -31,13 +31,17 @@ function button(text: string) {
   return found!
 }
 async function click(text: string) { button(text).click(); await settle() }
+function namedSpinbutton(label: string) {
+  const inputs = [...document.querySelectorAll<HTMLInputElement>('input[role="spinbutton"]')].filter((node) => node.getAttribute('aria-label') === label)
+  expect(inputs, `具名数字输入：${label}`).toHaveLength(1)
+  expect(inputs[0]!.type).toBe('number')
+  return inputs[0]!
+}
 async function editNumber(label: string, value: string) {
-  const field = [...document.querySelectorAll('.field')].find((node) => node.querySelector('span')?.textContent === label)
-  const input = field?.querySelector<HTMLInputElement>('input')
-  expect(input, label).toBeDefined()
-  input!.value = value
-  input!.dispatchEvent(new Event('input', { bubbles: true }))
-  input!.dispatchEvent(new Event('change', { bubbles: true }))
+  const input = namedSpinbutton(label)
+  input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
   await settle()
 }
 async function choosePolicy(label: string) {
@@ -100,6 +104,16 @@ const policies = [
 ] as const
 
 describe('创建确认的资源与重启策略快照', () => {
+  it('资源与重试次数的可访问名称位于真实数字输入上', async () => {
+    await mount()
+    expect(namedSpinbutton('CPU 限制（核）').value).toBe('')
+    expect(namedSpinbutton('内存限制（MiB）').value).toBe('')
+    expect(document.querySelector('input[aria-label="最大重试次数"]')).toBeNull()
+    await choosePolicy('失败时重启')
+    expect(namedSpinbutton('最大重试次数').value).toBe('0')
+    expect(createCalls()).toHaveLength(0)
+  })
+
   it.each([false, true])('缺省不请求资源限制，取消零提交，确认仅一次，runContainer=%s', async (runContainer) => {
     await mount()
     const open = runContainer ? '创建并启动' : '仅创建'
