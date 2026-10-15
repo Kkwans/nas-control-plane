@@ -793,6 +793,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			completed_at_unix INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS jobs_type_created ON jobs(type, created_at_unix DESC)`,
+		`CREATE INDEX IF NOT EXISTS jobs_created_id ON jobs(created_at_unix DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS jobs_type_created_id ON jobs(type, created_at_unix DESC, id DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {

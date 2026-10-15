@@ -172,3 +172,13 @@ OpenAPI 更新 cancel 202 为“取消请求已接收，可能仍在执行”；
 现有测试改造注意：jobs_snapshot_test.go 的 expectedRecords=2+iterations*4、终态后仍进度写、cancel callback之后期待旧快照最后落盘，都绑定旧实现，必须改成“快照隔离 + 最终一致/终态单调”断言；不能把写次数降低误判为漏写。保留M01保护目的，不能直接删掉race覆盖。取消快照CompletedAt现在可为空，原测试无条件解引用需要按状态改。controlstore TestJobsPersistProgressAndInterruptRunningTasks 的 LayersJSON 是数组fixture，实际snapshot用map；加合法map fixture和畸形历史数据测试，明确损坏记录诊断，不静默伪造正确进度。
 
 建议实施后的验证命令：go test -race ./internal/httpapi ./internal/controlstore；go test ./api/openapi；go build ./cmd/ncp-server ./cmd/ncp-agent；frontend pnpm test（定向Job/下载/Compose用例）、pnpm typecheck、pnpm build；若部署配置有变化再做纯Compose配置解析。上述本次均未执行；真实NAS健康、Docker真实取消与残留产物核验需要另获授权，不能用fake结果替代。
+
+## 2026-10-15 最近任务持久读取的索引切片
+
+基线 `0244ed9`。最近列表虽然限制最多 500 条，但原 `Store.Jobs` 的可选类型 OR 条件与不完整排序索引，会对累计历史扫描并建立临时排序；启动恢复后的混合列表读取也使用此路径。此片保留既有历史与接口，只将混合查询和精确类型查询分开，并以可重复执行的迁移增加 `(created_at_unix DESC, id DESC)`、`(type, created_at_unix DESC, id DESC)` 两个索引；原 `jobs_type_created` 保留，不删除或重写历史。空类型仍表示混合，非空类型不 trim，limit 不在 1–500 时仍取 100。
+
+固定依赖 modernc.org/sqlite v1.54.0 的临时文件测试覆盖：2,110 条多类型完整记录与旧 OR 查询及独立排序/过滤结果一致、同秒 ID 次排序、精确类型/不存在类型/空列表、1/500/无效 limit、两路已取消 context。直接对生产 SQL 的 EXPLAIN QUERY PLAN 验证混合有序索引扫描、指定类型索引查找且无临时排序。旧结构含已有记录及旧索引，经 Open、重复 migrate 和重新打开后完整数据保持不变，三个索引均保留。
+
+`BenchmarkRecentJobsHistory` 仅使用临时 SQLite，比较旧结构/旧 OR 查询和新增索引/生产查询；各次最多读取 500 条，不设置耗时断言。2026-10-15 云环境 Linux/amd64、Xeon 8573C，`-benchtime=200ms -count=1` 的一次样本（混合/指定类型，毫秒）：1千条旧 6.50/2.86、新 2.39/1.65；1万条旧 43.14/16.73、新 2.38/2.43；10万条旧 430.18/141.71、新 2.31/2.36。最小历史指定类型实际返回 334 条，其余返回 500 条。测试初跑发现基准 fixture 将 1千条中三等分首类数量误写为 333，已改为 334 并完整重跑通过；生产实现未因此变更。
+
+基准不包含建库、插入或索引创建时间，也不是 NAS、冷缓存或并发负载结论。新增索引有一次性历史建索引成本、持续写入/磁盘成本；首次迁移仍受现有启动预算约束。`RecoverInterruptedJobs` 的 UPDATE、历史读取之外的恢复和反序列化工作未改变，因此不声称整个启动时间或进程内存已严格有界。持久历史完整分页、清理策略和部署仍在本片之外。聚焦测试、上述完整基准、完整 controlstore 包 race（58.565秒）、controlstore vet、全部 cmd 构建及 diff 空白检查均通过；独立审查无阻断问题且独立重跑聚焦测试通过。远端 CI 尚待主任务提交后验证。

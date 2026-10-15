@@ -131,12 +131,20 @@ func (s *Store) Job(ctx context.Context, id string) (JobRecord, error) {
 	return job, err
 }
 
+const recentJobsQuery = `SELECT ` + jobColumns + ` FROM jobs ORDER BY created_at_unix DESC, id DESC LIMIT ?`
+const recentJobsByTypeQuery = `SELECT ` + jobColumns + ` FROM jobs WHERE type = ? ORDER BY created_at_unix DESC, id DESC LIMIT ?`
+
 func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, error) {
 	if limit < 1 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.database.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs
- WHERE (? = '' OR type = ?) ORDER BY created_at_unix DESC, id DESC LIMIT ?`, kind, kind, limit)
+	// 分开固定查询，让混合历史和指定类型都能按索引顺序取得有界前缀。
+	// 不使用可选条件 OR，避免为了最近几条记录扫描、排序全部历史。
+	query, args := recentJobsQuery, []any{limit}
+	if kind != "" {
+		query, args = recentJobsByTypeQuery, []any{kind, limit}
+	}
+	rows, err := s.database.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
