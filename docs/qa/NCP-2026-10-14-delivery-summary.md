@@ -120,3 +120,14 @@
 - **最新修复尚待实际图片复核**：[080447a](https://github.com/Kkwans/nas-control-plane/commit/080447a08756bb5bcb22aade276a31d46a2b369e) 限制确认弹窗高度，将详情设为具名、可聚焦的独立滚动区，保留标题和页脚；浏览器检查补充实际面板/页脚边界、按钮命中及 Home/End 滚动可达性。本地 128 文件、3570 单元测试、lint、类型检查、构建及 10 项 E2E 静态检查通过。00:40 UTC 时 [CI #344 / 38660310549](https://github.com/Kkwans/nas-control-plane/actions/runs/38660310549) 的 Go/Compose 已通过、Mock E2E 尚在运行；00:43 UTC 确认浏览器结果为 **426/427，未通过**。390px 参数/路径用例因滚动条占用宽度后，行内保留空白在行尾悬挂，触发 `fitsLabel` 失败。该用例的实际面板纵向边界为 16–828px，页脚按钮为 772–812px，命中检查通过；End/Home 使详情滚动位置从 37px 回到 0，标题和页脚保持不动。这些限定几何证据支持操作区可达，但不能替代完整视觉验收。当前正修复产品中的路径折行；后续仍需重新运行 CI 并核验实际图片，不宣称本轮全绿或像素问题已全部关闭。
 
 以上仍限于源码、隔离 SQLite 和浏览器 fixture；真实 NAS、原生 Docker、PostgreSQL/MySQL TLS 握手及原生多会话尚未验收。本轮没有部署或发布。
+
+
+## 窄屏确认流程复验关闭（2026-10-15 01:01 UTC）
+
+在保留上述 080447a 失败记录的基础上，[bdd852f](https://github.com/Kkwans/nas-control-plane/commit/bdd852f4d91f55f8928d4d542fd1f6143bca1498) 将精确路径改为块布局与 `break-spaces`，使连续空白参与折行宽度计算，保留原始 JSON 字符。[CI #346 / 38661847385](https://github.com/Kkwans/nas-control-plane/actions/runs/38661847385) 全部适用检查通过：128 文件、3570 单元测试、427 浏览器用例、11 项制品分片测试及 Go/Compose。
+
+- [制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38661847385/artifacts/11939801879) 与[分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38661847385/artifacts/11939975851) 的八张实际 PNG、八组配对捕获 JSON/提交回执及两份键盘 JSON 已复核；357 项源码哈希、图片与关联证据哈希一致。
+- 八组文本与标签包含关系、三阶段稳定几何、面板/页脚边界、按钮命中和标题/详情/页脚不重叠检查均通过；保留空白的字形宽度为正（6px），路径没有靠删除空格通过检查。390px 参数/路径面板纵向为 16–828px，按钮为 772–812px，均在 844px 视口内且命中有效；End 将详情滚到 82px 并显示最后字段，Home 回到 0，标题与页脚不动。其他七组无需额外滚动，End 位置为 0。
+- 每组确认后精确一次 POST、201 响应、六秒无重放；完整 axe 零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项。本轮限定的窄屏页脚与路径折行问题已通过实际截图和对应几何复验，不扩展为全面无障碍或真实环境验收。
+
+资源限制与重启策略的后续改动正在实施，尚未完成，不计入本次完成范围。以上仍为隔离浏览器/SQLite 证据，没有真实 NAS、原生 Docker 或真实数据库 TLS 验收，也没有部署或发布。
