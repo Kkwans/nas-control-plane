@@ -37,3 +37,7 @@ JobSnapshot/get/list/SSE与OpenAPI新增可选progressLimited。旧库可读的l
 前端最终9文件306项单元回归通过（解码、删除回执、两个merge、下载卡片、任务中心及Docker Hub）；vue-tsc、13个改动文件定向ESLint、生产构建与540KiB包预算通过。独立审查复跑HTTP预算race、SQLite、OpenAPI及相关前端185项通过，无剩余阻断。未做浏览器视觉验证；未提交、部署或修改共享QA，保留既有__pycache__。
 
 根审查后最终全量前端4150项/146文件通过；HTTP预算race另三轮、Store迁移与完整OpenAPI复验通过。新受限状态尚未取得真实浏览器截图，独立只读UI专项后续验证，不把既有浏览器回归视为该新状态覆盖。
+
+## 独立浏览器证据专项
+
+新增14例390/1440像素静态fixture：受限running/completed/pending/cancel-requested/cancel-unknown及省略/false兼容，每例检查下载卡和任务中心。保留完整axe、实际文字Range/容器裁剪、截图及源码/图片散列、前后请求稳定和最终失败账本；GET精确来源白名单拒绝所有写、外部来源、未知API和真实WebSocket。仅隔离fixture中精确15秒的自动刷新计时器，其他计时器与axe保持运行；元数据记录抑制次数，明确不验证真实轮询或实际拉取。正常样式包含ellipsis不等同实际裁剪，使用几何判定而非样式值硬禁。ESLint、strict TypeScript、14例发现与独立静态审查通过；真实28张截图及无障碍结论等待远端CI。
