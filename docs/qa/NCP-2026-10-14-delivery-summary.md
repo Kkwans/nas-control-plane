@@ -106,3 +106,17 @@
 - [f3efd48](https://github.com/Kkwans/nas-control-plane/commit/f3efd48990d353a6db0cf885e54d7e5ea2d58eee) 修复 SQLite BOM 前导语句的自动结果识别，隔离真实 SQLite 覆盖单次执行和返回行。原始 SQL 保持不变；其他方言不扩展 BOM 规则。
 
 以上仍是源码、隔离 SQLite 与浏览器 fixture 证据，没有 NAS、真实 Docker 或 PostgreSQL/MySQL TLS 实机验收。接续工作包括弹窗实际浏览器键盘动线和更完整的 SQL 结果模式边界；后续未推送代码不计入上述远端完成量。
+
+
+## 后续验证补充（2026-10-15 00:40 UTC；00:43 UTC 更新）
+
+当前已推送代码为 [080447a](https://github.com/Kkwans/nas-control-plane/commit/080447a08756bb5bcb22aade276a31d46a2b369e)。上文保留各历史检查点的当时结论；本节补充后续结果，不能将早期通过记录视为最新界面的完整验收。
+
+- **SQLite 结果模式**：[57ae940](https://github.com/Kkwans/nas-control-plane/commit/57ae940a0ba3c182a6bb201a9a705c2fb5fb6d3b) 补齐直接 `REPLACE … RETURNING` 的自动返回行；随后 [ceb427e](https://github.com/Kkwans/nas-control-plane/commit/ceb427e68ee7e6ddb86b4bf39c9134157d88bd44) 修复 SQLite `WITH … REPLACE` 无 `RETURNING` 时自动模式丢失影响行数。保留原始 SQL、单次执行与显式模式边界，不扩展到其他方言。后者本地数据库全量 race（8.979s）、全树编译和 vet 通过；[CI #343 / 38659943284](https://github.com/Kkwans/nas-control-plane/actions/runs/38659943284) 的 Go、Compose、Frontend 已全部通过，发布跳过。
+- **创建确认的输入边界**：在前述 d0f08a6 当前位置语义与 37a77b5 初轮弹窗修复之后，[30b744e](https://github.com/Kkwans/nas-control-plane/commit/30b744e6ff96ebb8f47b3c66aeaa99ca56804e81) 以带引号的路径预览明确挂载/设备边界；[b190db1](https://github.com/Kkwans/nas-control-plane/commit/b190db1918d0a06f27e2ee9a4e519b479985206e) 明确主机 IP、主机端口与容器端口；[621535d](https://github.com/Kkwans/nas-control-plane/commit/621535dd2a3b6d4bb265b4a50f382ea8e7d76656) 分别标明 privileged、capAdd 与 capDrop，避免混淆权限增减方向。
+- **浏览器失败与复验**：[3ca3d36](https://github.com/Kkwans/nas-control-plane/commit/3ca3d36c4f563acd803319c59ad17a5cc5d8ba24) 的端口用例曾出现四项超时；[af2c3e2](https://github.com/Kkwans/nas-control-plane/commit/af2c3e2abe65f337355013b85dd2755e8613399f) 将点击目标改为协议选择器的实际可见包装入口。[CI #342 / 38655370576](https://github.com/Kkwans/nas-control-plane/actions/runs/38655370576) 全部适用检查通过：128 文件、3569 单元测试、427 浏览器用例及 Go/Compose；发布跳过。这是修正测试目标后的复验结果，并非首轮成功。
+- **已核验的证据与局限**：[制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38655370576/artifacts/11936392857) 与[分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38655370576/artifacts/11936397829) 中八组 PNG、完整 axe 与提交后回执，以及两份实际浏览器键盘 JSON，均已核验 357 项源码哈希及图片/关联证据哈希。预览与规范化请求一致，确认后一次 POST、201 响应及六秒无重放；键盘记录覆盖两个弹窗的焦点循环、Escape 与焦点归还。完整 axe 零违规，仍保留 aria-valid-attr-value、color-contrast 两类 incomplete，不代表全面无障碍合格。
+- **绿色 CI 仍遗漏了实际窄屏问题**：af2c3e2 的 390px 参数/路径截图中页脚位于视口下方，通配地址/默认端口截图中页脚贴底并被裁切。此前文本几何通过和后续成功点击回执，只能证明相关检查及滚动后操作可达，不能证明截图时页脚可见。因此这些截图不构成完整视觉验收。
+- **最新修复尚待实际图片复核**：[080447a](https://github.com/Kkwans/nas-control-plane/commit/080447a08756bb5bcb22aade276a31d46a2b369e) 限制确认弹窗高度，将详情设为具名、可聚焦的独立滚动区，保留标题和页脚；浏览器检查补充实际面板/页脚边界、按钮命中及 Home/End 滚动可达性。本地 128 文件、3570 单元测试、lint、类型检查、构建及 10 项 E2E 静态检查通过。00:40 UTC 时 [CI #344 / 38660310549](https://github.com/Kkwans/nas-control-plane/actions/runs/38660310549) 的 Go/Compose 已通过、Mock E2E 尚在运行；00:43 UTC 确认浏览器结果为 **426/427，未通过**。390px 参数/路径用例因滚动条占用宽度后，行内保留空白在行尾悬挂，触发 `fitsLabel` 失败。该用例的实际面板纵向边界为 16–828px，页脚按钮为 772–812px，命中检查通过；End/Home 使详情滚动位置从 37px 回到 0，标题和页脚保持不动。这些限定几何证据支持操作区可达，但不能替代完整视觉验收。当前正修复产品中的路径折行；后续仍需重新运行 CI 并核验实际图片，不宣称本轮全绿或像素问题已全部关闭。
+
+以上仍限于源码、隔离 SQLite 和浏览器 fixture；真实 NAS、原生 Docker、PostgreSQL/MySQL TLS 握手及原生多会话尚未验收。本轮没有部署或发布。
