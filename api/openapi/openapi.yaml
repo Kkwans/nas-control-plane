@@ -730,6 +730,11 @@ paths:
     post:
       operationId: getDatabaseCatalog
       summary: 读取数据库表和视图目录
+      description: >-
+        Agent 在累计目录表、列与补充元数据时应用共享的 1 MiB 保守结果保留预算，包含来源、字段名、容器、转义文本及规范化默认值。
+        超预算返回 HTTP 422 result_too_large，不返回部分目录、不截断字段，也不自动重试；客户端保留上次有效目录。
+        SQLite 列写入模式可采用最大长度预留，因此可能早于最终编码大小达到上限时拒绝。普通可选统计读取失败仍允许缺失，取消和预算错误不能当作成功。
+        该预算不限制驱动读取单个值的峰值内存、数据库扫描或 COUNT 查询工作量、执行时长，也不是 NAS 实测容量。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:

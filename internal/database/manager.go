@@ -226,17 +226,21 @@ func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog,
 		return Catalog{}, err
 	}
 	defer cleanup()
-	tables, err := listTables(ctx, db, source, request.Credentials)
+	budget, err := newResultBudget(Catalog{Source: source, Tables: []Table{}})
+	if err != nil {
+		return Catalog{}, MapError(ctx, source, "catalog", err)
+	}
+	tables, err := listTables(ctx, db, source, request.Credentials, budget)
 	if err != nil {
 		return Catalog{}, MapError(ctx, source, "catalog", err)
 	}
 	for index := range tables {
-		columns, columnErr := listColumns(ctx, db, source.Driver, tables[index].Schema, tables[index].Name)
+		columns, columnErr := listCatalogColumns(ctx, db, source.Driver, tables[index].Schema, tables[index].Name, budget)
 		if columnErr != nil {
 			return Catalog{}, MapError(ctx, source, "catalog_columns", columnErr)
 		}
 		tables[index].Columns = columns
-		if err := enrichTable(ctx, db, source.Driver, &tables[index]); err != nil {
+		if err := enrichCatalogTable(ctx, db, source.Driver, &tables[index], budget); err != nil {
 			return Catalog{}, MapError(ctx, source, "catalog_metadata", err)
 		}
 	}
@@ -532,7 +536,7 @@ func credentialSecret(credentials Credentials) string {
 	return credentials.Token
 }
 
-func listTables(ctx context.Context, db *sql.DB, source Source, credentials Credentials) ([]Table, error) {
+func listTables(ctx context.Context, db *sql.DB, source Source, credentials Credentials, budget *resultBudget) ([]Table, error) {
 	var query string
 	var args []any
 	switch source.Driver {
@@ -555,12 +559,22 @@ func listTables(ctx context.Context, db *sql.DB, source Source, credentials Cred
 		if err := rows.Scan(&table.Schema, &table.Name, &table.Type, &table.Definition); err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := chargeCatalogValue(budget, table); err != nil {
+			return nil, err
+		}
+		cloneCatalogTableText(&table)
 		result = append(result, table)
 	}
-	return result, rows.Err()
+	if err := finishResultRows(ctx, rows, nil); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) error {
+func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table, checkpoint func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -577,12 +591,18 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) e
 		var count int64
 		if err := scan("SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name), nil, &count); err == nil {
 			table.RowCount = &count
+			if err := checkpoint(); err != nil {
+				return err
+			}
 		} else if cause := tlsContextCause(ctx, err); cause != nil {
 			return cause
 		}
 		var size sql.NullInt64
 		if err := scan("SELECT SUM(pgsize) FROM dbstat WHERE name = ?", []any{table.Name}, &size); err == nil && size.Valid {
 			table.SizeBytes = &size.Int64
+			if err := checkpoint(); err != nil {
+				return err
+			}
 		} else if cause := tlsContextCause(ctx, err); cause != nil {
 			return cause
 		}
@@ -600,12 +620,18 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) e
 				table.SizeBytes = &size.Int64
 			}
 			table.CreatedAt = created.String
+			if err := checkpoint(); err != nil {
+				return err
+			}
 		} else if cause := tlsContextCause(ctx, err); cause != nil {
 			return cause
 		}
 		var ignored, definition string
 		if err := scan("SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name), nil, &ignored, &definition); err == nil {
 			table.Definition = definition
+			if err := checkpoint(); err != nil {
+				return err
+			}
 		} else if cause := tlsContextCause(ctx, err); cause != nil {
 			return cause
 		}
@@ -620,11 +646,21 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) e
 			if size.Valid {
 				table.SizeBytes = &size.Int64
 			}
+			if err := checkpoint(); err != nil {
+				return err
+			}
 		} else if cause := tlsContextCause(ctx, err); cause != nil {
 			return cause
 		}
 		if strings.EqualFold(table.Type, "VIEW") {
-			err := scan("SELECT pg_get_viewdef($1::regclass, true)", []any{table.Schema + "." + table.Name}, &table.Definition)
+			var definition string
+			err := scan("SELECT pg_get_viewdef($1::regclass, true)", []any{table.Schema + "." + table.Name}, &definition)
+			if err == nil {
+				table.Definition = definition
+				if err := checkpoint(); err != nil {
+					return err
+				}
+			}
 			if cause := tlsContextCause(ctx, err); cause != nil {
 				return cause
 			}
@@ -634,6 +670,10 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) e
 }
 
 func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string) ([]Column, error) {
+	return listCatalogColumns(ctx, db, driver, schema, table, nil)
+}
+
+func listCatalogColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string, budget *resultBudget) ([]Column, error) {
 	if driver == DriverSQLite {
 		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+quote(driver, table)+")")
 		if err != nil {
@@ -645,17 +685,35 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			var position, notNull, primaryKey int
 			var name, dataType string
 			var defaultValue any
-			if err := rows.Scan(&position, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			cell := catalogDefaultCell{budget: budget}
+			var defaultTarget any = &defaultValue
+			if budget != nil {
+				defaultTarget = &cell
+			}
+			if err := rows.Scan(&position, &name, &dataType, &notNull, defaultTarget, &primaryKey); err != nil {
 				return nil, err
 			}
-			primary := primaryKey > 0
-			result = append(result, Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primary, Default: normalizeValue(defaultValue), Position: position + 1})
+			if budget != nil {
+				defaultValue = cell.value
+			} else {
+				defaultValue = normalizeValue(defaultValue)
+			}
+			column := Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primaryKey > 0, Default: defaultValue, Position: position + 1}
+			if err := retainCatalogColumn(ctx, budget, &column, len(result) == 0, true); err != nil {
+				return nil, err
+			}
+			result = append(result, column)
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
 		if err := rows.Close(); err != nil {
 			return nil, err
+		}
+		if budget != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 		}
 		primaryCount := 0
 		integerPrimary := false
@@ -703,6 +761,11 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			}
 			column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, "")
 		}
+		if budget != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		return result, nil
 	}
 	placeholderSchema, placeholderTable := "?", "?"
@@ -745,14 +808,31 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		var nullable string
 		var primaryKey int
 		var identityGeneration, generatedKind string
-		if err := rows.Scan(&column.Name, &column.DataType, &nullable, &column.Default, &column.Position, &primaryKey, &identityGeneration, &generatedKind); err != nil {
+		cell := catalogDefaultCell{budget: budget}
+		var defaultTarget any = &column.Default
+		if budget != nil {
+			defaultTarget = &cell
+		}
+		if err := rows.Scan(&column.Name, &column.DataType, &nullable, defaultTarget, &column.Position, &primaryKey, &identityGeneration, &generatedKind); err != nil {
 			return nil, err
 		}
 		column.Nullable = nullable == "YES"
 		column.PrimaryKey = primaryKey == 1
-		column.Default = normalizeValue(column.Default)
+		if budget != nil {
+			column.Default = cell.value
+		} else {
+			column.Default = normalizeValue(column.Default)
+		}
 		column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, generatedKind)
+		if err := retainCatalogColumn(ctx, budget, &column, len(result) == 0, false); err != nil {
+			return nil, err
+		}
 		result = append(result, column)
+	}
+	if budget != nil {
+		if err := finishResultRows(ctx, rows, nil); err != nil {
+			return nil, err
+		}
 	}
 	return result, rows.Err()
 }
