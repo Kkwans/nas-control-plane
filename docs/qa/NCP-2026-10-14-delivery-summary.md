@@ -157,3 +157,14 @@
 - **写入与无障碍边界**：20 组均确认前零写入，确认后精确一次创建 POST、预期 201 回执、六秒无重放，无未知请求或页面错误；两份键盘记录覆盖弹窗层叠、焦点循环、Escape 归还及六秒零写入。完整 axe 扫描没有缩小规则或排除范围，零违规，仍保留 aria-valid-attr-value 与 color-contrast 两类 incomplete 人工审查项，不代表全面无障碍验收。
 
 以上仍是源码与隔离浏览器 fixture 证据，不证明真实 GPU 分配、原生 Docker 或 NAS 可用；真实数据库 TLS 握手及原生多会话也仍未验收。本轮没有部署或发布。
+
+
+## 单镜像删除持久任务闭环（2026-10-15 03:27 UTC）
+
+- **新增单目标 Job 链路**：[598f939](https://github.com/Kkwans/nas-control-plane/commit/598f939f1b785814df825de5b25b1213f97e7899) 增加 `POST /api/v1/docker/images/remove-job`，只接受完整规范镜像内容 ID，持久接收后返回原始 queued 202 快照。独立串行 worker 复用现有共享容量 32，仅调用一次既有批量删除 RPC 的单元素请求，保留引用预检与非强制删除；无取消/重试，重启不重放，无法确认的执行结果归为 interrupted。前端严格校验接收回执、保留同会话未确认锁，提供最近任务和镜像清单只读核对；原多选批量路径保留。相关 Go race、OpenAPI、全树构建/vet 与最初 3668 项前端单元通过。
+- **保留首次失败与修复**：[CI #357 / 38673340124](https://github.com/Kkwans/nas-control-plane/actions/runs/38673340124) 的四项新增浏览器用例失败，439 项旧用例通过：残留 ElTooltip 遮挡手机操作，桌面完整 axe 发现 region 问题。[54f0cec](https://github.com/Kkwans/nas-control-plane/commit/54f0cecf83460c9ad12d72c4955e0697de9f0b91) 将提示挂入 main 地标并在删除等待期间禁用；[CI #358 / 38674968351](https://github.com/Kkwans/nas-control-plane/actions/runs/38674968351) 全部适用检查通过：134 文件、3669 单元测试、443 浏览器用例、11 项制品分片测试及 Go/Compose，没有削弱原断言。
+- **实际图片与请求证据**：[制品分片 3](https://github.com/Kkwans/nas-control-plane/actions/runs/38674968351/artifacts/11946466840)、[分片 4](https://github.com/Kkwans/nas-control-plane/actions/runs/38674968351/artifacts/11946466845) 与[分片 5](https://github.com/Kkwans/nas-control-plane/actions/runs/38674968351/artifacts/11945982192) 中六张新增实际 PNG 和四份最终请求记录已复核：完整镜像 ID 可见折行，手机只读刷新/最近任务按钮无遮挡，44px 最小按钮与命中检查通过。每份记录仅一次携带 imageId 的删除任务 POST；分别核对严格 queued 202 接收、错误 reference 的 202，以及实际 `net::ERR_FAILED` 且无响应状态/正文的传输丢失。之后六秒只读观察，没有重发、同步接口降级、未知请求或额外页面错误。
+- **接收、完成与当前库存分开**：接受任务不显示为镜像已删除；错配或丢失回执明确提示不要重复提交。完成任务的只读回执与最初接收状态分开呈现，仍要求刷新本地镜像以核对当前状态。四份记录的后续请求均为 GET，每份镜像列表读取共三次，任务读取在已接收场景共两次、未确认场景一次。
+- **完整回归与边界**：全部 26 组捕获链、既有 20 组创建回执及两份键盘 JSON 已重新核验 364 项源码哈希、干净的 CI 工作树、归档/PNG/关联哈希与几何。既有创建图中 17 张与前轮逐图审查版本字节相同，另三张变化图重新目视检查通过；仍保持精确一次创建 POST、201、六秒无重放及键盘零写入。完整 axe 零违规；接收界面保留 aria-valid-attr-value、color-contrast incomplete，完成任务读回另有 aria-prohibited-attr incomplete，仍需人工审查，不能称全面无障碍合格。
+
+本片完成的是源码、fake 后端与 CI 浏览器 fixture 的隔离验证；不提供跨请求幂等，不代表真实 Docker/Agent socket、NAS 或真实持久库重启集成验收。没有部署、发布或生产操作。

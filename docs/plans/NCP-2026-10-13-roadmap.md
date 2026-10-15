@@ -171,7 +171,7 @@ NAS实机、真实PG/MySQL与原生多PTY部署边界未改变，不把隔离CI�
 Docker新增断言使用基线生产文件overlay先复现失败，再在修复后通过：`go test ./internal/docker -run '^Test(ContainerController|ProjectController|ProjectAction)' -race -count=20`；纯RPC decoder/service通过`go test ./internal/agentsocket -run '^Test(Project|Compose)Action(Decoder|Service)' -race -count=20`。相关Go vet、`go build ./cmd/...`与diff检查通过；未执行含监听器的整包测试、浏览器、真实Docker/Compose、NAS或部署。提交与远端CI由主任务接续核验。
 
 
-## 耗时操作 Job 扩展：单镜像删除（2026-10-15，实施中）
+## 耗时操作 Job 扩展：单镜像删除（2026-10-15，隔离验证完成）
 
 本片沿用后端审计的耗时操作迁移方向，离开容器创建修补；只迁移本地镜像行内单目标删除，旧同步及多选批量接口保留。新增 `POST /api/v1/docker/images/remove-job`，请求 `{imageId}` 只接受清单中 `sha256:` 加64位小写十六进制内容身份；202返回现有JobSnapshot的原始queued快照，即使后台已推进也不替换接收回执；type为`docker-image-remove`、reference固定该ID、cancellable=false、status=queued、artifactState=unknown；progress/downloadedBytes/totalBytes/speedBytes均为0、layers为空对象，不包含cancellationStatus/persistenceStatus/completedAt/errorCode/error元数据。接收不等于删除完成，无取消、自动/手动重试或跨请求幂等承诺。
 
@@ -184,3 +184,6 @@ Docker新增断言使用基线生产文件overlay先复现失败，再在修复�
 
 
 后端本地验证：新增10组删除Job测试通过race×20；既有Job与新增删除Job、MIME路由拒绝/非法body/认证来源顺序通过race×3，完整36条JSON路由body限额通过race×3；既有fake Docker批量删除通过race×3。完整OpenAPI测试、`go build ./...`和`go vet ./...`通过。首次扩展回归发现固定路由计数仍为35，已同步为新增后的36并复跑通过，未移除用例。独立后端审查无阻塞发现。恢复用例为fake store hydration、不代表真实SQLite重启集成；未执行含监听器的整包HTTP测试、真实Docker/Agent socket或NAS。前端与远端CI由主任务接续，暂不宣称整片交付完成。
+
+
+03:27 UTC 接续结果：上述本地验证记录保留为当时状态。598f939 首轮 CI #357 的四项新浏览器用例暴露残留镜像提示遮挡移动操作及桌面 axe region 问题，439 项既有用例通过；54f0cec 将提示挂入 main 并在删除等待期间禁用，随后 [CI #358 / 38674968351](https://github.com/Kkwans/nas-control-plane/actions/runs/38674968351) 全部适用检查通过（3669 单元/134 文件、443 浏览器、11 项制品分片及 Go/Compose）。六张新增实际 PNG、四份精确请求/接收或未知结果记录，以及既有 20 组创建证据和键盘记录完成复核，详见[累计交付记录](../qa/NCP-2026-10-14-delivery-summary.md)。本片的隔离实现与 CI 浏览器 fixture 验证闭环；不代表真实 Docker/NAS 删除验收，不增加跨请求幂等承诺，没有部署或发布。
