@@ -495,3 +495,133 @@ for (const width of [390, 1440]) for (const scenario of portCases) {
     } finally { api.release.resolve() }
   })
 }
+
+// 资源和重启策略按确认快照逐项取证，边界检查覆盖真实字形和所有裁剪祖先。
+const resourcePreviewLabels = ['CPU 限制', '内存限制', '重启策略', '最大重试次数']
+const resourceCases = [
+  { name: 'default-resources-zero-retries', cpu: undefined, memoryMiB: undefined, retries: 0,
+    preview: ['未设置限制', '未设置限制', '失败时重启（on-failure）', '0（不限制重试次数）'] },
+  { name: 'explicit-resources-positive-retries', cpu: 1.5, memoryMiB: 384, retries: 3,
+    preview: ['1.5 核', '402653184 字节（384 MiB）', '失败时重启（on-failure）', '3 次'] },
+]
+async function resourceGeometry(page: Page) {
+  return page.getByRole('dialog', { name: '确认容器配置', exact: true }).evaluate((dialog, labels) => {
+    const fields = labels.map((label) => {
+      const term = [...dialog.querySelectorAll('.preview-grid dt')].find((element) => element.textContent === label)!
+      const field = term.nextElementSibling!, bounds = field.getBoundingClientRect(), range = document.createRange()
+      range.selectNodeContents(field)
+      const lines = [...range.getClientRects()].filter((line) => line.width > 0 && line.height > 0)
+      const clips: Array<{ x: boolean; y: boolean; bounds: DOMRect }> = []
+      for (let ancestor: Element | null = field; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        const x = /hidden|clip|auto|scroll/.test(style.overflowX), y = /hidden|clip|auto|scroll/.test(style.overflowY)
+        if (x || y) clips.push({ x, y, bounds: ancestor.getBoundingClientRect() })
+      }
+      return { label, text: field.textContent, bounds: bounds.toJSON(), lines: lines.map((line) => line.toJSON()),
+        clips: clips.map((clip) => ({ ...clip, bounds: clip.bounds.toJSON() })),
+        fullTextVisible: lines.length > 0 && lines.every((line) => line.left >= bounds.left - 1 && line.right <= bounds.right + 1 && line.top >= bounds.top - 1 && line.bottom <= bounds.bottom + 1 && line.left >= -1 && line.right <= innerWidth + 1 && line.top >= -1 && line.bottom <= innerHeight + 1 && clips.every((clip) => (!clip.x || line.left >= clip.bounds.left - 1 && line.right <= clip.bounds.right + 1) && (!clip.y || line.top >= clip.bounds.top - 1 && line.bottom <= clip.bounds.bottom + 1))) }
+    })
+    return { fields, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
+      dialogBounds: dialog.getBoundingClientRect().toJSON(), focusInside: dialog.contains(document.activeElement) }
+  }, resourcePreviewLabels)
+}
+
+for (const width of [390, 1440]) for (const scenario of resourceCases) {
+  test(`${width}px ${scenario.name} 资源和重启确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+    const expected: DockerContainerCreateInput = { ...expectedInput(true), restartPolicy: 'on-failure', restartMaxRetries: scenario.retries,
+      ...(scenario.cpu === undefined ? {} : { cpu: scenario.cpu, memoryBytes: scenario.memoryMiB! * 1024 * 1024 }) }
+    const api = await fixture(page, new URL(baseURL!).origin, expected)
+    await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: '镜像', exact: true }).click()
+    await page.getByRole('button', { name: '从镜像 identity:latest 创建容器', exact: true }).filter({ visible: true }).click()
+    const drawer = page.locator('.create-container-drawer')
+    await expect(drawer).toBeVisible()
+    await expect.poll(() => api.requests.includes('GET /api/v1/docker/resources')).toBe(true)
+    await expect(drawer.getByText('正在读取 Docker 网络、卷和端口清单…', { exact: true })).toHaveCount(0)
+    if (scenario.cpu !== undefined) {
+      await drawer.getByRole('spinbutton', { name: 'CPU 限制（核）', exact: true }).fill(String(scenario.cpu))
+      await drawer.getByRole('spinbutton', { name: '内存限制（MiB）', exact: true }).fill(String(scenario.memoryMiB))
+    }
+    await expect(drawer.getByRole('combobox', { name: '容器重启策略', exact: true })).toHaveCount(1)
+    await drawer.locator('label.field').filter({ has: drawer.getByRole('combobox', { name: '容器重启策略', exact: true }) }).locator('.el-select__wrapper').click()
+    await page.getByRole('option', { name: '失败时重启', exact: true }).click()
+    await drawer.getByRole('spinbutton', { name: '最大重试次数', exact: true }).fill(String(scenario.retries))
+    const opener = drawer.getByRole('button', { name: '创建并启动', exact: true })
+    await opener.focus(); await page.keyboard.press('Enter')
+    const preview = page.getByRole('dialog', { name: '确认容器配置', exact: true })
+    await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    const confirm = preview.getByRole('button', { name: '确认创建并启动', exact: true })
+    await confirm.focus(); await page.keyboard.press('Tab')
+    await expect(preview.locator('.el-dialog__headerbtn')).toBeFocused()
+    await page.keyboard.press('Shift+Tab'); await expect(confirm).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(preview).not.toBeVisible(); await expect(opener).toBeFocused()
+    expect(api.writes).toEqual([])
+    await page.keyboard.press('Enter'); await expect(preview).toBeVisible()
+    await expect.poll(() => preview.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+    await page.evaluate(() => document.fonts.ready)
+    const scrollEvidence = await verifyConfigurationScroll(page)
+    await preview.locator('.preview-grid dt').filter({ hasText: /^最大重试次数$/ }).locator('xpath=following-sibling::dd[1]').scrollIntoViewIfNeeded()
+    await page.waitForTimeout(350)
+    const before = { ...await resourceGeometry(page), chrome: await modalChrome(page) }, requestsBefore = [...api.requests]
+    const prefix = `docker-create-resources-${scenario.name}-${width}`
+    await mkdir(info.outputPath('ui-captures'), { recursive: true })
+    const png = info.outputPath('ui-captures', `${prefix}.png`)
+    await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
+    const after = { ...await resourceGeometry(page), chrome: await modalChrome(page) }, axe = await new AxeBuilder({ page }).analyze(), afterAxe = { ...await resourceGeometry(page), chrome: await modalChrome(page) }
+    const captureState = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
+    const screenshotSha256 = createHash('sha256').update(await readFile(png)).digest('hex')
+    await writeFile(captureState, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+      evidenceKind: 'pre-create-resource-restart-preview', scrollEvidence, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+      expectedInput: expected, expectedPreview: scenario.preview, screenshot: `${prefix}.png`, screenshotSha256,
+      beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests],
+      writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+      keyboard: { tabWrappedToClose: true, shiftTabWrappedToConfirm: true, escapeRestoredOpener: true } }, null, 2))
+    await info.attach(prefix, { path: png, contentType: 'image/png' })
+    await info.attach(`${prefix}-axe-state`, { path: captureState, contentType: 'application/json' })
+    for (const sample of [before, after, afterAxe]) {
+      assertModalChrome(sample.chrome)
+      expect(sample.fields.map((field) => field.label)).toEqual(resourcePreviewLabels)
+      expect(sample.fields.map((field) => field.text)).toEqual(scenario.preview)
+      expect(sample.fields).toHaveLength(4)
+      expect(sample.fields.every((field) => field.fullTextVisible), JSON.stringify(sample)).toBe(true)
+      expect(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.clientWidth + 1)
+      expect(sample.dialogBounds.left).toBeGreaterThanOrEqual(-1)
+      expect(sample.dialogBounds.right).toBeLessThanOrEqual(width + 1)
+      expect(sample.focusInside).toBe(true)
+    }
+    expect(after).toEqual(before); expect(afterAxe).toEqual(before)
+    expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+    expect(api.requests).toEqual(requestsBefore); expect(api.writes).toEqual([])
+    api.authorize()
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === createPath && response.request().method() === 'POST')
+    try {
+      await confirm.click()
+      await api.received.promise
+      expect(api.writes).toEqual([expected])
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
+      api.release.resolve()
+      const response = await responsePromise
+      expect(response.status()).toBe(201)
+      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
+      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      await expect(preview).not.toBeVisible()
+      await page.waitForTimeout(6000)
+      expect(api.writes).toEqual([expected])
+      expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
+      expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
+      await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+        evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
+        testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
+        preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
+        replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
+        status: response.status(), response: await response.json() }, null, 2))
+      await info.attach('strict-resource-restart-create-receipt', { path: receiptPath, contentType: 'application/json' })
+    } finally { api.release.resolve() }
+  })
+}

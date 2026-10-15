@@ -112,7 +112,7 @@ describe('创建容器无障碍 DOM', () => {
     expect(region.contains(header)).toBe(false)
     expect(region.contains(footer)).toBe(false)
     expect([...region.querySelectorAll('dt')].map((node) => node.textContent)).toEqual([
-      '镜像', '容器名称', '挂载', '网络', '端口', '启动参数', '设备映射', '特权模式',
+      '镜像', '容器名称', 'CPU 限制', '内存限制', '重启策略', '挂载', '网络', '端口', '启动参数', '设备映射', '特权模式',
       '增加 Capabilities', '移除 Capabilities', '硬件请求',
     ])
     expect(footer.contains(button('返回修改'))).toBe(true)

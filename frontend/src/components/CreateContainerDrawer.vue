@@ -696,6 +696,12 @@ async function refreshUnresolvedInventory() {
       <dl class="preview-grid">
         <dt>镜像</dt><dd><code>{{ previewInput.image }}</code></dd>
         <dt>容器名称</dt><dd>{{ previewLabel(previewInput.name, '自动生成') }}</dd>
+        <dt>CPU 限制</dt><dd>{{ previewInput.cpu === undefined ? '未设置限制' : `${previewInput.cpu} 核` }}</dd>
+        <dt>内存限制</dt><dd>{{ previewInput.memoryBytes === undefined ? '未设置限制' : `${previewInput.memoryBytes} 字节（${previewInput.memoryBytes / 1024 / 1024} MiB）` }}</dd>
+        <dt>重启策略</dt><dd>{{ restartPolicyOptions.find((option) => option.value === (previewInput?.restartPolicy || 'no'))?.label }}（{{ previewInput.restartPolicy || 'no' }}）</dd>
+        <template v-if="previewInput.restartPolicy === 'on-failure'">
+          <dt>最大重试次数</dt><dd>{{ previewInput.restartMaxRetries || 0 }}{{ previewInput.restartMaxRetries ? ' 次' : '（不限制重试次数）' }}</dd>
+        </template>
         <dt>挂载</dt><dd>
           {{ previewInput.mounts?.length || 0 }} 项
           <ol v-if="previewInput.mounts?.length" class="path-mappings" aria-label="挂载映射">
