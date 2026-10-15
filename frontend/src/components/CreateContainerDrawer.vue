@@ -445,6 +445,13 @@ function validationMessage(input: DockerContainerCreateInput) {
   if (input.devices?.some((device) => !device.hostPath.startsWith('/') || !device.containerPath.startsWith('/'))) return '设备路径必须使用绝对路径。'
   const deviceTargets = input.devices?.map((device) => device.containerPath) ?? []
   if (new Set(deviceTargets).size !== deviceTargets.length) return '同一个容器设备路径不能重复映射。'
+  for (const gpu of input.gpus ?? []) {
+    if (typeof gpu.count !== 'number' || !Number.isInteger(gpu.count) || (gpu.count !== -1 && (gpu.count < 1 || gpu.count > 128))) return 'GPU 数量必须是 -1（全部）或 1–128 的整数。'
+    if (gpu.driver && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(gpu.driver)) return 'GPU 驱动必须以字母或数字开头，仅含字母、数字、点、下划线和连字符，且不超过 64 个字符。'
+    const capabilities = (gpu.capabilities ?? []).map((capability) => capability.toLowerCase())
+    if (capabilities.some((capability) => !/^[a-z0-9_]+$/.test(capability))) return 'GPU 能力只能包含字母、数字和下划线。'
+    if (new Set(capabilities).size !== capabilities.length) return 'GPU 能力不能重复（不区分大小写）。'
+  }
   return ''
 }
 
@@ -651,7 +658,7 @@ async function refreshUnresolvedInventory() {
           <label class="switch-line"><span><strong>GPU</strong><small>仅当宿主机已安装兼容运行时和驱动时启用。</small></span><ElSwitch v-model="form.gpuEnabled" /></label>
           <div v-if="form.gpuEnabled" class="form-grid">
             <label class="field"><span>驱动</span><ElInput v-model="form.gpuDriver" placeholder="例如 nvidia；留空自动" /></label>
-            <label class="field"><span>数量</span><ElInputNumber v-model="form.gpuCount" :min="-1" :max="128" controls-position="right" /></label>
+            <label class="field"><span>数量（-1 表示全部）</span><ElInputNumber v-model="form.gpuCount" aria-label="GPU 数量（-1 表示全部）" :min="-1" :max="128" controls-position="right" /></label>
             <label class="field field--wide"><span>能力</span><ElInput v-model="form.gpuCapabilities" placeholder="gpu,compute,utility" /></label>
           </div>
         </div>

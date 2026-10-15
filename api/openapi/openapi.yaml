@@ -4140,10 +4140,19 @@ components:
     DockerContainerGPUInput:
       type: object
       properties:
-        driver: { type: string }
-        count: { type: integer, minimum: -1, maximum: 128 }
+        driver:
+          type: string
+          description: 去除首尾空白；留空由 Docker 自动选择，否则须匹配 ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$。
+        count:
+          type: integer
+          minimum: -1
+          maximum: 128
+          description: -1 请求全部设备；1–128 请求指定数量；0 或省略仅在提供非空 deviceIds 时有效。
         deviceIds: { type: array, items: { type: string } }
-        capabilities: { type: array, items: { type: string } }
+        capabilities:
+          type: array
+          items: { type: string }
+          description: 每项去除首尾空白并转为小写，仅允许字母、数字和下划线，不允许重复（不区分大小写）；省略或空数组由 Docker 映射默认使用 gpu。
     DockerContainerCreateRequest:
       type: object
       required: [image, runContainer]
