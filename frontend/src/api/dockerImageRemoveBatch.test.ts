@@ -23,8 +23,31 @@ describe('batch image deletion receipts', () => {
     await expect(removeDockerImages(ids, fetcher)).resolves.toEqual(payload)
     expect(fetcher).toHaveBeenCalledOnce()
     expect(fetcher.mock.calls[0]![0]).toBe('/api/v1/docker/images/remove-batch')
-    expect(fetcher.mock.calls[0]![1].method).toBe('POST')
+    expect(fetcher.mock.calls[0]![1]).toMatchObject({ method: 'POST', redirect: 'error', credentials: 'same-origin' })
     expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({ imageIds: ids })
+  })
+
+  it.each([true, undefined, null])('rejects non-false redirected state %s before reading a receipt', async (redirected) => {
+    const receipt = response(success())
+    Object.defineProperty(receipt, 'redirected', { value: redirected })
+    const read = vi.spyOn(receipt, 'json')
+    const fetcher = vi.fn().mockResolvedValue(receipt)
+    await expect(removeDockerImages(ids, fetcher)).rejects.toMatchObject(unknownOutcome)
+    expect(read).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('does not trust redirected preflight rejection receipts', async () => {
+    const receipt = response({ code: 'HTTP_UNSUPPORTED_MEDIA_TYPE', message: '拒绝', requestId: 'fixture' }, 415)
+    Object.defineProperty(receipt, 'redirected', { value: true })
+    await expect(removeDockerImages(ids, vi.fn().mockResolvedValue(receipt))).rejects.toMatchObject(unknownOutcome)
+  })
+
+  it('does not retry a browser rejection caused by redirect:error', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new TypeError('Failed to fetch: redirect disallowed'))
+    await expect(removeDockerImages(ids, fetcher)).rejects.toMatchObject(unknownOutcome)
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(fetcher.mock.calls[0]![1].redirect).toBe('error')
   })
 
   it.each([
@@ -61,7 +84,7 @@ describe('batch image deletion receipts', () => {
     expect(fetcher).toHaveBeenCalledOnce()
   })
 
-  it.each([201, 202, 204, 400, 401, 403, 409, 413, 415, 500, 503])('requires exact HTTP 200, not %s', async (status) => {
+  it.each([201, 202, 204, 301, 302, 303, 307, 308, 400, 401, 403, 409, 413, 415, 500, 503])('requires exact HTTP 200, not %s', async (status) => {
     const fetcher = vi.fn().mockResolvedValue(status === 204 ? new Response(null, { status }) : response(success(), status))
     await expect(removeDockerImages(ids, fetcher)).rejects.toMatchObject(unknownOutcome)
     expect(fetcher).toHaveBeenCalledOnce()
@@ -94,7 +117,7 @@ describe('batch image deletion receipts', () => {
       vi.fn().mockRejectedValue(new Error('offline')),
       vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError')),
       vi.fn().mockResolvedValue(new Response('{', { headers: { 'Content-Type': 'application/json' } })),
-      vi.fn().mockResolvedValue({ status: 200, headers: new Headers({ 'Content-Type': 'application/json' }), json: vi.fn().mockRejectedValue(new Error('body interrupted')) }),
+      vi.fn().mockResolvedValue({ status: 200, redirected: false, headers: new Headers({ 'Content-Type': 'application/json' }), json: vi.fn().mockRejectedValue(new Error('body interrupted')) }),
       vi.fn().mockResolvedValue(response({ code: 'DOCKER_IMAGE_IN_USE', message: 'safe to retry', requestId: 'r' }, 409)),
     ]) {
       const error = await removeDockerImages(ids, fetcher).catch((caught: unknown) => caught)

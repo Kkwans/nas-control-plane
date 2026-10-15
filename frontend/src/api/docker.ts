@@ -260,8 +260,10 @@ export async function removeDockerImages(
   try {
     const response = await fetcher(
       '/api/v1/docker/images/remove-batch',
-      requestOptions(jsonRequest({ imageIds: requestedIds })),
+      requestOptions({ ...jsonRequest({ imageIds: requestedIds }), redirect: 'error' }),
     )
+    // 禁止重定向重放删除请求，也不信任已跟随重定向取得的回执。
+    if (response.redirected !== false) throw new Error('回执重定向状态无效')
     const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
     if (mediaType !== 'application/json') throw new Error('回执媒体类型无效')
     const payload: unknown = await response.json()
