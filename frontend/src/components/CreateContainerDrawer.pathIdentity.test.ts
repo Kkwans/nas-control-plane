@@ -32,7 +32,7 @@ function page(path: string): FileEntriesPage {
   }
 }
 async function settle() { for (let count = 0; count < 30; count++) await nextTick() }
-function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers' && init?.method === 'POST') }
+function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers/create-jobs' && init?.method === 'POST') }
 function submittedInput() { return JSON.parse(String(createCalls()[0]![1]!.body)) as DockerContainerCreateInput }
 function requestedPaths() {
   return fetcher.mock.calls.filter(([path]) => String(path).startsWith('/api/v1/files/entries?'))
@@ -109,9 +109,8 @@ beforeEach(() => {
       expect(['/', ...names.map((name) => `/${name}`)]).toContain(selected)
       return json(page(selected))
     }
-    if (path === '/api/v1/docker/containers' && init.method === 'POST') {
-      const input = JSON.parse(String(init.body)) as DockerContainerCreateInput
-      return json({ containerId: 'created-id', name: input.name || 'alpine', image: input.image, state: input.runContainer ? 'running' : 'stopped', created: true, started: input.runContainer, runContainer: input.runContainer }, 201)
+    if (path === '/api/v1/docker/containers/create-jobs' && init.method === 'POST') {
+      return json({ id: 'create-1', type: 'docker-container-create', status: 'queued', cancellable: false, artifactState: 'unknown', message: '已接收', progress: 0, createdAt: collectedAt, updatedAt: collectedAt, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} }, 202)
     }
     throw new Error(`非预期 fixture 请求：${String(path)} ${init.method || 'GET'}`)
   })
@@ -150,7 +149,7 @@ describe('创建容器挂载路径的端到端组件身份', () => {
       { type: 'bind', source: '/selected ', target: '/data ', readOnly: false },
     ] })
     expect(createCalls()[0]![1]).toMatchObject({ credentials: 'same-origin', redirect: 'error' })
-    expect(created).toHaveBeenCalledExactlyOnceWith('created-id')
+    expect(created).not.toHaveBeenCalled()
     expect(state.open).toBe(false)
   })
 

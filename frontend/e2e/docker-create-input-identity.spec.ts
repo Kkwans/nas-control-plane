@@ -5,12 +5,14 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
-import { overviewDocker, summary } from './mockApi'
+import { overviewDocker, summary, creationJobFixture, fixtureCreatedContainerId } from './mockApi'
 import type { DockerContainerCreateInput } from '../src/api/system'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
 const stamp = '2026-10-14T20:00:00.000Z'
-const createPath = '/api/v1/docker/containers'
+const createPath = '/api/v1/docker/containers/create-jobs'
+const jobId = 'job-create-identity'
+const jobPath = `/api/v1/jobs/${jobId}`
 const argv = ['/app/server ', '  leading  spaces  ', ' ', '"quoted value"', '$APP_MODE && echo ok; $(literal) | *', '--name=a b']
 const mount = { type: 'bind' as const, source: '/fixture/source  ', target: '/data/target  ', readOnly: false }
 const device = { hostPath: '/dev/fixture  ', containerPath: '/dev/target  ', cgroupPermissions: 'rwm' }
@@ -40,7 +42,7 @@ async function fixture(page: Page, origin: string, expected: DockerContainerCrea
   })
   const requests: string[] = [], denied: string[] = [], errors: string[] = []
   const writes: unknown[] = [], received = deferred(), release = deferred()
-  let authorized = false
+  let authorized = false, accepted = false
   const reads = new Map<string, unknown>([
     ['/api/v1/auth/status', { initialized: true, authenticated: true, user: { id: 1, username: 'root', role: 'root' } }],
     ['/api/v1/preferences', { refreshIntervalSeconds: 5, interfaceDensity: 'comfortable', baseFontSize: 15, pageSize: 10, sidebarDefault: 'expanded', linkOpenMode: 'same-tab', siteDefaultProtocol: 'http', chineseFont: 'system', latinFont: 'system', navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'] }],
@@ -68,6 +70,7 @@ async function fixture(page: Page, origin: string, expected: DockerContainerCrea
     const request = route.request(), url = new URL(request.url()), target = `${request.method()} ${url.pathname}${url.search}`
     requests.push(target)
     if (url.origin !== origin) { denied.push(target); return route.abort('blockedbyclient') }
+    if (request.method() === 'GET' && url.pathname === jobPath && !url.search && accepted) return route.fulfill({ json: creationJobFixture(jobId, 'completed', expected.runContainer) })
     const readKey = url.pathname + url.search
     if (request.method() === 'GET' && reads.has(readKey)) return route.fulfill({ json: reads.get(readKey) })
     if (request.method() === 'POST' && url.pathname === createPath && !url.search && authorized) {
@@ -77,7 +80,8 @@ async function fixture(page: Page, origin: string, expected: DockerContainerCrea
       received.resolve()
       expect(body).toEqual(expected)
       await release.promise
-      return route.fulfill({ status: 201, json: { containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true } })
+      accepted = true
+      return route.fulfill({ status: 202, json: creationJobFixture(jobId) })
     }
     denied.push(target)
     return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED', message: '未预期请求已拒绝' } })
@@ -222,7 +226,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, defaultCommand:
 }
 
 for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
-  test(`${width}px ${defaultCommand ? '全空白命令省略 command' : 'argv 与设备挂载路径保留原始空白'}，确认前零写入且仅接受一次 201 回执`, async ({ page, baseURL }, info) => {
+  test(`${width}px ${defaultCommand ? '全空白命令省略 command' : 'argv 与设备挂载路径保留原始空白'}，确认前零写入且仅接受一次 202 接纳及精确 Job 完成 回执`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const expected = expectedInput(defaultCommand), api = await fixture(page, new URL(baseURL!).origin, expected)
@@ -259,9 +263,18 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
       await expect(drawer.getByRole('button', { name: '创建并启动', exact: true })).toBeDisabled()
       api.release.resolve()
       const response = await responsePromise
-      expect(response.status()).toBe(201)
-      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
-      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      expect(response.status()).toBe(202)
+      expect(await response.json()).toEqual(creationJobFixture(jobId))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', expected.runContainer))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests).toContain(`GET ${jobPath}`)
       await expect(preview).not.toBeVisible()
       // 覆盖五秒刷新周期，确认无自动重放；未授权第二次 POST 会失败关闭。
       await page.waitForTimeout(6000)
@@ -269,6 +282,7 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
       // 独立记录提交后的回执与重放观察；不能冒充确认前 PNG 的截图时状态。
+      expect(info.errors, '所有预览几何、可访问性和流程断言通过后才能记录完成').toEqual([])
       const receiptPath = info.outputPath('ui-captures', `${previewEvidence.prefix}-receipt-capture-state.json`)
       const receipt = {
         ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
@@ -276,7 +290,7 @@ for (const width of [390, 1440]) for (const defaultCommand of [false, true]) {
         testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
         preCreatePreviewEvidence: previewEvidence, replayObservationMilliseconds: 6000,
         expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
-        status: response.status(), response: await response.json(),
+        journeyCompleted: true, status: response.status(), response: await response.json(), completedStatus: completedResponse.status(), completedJob,
       }
       await writeFile(receiptPath, JSON.stringify(receipt, null, 2))
       await info.attach('strict-create-receipt', { path: receiptPath, contentType: 'application/json' })
@@ -395,7 +409,7 @@ async function portGeometry(page: Page) {
 }
 
 for (const width of [390, 1440]) for (const scenario of portCases) {
-  test(`${width}px ${scenario.name} 端口确认预览与规范化请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+  test(`${width}px ${scenario.name} 端口确认预览与规范化请求一致且只接受一次 202 接纳及精确 Job 完成`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const expected: DockerContainerCreateInput = { ...expectedInput(true), ports: scenario.ports }
@@ -477,21 +491,31 @@ for (const width of [390, 1440]) for (const scenario of portCases) {
       await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
       api.release.resolve()
       const response = await responsePromise
-      expect(response.status()).toBe(201)
-      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
-      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      expect(response.status()).toBe(202)
+      expect(await response.json()).toEqual(creationJobFixture(jobId))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', expected.runContainer))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests).toContain(`GET ${jobPath}`)
       await expect(preview).not.toBeVisible()
       await page.waitForTimeout(6000)
       expect(api.writes).toEqual([expected])
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      expect(info.errors, '所有预览几何、可访问性和流程断言通过后才能记录完成').toEqual([])
       const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
       await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
         evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
         testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
         preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
         replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
-        status: response.status(), response: await response.json() }, null, 2))
+        journeyCompleted: true, status: response.status(), response: await response.json(), completedStatus: completedResponse.status(), completedJob }, null, 2))
       await info.attach('strict-port-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })
@@ -528,7 +552,7 @@ async function resourceGeometry(page: Page) {
 }
 
 for (const width of [390, 1440]) for (const scenario of resourceCases) {
-  test(`${width}px ${scenario.name} 资源和重启确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+  test(`${width}px ${scenario.name} 资源和重启确认预览与请求一致且只接受一次 202 接纳及精确 Job 完成`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const expected: DockerContainerCreateInput = { ...expectedInput(true), restartPolicy: 'on-failure', restartMaxRetries: scenario.retries,
@@ -607,21 +631,31 @@ for (const width of [390, 1440]) for (const scenario of resourceCases) {
       await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
       api.release.resolve()
       const response = await responsePromise
-      expect(response.status()).toBe(201)
-      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
-      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      expect(response.status()).toBe(202)
+      expect(await response.json()).toEqual(creationJobFixture(jobId))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', expected.runContainer))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests).toContain(`GET ${jobPath}`)
       await expect(preview).not.toBeVisible()
       await page.waitForTimeout(6000)
       expect(api.writes).toEqual([expected])
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      expect(info.errors, '所有预览几何、可访问性和流程断言通过后才能记录完成').toEqual([])
       const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
       await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
         evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
         testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
         preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
         replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
-        status: response.status(), response: await response.json() }, null, 2))
+        journeyCompleted: true, status: response.status(), response: await response.json(), completedStatus: completedResponse.status(), completedJob }, null, 2))
       await info.attach('strict-resource-restart-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })
@@ -675,7 +709,7 @@ async function networkGeometry(page: Page, labels: string[]) {
 }
 
 for (const width of [390, 1440]) for (const scenario of networkCases) {
-  test(`${width}px ${scenario.name} 网络确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+  test(`${width}px ${scenario.name} 网络确认预览与请求一致且只接受一次 202 接纳及精确 Job 完成`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const expected: DockerContainerCreateInput = { ...expectedInput(true), network: scenario.network }
@@ -769,21 +803,31 @@ for (const width of [390, 1440]) for (const scenario of networkCases) {
       await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
       api.release.resolve()
       const response = await responsePromise
-      expect(response.status()).toBe(201)
-      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
-      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      expect(response.status()).toBe(202)
+      expect(await response.json()).toEqual(creationJobFixture(jobId))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', expected.runContainer))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests).toContain(`GET ${jobPath}`)
       await expect(preview).not.toBeVisible()
       await page.waitForTimeout(6000)
       expect(api.writes).toEqual([expected])
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      expect(info.errors, '所有预览几何、可访问性和流程断言通过后才能记录完成').toEqual([])
       const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
       await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
         evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
         testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
         preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
         replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
-        status: response.status(), response: await response.json() }, null, 2))
+        journeyCompleted: true, status: response.status(), response: await response.json(), completedStatus: completedResponse.status(), completedJob }, null, 2))
       await info.attach('strict-network-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })
@@ -837,7 +881,7 @@ const gpuCases: Array<{ name: string; gpu: NonNullable<DockerContainerCreateInpu
 ]
 
 for (const width of [390, 1440]) for (const scenario of gpuCases) {
-  test(`${width}px ${scenario.name} GPU 确认预览与请求一致且只接受一次 201`, async ({ page, baseURL }, info) => {
+  test(`${width}px ${scenario.name} GPU 确认预览与请求一致且只接受一次 202 接纳及精确 Job 完成`, async ({ page, baseURL }, info) => {
     test.setTimeout(120_000)
     await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
     const expected: DockerContainerCreateInput = { ...expectedInput(true), gpus: [scenario.gpu] }
@@ -927,21 +971,31 @@ for (const width of [390, 1440]) for (const scenario of gpuCases) {
       await expect(drawer).toBeVisible(); await expect(opener).toBeDisabled()
       api.release.resolve()
       const response = await responsePromise
-      expect(response.status()).toBe(201)
-      expect(await response.json()).toEqual({ containerId: 'created-identity', name: 'identity', image: 'identity:latest', state: 'running', created: true, started: true, runContainer: true })
-      await expect(page.getByText('容器“identity”已创建并启动', { exact: true })).toBeVisible()
+      expect(response.status()).toBe(202)
+      expect(await response.json()).toEqual(creationJobFixture(jobId))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', expected.runContainer))
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests).toContain(`GET ${jobPath}`)
       await expect(preview).not.toBeVisible()
       await page.waitForTimeout(6000)
       expect(api.writes).toEqual([expected])
       expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual([`POST ${createPath}`])
       expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+      expect(info.errors, '所有预览几何、可访问性和流程断言通过后才能记录完成').toEqual([])
       const receiptPath = info.outputPath('ui-captures', `${prefix}-receipt-capture-state.json`)
       await writeFile(receiptPath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
         evidenceKind: 'post-create-receipt', phase: 'after-create-response-and-replay-observation',
         testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(),
         preCreatePreviewEvidence: { prefix, screenshot: `${prefix}.png`, screenshotSha256, captureState: `${prefix}-axe-capture-state.json`, captureStateSha256: createHash('sha256').update(await readFile(captureState)).digest('hex') },
         replayObservationMilliseconds: 6000, expected, requests: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors],
-        status: response.status(), response: await response.json() }, null, 2))
+        journeyCompleted: true, status: response.status(), response: await response.json(), completedStatus: completedResponse.status(), completedJob }, null, 2))
       await info.attach('strict-gpu-create-receipt', { path: receiptPath, contentType: 'application/json' })
     } finally { api.release.resolve() }
   })

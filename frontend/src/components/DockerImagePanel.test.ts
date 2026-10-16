@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { computed, createApp, defineComponent, h, nextTick, ref, type App } from 'vue'
+import { computed, createApp, defineComponent, effectScope, h, nextTick, ref, type App } from 'vue'
 import type { JobSnapshot } from '@/api/system'
 import DockerImagePanel from './DockerImagePanel.vue'
-import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
+import { useDockerContainerCreateJobs } from '@/composables/useDockerContainerCreateJobs'
+import { beginSession } from '@/session/sessionLifecycle'
 
 const hooks = vi.hoisted(() => ({ downloads: vi.fn(), local: vi.fn(), warning: vi.fn(), inventoryRefresh: vi.fn() }))
 vi.mock('@/composables/useDockerImageDownloads', () => ({ useDockerImageDownloads: hooks.downloads }))
@@ -218,30 +219,31 @@ describe('DockerImagePanel 下载观察状态', () => {
 })
 
 
-describe('DockerImagePanel 创建后对账归属', () => {
-  it.each(['session', 'unmount'])('%s 失效发生在 inventory await 期间时不提示或开始镜像 GET', async (kind) => {
-    let resolve!: (value: { failed: string[] }) => void
-    hooks.inventoryRefresh.mockReturnValue(new Promise<{ failed: string[] }>((done) => { resolve = done }))
-    const host = await mountDownloads()
-    const local = hooks.local.mock.results[0]!.value as { refresh: ReturnType<typeof vi.fn> }
-    expect(local.refresh).toHaveBeenCalledTimes(1)
-    host.querySelector<HTMLButtonElement>('.container-created-stub')!.click()
-    expect(hooks.inventoryRefresh).toHaveBeenCalledExactlyOnceWith({ inventory: true, force: true })
-    if (kind === 'session') invalidateSession()
-    else { const entry = mounted.pop()!; entry.app.unmount(); entry.host.remove() }
-    resolve({ failed: ['inventory'] }); await Promise.resolve(); await nextTick()
-    expect(hooks.warning).not.toHaveBeenCalled(); expect(local.refresh).toHaveBeenCalledTimes(1)
-  })
-
-  it.each([false, true])('同页会话保持有效时完成后续只读对账，读取失败=%s', async (failed) => {
-    const failures = failed ? ['inventory'] : []
-    hooks.inventoryRefresh.mockResolvedValue({ failed: failures })
+describe('DockerImagePanel 创建会话保护归属', () => {
+  it('旧 created 事件不再触发局部对账或成功提示', async () => {
     const host = await mountDownloads()
     const local = hooks.local.mock.results[0]!.value as { refresh: ReturnType<typeof vi.fn> }
     host.querySelector<HTMLButtonElement>('.container-created-stub')!.click()
     await Promise.resolve(); await nextTick()
-    expect(local.refresh).toHaveBeenCalledTimes(2)
-    expect(hooks.warning).toHaveBeenCalledTimes(failures.length ? 1 : 0)
+    expect(hooks.inventoryRefresh).not.toHaveBeenCalled()
+    expect(hooks.warning).not.toHaveBeenCalled(); expect(local.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('共享创建槽阻止每个镜像入口，取消未派发预览后恢复', async () => {
+    const scope = effectScope(), registry = scope.run(() => useDockerContainerCreateJobs())!
+    try {
+      const local = hooks.local() as Record<string, unknown>
+      const image = { id: `sha256:${'a'.repeat(64)}`, repoTags: ['alpine'], repoDigests: [], sizeBytes: 1, createdAt: '', containers: 0 }
+      Object.assign(local, { images: ref([image]), pagedImages: ref([image]), filteredImages: ref([image]), containerReferenceCount: () => 0, displayName: () => 'alpine', shortId: () => 'aaaa', isRemovePending: () => false })
+      const host = document.createElement('div'); document.body.append(host)
+      const app = createApp({ render: () => h(DockerImagePanel, { query: '', containers: [], pageSize: 20 }) })
+      app.mount(host); mounted.push({ app, host }); await nextTick()
+      const create = host.querySelector<HTMLButtonElement>('[aria-label="从镜像 alpine 创建容器"]')!
+      expect(create.disabled).toBe(false)
+      const reservation = registry.reserve(false)!
+      await nextTick(); expect(create.disabled).toBe(true)
+      registry.cancel(reservation); await nextTick(); expect(create.disabled).toBe(false)
+    } finally { scope.stop() }
   })
 })
 

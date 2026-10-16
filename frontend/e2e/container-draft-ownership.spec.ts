@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
-import { installMockApi } from './mockApi'
+import { installMockApi, creationJobFixture, fixtureCreatedContainerId } from './mockApi'
 
-const createPath = '/api/v1/docker/containers'
+const createPath = '/api/v1/docker/containers/create-jobs'
+const jobPath = '/api/v1/jobs/job-create-draft'
 const resourcePath = '/api/v1/docker/resources'
 const entriesPath = '/api/v1/files/entries'
 const drawer = (page: Page) => page.locator('.create-container-drawer')
@@ -26,12 +27,16 @@ async function fixture(page: Page) {
   const writes: Array<Record<string, unknown>> = []
   const unexpected: string[] = []
   const gates: Gate[] = []
+  let accepted = false, started = false
+  let detailStatus: 'queued' | 'running' | 'completed' = 'completed'
+  await page.addInitScript(() => Object.defineProperty(window, '__creationDocumentId', { value: crypto.randomUUID() }))
   const reads = new Set(['/api/v1/auth/status', '/api/v1/preferences', '/api/v1/system/capabilities', '/api/v1/system/summary', '/api/v1/docker/inventory', '/api/v1/docker/images', '/api/v1/jobs', '/api/v1/sites', '/api/v1/sites/ignored'])
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
     const method = request.method()
     requests.push(`${method} ${path}`)
+    if (method === 'GET' && path === jobPath && accepted) return route.fulfill({ json: creationJobFixture('job-create-draft', detailStatus, started) })
     if (method === 'POST' && path === '/api/v1/auth/logout') return route.fulfill({ status: 204 })
     if (method === 'GET' && (reads.has(path) || path.startsWith('/api/v1/preferences/lists/'))) return route.fallback()
     if (!(method === 'POST' && path === createPath) && !(method === 'GET' && [resourcePath, entriesPath].includes(path))) {
@@ -45,7 +50,7 @@ async function fixture(page: Page) {
     if (gate) { gate.received.resolve(); await gate.release.promise }
     try {
       if (gate && gate.status !== 200) return await route.fulfill({ status: gate.status, json: { code: 'DOCKER_CONTAINER_CREATE_INVALID', message: '容器创建参数无效。', requestId: 'fixture-create-a' } })
-      if (body) return await route.fulfill({ status: 201, json: { containerId: 'created-fixture-a', name: body.name, image: body.image, state: 'running', created: true, started: true, runContainer: true } })
+      if (body) { accepted = true; started = body.runContainer === true; return await route.fulfill({ status: 202, json: creationJobFixture('job-create-draft') }) }
       if (path === resourcePath) return await route.fulfill({ json: { collectedAt: '2026-10-13T12:00:00Z', networks: [{ id: 'old-network', name: 'old-network', driver: 'bridge', scope: 'local', internal: false, subnets: [], gateways: [] }], volumes: [] } })
       if (gate && path === entriesPath) return await route.fulfill({ json: { path: '/obsolete', parent: '/', nextCursor: '', collectedAt: '2026-10-13T12:00:00Z', entries: [{ name: 'obsolete-entry', path: '/obsolete/entry', type: 'directory', readable: true }] } })
       return await route.fallback()
@@ -53,6 +58,7 @@ async function fixture(page: Page) {
   })
   return {
     requests, writes, unexpected,
+    detail(status: 'queued' | 'running' | 'completed') { detailStatus = status },
     hold(path: string, status = 200) {
       const gate: Gate = { path, status, received: deferred(), release: deferred(), finished: deferred() }
       gates.push(gate)
@@ -93,105 +99,103 @@ async function closeDrawer(page: Page, method: 'x' | 'escape') {
   else await page.keyboard.press('Escape')
   await expect(drawer(page)).toBeHidden()
 }
-async function capturePendingB(page: Page, info: TestInfo) {
-  const files = ['e2e/container-draft-ownership.spec.ts', 'e2e/mockApi.ts', 'src/components/CreateContainerDrawer.vue', 'src/components/DockerImagePanel.vue']
+async function capturePendingB(page: Page, info: TestInfo, api: Awaited<ReturnType<typeof fixture>>) {
+  const files = ['e2e/container-draft-ownership.spec.ts', 'e2e/mockApi.ts', 'src/components/CreateContainerDrawer.vue', 'src/components/DockerImagePanel.vue', 'src/components/ContainerCreateProtectionPanel.vue', 'src/composables/useDockerContainerCreateJobs.ts', 'src/api/dockerContainerCreateJob.ts', 'src/views/DockerView.vue']
   const sourceHashes = Object.fromEntries(await Promise.all(files.map(async (file) => [file, createHash('sha256').update(await readFile(file)).digest('hex')])))
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   const workingTree = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })
-  const observations = []
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 })
+    const panel = page.getByRole('region', { name: '容器创建防重复保护', exact: true })
+    await panel.scrollIntoViewIfNeeded()
     await page.evaluate(() => document.fonts.ready)
-    await nameInput(page).scrollIntoViewIfNeeded()
-    const state = () => page.evaluate(() => {
-      const selectors = ['.create-container-drawer .el-drawer__header', '.create-container-drawer input[placeholder="例如 mysql-1"]', '.create-container-drawer .drawer-actions', '.create-container-drawer .el-drawer__close-btn', ...[1, 2, 3].flatMap((index) => [`.create-container-drawer .drawer-actions button:nth-child(${index})`, `.create-container-drawer .drawer-actions button:nth-child(${index}) .action-button__label`])]
-      return {
-        viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY },
-        focus: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label'), placeholder: document.activeElement?.getAttribute('placeholder') },
-        bodyWidth: document.body.scrollWidth,
-        imageLayout: ['.image-workspace', '.image-modebar', '.image-workspace .resource-table'].map((selector) => {
-          const element = document.querySelector<HTMLElement>(selector)!
-          return { selector, bounds: element.getBoundingClientRect().toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, overflowX: getComputedStyle(element).overflowX }
-        }),
-        controls: selectors.map((selector) => {
-          const element = document.querySelector<HTMLElement>(selector)!
-          const bounds = element.getBoundingClientRect()
-          return { selector, bounds: bounds.toJSON(), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, inViewport: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight }
-        }),
-        draft: document.querySelector<HTMLInputElement>('.create-container-drawer input[placeholder="例如 mysql-1"]')?.value,
-        actions: [...document.querySelectorAll<HTMLButtonElement>('.create-container-drawer .drawer-actions button')].map((button) => ({ text: button.textContent?.trim(), disabled: button.disabled })),
-      }
-    })
+    const state = () => panel.evaluate((element) => ({
+      viewport: { width: innerWidth, height: innerHeight }, scroll: { x: scrollX, y: scrollY },
+      bodyWidth: document.body.scrollWidth, text: element.textContent,
+      focus: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') },
+      controls: [element, ...element.querySelectorAll('button, h2, p, strong')].map((control) => {
+        const bounds = control.getBoundingClientRect(), style = getComputedStyle(control)
+        return { text: control.textContent, bounds: bounds.toJSON(), scrollWidth: control.scrollWidth, clientWidth: control.clientWidth,
+          disabled: control instanceof HTMLButtonElement ? control.disabled : undefined,
+          visible: style.visibility !== 'hidden' && bounds.width > 0 && bounds.height > 0,
+          inViewport: bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth + 1 && bounds.bottom <= innerHeight + 1 }
+      }),
+    }))
     const beforeCapture = await state()
     const name = `container-draft-pending-b-${width}`
     await mkdir(info.outputPath('ui-captures'), { recursive: true })
     const path = info.outputPath('ui-captures', `${name}.png`)
     await page.screenshot({ path, animations: 'disabled' })
     const afterCapture = await state()
-    const axe = await new AxeBuilder({ page }).include('.create-container-drawer').analyze()
+    const axe = await new AxeBuilder({ page }).analyze()
     const afterAxe = await state()
-    await writeFile(info.outputPath('ui-captures', `${name}-capture-state.json`), JSON.stringify({ sourceSha, sourceHashes, workingTree, fixtureOnly: true, state: 'A POST pending; B name edited; original POST lock retained', beforeCapture, afterCapture, afterAxe, axeViolations: axe.violations }, null, 2))
+    await writeFile(info.outputPath('ui-captures', `${name}-capture-state.json`), JSON.stringify({ sourceSha, sourceHashes, workingTree, fixtureOnly: true, state: 'A POST pending; B entry blocked by session slot', requests: [...api.requests], writes: [...api.writes], unexpected: [...api.unexpected], beforeCapture, afterCapture, afterAxe, axe }, null, 2))
     await info.attach(name, { path, contentType: 'image/png' })
-    observations.push({ width, beforeCapture, violations: axe.violations })
-  }
-  for (const observation of observations) {
-    expect(observation.beforeCapture.draft).toBe('draft-b')
-    expect(observation.beforeCapture.actions.every((action) => action.disabled)).toBe(true)
-    expect(observation.beforeCapture.bodyWidth).toBeLessThanOrEqual(observation.width)
-    expect(observation.beforeCapture.controls.every((control) => control.inViewport && control.scrollWidth <= control.clientWidth + 1), `${observation.width}px 关键控件完整可见`).toBe(true)
-    expect(observation.violations.filter((violation) => ['critical', 'serious'].includes(violation.impact ?? '')), `${observation.width}px axe`).toEqual([])
+    expect.soft(afterCapture).toEqual(beforeCapture)
+    expect.soft(afterAxe).toEqual(beforeCapture)
+    expect.soft(beforeCapture.bodyWidth).toBeLessThanOrEqual(width)
+    expect.soft(beforeCapture.controls.every(control => control.visible && control.inViewport && control.scrollWidth <= control.clientWidth + 1)).toBe(true)
+    expect.soft(axe.violations).toEqual([])
   }
 }
 
 for (const outcome of [{ status: 200, close: 'x' }, { status: 400, close: 'escape' }] as const) {
-  test(`A 提交后普通 ${outcome.close} 关闭，迟到 ${outcome.status} 保留 B 且不重放`, async ({ page }, info) => {
+  test(`A 提交后普通 ${outcome.close} 关闭，迟到 ${outcome.status === 200 ? 202 : 400} 不允许 B 绕过会话锁或重放`, async ({ page }, info) => {
     const api = await fixture(page)
     await openImages(page); await openDraft(page)
     const held = api.hold(createPath, outcome.status)
     await submitA(page); await held.received.promise
     await closeDrawer(page, outcome.close)
+    const openB = page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true })
+    await expect(openB).toBeDisabled()
+    if (outcome.status === 200) await capturePendingB(page, info, api)
+    const readsBefore = api.requests.length
+    await api.release(held)
+    await expect(page.locator('.el-message')).toHaveCount(0)
+    expect(api.requests.slice(readsBefore)).toEqual([])
+    if (outcome.status === 200) {
+      await expect(openB).toBeDisabled()
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+      await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+      await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+      expect(api.requests.slice(readsBefore)).toContain(`GET ${jobPath}`)
+    }
+    await expect(openB).toBeEnabled()
     await openDraft(page, 'alpine:3.20')
-    await expect(nameInput(page)).toHaveValue('alpine')
     await nameInput(page).fill('draft-b')
-    await expect(createButton(page)).toBeDisabled()
-    await expect(drawer(page).getByRole('button', { name: '仅创建', exact: true })).toBeDisabled()
-    if (outcome.status === 200) await capturePendingB(page, info)
     await drawer(page).getByRole('button', { name: '添加环境变量', exact: true }).click()
     await drawer(page).getByPlaceholder('变量，例如 APP_MODE').fill('DRAFT')
     await drawer(page).getByPlaceholder('值', { exact: true }).fill('B')
-    const readsBefore = api.requests.length
-    await api.release(held)
-    await expect(createButton(page)).toBeEnabled()
-    await expect(drawer(page)).toBeVisible()
-    await expect(nameInput(page)).toHaveValue('draft-b')
-    await expect(drawer(page).getByPlaceholder('变量，例如 APP_MODE')).toHaveValue('DRAFT')
-    await expect(drawer(page).getByPlaceholder('值', { exact: true })).toHaveValue('B')
-    await expect(drawer(page).getByLabel('镜像', { exact: true })).toHaveValue('alpine:3.20')
-    await expect(page.locator('.el-message')).toHaveCount(0)
-    if (outcome.status === 200) await expect.poll(() => api.requests.slice(readsBefore).includes('GET /api/v1/docker/images')).toBe(true)
-    if (outcome.status === 200) expect(api.requests.slice(readsBefore)).toEqual(['GET /api/v1/docker/inventory', 'GET /api/v1/docker/images'])
-    else expect(api.requests.slice(readsBefore)).toEqual([])
     await createButton(page).click()
     const previewB = page.getByRole('dialog', { name: '确认容器配置', exact: true })
     await expect(previewB).toContainText('draft-b')
     await expect(previewB).toContainText('alpine:3.20')
     await previewB.getByRole('button', { name: '返回修改', exact: true }).click()
+    await expect(nameInput(page)).toHaveValue('draft-b')
+    await expect(drawer(page).getByPlaceholder('值', { exact: true })).toHaveValue('B')
     expect(api.writes).toHaveLength(1)
     expect(api.writes[0]).toMatchObject({ name: 'draft-a', image: 'media-api:latest', runContainer: true })
     expect(api.unexpected).toEqual([])
   })
 }
 
-for (const destination of ['logout', 'unmount'] as const) {
-  test(`A 提交后 ${destination}，迟到成功不通知或触发创建后读取`, async ({ page }) => {
+for (const destination of ['logout', 'unmount', 'spa-route'] as const) {
+  test(`A 提交后 ${destination}，迟到 202 不通知或触发创建后读取`, async ({ page }, info) => {
     const api = await fixture(page)
     await openImages(page); await openDraft(page)
+    const originalDocument = await page.evaluate(() => (window as Window & { __creationDocumentId: string }).__creationDocumentId)
+    if (destination === 'spa-route') api.detail('queued')
     const held = api.hold(createPath)
     await submitA(page); await held.received.promise
     await closeDrawer(page, 'x')
     if (destination === 'logout') {
       await page.getByRole('button', { name: '退出登录', exact: true }).click()
       await expect(page.getByRole('heading', { name: '进入 NAS Control Plane', exact: true })).toBeVisible()
+    } else if (destination === 'spa-route') {
+      await page.getByRole('link', { name: '总览', exact: true }).click()
+      await expect(page).toHaveURL('/')
+      expect(await page.evaluate(() => (window as Window & { __creationDocumentId: string }).__creationDocumentId)).toBe(originalDocument)
+      await expect(page.locator('.image-workspace')).toHaveCount(0)
     } else {
       await page.getByRole('button', { name: '容器', exact: true }).click()
       await expect(page.locator('.image-workspace')).toHaveCount(0)
@@ -200,6 +204,32 @@ for (const destination of ['logout', 'unmount'] as const) {
     await api.release(held)
     await expect(page.locator('.el-message')).toHaveCount(0)
     expect(api.requests.slice(before)).toEqual([])
+    if (destination === 'unmount' || destination === 'spa-route') {
+      if (destination === 'spa-route') await page.getByRole('link', { name: 'Docker', exact: true }).click()
+      await page.getByRole('button', { name: '镜像', exact: true }).click()
+      await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true })).toBeDisabled()
+      await expect(page.getByRole('region', { name: '容器创建防重复保护', exact: true })).toContainText('任务已受理，尚未确认创建完成')
+      if (destination === 'spa-route') {
+        const documentAfterReturn = await page.evaluate(() => (window as Window & { __creationDocumentId: string }).__creationDocumentId)
+        expect(documentAfterReturn).toBe(originalDocument)
+        await expect.poll(() => api.requests.filter(target => target === `GET ${jobPath}`).length).toBe(1)
+        const check = page.getByRole('button', { name: '只读核对任务与容器', exact: true })
+        await expect(check).toBeEnabled()
+        await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+        api.detail('completed')
+        await check.click()
+        await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
+        await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true })).toBeEnabled()
+        expect(api.requests.filter(target => target === `GET ${jobPath}`)).toHaveLength(2)
+        expect(api.writes).toHaveLength(1)
+        expect(api.unexpected).toEqual([])
+        expect(info.errors).toEqual([])
+        const path = info.outputPath('ui-captures', 'creation-late-202-spa-capture-state.json')
+        await mkdir(info.outputPath('ui-captures'), { recursive: true })
+        await writeFile(path, JSON.stringify({ fixtureOnly: true, journeyCompleted: true, originalDocument, documentAfterReturn, requests: api.requests, writes: api.writes, unexpected: api.unexpected, result: fixtureCreatedContainerId }, null, 2))
+        await info.attach('late-202-same-document', { path, contentType: 'application/json' })
+      }
+    }
     expect(api.writes).toHaveLength(1)
     expect(api.unexpected).toEqual([])
   })

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-import { installMockApi } from './mockApi'
+import { installMockApi, fixtureCreatedContainerId } from './mockApi'
 
 const routeNavigationTimeout = 120_000
 
@@ -141,5 +141,7 @@ test('创建容器使用已有资源、浏览 NAS 路径并在提交前展示配
   await expect(preview).toContainText('media-api:latest')
   await expect(preview).toContainText('/volume2')
   await preview.getByRole('button', { name: '确认创建并启动', exact: true }).click()
-  await expect(page.getByText('容器“media-api”已创建并启动', { exact: true })).toBeVisible()
+  await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '只读核对任务与容器', exact: true }).click()
+  await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toContainText(fixtureCreatedContainerId)
 })

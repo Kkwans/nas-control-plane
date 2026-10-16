@@ -23,7 +23,7 @@ const inventory = {
 }
 const image = (name: string): DockerImageSummary => ({ id: name, repoTags: [`${name}:latest`], repoDigests: [], sizeBytes: 1, createdAt: collectedAt, containers: 0 })
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
-const createdResponse = (input: DockerContainerCreateInput) => json({ containerId: 'created-id', name: input.name || 'alpine', image: input.image, state: input.runContainer ? 'running' : 'stopped', created: true, started: input.runContainer, runContainer: input.runContainer }, 201)
+const createdResponse = () => json({ id: 'create-1', type: 'docker-container-create', status: 'queued', cancellable: false, artifactState: 'unknown', message: '已接收', progress: 0, createdAt: collectedAt, updatedAt: collectedAt, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} }, 202)
 const fetcher = vi.fn<typeof fetch>()
 let respondToCreate: (input: DockerContainerCreateInput) => Response | Promise<Response>
 let app: App | undefined
@@ -31,7 +31,7 @@ let host: HTMLDivElement | undefined
 
 async function settle() { for (let count = 0; count < 30; count++) await nextTick() }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
-function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers' && init?.method === 'POST') }
+function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers/create-jobs' && init?.method === 'POST') }
 function submittedInput() { return JSON.parse(String(createCalls()[0]![1]!.body)) as DockerContainerCreateInput }
 function button(text: string) {
   const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent?.trim() === text)
@@ -100,7 +100,7 @@ beforeEach(() => {
   fetcher.mockImplementation(async (path, init = {}) => {
     if (path === '/api/v1/docker/resources' && !init.method) return json(resources)
     if (path === '/api/v1/docker/inventory' && !init.method) return json(inventory)
-    if (path === '/api/v1/docker/containers' && init.method === 'POST') return respondToCreate(JSON.parse(String(init.body)) as DockerContainerCreateInput)
+    if (path === '/api/v1/docker/containers/create-jobs' && init.method === 'POST') return respondToCreate(JSON.parse(String(init.body)) as DockerContainerCreateInput)
     throw new Error(`非预期的 fixture 请求：${String(path)} ${init.method || 'GET'}`)
   })
   vi.stubGlobal('fetch', fetcher)
@@ -150,7 +150,7 @@ describe('Docker 卷清空的真实创建流程', () => {
     expect(createCalls()).toHaveLength(1)
     expect(submittedInput()).toMatchObject({ image: 'alpine:latest', runContainer, mounts: [{ type: 'volume', source: 'data-b', target: '/data', readOnly: false }] })
     expect(createCalls()[0]![1]).toMatchObject({ credentials: 'same-origin', redirect: 'error' })
-    expect(created).toHaveBeenCalledExactlyOnceWith('created-id')
+    expect(created).not.toHaveBeenCalled()
     expect(state.open).toBe(false)
   })
 
@@ -164,7 +164,7 @@ describe('Docker 卷清空的真实创建流程', () => {
     await click('确认创建')
     expect(createCalls()).toHaveLength(1)
     expect(submittedInput().mounts).toEqual([{ type: 'volume', source: name, target: '/data', readOnly: false }])
-    expect(created).toHaveBeenCalledExactlyOnceWith('created-id')
+    expect(created).not.toHaveBeenCalled()
   })
 
   it('清空重选后的迟到成功只对账，不能关闭或覆盖重开的新镜像草稿', async () => {
@@ -188,16 +188,16 @@ describe('Docker 卷清空的真实创建流程', () => {
     expect(button('创建并启动').disabled).toBe(true)
     await submitForm()
     expect(createCalls()).toHaveLength(1)
-    pending.resolve(createdResponse(original))
+    pending.resolve(createdResponse())
     await settle()
     expect(state.open).toBe(true)
     expect(document.querySelector<HTMLInputElement>('input[placeholder="例如 mysql-1"]')!.value).toBe('draft-b')
-    expect(button('仅创建').disabled).toBe(false)
-    expect(created).toHaveBeenCalledExactlyOnceWith('created-id')
+    expect(button('仅创建').disabled).toBe(true)
+    expect(created).not.toHaveBeenCalled()
     expect(document.querySelector('.el-message--success')).toBeNull()
     await click('仅创建')
-    expect(document.querySelector('.create-preview')?.textContent).toContain('redis:latest')
-    expect(document.querySelector('.create-preview')?.textContent).toContain('卷名："data-a"容器路径："/data"')
+    expect(document.querySelector('.create-preview')).toBeNull()
+    expect(combobox('第 1 个 Docker 卷').closest('.ncp-select')?.textContent).toContain('data-a')
     expect(original.mounts).toEqual([{ type: 'volume', source: 'data-b', target: '/data', readOnly: false }])
   })
 
@@ -215,8 +215,8 @@ describe('Docker 卷清空的真实创建流程', () => {
     await edit('例如 mysql-1', 'edited-draft')
     pending.resolve(json({ containerId: 'unconfirmed-id' }, 201))
     await settle()
-    expect(document.querySelector('[aria-label="创建结果未知"]')?.textContent).toContain('容器可能已经创建')
-    expect(document.querySelector('[aria-label="创建结果未知"]')?.textContent).not.toContain('edited-draft')
+    expect(document.querySelector('.unresolved-attempt')?.textContent).toContain('创建任务已保留防重复保护')
+    expect(document.querySelector('.unresolved-attempt')?.textContent).not.toContain('edited-draft')
     expect(submittedInput().mounts?.[0]?.source).toBe('data-a')
     expect(button('仅创建').disabled).toBe(true)
     expect(button('创建并启动').disabled).toBe(true)
@@ -227,8 +227,7 @@ describe('Docker 卷清空的真实创建流程', () => {
     await settle()
     state.open = true
     await settle()
-    await click('只读查看容器列表')
-    expect(document.body.textContent).toContain('本次读取 0 个容器；创建结果仍未知。')
+    expect(document.body.textContent).toContain('请在 Docker 页面顶部只读核对')
     expect(button('仅创建').disabled).toBe(true)
     expect(button('创建并启动').disabled).toBe(true)
     await submitForm()

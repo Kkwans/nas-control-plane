@@ -23,7 +23,7 @@ let app: App | undefined
 let host: HTMLDivElement | undefined
 
 async function settle() { for (let count = 0; count < 30; count++) await nextTick() }
-function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers' && init?.method === 'POST') }
+function createCalls() { return fetcher.mock.calls.filter(([path, init]) => path === '/api/v1/docker/containers/create-jobs' && init?.method === 'POST') }
 function submittedInput() { return JSON.parse(String(createCalls()[0]![1]!.body)) as DockerContainerCreateInput }
 function button(text: string) {
   const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find((node) => node.textContent?.trim() === text)
@@ -62,9 +62,8 @@ beforeEach(() => {
   fetcher.mockImplementation(async (path, init = {}) => {
     if (path === '/api/v1/docker/resources' && !init.method) return json({ collectedAt, networks: [], volumes: [] })
     if (path === '/api/v1/docker/inventory' && !init.method) return json(inventory)
-    if (path === '/api/v1/docker/containers' && init.method === 'POST') {
-      const input = JSON.parse(String(init.body)) as DockerContainerCreateInput
-      return json({ containerId: 'created-id', name: input.name || 'alpine', image: input.image, state: input.runContainer ? 'running' : 'stopped', created: true, started: input.runContainer, runContainer: input.runContainer }, 201)
+    if (path === '/api/v1/docker/containers/create-jobs' && init.method === 'POST') {
+      return json({ id: 'create-1', type: 'docker-container-create', status: 'queued', cancellable: false, artifactState: 'unknown', message: '已接收', progress: 0, createdAt: collectedAt, updatedAt: collectedAt, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} }, 202)
     }
     throw new Error(`非预期 fixture 请求：${String(path)} ${init.method || 'GET'}`)
   })
@@ -102,7 +101,7 @@ describe('创建设备映射保留路径身份', () => {
     expect(createCalls()).toHaveLength(1)
     expect(submittedInput().devices).toEqual(expected)
     expect(submittedInput().runContainer).toBe(runContainer)
-    expect(created).toHaveBeenCalledTimes(1)
+    expect(created).not.toHaveBeenCalled()
   })
 
   it.each(['主机设备 /dev/...', '容器设备 /dev/...'])('%s 拒绝前导空白', async (field) => {

@@ -10,6 +10,8 @@ import { NcpApiError, deleteDockerProject, requestContainerDetails, requestConta
 import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
+import ContainerCreateProtectionPanel from '@/components/ContainerCreateProtectionPanel.vue'
+import { useDockerContainerCreateJobs, containerCreateCanRelease, type ContainerCreateAdmission } from '@/composables/useDockerContainerCreateJobs'
 import ContainerActionProtectionPanel from '@/components/ContainerActionProtectionPanel.vue'
 import { useDockerContainerActionJobs, containerActionCanRelease, type ContainerActionAdmission } from '@/composables/useDockerContainerActionJobs'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
@@ -67,6 +69,21 @@ const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
 const projectContainerActionErrors = ref<Record<string, string>>({})
 const actionError = ref<string | null>(null)
 let viewActive = true
+const createJobs = useDockerContainerCreateJobs()
+const { entry: createAdmission } = createJobs
+const createResult = shallowRef<{ containerId: string; created: true; started: boolean } | null>(null)
+const creationSession = captureSession()
+const clearCreateResult = () => { createResult.value = null }
+creationSession.signal.addEventListener('abort', clearCreateResult, { once: true })
+watch(createAdmission, entry => {
+  if (!createJobs.alive()) { createResult.value = null; return }
+  if (!viewActive || !entry || !entry.completionVersion) return
+  const result = createJobs.consumeCompletion(entry, entry.completionVersion)
+  if (!result) return
+  createResult.value = result
+  // 必须先同步消费并保留精确结果，再进行独立的只读状态刷新。
+  void refreshContainerInventory()
+}, { immediate: true, flush: 'sync' })
 const detailRequest = createScopedReadRequest()
 const logOpen = ref(false)
 const logLoading = ref(false)
@@ -301,9 +318,27 @@ async function refreshContainerInventory() {
 async function refreshDockerPage() {
   const inventoryRead = systemStore.refresh({ inventory: true }).then(result => result.succeeded.includes('inventory'))
   await Promise.all(containerAdmissions.value.filter(entry => entry.phase === 'known').map(entry => containerJobs.check(entry, () => inventoryRead)))
+  const createEntry = createAdmission.value
+  if (createEntry && !['confirming', 'submitting', 'resolved'].includes(createEntry.phase)) await createJobs.check(createEntry, () => inventoryRead)
   await inventoryRead
 }
 const unregisterManualRefresh = manualRefreshRegistry?.register(refreshDockerPage)
+async function releaseCreateProtection(entry: ContainerCreateAdmission) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  await createJobs.check(entry, refreshContainerInventory)
+  if (!viewActive || !createJobs.alive()) return
+  const checked = createAdmission.value
+  if (!checked || checked.token !== entry.token || !containerCreateCanRelease(checked)) return
+  const version = checked.checkVersion
+  try {
+    await ElMessageBox.confirm('仅解除本登录会话防重复保护，不会取消、重试或重发创建任务。之前创建可能已经执行，再次提交可能重复创建。整页刷新与其他标签页不受此保护。确认自行承担重复创建风险并解除？', '解除创建防重复保护', { confirmButtonText: '确认风险并解除', cancelButtonText: '保留保护', type: 'warning', customClass: 'ncp-container-action-confirmation' })
+    if (viewActive && createJobs.alive()) createJobs.release(checked, version)
+  } catch (decision) {
+    if (decision !== 'cancel' && decision !== 'close') return
+    await nextTick()
+    if (viewActive && createJobs.alive() && createAdmission.value?.token === checked.token && createAdmission.value.checkVersion === version && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
+  }
+}
 async function releaseContainerProtection(entry: ContainerActionAdmission) {
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   // 每次解除前重新只读核对；确认框等待期间的新观察不能被旧确认覆盖。
@@ -484,7 +519,7 @@ watch(logOpen, (open) => {
     containerDrawerError.value = ''
   }
 }, { flush: 'sync' })
-onBeforeUnmount(() => { viewActive = false; detailRequest.invalidate(); unregisterManualRefresh?.() })
+onBeforeUnmount(() => { creationSession.signal.removeEventListener('abort', clearCreateResult); viewActive = false; detailRequest.invalidate(); unregisterManualRefresh?.() })
 
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
@@ -518,6 +553,8 @@ onMounted(() => {
     <div v-if="actionError" class="action-error" role="alert">
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
     </div>
+
+    <ContainerCreateProtectionPanel :entry="createAdmission" :result="createResult" @check="entry => createJobs.check(entry, refreshContainerInventory)" @release="releaseCreateProtection" />
 
     <ContainerActionProtectionPanel :entries="containerAdmissions" @check="entry => containerJobs.check(entry, refreshContainerInventory)" @release="releaseContainerProtection" />
 

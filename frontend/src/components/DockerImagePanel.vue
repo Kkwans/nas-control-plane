@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { ArrowDown, ArrowUp, ArrowUpDown, Box, Download, Eye, HardDrive, Image as ImageIcon, PackagePlus, RefreshCw, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
-import { ElInput, ElMessage, ElTooltip } from 'element-plus'
+import { ElInput, ElTooltip } from 'element-plus'
 
 import {
   type DockerImageSummary,
@@ -20,15 +20,12 @@ import { useDockerImageDownloads } from '@/composables/useDockerImageDownloads'
 import { useDockerLocalImages } from '@/composables/useDockerLocalImages'
 import { formatBytes } from '@/domain/overview'
 import { jobProgressLimitedWarning, jobStateDescription } from '@/domain/jobPresentation'
-import { useSystemStore } from '@/stores/system'
-import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
+import { useDockerContainerCreateJobs } from '@/composables/useDockerContainerCreateJobs'
 
 const props = defineProps<{ query: string; containers: DockerInventory['containers']; pageSize: number }>()
 const emit = defineEmits<{ 'update:query': [value: string] }>()
 type ImageMode = 'local' | 'hub' | 'downloads'
-const systemStore = useSystemStore()
-let alive = true
-onBeforeUnmount(() => { alive = false })
+const { blocked: createBlocked } = useDockerContainerCreateJobs()
 
 const pageRoot = shallowRef<HTMLElement>()
 const tooltipTarget = shallowRef<HTMLElement>()
@@ -60,20 +57,9 @@ const imageModeTabs = computed<SectionTab[]>(() => [
 ])
 
 function openCreateDrawer(image: DockerImageSummary) {
+  if (createBlocked.value) return
   createImage.value = image
   createDrawerOpen.value = true
-}
-
-async function handleContainerCreated() {
-  if (!alive) return
-  const session = captureSession()
-  const refreshResult = await systemStore.refresh({ inventory: true, force: true })
-  // 创建对账跨两个读取阶段；页面或会话离开后不再提示或启动下一次读取。
-  if (!alive || !isCurrentSession(session.generation)) return
-  if (refreshResult.failed.length) {
-    ElMessage.warning('容器已创建，但状态刷新失败，请手动重新加载。')
-  }
-  await refresh()
 }
 
 function handleHubJobCreated(job: JobSnapshot) {
@@ -164,7 +150,7 @@ onMounted(() => {
             </span>
           </ElTooltip>
           <div class="image-row-actions">
-            <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" content="使用此镜像创建容器"><ListIconButton :icon="PackagePlus" :label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)" /></ElTooltip>
+            <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" content="使用此镜像创建容器"><ListIconButton :icon="PackagePlus" :disabled="createBlocked" :label="`从镜像 ${displayName(image)} 创建容器`" @click="openCreateDrawer(image)" /></ElTooltip>
             <ElTooltip :append-to="tooltipTarget" :disabled="isRemovePending(image.id) || bulkRemovePending" :content="containerReferenceCount(image) ? '镜像正在被容器引用，先停止并移除引用' : '删除未使用的本地镜像'"><ListIconButton :icon="Trash2" tone="danger" :loading="isRemovePending(image.id)" :disabled="bulkRemovePending || containerReferenceCount(image) > 0" :label="`删除镜像 ${displayName(image)}`" @click="confirmRemove(image)" /></ElTooltip>
           </div>
         </div>
@@ -242,7 +228,7 @@ onMounted(() => {
         <div><button type="button" :disabled="downloadPage <= 1" @click="downloadPage -= 1">上一页</button><strong>{{ downloadPage }} / {{ downloadPageCount }}</strong><button type="button" :disabled="downloadPage >= downloadPageCount" @click="downloadPage += 1">下一页</button></div>
       </footer>
     </section>
-    <CreateContainerDrawer v-model="createDrawerOpen" :image="createImage" @created="handleContainerCreated" />
+    <CreateContainerDrawer v-model="createDrawerOpen" :image="createImage" />
   </section>
 </template>
 

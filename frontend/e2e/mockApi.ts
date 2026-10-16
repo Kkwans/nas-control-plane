@@ -355,7 +355,20 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
+// 创建 fixture 仅模拟持久接纳和精确详情，绝不使用旧同步创建接口。
+export const fixtureCreatedContainerId = 'a'.repeat(64)
+export function creationJobFixture(id: string, status: 'queued' | 'running' | 'completed' = 'queued', started = true) {
+  return {
+    id, type: 'docker-container-create', status, artifactState: 'unknown', cancellable: false,
+    message: status === 'completed' ? '容器创建任务已完成' : '容器创建任务已接纳',
+    progress: status === 'completed' ? 100 : 0, createdAt: collectedAt, updatedAt: collectedAt,
+    downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {},
+    ...(status === 'completed' ? { completedAt: collectedAt, createResult: { containerId: fixtureCreatedContainerId, created: true, started } } : {}),
+  }
+}
+
 export async function installMockApi(page: Page, options: { clock?: boolean; manualRealtime?: boolean } = {}) {
+  let createStarted: boolean | undefined
   // 普通 fixture 的日期与单调时钟一起前进，定期发出真实的新采集时间。
   // 过期测试自行安装时钟并选择静默流，生产过期逻辑不作任何例外。
   if (options.clock !== false) await page.clock.install({ time: new Date(collectedAt) })
@@ -449,13 +462,17 @@ export async function installMockApi(page: Page, options: { clock?: boolean; man
         downloadedBytes: 0, totalBytes: body.expectedBytes || 0, speedBytes: 0, layers: {},
       })
     }
-    if (path === '/api/v1/docker/containers' && route.request().method() === 'POST') {
-      const body = route.request().postDataJSON() as { image?: string; name?: string; runContainer?: boolean }
-      return json(route, {
-        containerId: 'created-fixture', name: body.name || 'created-fixture', image: body.image || 'unknown',
-        state: body.runContainer ? 'running' : 'stopped', created: true, started: Boolean(body.runContainer), runContainer: Boolean(body.runContainer),
-      }, 201)
+    if (path === '/api/v1/docker/containers/create-jobs' && route.request().method() === 'POST' && !new URL(route.request().url()).search) {
+      if (createStarted !== undefined) return json(route, { code: 'FIXTURE_DUPLICATE_CREATE', message: '禁止重放创建' }, 503)
+      const body = route.request().postDataJSON() as { runContainer: boolean }
+      createStarted = body.runContainer
+      return json(route, creationJobFixture('job-create-fixture'), 202)
     }
+    if (path === '/api/v1/docker/containers/create-jobs') return json(route, { code: 'FIXTURE_CREATE_ROUTE_DENIED', message: '创建路径只接受精确 POST' }, 503)
+    if (path === '/api/v1/docker/containers' && route.request().method() === 'POST') return json(route, { code: 'FIXTURE_LEGACY_CREATE_DENIED', message: '禁止回退同步创建' }, 503)
+    if (path === '/api/v1/jobs/job-create-fixture' && route.request().method() === 'GET' && createStarted !== undefined) return json(route, creationJobFixture('job-create-fixture', 'completed', createStarted))
+    if (path.startsWith('/api/v1/jobs/')) return json(route, { code: 'FIXTURE_UNKNOWN_JOB', message: '未授权的任务详情' }, 404)
+    if (path === '/api/v1/jobs' && new URL(route.request().url()).searchParams.get('type') === 'docker-container-create') return json(route, { jobs: [] })
     if (path === '/api/v1/jobs') return json(route, dockerImageJobs)
     if (path.startsWith('/api/v1/docker/compose/projects/') && path.includes('/actions/')) {
       const segments = path.split('/')
