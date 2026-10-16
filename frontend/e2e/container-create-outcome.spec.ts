@@ -43,8 +43,9 @@ const agentFailure: Reply = { status: 503, body: JSON.stringify({ code: 'AGENT_D
 // 严格内存 fixture：只放行逐次授权的一个 POST，所有其他 API 变更和未知路径失败关闭。
 // 不访问 Docker/NAS；事件流也由通用 fixture 的手动 EventSource 接管。
 async function fixture(page: Page) {
-  // 只固定 Date，保留浏览器计时器，axe 和正常控件过渡仍然运行。
-  await page.clock.setFixedTime(new Date(submittedTime))
+  // 日期与单调时钟自然前进；每次真实 fixture 读取返回新的采集版本。
+  // 相同采集时间不会续期；静默事件流不应把多次成功读取伪装成同一旧快照。
+  await page.clock.install({ time: new Date(submittedTime) })
   await installMockApi(page, { clock: false, manualRealtime: true })
   const requests: string[] = []
   const writes: Array<{ target: string; body: Record<string, unknown> }> = []
@@ -56,6 +57,7 @@ async function fixture(page: Page) {
   ])
   let permitted: { reply: Reply; gate?: Gate } | undefined
   let inventoryMode: InventoryMode = 'empty'
+  let inventoryTimestamp = Date.parse(submittedTime)
   let jobs: unknown = { jobs: [] }
   let job: unknown = creationJobFixture(jobId, 'queued')
   let jobStatus = 200
@@ -86,6 +88,7 @@ async function fixture(page: Page) {
     if (method === 'GET' && path === '/api/v1/jobs' && new URL(request.url()).search === '?type=docker-container-create') return route.fulfill({ json: jobs })
     if (method === 'GET' && path === inventoryPath) {
       if (inventoryMode === 'failure') return route.fulfill({ status: 503, json: { code: 'FIXTURE_INVENTORY_FAILED', message: '只读列表暂不可用' } })
+      inventoryTimestamp = Math.max(inventoryTimestamp + 1, await page.evaluate(() => Date.now()))
       const containers = inventoryMode === 'same-name' ? [{
         id: 'unrelated-same-name-fixture', name: submittedName, image: submittedImage,
         state: 'running', status: 'Up 3 hours', ports: [],
@@ -93,7 +96,7 @@ async function fixture(page: Page) {
         exitCode: 0, restartCount: 0, health: 'none', projectId: '', projectName: '', serviceName: '',
       }] : []
       return route.fulfill({ json: {
-        collectedAt: '2026-10-13T12:00:00Z', projects: [], containers,
+        collectedAt: new Date(inventoryTimestamp).toISOString(), projects: [], containers,
         engine: { serverVersion: 'fixture', operatingSystem: 'fixture', architecture: 'fixture', containers: containers.length, containersRunning: containers.length, containersStopped: 0, images: 2 },
       } })
     }
@@ -106,6 +109,11 @@ async function fixture(page: Page) {
     jobs(value: unknown) { jobs = value },
     job(value: unknown, status = 200) { job = value; jobStatus = status },
     inventory(mode: InventoryMode) { inventoryMode = mode },
+    async expectInventoryReady() {
+      const recovery = page.locator('.inventory-recovery')
+      if (inventoryMode === 'failure') await expect(recovery).toContainText('Docker 状态更新失败，显示上次数据')
+      else await expect(recovery).toHaveCount(0)
+    },
     allowOneCreate(reply: Reply = invalidJson, hold = false) {
       expect(permitted, '不能覆盖尚未消费的 fixture 提交许可').toBeUndefined()
       const gate: Gate | undefined = hold ? { transportFailure: 'abort' in reply, received: deferred(), release: deferred(), finished: deferred() } : undefined
@@ -205,7 +213,8 @@ async function captureState(page: Page) {
       root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
       scroll: { x: scrollX, y: scrollY },
       focus: { tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') },
-      semantic: { notice: panel.textContent, toasts: [...document.querySelectorAll('.el-message')].map(message => message.textContent) },
+      semantic: { notice: panel.textContent, inventoryRecovery: document.querySelector('.inventory-recovery')?.textContent ?? null,
+        toasts: [...document.querySelectorAll('.el-message')].map(message => message.textContent) },
       controls: selectors.flatMap(selector => [...panel.querySelectorAll<HTMLElement>(selector)].map((element, index) => {
         const bounds = element.getBoundingClientRect(), style = getComputedStyle(element)
         const range = document.createRange(); range.selectNodeContents(element)
@@ -231,6 +240,8 @@ async function captureState(page: Page) {
 // 只在真实浏览器执行时产出像素，PNG 与两份 JSON 都是 ui-captures 的直接子项。
 // 通过普通滚动分别取警告与提交区，不强行让整张长表单挤进同一视口。
 async function capture(page: Page, info: TestInfo, api: Fixture, stateName: string, region: 'notice' | 'actions') {
+  // 成功读取核验新清单；失败读取保留并核验真实恢复提示，不隐藏或移除提示。
+  await api.expectInventoryReady()
   await page.evaluate(() => document.fonts.ready)
   await (region === 'notice' ? notice(page) : notice(page).locator('.protection-actions')).scrollIntoViewIfNeeded()
   await settle(page)
