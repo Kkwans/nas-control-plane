@@ -6,12 +6,14 @@ import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import { composeActionStateMatches, dockerActionStateMatches, DockerActionOutcomeUnknownError } from '@/api/dockerActionOutcome'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
-import { NcpApiError, deleteDockerProject, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
+import { NcpApiError, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
 import ContainerCreateProtectionPanel from '@/components/ContainerCreateProtectionPanel.vue'
 import { useDockerContainerCreateJobs, containerCreateCanRelease, type ContainerCreateAdmission } from '@/composables/useDockerContainerCreateJobs'
+import ProjectDeletionProtectionPanel from '@/components/ProjectDeletionProtectionPanel.vue'
+import { useDockerProjectDeletionProtection, projectDeletionCanRelease, type ProjectDeletionAdmission } from '@/composables/useDockerProjectDeletionProtection'
 import ContainerActionProtectionPanel from '@/components/ContainerActionProtectionPanel.vue'
 import { useDockerContainerActionJobs, containerActionCanRelease, type ContainerActionAdmission } from '@/composables/useDockerContainerActionJobs'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
@@ -64,7 +66,9 @@ const containerJobs = useDockerContainerActionJobs()
 const { entries: containerAdmissions, blockedIds: blockedContainerIds } = containerJobs
 let containerActionOwner: symbol | null = null
 const projectActionPending = ref<{ projectId: string; action: ContainerAction } | null>(null)
-const projectDeletePending = ref<string | null>(null)
+const projectDeletion = useDockerProjectDeletionProtection()
+const { entries: projectDeletionEntries, blockedIds: blockedProjectDeletionIds } = projectDeletion
+const projectDeletePending = computed(() => projectDeletionEntries.value.find(entry => entry.phase === 'submitting')?.projectId ?? null)
 const projectActionErrors = ref<Record<string, ProjectActionError[]>>({})
 const projectContainerActionErrors = ref<Record<string, string>>({})
 const actionError = ref<string | null>(null)
@@ -206,6 +210,7 @@ function projectActionDisabled(project: DockerProject, action: ContainerAction) 
   )
 }
 function projectDeleteDisabledReason(project: DockerProject) {
+  if (blockedProjectDeletionIds.value.includes(project.id)) return '该项目删除等待确认或结果待核对，请保留防重复保护。'
   if (projectHasProtectedContainer(project)) return '项目含有操作结果待核对的容器，请先核对。'
   return dockerProjectDeleteDisabledReason(
     project,
@@ -454,35 +459,61 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
     }
   }
 }
+async function releaseProjectDeletion(entry: ProjectDeletionAdmission) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  await projectDeletion.check(entry, refreshContainerInventory)
+  if (!viewActive || !projectDeletion.alive()) return
+  const checked = projectDeletionEntries.value.find(item => item.token === entry.token)
+  if (!checked || !projectDeletionCanRelease(checked)) return
+  const version = checked.checkVersion
+  try {
+    await ElMessageBox.confirm('本轮清单读取成功不证明删除结果，项目注册状态可能仍需人工核对。解除仅允许本会话再次删除，不会补偿、重发或取消原操作；再次删除可能重复执行。确认自行承担风险并解除？', '解除项目删除保护', { confirmButtonText: '确认风险并解除', cancelButtonText: '保留保护', type: 'warning', customClass: 'ncp-container-action-confirmation' })
+    if (viewActive) projectDeletion.release(checked, version)
+  } catch (decision) {
+    if (decision !== 'cancel' && decision !== 'close') return
+    await nextTick()
+    if (viewActive && projectDeletion.alive() && projectDeletionEntries.value.some(item => item.token === checked.token && item.checkVersion === version) && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
+  }
+}
 async function confirmDeleteProject(project: DockerProject) {
   const disabledReason = projectDeleteDisabledReason(project)
-  if (disabledReason) {
-    ElMessage.info(disabledReason)
-    return
-  }
+  if (disabledReason) { ElMessage.info(disabledReason); return }
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const entry = projectDeletion.reserve(project)
+  if (!entry) return
+  const current = () => viewActive && projectDeletion.alive()
   try {
     await ElMessageBox.confirm(
-      `将删除项目“${project.name}”的已停止容器及 UGREEN 项目注册记录。镜像、卷、Compose 文件和工作目录不会删除。`,
+      `将删除项目“${entry.name}”的已停止容器及 UGREEN 项目注册记录。镜像、卷、Compose 文件和工作目录不会删除。`,
       '确认删除 Docker 项目',
-      { confirmButtonText: '删除项目', cancelButtonText: '取消', type: 'warning' },
+      { confirmButtonText: '删除项目', cancelButtonText: '取消', type: 'warning', customClass: 'ncp-container-action-confirmation' },
     )
-  } catch { return }
-  if (projectHasProtectedContainer(project)) return
-  projectDeletePending.value = project.id
+  } catch {
+    projectDeletion.cancel(entry)
+    await nextTick()
+    if (current() && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
+    return
+  }
+  if (!current()) { projectDeletion.cancel(entry); return }
+  const latest = allProjects.value.find(item => item.id === entry.projectId)
+  if (!latest || projectHasProtectedContainer(latest) || dockerProjectDeleteDisabledReason(latest, Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value))) { projectDeletion.cancel(entry); return }
   actionError.value = null
-  try {
-    await deleteDockerProject(project)
-    if (selectedProject.value?.id === project.id) await updateSelectedProject(null)
-    const refreshResult = await systemStore.refresh({ inventory: true, force: true })
-    if (refreshResult.failed.length) ElMessage.warning(`项目“${project.name}”已删除，但状态刷新失败，请手动重新加载。`)
-    else ElMessage.success(`项目“${project.name}”已删除；镜像、卷和配置文件均已保留。`)
-  } catch (error) {
-    const message = errorMessage(error, '项目删除失败，未确认的资源不会继续删除。')
+  const outcome = await projectDeletion.dispatch(entry)
+  if (!current() || !outcome) return
+  if (outcome === 'deleted') {
+    // 先保留已确认事实；路由等待或刷新失败不能改写删除回执。
+    ElMessage.success(`项目“${entry.name}”已删除；镜像、卷和配置文件均已保留。`)
+    if (selectedProject.value?.id === entry.projectId) {
+      try { await updateSelectedProject(null) } catch { /* 路由失败不改写删除事实。 */ }
+    }
+    if (!current()) return
+    let refreshed = false
+    try { refreshed = await refreshContainerInventory() } catch { /* 独立只读刷新。 */ }
+    if (current() && !refreshed) ElMessage.warning(`项目“${entry.name}”已删除，但状态刷新失败，请手动重新加载。`)
+  } else {
+    const message = outcome === 'rejected' ? '删除请求在执行前被明确拒绝，未执行本次删除。请核对项目状态后再操作。' : '项目删除结果未知，可能已删除部分或全部资源。防重复保护已保留，请先只读核对。'
     actionError.value = message
     ElMessage.error(message)
-    await systemStore.refresh({ inventory: true, force: true })
-  } finally {
-    projectDeletePending.value = null
   }
 }
 function performSelectedProjectAction(action: ContainerAction) {
@@ -556,6 +587,7 @@ onMounted(() => {
 
     <ContainerCreateProtectionPanel :entry="createAdmission" :result="createResult" @check="entry => createJobs.check(entry, refreshContainerInventory)" @release="releaseCreateProtection" />
 
+    <ProjectDeletionProtectionPanel :entries="projectDeletionEntries" @check="entry => projectDeletion.check(entry, refreshContainerInventory)" @release="releaseProjectDeletion" />
     <ContainerActionProtectionPanel :entries="containerAdmissions" @check="entry => containerJobs.check(entry, refreshContainerInventory)" @release="releaseContainerProtection" />
 
     <section v-if="inventory && (systemStore.inventoryErrorCode || systemStore.inventoryStale)" class="inventory-recovery panel" role="status">
