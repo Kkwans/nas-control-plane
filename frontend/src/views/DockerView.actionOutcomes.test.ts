@@ -91,9 +91,10 @@ function button(label: string) { return host.querySelector<HTMLButtonElement>(`b
 function posts() { return fetcher.mock.calls.filter(([, options]) => options?.method === 'POST') }
 function receipt(state = 'running') { return { containerId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'demo-web', action: 'restart', state } }
 function projectReceipt(state = 'running') { return { projectId: 'demo', kind: 'standalone', action: 'restart', state, completed: true, containers: [{ ...receipt(state), success: true }] } }
+function projectJob(action = 'restart', state?: string) { return { ...actionJob(), id: 'project-job', type: `docker-project-${action}`, reference: 'standalone', ...(state ? { status: state === 'running' ? 'completed' : 'failed', progress: state === 'running' ? 100 : 0, completedAt: collectedAt, ...(state === 'running' ? {} : { errorCode: 'DOCKER_PROJECT_STATE_MISMATCH' }), projectActionResult: { projectId: 'standalone', kind: 'standalone', action, items: [{ containerId: 'a'.repeat(64), outcome: state === 'running' ? 'succeeded' : 'state-mismatch', state, ...(state === 'running' ? {} : { errorCode: 'DOCKER_CONTAINER_STATE_MISMATCH' }) }] } } : {}) } }
 function actionJob() { return { id: 'job-1', type: 'docker-container-restart', reference: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', status: 'queued', artifactState: 'unknown', cancellable: false, message: '已排队', progress: 0, createdAt: collectedAt, updatedAt: collectedAt, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} } }
 async function ready(container = true) {
-  fetcher.mockImplementation(async (url, options) => options?.method === 'POST' ? (container ? response(actionJob(), 202) : response(projectReceipt())) : String(url).includes('/jobs/') ? response(actionJob()) : response(inventory()))
+  fetcher.mockImplementation(async (url, options) => options?.method === 'POST' ? response(container ? actionJob() : projectJob(), 202) : String(url).includes('/jobs/') ? response(container ? actionJob() : projectJob()) : response(inventory()))
   await mount()
   if (container) { selectContainers(); await settle() }
 }
@@ -135,11 +136,11 @@ describe('DockerView 生命周期回执', () => {
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(1)
     expect(posts()[0]![1]?.redirect).toBe('error')
-    if (!container) expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'demo', kind: 'standalone', containerIds: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], action: 'restart' })
+    if (!container) expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ containerIds: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] })
     if (container) { expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成')); expect(ElMessage.success).not.toHaveBeenCalled() }
-    else expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('读回时'))
+    else { expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成')); expect(ElMessage.success).not.toHaveBeenCalled() }
   })
-  it.each([true, false])('状态未达目标保留警告，刷新成功不伪装完成 container=%s', async (container) => {
+  it.each([true, false])('旧同步回执不当作异步完成，保留警告与保护 container=%s', async (container) => {
     await ready(container)
     fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response(container ? receipt('stopped') : projectReceipt('stopped')) : response(inventory()))
     button(container ? '重启容器' : '重启项目 demo-project').click(); await settle()
@@ -147,7 +148,8 @@ describe('DockerView 生命周期回执', () => {
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(ElMessage.warning).toHaveBeenCalled()
     expect(host.querySelector('.action-error')?.textContent).toContain('只读核对')
-    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(container ? 1 : 2)
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(1)
+    if (!container) expect(button('重启项目 demo-project').disabled).toBe(true)
   })
   it.each([true, false])('未知回执与刷新失败分别保留且不自动重试 container=%s', async (container) => {
     await ready(container)
@@ -159,7 +161,15 @@ describe('DockerView 生命周期回执', () => {
     expect(posts()).toHaveLength(1)
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(host.querySelector('.action-error')?.textContent).toContain('可能已经执行')
-    if (!container) expect(host.querySelector('.action-error')?.textContent).toContain('状态刷新失败')
+    if (!container) {
+      const check = [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === '只读核对任务与容器')!
+      check.click(); await settle()
+      const protection = host.querySelector('[aria-label="项目操作保护状态"]')!
+      expect(protection.textContent).toContain('接收结果未知')
+      expect(protection.textContent).toContain('容器清单未成功刷新')
+      expect(protection.textContent).toContain('任务读取失败')
+      expect(button('重启项目 demo-project').disabled).toBe(true)
+    }
     expect(host.textContent).not.toContain('private-network-secret')
     await vi.advanceTimersByTimeAsync(15_000); await settle()
     expect(posts()).toHaveLength(1)
@@ -173,7 +183,7 @@ describe('DockerView 生命周期回执', () => {
     invalidateSession(); beginSession(); confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(0)
     expect(ElMessage.success).not.toHaveBeenCalled()
-    if (container) { app!.unmount(); app = undefined; await mount(); selectContainers(); await settle() }
+    app!.unmount(); app = undefined; await mount(); if (container) selectContainers(); await settle()
     button(label).click(); await settle()
     expect(posts()).toHaveLength(1)
   })
@@ -338,22 +348,23 @@ describe.each(['compose', 'standalone'] as const)('项目确认范围与取消�
       expect(message).toBe(`将通过 Compose ${label}项目“demo-project”。确认前最近一次清单观察到该项目 1 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`)
       expect(options).toEqual({ ...commonOptions, customClass: 'ncp-compose-action-confirmation' })
     } else {
-      expect(message).toBe(action === 'stop'
+      expect(message).toContain(action === 'stop'
         ? '将停止项目“demo-project”的 1 个容器。容器会停止，但镜像、卷、Compose 文件和工作目录不会删除。'
         : '将重启项目“demo-project”的 1 个容器。容器会逐项重启，镜像、卷、Compose 文件和工作目录不会删除。')
-      expect(options).toEqual(commonOptions)
+      expect(message).toContain('冻结操作：'); expect(message).toContain('a'.repeat(64)); expect(message).toContain('已接收不代表完成')
+      expect(options).toEqual({ ...commonOptions, customClass: 'ncp-container-action-confirmation' })
     }
     fetcher.mockImplementation(async (_url, init) => {
-      if (init?.method !== 'POST') return response(kind === 'compose' ? composeInventory() : inventory())
+      if (init?.method !== 'POST') return response(String(_url).includes('/jobs/') ? projectJob(action) : kind === 'compose' ? composeInventory() : inventory())
       const state = action === 'stop' ? 'stopped' : 'running'
       return response(kind === 'compose'
         ? { ...composeResult(), action, state, services: [{ name: 'web', state: action === 'stop' ? 'exited' : 'running', running: action !== 'stop' }] }
-        : { ...projectReceipt(state), action, containers: [{ ...receipt(state), action, success: true }] })
+        : projectJob(action), kind === 'compose' ? 200 : 202)
     })
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(1)
-    expect(JSON.parse(String(posts()[0]![1]?.body)).action).toBe(action)
-    expect(ElMessage.success).toHaveBeenCalledOnce()
+    if (kind === 'compose') { expect(JSON.parse(String(posts()[0]![1]?.body)).action).toBe(action); expect(ElMessage.success).toHaveBeenCalledOnce() }
+    else { expect(posts()[0]![0]).toBe(`/api/v1/docker/projects/standalone/action-jobs/${action}`); expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成')) }
   })
 
   describe.each(['cancel', 'close'])('%s 不代表同意', (decision) => {
@@ -374,20 +385,19 @@ describe.each(['compose', 'standalone'] as const)('项目确认范围与取消�
 })
 
 
-it.each(['mismatch', 'all-target-incomplete'])('独立容器组列表两处保留核对标题 %s', async (mode) => {
+it.each(['mismatch', 'all-target-incomplete'])('独立容器组异步结果保留核对与保护 %s', async (mode) => {
   await ready(false)
-  fetcher.mockImplementation(async (_url, options) => options?.method === 'POST'
-    ? response({ ...projectReceipt(mode === 'mismatch' ? 'stopped' : 'running'), completed: false })
-    : response(inventory()))
+  fetcher.mockImplementation(async (url, options) => options?.method === 'POST'
+    ? response(projectJob(), 202)
+    : String(url).includes('/jobs/') ? response(mode === 'mismatch' ? projectJob('restart', 'stopped') : { ...projectJob('restart', 'running'), projectActionResult: undefined }) : response(inventory()))
   button('重启项目 demo-project').click(); await settle()
-  for (const selector of ['.project-row-feedback', '.docker-mobile-list .project-action-errors']) {
-    const feedback = host.querySelector(selector)!
-    expect(feedback.querySelector('strong')?.textContent).toBe('项目操作需核对')
-    expect(feedback.querySelector('li')?.textContent).toContain(mode === 'mismatch' ? '读回时尚未达到目标状态' : '项目回执未确认完成')
-  }
+  const feedback = host.querySelector('[aria-label="项目操作保护状态"]')!
+  expect(feedback.textContent).toContain(mode === 'mismatch' ? '该次调用回读与目标状态不符' : '任务读取失败')
+  expect(button('重启项目 demo-project').disabled).toBe(true)
   expect(ElMessage.success).not.toHaveBeenCalled()
   expect(posts()).toHaveLength(1)
 })
+
 
 function focusMockDialog() {
   const dialogControl = document.createElement('button')

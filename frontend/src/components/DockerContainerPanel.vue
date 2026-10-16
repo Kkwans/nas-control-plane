@@ -18,6 +18,7 @@ const props = defineProps<{
   containers: DockerContainer[]
   query: string
   stateFilter: ContainerStateFilter
+  mutationsBlocked?: boolean
   blockedContainerIds?: string[]
   actionPending: string | null
   pageSize: number
@@ -90,14 +91,14 @@ function stateTone(container: DockerContainer) {
         <small v-if="!publicPorts(container).length">无公开端口</small>
       </div>
       <div class="container-actions">
-        <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" v-if="container.state !== 'running'" content="启动容器" placement="top">
-          <ListIconButton :icon="Play" label="启动容器" :loading="pending(container.id, 'start')" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'start')" />
+        <ElTooltip :trigger-keys="[]" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" v-if="container.state !== 'running'" content="启动容器" placement="top">
+          <ListIconButton :icon="Play" label="启动容器" :loading="pending(container.id, 'start')" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'start')" />
         </ElTooltip>
-        <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" v-else content="停止容器" placement="top">
-          <ListIconButton :icon="Square" label="停止容器" tone="danger" :loading="pending(container.id, 'stop')" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'stop')" />
+        <ElTooltip :trigger-keys="[]" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" v-else content="停止容器" placement="top">
+          <ListIconButton :icon="Square" label="停止容器" tone="danger" :loading="pending(container.id, 'stop')" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'stop')" />
         </ElTooltip>
-        <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" content="重启容器" placement="top">
-          <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id)) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
+        <ElTooltip :trigger-keys="[]" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :append-to="tooltipAppendTo" content="重启容器" placement="top">
+          <ListIconButton :icon="RotateCcw" label="重启容器" :loading="pending(container.id, 'restart')" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id)) || container.state !== 'running'" @click="emit('action', container.id, 'restart')" />
         </ElTooltip>
         <ElTooltip :trigger-keys="[]" :append-to="tooltipAppendTo" content="查看容器详情与日志" placement="top">
           <ListIconButton :icon="Info" label="查看容器详情与日志" @click="emit('details', container)" />
@@ -126,9 +127,9 @@ function stateTone(container: DockerContainer) {
         <div><dt>公开端口</dt><dd>{{ publicPorts(container).map((port) => port.label).join('、') || '无' }}</dd></div>
       </dl>
       <div class="mobile-actions">
-        <button v-if="container.state !== 'running'" type="button" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'start')"><Play :size="16" />启动</button>
-        <button v-else class="danger" type="button" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'stop')"><Square :size="15" />停止</button>
-        <button type="button" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id)) || container.state !== 'running'" @click="emit('action', container.id, 'restart')"><RotateCcw :size="16" />重启</button>
+        <button v-if="container.state !== 'running'" type="button" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'start')"><Play :size="16" />启动</button>
+        <button v-else class="danger" type="button" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" @click="emit('action', container.id, 'stop')"><Square :size="15" />停止</button>
+        <button type="button" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id)) || container.state !== 'running'" @click="emit('action', container.id, 'restart')"><RotateCcw :size="16" />重启</button>
         <button type="button" @click="emit('details', container)"><Info :size="16" />详情</button>
       </div>
     </article>

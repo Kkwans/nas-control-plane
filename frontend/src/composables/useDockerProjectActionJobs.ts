@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, shallowRef } from 'vue'
 import type { DockerProjectAction, DockerProjectActionJobSnapshot, DockerProjectActionJobItem } from '@/api/dockerProjectActionJob'
 import { requestDockerProjectActionJobs, isDockerProjectActionAdmissionRejected, requestDockerProjectActionJob, requestDockerProjectActionJobStatus } from '@/api/dockerProjectActionJob'
+import { captureDockerMutationFence } from './dockerMutationFence'
 import { captureSession } from '@/session/sessionLifecycle'
 
 export interface ProjectActionCompletion {
@@ -98,6 +99,7 @@ function evidence(job: DockerProjectActionJobSnapshot, ids: readonly string[], a
 /** 会话拥有唯一项目操作槽；scope 只拥有自己的未派发确认。 */
 export function useDockerProjectActionJobs() {
   const session = captureSession(), slot = sessionRegistry(session)
+  const fence = captureDockerMutationFence(session)
   const reservations = new Set<symbol>()
   let disposed = false
   const alive = () => !disposed && !session.signal.aborted
@@ -106,10 +108,11 @@ export function useDockerProjectActionJobs() {
     const owned = current(handle)
     if (owned) slot.value = Object.freeze({ ...owned, ...changes })
   }
-  function remove(handle: Handle) { if (current(handle)) { reservations.delete(tokenOf(handle)); slot.value = null } }
+  function remove(handle: Handle) { if (current(handle)) { fence.release('standalone', tokenOf(handle)); reservations.delete(tokenOf(handle)); slot.value = null } }
   function reserve(containerIds: readonly string[], action: DockerProjectAction) {
     if (!alive() || slot.value || !['start', 'stop', 'restart'].includes(action) || !Array.isArray(containerIds) || containerIds.length < 1 || containerIds.length > 128 || new Set(containerIds).size !== containerIds.length || Array.from(containerIds).some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) return null
     const entry: ProjectActionAdmission = Object.freeze({ token: Symbol(), generation: session.generation, action, containerIds: Object.freeze([...containerIds]), reservedAt: Date.now(), phase: 'confirming', checking: false, checkVersion: 0, completionVersion: 0, checked: false, lastReadSucceeded: false, inventoryChecked: false, observedActive: false, notice: '' })
+    if (!fence.reserve('standalone', entry.token)) return null
     reservations.add(entry.token); slot.value = entry
     return entry
   }
@@ -118,7 +121,7 @@ export function useDockerProjectActionJobs() {
   }
   async function dispatch(handle: Handle): Promise<'accepted' | 'rejected' | 'unknown' | undefined> {
     const owned = current(handle)
-    if (!alive() || !owned || !reservations.has(owned.token) || owned.phase !== 'confirming') return
+    if (!alive() || !owned || !fence.owns('standalone', owned.token) || !reservations.has(owned.token) || owned.phase !== 'confirming') return
     update(handle, { phase: 'submitting' })
     reservations.delete(owned.token)
     try {
@@ -177,5 +180,5 @@ export function useDockerProjectActionJobs() {
     if (owned && reservations.has(owned.token) && owned.phase === 'confirming') cancel(owned.token)
     reservations.clear()
   })
-  return { entry: computed(() => slot.value), blocked: computed(() => slot.value !== null), reserve, cancel, dispatch, check, release, consumeCompletion, alive }
+  return { entry: computed(() => slot.value), blocked: computed(() => slot.value !== null || fence.standaloneBlocked.value), reserve, cancel, dispatch, check, release, consumeCompletion, alive }
 }

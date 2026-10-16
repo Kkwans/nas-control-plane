@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, shallowRef } from 'vue'
 import type { DockerContainerCreateInput } from '@/api/system'
 import { requestDockerContainerCreateJobs, isDockerContainerCreateAdmissionRejected, requestDockerContainerCreateJob, requestDockerContainerCreateJobStatus } from '@/api/dockerContainerCreateJob'
+import { captureDockerMutationFence } from './dockerMutationFence'
 import { captureSession } from '@/session/sessionLifecycle'
 
 export interface ContainerCreateCompletion {
@@ -79,6 +80,7 @@ function evidence(job: ContainerCreateJobEvidence, runContainer: boolean, jobId?
 /** 会话拥有唯一创建槽；scope 只拥有自己的未派发确认。 */
 export function useDockerContainerCreateJobs() {
   const session = captureSession(), slot = sessionRegistry(session)
+  const fence = captureDockerMutationFence(session)
   const reservations = new Set<symbol>()
   let disposed = false
   const alive = () => !disposed && !session.signal.aborted
@@ -87,10 +89,11 @@ export function useDockerContainerCreateJobs() {
     const owned = current(handle)
     if (owned) slot.value = Object.freeze({ ...owned, ...changes })
   }
-  function remove(handle: Handle) { if (current(handle)) { reservations.delete(tokenOf(handle)); slot.value = null } }
+  function remove(handle: Handle) { if (current(handle)) { fence.release('create', tokenOf(handle)); reservations.delete(tokenOf(handle)); slot.value = null } }
   function reserve(runContainer: boolean) {
     if (!alive() || slot.value || typeof runContainer !== 'boolean') return null
     const entry: ContainerCreateAdmission = Object.freeze({ token: Symbol(), generation: session.generation, runContainer, reservedAt: Date.now(), phase: 'confirming', checking: false, checkVersion: 0, completionVersion: 0, checked: false, lastReadSucceeded: false, inventoryChecked: false, observedActive: false, notice: '' })
+    if (!fence.reserve('create', entry.token)) return null
     reservations.add(entry.token); slot.value = entry
     return entry
   }
@@ -99,7 +102,7 @@ export function useDockerContainerCreateJobs() {
   }
   async function dispatch(handle: Handle, input: DockerContainerCreateInput): Promise<'accepted' | 'rejected' | 'unknown' | undefined> {
     const owned = current(handle)
-    if (!alive() || !owned || !reservations.has(owned.token) || owned.phase !== 'confirming' || input.runContainer !== owned.runContainer) return
+    if (!alive() || !owned || !fence.owns('create', owned.token) || !reservations.has(owned.token) || owned.phase !== 'confirming' || input.runContainer !== owned.runContainer) return
     update(handle, { phase: 'submitting' })
     reservations.delete(owned.token)
     try {
@@ -158,5 +161,5 @@ export function useDockerContainerCreateJobs() {
     if (owned && reservations.has(owned.token) && owned.phase === 'confirming') cancel(owned.token)
     reservations.clear()
   })
-  return { entry: computed(() => slot.value), blocked: computed(() => slot.value !== null), reserve, cancel, dispatch, check, release, consumeCompletion, alive }
+  return { entry: computed(() => slot.value), blocked: computed(() => slot.value !== null || fence.otherMutationsBlocked.value), reserve, cancel, dispatch, check, release, consumeCompletion, alive }
 }

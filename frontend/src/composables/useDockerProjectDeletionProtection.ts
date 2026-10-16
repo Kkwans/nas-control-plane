@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, shallowRef } from 'vue'
 import { deleteDockerProject, isDockerProjectDeleteRejected } from '@/api/docker'
 import type { DockerProject } from '@/api/system'
+import { captureDockerMutationFence } from './dockerMutationFence'
 import { captureSession } from '@/session/sessionLifecycle'
 
 export interface ProjectDeletionAdmission {
@@ -31,6 +32,7 @@ export function projectDeletionCanRelease(entry: ProjectDeletionAdmission) {
 /** 派发后的保护属于原登录会话，而不是路由或清单中的对象。 */
 export function useDockerProjectDeletionProtection() {
   const session = captureSession()
+  const fence = captureDockerMutationFence(session)
   const entries = sessionRegistry(session)
   const reservations = new Set<symbol>()
   let disposed = false
@@ -44,11 +46,14 @@ export function useDockerProjectDeletionProtection() {
   }
   function remove(entry: ProjectDeletionAdmission) {
     if (!owns(entry)) return
+    fence.release('delete', entry.token)
+    reservations.delete(entry.token)
     const next = new Map(entries.value); next.delete(entry.projectId); entries.value = next
   }
   function reserve(project: Pick<DockerProject, 'id' | 'name' | 'kind'>) {
     if (!alive() || !project.id || entries.value.has(project.id)) return null
     const entry: ProjectDeletionAdmission = Object.freeze({ token: Symbol(), projectId: project.id, name: project.name, kind: project.kind, phase: 'confirming', checking: false, checkVersion: 0, inventoryChecked: false, notice: '' })
+    if (!fence.reserve('delete', entry.token)) return null
     reservations.add(entry.token)
     entries.value = new Map(entries.value).set(entry.projectId, entry)
     return entry
@@ -60,7 +65,7 @@ export function useDockerProjectDeletionProtection() {
     }
   }
   async function dispatch(entry: ProjectDeletionAdmission) {
-    if (!alive() || !reservations.has(entry.token) || !owns(entry) || entries.value.get(entry.projectId)?.phase !== 'confirming') return
+    if (!alive() || !reservations.has(entry.token) || !fence.owns('delete', entry.token) || !owns(entry) || entries.value.get(entry.projectId)?.phase !== 'confirming') return
     reservations.delete(entry.token)
     update(entry, { phase: 'submitting' })
     try {

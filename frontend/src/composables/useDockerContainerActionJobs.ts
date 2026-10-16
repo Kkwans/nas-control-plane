@@ -2,6 +2,7 @@ import { computed, onScopeDispose, shallowRef } from 'vue'
 import type { ContainerAction, JobSnapshot } from '@/api/system'
 import { requestJobs } from '@/api/docker'
 import { isDockerContainerActionAdmissionRejected, requestDockerContainerActionJob, requestDockerContainerActionJobStatus } from '@/api/dockerContainerActionJob'
+import { captureDockerMutationFence } from './dockerMutationFence'
 import { captureSession } from '@/session/sessionLifecycle'
 
 export interface ContainerActionAdmission {
@@ -50,6 +51,7 @@ export function containerActionAdmissionLabel(entry: ContainerActionAdmission) {
 /** 登录会话拥有锁；视图仅拥有确认框与提示，不拥有已派发操作。 */
 export function useDockerContainerActionJobs() {
   const session = captureSession()
+  const fence = captureDockerMutationFence(session)
   const entries = sessionRegistry(session)
   let disposed = false
   const alive = () => !disposed && !session.signal.aborted
@@ -60,19 +62,23 @@ export function useDockerContainerActionJobs() {
   }
   function remove(entry: ContainerActionAdmission) {
     if (!owns(entry)) return
+    fence.release('container', entry.token)
+    reservations.delete(entry.token)
     const next = { ...entries.value }; delete next[entry.containerId]; entries.value = next
   }
   function reserve(containerId: string, action: ContainerAction, name: string) {
     if (!alive() || entries.value[containerId] || !/^[a-f0-9]{64}$/.test(containerId) || !['start', 'stop', 'restart'].includes(action)) return null
     const entry: ContainerActionAdmission = Object.freeze({ token: Symbol(), containerId, action, name, phase: 'confirming', checking: false, checkVersion: 0, checked: false, inventoryChecked: false, observedActive: false, notice: '' })
+    if (!fence.reserve('container', entry.token)) return null
     entries.value = { ...entries.value, [containerId]: entry }
     return entry
   }
   function cancel(entry: ContainerActionAdmission) {
-    if (entries.value[entry.containerId]?.phase === 'confirming') remove(entry)
+    if (reservations.has(entry.token) && entries.value[entry.containerId]?.phase === 'confirming') remove(entry)
   }
   async function dispatch(entry: ContainerActionAdmission): Promise<'accepted' | 'rejected' | 'unknown' | undefined> {
-    if (!alive() || !owns(entry) || entries.value[entry.containerId]?.phase !== 'confirming') return
+    if (!alive() || !reservations.has(entry.token) || !fence.owns('container', entry.token) || !owns(entry) || entries.value[entry.containerId]?.phase !== 'confirming') return
+    reservations.delete(entry.token)
     update(entry, { phase: 'submitting' })
     try {
       const job = await requestDockerContainerActionJob(entry.containerId, entry.action)
@@ -124,6 +130,7 @@ export function useDockerContainerActionJobs() {
   onScopeDispose(() => {
     disposed = true
     for (const entry of Object.values(entries.value)) if (entry.phase === 'confirming' && reservations.has(entry.token)) cancel(entry)
+    reservations.clear()
   })
   // 仅释放本实例未派发的确认，不能释放别的视图拥有的确认。
   const reservations = new Set<symbol>()
