@@ -21,6 +21,31 @@ function button(text: string) { return [...host.querySelectorAll('button')].find
 afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
   it.each([
+    ['compose-start', 'Compose 启动'], ['compose-stop', 'Compose 停止'], ['compose-restart', 'Compose 重启'],
+  ])('%s 的完成记录仍需核对详情和当前状态，无进度、取消或重试操作', async (type, label) => {
+    await mount([job({ type, status: 'completed', reference: 'compose-project', cancellable: true })])
+    expect(host.textContent).toContain(label)
+    expect(host.textContent).toContain('任务记录标记为已完成')
+    expect(host.textContent).toContain('任务详情中的操作回执与项目当前状态')
+    expect(host.textContent).toContain('仅为当次观察数量，不代表配置服务完整性')
+    expect(host.textContent).not.toContain('读回状态符合目标')
+    button('查看详情').click(); await nextTick()
+    expect(host.textContent).toContain('此任务不支持取消')
+    expect(host.querySelector('progress')).toBeNull()
+    expect(host.querySelector('.task-cancel')).toBeNull()
+    expect([...host.querySelectorAll('button')].some(item => /重试|重新提交/.test(item.textContent ?? ''))).toBe(false)
+    button('刷新任务').click(); await nextTick()
+    expect(refresh).toHaveBeenCalledOnce(); expect(requestCancel).not.toHaveBeenCalled()
+  })
+  it.each(['compose-start', 'compose-stop', 'compose-restart'])('%s 保存中不能展示完成证据', async type => {
+    await mount([job({ type, status: 'completed', persistenceStatus: 'pending', cancellable: true })])
+    expect(host.textContent).toContain('任务结果正在保存，尚未确认最终结果')
+    expect(host.textContent).not.toContain('任务记录标记为已完成')
+    expect(host.textContent).not.toContain('当次观察数量')
+    expect(host.querySelector('progress')).toBeNull()
+    expect(host.querySelector('.task-cancel')).toBeNull()
+  })
+  it.each([
     ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
   ])('%s 无逐容器回执时不承诺当前健康，无进度和取消控件', async (type, label) => {
     await mount([job({ type, status: 'completed', reference: 'standalone', cancellable: true })])

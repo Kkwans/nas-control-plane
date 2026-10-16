@@ -20,6 +20,9 @@ export function jobStateLabel(job: JobSnapshot): string {
   return jobStatusOptions.find((option) => option.value === jobState(job))!.label
 }
 export function jobTypeLabel(type: string): string {
+  if (type === 'compose-start') return 'Compose 启动'
+  if (type === 'compose-stop') return 'Compose 停止'
+  if (type === 'compose-restart') return 'Compose 重启'
   if (type === 'docker-project-start') return '项目启动'
   if (type === 'docker-project-stop') return '项目停止'
   if (type === 'docker-project-restart') return '项目重启'
@@ -48,11 +51,20 @@ export function projectActionStateDescription(type: string, state: string): stri
   if (state === 'interrupted') return '项目执行结果未确认，部分容器操作可能已执行；请只读核对各容器实际状态，勿重复提交。'
   return ''
 }
+/** 列表仅描述保存摘要；完成证据与观察数量须另行核对详情，不推断配置完整性。 */
+export function composeActionStateDescription(type: string, state: string): string {
+  if (!/^compose-(start|stop|restart)$/.test(type)) return ''
+  if (state === 'queued' || state === 'running') return 'Compose 项目操作任务已接收，尚未确认完成。'
+  if (state === 'completed') return '任务记录标记为已完成；请核对任务详情中的操作回执与项目当前状态。回执数量仅为当次观察数量，不代表配置服务完整性，也不保证健康、持续状态或重启次数。'
+  if (state === 'failed' || state === 'interrupted') return 'Compose 项目操作结果未确认，操作可能已执行；请只读核对实际状态，勿重复提交。'
+  return ''
+}
 export function jobStateDescription(job: JobSnapshot): string {
   const state = jobState(job)
   if (state === 'persisting') return '任务结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
   if (job.type === 'docker-container-create') return containerCreateStateDescription(state)
+  if (/^compose-(start|stop|restart)$/.test(job.type)) return composeActionStateDescription(job.type, state)
   if (/^docker-project-(start|stop|restart)$/.test(job.type)) return projectActionStateDescription(job.type, state)
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
   if (/^docker-container-(start|stop|restart)$/.test(job.type)) {

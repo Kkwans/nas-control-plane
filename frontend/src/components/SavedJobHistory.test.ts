@@ -17,6 +17,37 @@ beforeEach(() => { beginSession(); vi.resetAllMocks(); api.read.mockResolvedValu
 afterEach(() => { app?.unmount(); host?.remove() })
 describe('保存历史只读呈现', () => {
   it.each([
+    ['compose-start', 'Compose 启动'], ['compose-stop', 'Compose 停止'], ['compose-restart', 'Compose 重启'],
+  ])('无 Compose 记录也可用 %s 中文类型精确筛选', async (type, label) => {
+    await mount()
+    const select = host.querySelector('select')!
+    expect(select.querySelector(`option[value="${type}"]`)?.textContent).toBe(label)
+    select.value = type; select.dispatchEvent(new Event('change')); await flush()
+    expect(api.read.mock.calls.at(-1)?.[0]).toEqual({ type, limit: 50 })
+  })
+  it.each([
+    ['queued', '尚未确认完成'], ['running', '尚未确认完成'], ['completed', '任务记录标记为已完成'],
+    ['failed', '操作可能已执行'], ['interrupted', '操作结果未确认'],
+  ])('Compose 历史 %s 仅显示摘要，不推断观察结果或当前状态', async (status, description) => {
+    api.read.mockResolvedValue({ source: 'persisted', items: ['start', 'stop', 'restart'].map(action => ({ ...item(status), id: action, type: `compose-${action}`, reference: 'compose-project' })) })
+    await mount()
+    const records = [...host.querySelectorAll('.history-record')]
+    expect(records).toHaveLength(3)
+    for (const record of records) {
+      expect(record.textContent).toContain('保存记录：')
+      expect(record.textContent).toContain(description)
+      if (status === 'completed') {
+        expect(record.textContent).toContain('任务详情中的操作回执与项目当前状态')
+        expect(record.textContent).toContain('仅为当次观察数量，不代表配置服务完整性')
+        expect(record.textContent).toContain('不保证健康、持续状态或重启次数')
+      }
+      expect(record.textContent).not.toContain('读回状态符合目标')
+      expect(record.textContent).not.toContain('composeActionResult')
+      expect(record.querySelector('progress')).toBeNull()
+      expect(record.querySelector('button')).toBeNull()
+    }
+  })
+  it.each([
     ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
   ])('无项目记录也可用 %s 中文类型精确筛选', async (type, label) => {
     await mount()

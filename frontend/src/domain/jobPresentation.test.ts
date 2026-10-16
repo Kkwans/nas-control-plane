@@ -152,3 +152,32 @@ describe('独立容器项目操作任务展示', () => {
     }
   })
 })
+
+
+describe('Compose 项目操作任务展示', () => {
+  it.each([
+    ['compose-start', 'Compose 启动'], ['compose-stop', 'Compose 停止'], ['compose-restart', 'Compose 重启'],
+  ])('%s 仅描述保存摘要，保留观察边界与保存优先级', (type, label) => {
+    expect(jobTypeLabel(type)).toBe(label)
+    for (const status of ['queued', 'running'] as const) expect(jobStateDescription(job({ type, status }))).toContain('尚未确认完成')
+    const completed = jobStateDescription(job({ type, status: 'completed' }))
+    expect(completed).toContain('任务记录标记为已完成')
+    expect(completed).toContain('任务详情中的操作回执与项目当前状态')
+    expect(completed).toContain('仅为当次观察数量，不代表配置服务完整性')
+    expect(completed).toContain('不保证健康、持续状态或重启次数')
+    expect(completed).not.toContain('读回状态符合目标')
+    for (const status of ['failed', 'interrupted'] as const) {
+      expect(jobStateDescription(job({ type, status }))).toContain('操作可能已执行')
+      expect(jobStateDescription(job({ type, status }))).toContain('只读核对实际状态，勿重复提交')
+    }
+    expect(jobStateDescription(job({ type, status: 'completed', cancellationStatus: 'unknown' }))).toContain('结果未确认')
+    for (const status of ['queued', 'running', 'completed', 'failed', 'interrupted'] as const) {
+      const pending = job({ type, status, persistenceStatus: 'pending', cancellable: true })
+      expect(jobState(pending)).toBe('persisting')
+      expect(jobStateDescription(pending)).toBe('任务结果正在保存，尚未确认最终结果。')
+      expect(isTerminalJob(pending)).toBe(false)
+      expect(canRequestJobCancellation(pending)).toBe(false)
+      expect(canRequestJobCancellation(job({ type, status, cancellable: true }))).toBe(false)
+    }
+  })
+})

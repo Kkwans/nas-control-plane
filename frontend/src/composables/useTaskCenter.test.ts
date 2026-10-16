@@ -37,6 +37,7 @@ afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealT
 describe('任务中心观察与竞争', () => {
   it.each([
     ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
+    ['compose-start', 'Compose 启动'], ['compose-stop', 'Compose 停止'], ['compose-restart', 'Compose 重启'],
   ])('%s 复用中文类型筛选和搜索且不可取消', async (type, label) => {
     const project = job({ id: 'project-job', type, reference: 'standalone' })
     api.list.mockResolvedValue(list([project, job()]))
