@@ -275,3 +275,45 @@
 58PNG按真实散列分52唯一组，逐组人工检查，6张字节相同图未重复计作独立视觉状态。174几何快照、1140字段无文字/裁剪越界；134次可达按钮探测共670点全命中，402组按钮frame五点也通过。新保护面板/风险框最小44×44；释放后既有桌面40px/移动42px基线明确披露，未冒称全部控件44。12焦点文件72样本保持框内可见实线。晚202绑定、跨路由未知保护、目标消失仍可核对、failed/interrupted取消风险确认保持和明确本地解除均实际走完。两宽度主动分页hover均归属MAIN，锚点间距约11.906/12.078px；正常解除截图无残留hover遮挡。
 
 58完整axe均零violation，但56份仍有aria popup引用、58份有渐变/短文本contrast incomplete，不能称完整WCAG或读屏验收。时钟自然推进而不暂停，fixture仅隔离精确15秒任务轮询；不证明真实轮询、NAS、Docker变更或跨客户端幂等。容器创建仍走原同步201，尚未宣称创建Job垂直切片完成。
+
+## 创建任务接入与删除回执保护（2026-10-16 03:54 UTC，验收进行中）
+
+- [cd71f67](https://github.com/Kkwans/nas-control-plane/commit/cd71f673507482b282cd0666e04613ff7bfdab07) 增加容器创建持久任务：16KiB严格输入、独立单worker与全局容量限制、持久queued后202，冻结输入仅存内存，不将环境变量等请求内容写入任务历史。完成结果只保留完整容器ID、created和started，并与终态同次CAS保存；待保存不重放RPC，超时/错配回执保持结果未知。旧同步API兼容保留。[CI 38843997126](https://github.com/Kkwans/nas-control-plane/actions/runs/38843997126) 通过4307单元/151文件、487E2E及Go/Compose；该轮尚无创建界面专项。
+- [1b557a8](https://github.com/Kkwans/nas-control-plane/commit/1b557a837dd2d1bee45205375daf7f18441a9a05) 增加创建任务中文标签与历史过滤，历史摘要只称记录标记完成，要求核对详情回执及当前状态。[CI 38844824562](https://github.com/Kkwans/nas-control-plane/actions/runs/38844824562) 通过4323单元/151文件、487E2E及Go/Compose。
+- [a6de42d](https://github.com/Kkwans/nas-control-plane/commit/a6de42d07ebdeb590ca6813861cd676de45b06cf) 增加严格创建任务传输：64KiB流式响应界限、UTF-8/MIME/重复JSON字段检查、精确202初始态与GET结果绑定，无旧API回退或自动重试。[218ffc1](https://github.com/Kkwans/nas-control-plane/commit/218ffc182b31f76afb63464926dd86d821a8847b) 增加会话级创建保护，跨SPA和迟到202保留原会话归属，未知任务不按历史相似项认领；解除须当前轮只读证据及显式风险确认。两轮CI单元分别4449/152、4470/153全部通过，Go/Compose通过，但各有486E2E通过、1失败：既有单容器动作未知结果旅程等待toast自然消失超过5秒。原因尚未确定，不能称全绿或直接归为偶发；[6686836](https://github.com/Kkwans/nas-control-plane/commit/66868367ce3ef0349f1027827148c71f1e973e23) 已增加保留原等待断言的计时器、hover和实际DOM诊断，不声称已修复。
+- [0ff83a7](https://github.com/Kkwans/nas-control-plane/commit/0ff83a72490608008402b5285a94c57967e22766) 将创建表单、镜像入口及Docker页接入Job保护，202只表示接纳；完成须精确完整结果，started不代表持续运行。表单关闭和会话结束清理敏感草稿，旧响应不关闭新草稿。新增两宽度六项创建结果旅程并适配既有创建测试。根本地4466单元、类型、lint、构建及预算通过；实际[CI 38845656924](https://github.com/Kkwans/nas-control-plane/actions/runs/38845656924) 为4466单元/155文件通过、464E2E通过/29失败，Go/Compose通过。13项涉及article使用status角色不合法，16项涉及取消确认预览后未恢复创建按钮焦点，正在修复，未降低axe或焦点断言。
+- 上述创建CI真实输出66PNG及132JSON，403项源码散列及66PNG散列匹配精确0ff版本，66捕获请求稳定。但66份完整axe均存在同一角色违规，且仍有aria/contrast incomplete。失败旅程没有写出最终完成账本，因此不能认定journeyCompleted或完整视觉/无障碍验收通过；修复后需重新运行并检查制品。
+- [219a883](https://github.com/Kkwans/nas-control-plane/commit/219a883a2c8ad9c1e820761fade6e403eaf3136f) 严格绑定项目删除HTTP200回执的项目ID、compose类型、完成/部分删除、注册表状态和每项删除结果；拒绝重复字段、坏UTF-8、错误媒体类型及超限响应，仅精确派发前错误允许安全重试，其他错误均标记可能已经删除。独立API回归299项通过。[1a025e6](https://github.com/Kkwans/nas-control-plane/commit/1a025e6f35ac893118adb5ea55b444ad6c33738e) 增加按项目会话保护，详情关闭、目标消失或SPA导航不解除未知删除；只读清单成功也不等于删除成功，须显式确认才解除本地锁。根本地4572单元/159文件、类型、lint、构建与预算通过。219a883 的[CI 38846568847](https://github.com/Kkwans/nas-control-plane/actions/runs/38846568847) 已结束：4547单元/156文件通过、464E2E通过/29失败，继承相同创建ARIA与焦点失败；Go/Compose通过。1a025e6 前端仍在执行。新增12项专项脚本在静态补强后单独提交为[728b14b](https://github.com/Kkwans/nas-control-plane/commit/728b14b5cbee42dc0f2647d52bd53151be51db32)，尚未作为浏览器通过证据。
+
+以上仅为纯fake、临时SQLite与隔离CI验证。创建界面及新增删除专项仍待真实CI闭环；没有NAS实机验收，未以模拟结果代替实际设备结果。
+
+### 后续修复与独立模块（2026-10-16 04:03 UTC）
+
+- [7741cd1](https://github.com/Kkwans/nas-control-plane/commit/7741cd166232447e95e61444c99ccd8d044e3d12) 将创建状态容器改为合法div/status；在创建预留禁用按钮前捕获发起者，取消预览后等待Element Plus关闭、模型更新和Vue渲染，再按会话、草稿版本及抽屉归属恢复焦点。补充两种创建意图、Escape/关闭/返回及旧草稿隔离回归。全部六项创建旅程在失败时也写最终账本，保留原始错误且不虚报完成。本地4578单元/159文件、类型、全lint、构建及540KiB预算通过，独立审查无阻塞；真实CI仍待完成。
+- 对0ff失败制品按散列去重后的34独特PNG全部目检，覆盖66原图。创建提示、完整ID和按钮未见明显溢出；390px两份同字节图刷新tooltip外缘贴右边界，文字可读。移动表格只显示横滚后部分列，静态图不能证明滚动可用性。此检查不能代替新修复的浏览器焦点与axe验收。
+- [aaacf46](https://github.com/Kkwans/nas-control-plane/commit/aaacf4695dd4b460acb8881985fd5a49f67a4dc2) 独立增加standalone项目start/stop/restart Job后台：冻结1至128个完整ID，5秒只读归属预检，沿用45秒单次操作预算，复用串行队列。完整回执通过集合、归属与汇总核验后才保存安全逐项结果；区分成功、已执行但状态不符、未知，终态与结果同次CAS，pending不泄漏结果、恢复不重放。专用结果有界64KiB、128项且历史摘要不读取；交叉结果损坏清空全部结果。全controlstore普通/race、定向Job race、OpenAPI、build/vet与独立审查通过；根另复验混合定向race和OpenAPI通过。尚未切换前端或承诺大批次均能在预算内完成，CI待核验。
+
+### 项目操作前端分模块交付（2026-10-16 04:24 UTC）
+
+- [44e1a73](https://github.com/Kkwans/nas-control-plane/commit/44e1a73221ae0b96ea7cd9e28662ebe2dacd0aff) 的严格项目任务传输通过96项测试；[2bb71c4](https://github.com/Kkwans/nas-control-plane/commit/2bb71c42cc4e30b3e8286a04fd65b7e08677720b) 的会话槽通过30项生命周期测试，两组根联合复验126项通过。目标集合和逐项结果均完整关联，错误整体拒绝；三列表读取仅观察活动任务，不认领未知提交。详情256KiB、每类列表8MiB，超限继续保护。稀疏数组输入在预留前拒绝。
+- [95af848](https://github.com/Kkwans/nas-control-plane/commit/95af84845fb4afb1e407a0506b627c62d29ac1ec) 增加中文项目任务标签和历史筛选，根113项展示/任务中心测试通过；[448cb38](https://github.com/Kkwans/nas-control-plane/commit/448cb38a618dda07d6497d3816670c53686cc3bb) 增加真实会话身份绑定的互斥基础，根12项纯内存测试通过。过期或伪造信号不产生新准入域，迟到中止不清新会话。
+- [50eaaef](https://github.com/Kkwans/nas-control-plane/commit/50eaaefc6fa4da2359f9e1100f9aac92ed084762) 的结果面板通过根25项组件测试。完整ID和结果以原生details呈现，超过8项默认折叠，核对操作置前，128项不会默认铺满整个页面；保留逐项成功/状态不符/未知计数。仅有DOM和样式证据，尚未宣称实际浏览器几何或无障碍通过。
+- [70fa34f](https://github.com/Kkwans/nas-control-plane/commit/70fa34f6aeba9dce3b7227ae1b7271a3d3a22d7a) 接通standalone后台任务、跨入口会话保护、手动核对及显式风险解除。完成卡在新意图出现时清理，迟到响应不抢新会话；Compose生命周期保留同步接口并管理确认/派发令牌。根4788单元/165文件、类型、源码lint、已跟踪E2E TypeScript lint、构建及预算通过；最大块518KiB，DockerView约202KiB。最初全目录lint碰到另一未完成专项脚本，单独已跟踪文件检查又误纳PNG/JSON而产生33个忽略警告；最终仅TypeScript检查退出0，未把前两次失败记为通过。新增项目浏览器专项与既有同步fixture迁移仍在审查，CI尚未闭环。
+- 该互斥只覆盖本登录会话内容器创建、单容器生命周期、项目删除和Compose生命周期相对于standalone项目操作的准入。Compose编辑器部署/回滚、镜像操作、其他标签页/客户端和服务端全局串行不在此合同内。
+- [acc24e5](https://github.com/Kkwans/nas-control-plane/commit/acc24e5782956a9f08bcaaa1fb068adaa247447e) 单独修正删除保护面板相同的article/status角色问题，根18项面板/删除集成回归通过。但较早728b14b与aaacf46实际CI各为4572单元通过、470E2E通过/35失败，其中新增6删除旅程在键盘Enter后等待取消按钮超时，尚未到截图，不能归为已修ARIA。源码审查发现删除按钮的tooltip仍以Enter/Space切换并preventDefault，正在用真实Element Plus隔离回归核实及修复，保留原键盘验收。其余29为已知创建失败。6686836与1a025e6终态也继承29项创建失败，没有再次出现动作toast失败，仍不足以宣称toast原因已查明或修复。
+
+### 创建专项闭环与删除键盘修复（2026-10-16 04:35 UTC）
+
+[acc24e5 的CI 38848704979](https://github.com/Kkwans/nas-control-plane/actions/runs/38848704979) 前端4581单元/159文件通过、499E2E通过/6删除键盘失败；创建原29项失败已消失。其精确版本创建制品410项源码散列及66PNG散列全部匹配，66次捕获请求稳定，66完整axe均零violation。六份完成账本均journeyCompleted=true：四个精确结果流程每例1POST/29请求，两个无效202流程每例1POST/33请求，均无denied。66图按字节散列去重为37独特图（19桌面、18移动），全部目检：创建面板、ID换行及按钮无明显截断；刷新tooltip边缘贴屏但圆角与文字可见，未复现旧图裁切。移动表格当前横滚位置仅显示部分列，图像不证明其完整滚动可用性。66份axe仍各有aria-valid incomplete，contrast incomplete计数为10/12/16（33/31/2份）；未宣称完整WCAG、读屏或NAS验收。
+
+[ba4e43f](https://github.com/Kkwans/nas-control-plane/commit/ba4e43fb114841c1d756d0b1474b1becc5d34f51) 修复两处删除tooltip的Enter/Space默认事件拦截。真实Element Plus/jsdom对照证明旧默认设置preventDefault，新入口保留按钮默认行为和焦点；根14项删除回归通过，清单fixture计数亦修正。此前728失败账本确认六例均在cancel-before-delete、零写/零截图、无denied/pageerror，没有浏览器键事件trace；仍须新CI证明完整键盘旅程通过。
+
+[40cf000](https://github.com/Kkwans/nas-control-plane/commit/40cf00004eb7afb5130f4ce10ac08084a3592f4d) 新增15项项目任务专项并迁移旧4项回执旅程。覆盖两宽度、冻结子集、完整/部分/未知结果、三类型列表、只读失败、跨路由/会话、显式风险解除及128目标确认。完整axe不排除区域，PNG与元数据均散列关联，finally账本不会把失败标成完成；认证写入需明确一次性fixture许可。128项确认正文有界滚动并提供可见焦点；初始locator.focus+Enter只算激活设置，原生Tab循环才作为键盘可达/焦点证据。根19项专项收集、别名配置下严格TypeScript、全lint及构建预算通过。首次直接tsc缺少项目@路径映射而失败，使用一致路径配置后退出0，无源码回退或跳过检查。实际浏览器执行与删除修复仍待CI；不能把静态用例收集描述为浏览器通过。
+
+### 最新复验与剩余失败（2026-10-16 04:40 UTC）
+
+精确40cf000本地全套4792单元/166文件通过。实际[CI 38851321824](https://github.com/Kkwans/nas-control-plane/actions/runs/38851321824)仍在执行，新增项目旅程与删除键盘修复尚未宣布通过。
+
+[448cb38 的CI 38849443606](https://github.com/Kkwans/nas-control-plane/actions/runs/38849443606) 为4736单元/162文件通过、497E2E通过/8失败：六项删除键盘及两宽度动作未知结果toast等待。此次真实失败诊断显示鼠标进入warning消息后清除了3000ms计时器，5秒后仍hovered，Date/performance自然推进；不是时钟暂停。诊断acceptedCapture=false，仅作根因证据，不计作成功截图。后续修复须先让指针离开非目标通知，保留自然消失、原断言及失败诊断，不隐藏通知或提高等待阈值。
+
+70fa34f的实际CI为4788单元/165文件通过、497E2E通过/8失败，其中六项删除及两项旧standalone同步fixture预期不符；40cf000已迁移后两项，但仍需实际浏览器确认。Compose生命周期后台任务方案已完成，下一独立模块复用现有Compose队列及RPC，保留同步兼容接口；当前尚无该模块实现或验收结论。
