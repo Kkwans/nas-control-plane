@@ -471,21 +471,112 @@ export async function createDockerContainer(
   return payload
 }
 
+// 这些状态/稳定码配对仅在删除副作用之前产生；注册表失败、回滚失败及
+// Agent 通道异常可能发生在部分容器已经删除之后，必须保留结果未知语义。
+const projectDeleteRejections = new Map<string, readonly [number, string]>([
+  ['DOCKER_PROJECT_DELETE_INVALID', [400, 'Docker 项目删除参数无效。']],
+  ['DOCKER_PROJECT_DELETE_RUNNING', [409, '项目仍有运行中的容器，停止后才能删除。']],
+  ['DOCKER_PROJECT_DELETE_PROTECTED', [409, '该项目受保护，不能删除。']],
+  ['DOCKER_PROJECT_DELETE_REGISTRY_NOT_FOUND', [409, '未找到精确匹配的项目注册记录，已拒绝删除。']],
+  ['DOCKER_PROJECT_DELETE_NOT_FOUND', [404, '当前 Docker 清单中找不到该项目，请先刷新状态。']],
+  ['CONTROL_INPUT_INVALID', [400, '请求参数无效。']],
+  ['AUTH_UNAUTHORIZED', [401, '请先登录。']],
+  ['AUTH_UNAVAILABLE', [503, '登录服务暂不可用。']],
+  ['HTTP_CROSS_ORIGIN_REJECTED', [403, '请求来源校验失败。']],
+  ['ROUTE_NOT_FOUND', [404, '请求的接口不存在。']],
+  ['METHOD_NOT_ALLOWED', [405, '请求方法不受支持。']],
+  ['HTTP_REQUEST_BODY_TOO_LARGE', [413, '请求体超过大小限制。']],
+  ['HTTP_UNSUPPORTED_MEDIA_TYPE', [415, '请求必须使用 application/json 内容类型。']],
+])
+
+class DockerProjectDeleteRejectedError extends NcpApiError {}
+export function isDockerProjectDeleteRejected(error: unknown): error is NcpApiError {
+  return error instanceof DockerProjectDeleteRejectedError
+}
+
+function projectDeleteOutcomeUnknown(): NcpApiError {
+  return new NcpApiError('DOCKER_PROJECT_DELETE_OUTCOME_UNKNOWN',
+    '项目可能已部分或全部删除，结果尚未确认。请先只读核对容器及项目注册状态，勿重复提交。')
+}
+
+// DeleteProject RPC 沿用 gRPC 默认 4MiB 接收上限；HTTP JSON 字符串
+// 转义最多放大六倍。32MiB 留出结构余量，不对合法项目另设容器数量上限。
+const projectDeleteResponseMaxBytes = 32 * 1024 * 1024
+
+function parseProjectDeleteJSON(source: string): unknown {
+  const payload: unknown = JSON.parse(source)
+  // JSON.parse 的后键覆盖会掩盖矛盾结果，按对象分别核对解码后的键。
+  const stack: (Set<string> | null)[] = []
+  const tokens = /"(?:\\.|[^"\\])*"|[{}[\]:,]/g
+  for (const match of source.matchAll(tokens)) {
+    const token = match[0]
+    if (token === '{' || token === '[') {
+      stack.push(token === '{' ? new Set() : null)
+      if (stack.length > 32) throw projectDeleteOutcomeUnknown()
+    } else if (token === '}' || token === ']') stack.pop()
+    else if (token.startsWith('"') && /^\s*:/.test(source.slice(match.index! + token.length))) {
+      const keys = stack.at(-1), key = JSON.parse(token) as string
+      if (!keys || keys.has(key)) throw projectDeleteOutcomeUnknown()
+      keys.add(key)
+    }
+  }
+  return payload
+}
+
+async function readProjectDeleteJSON(response: Response): Promise<unknown> {
+  if (response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json' || !response.body) throw projectDeleteOutcomeUnknown()
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+  let bytes = 0, source = ''
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > projectDeleteResponseMaxBytes) throw projectDeleteOutcomeUnknown()
+      source += decoder.decode(chunk.value, { stream: true })
+    }
+    return parseProjectDeleteJSON(source + decoder.decode())
+  } catch (error) {
+    await reader.cancel().catch(() => {})
+    throw error
+  } finally { reader.releaseLock() }
+}
+
 export async function deleteDockerProject(
   project: Pick<DockerProject, 'id' | 'name' | 'kind'>,
   fetcher: typeof fetch = fetch,
 ): Promise<DockerProjectDeleteResult> {
-  return requestJson(
-    `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}`,
-    {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: project.id, kind: project.kind, registryName: project.name }),
-    },
-    isDockerProjectDeleteResult,
-    fetcher,
-    'DOCKER_PROJECT_DELETE_RESPONSE_INVALID',
-  )
+  // 固定提交身份；等待期间调用方的对象变化不能改写回执核验目标。
+  const projectId = project.id
+  const path = `/api/v1/docker/compose/projects/${encodeURIComponent(projectId)}`
+  const options = requestOptions({
+    method: 'DELETE',
+    redirect: 'error',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, kind: project.kind, registryName: project.name }),
+  })
+  let response: Response
+  let payload: unknown
+  try {
+    response = await fetcher(path, options)
+    if (response.redirected !== false) throw projectDeleteOutcomeUnknown()
+    payload = await readProjectDeleteJSON(response)
+  } catch {
+    throw projectDeleteOutcomeUnknown()
+  }
+  if (response.status !== 200) {
+    if (isApiErrorResponse(payload)) {
+      const rejection = projectDeleteRejections.get(payload.code)
+      if (rejection?.[0] === response.status) {
+        const requestId = /^[A-Za-z0-9._:-]{1,128}$/.test(payload.requestId) ? payload.requestId : undefined
+        throw new DockerProjectDeleteRejectedError(payload.code, rejection[1], requestId)
+      }
+    }
+    throw projectDeleteOutcomeUnknown()
+  }
+  if (!isDockerProjectDeleteResult(payload, projectId)) throw projectDeleteOutcomeUnknown()
+  return payload
 }
 
 export async function readComposeConfig(
@@ -758,25 +849,28 @@ function isDockerContainerCreateResult(value: unknown, runContainer: boolean): v
   )
 }
 
-function isDockerProjectDeleteResult(value: unknown): value is DockerProjectDeleteResult {
+function isDockerProjectDeleteResult(value: unknown, projectId: string): value is DockerProjectDeleteResult {
+  const containerIds = new Set<string>()
   return (
     isRecord(value) &&
-    typeof value.projectId === 'string' &&
+    typeof value.projectId === 'string' && value.projectId === projectId && projectId.trim().length > 0 &&
     value.kind === 'compose' &&
     value.completed === true &&
-    typeof value.partial === 'boolean' &&
-    typeof value.registryDeleted === 'boolean' &&
-    typeof value.registryRolledBack === 'boolean' &&
+    value.partial === false &&
+    value.registryDeleted === true &&
+    value.registryRolledBack === false &&
     Array.isArray(value.containers) &&
-    value.containers.every((container) =>
-      isRecord(container) &&
-      typeof container.containerId === 'string' &&
-      typeof container.name === 'string' &&
-      typeof container.state === 'string' &&
-      typeof container.deleted === 'boolean' &&
-      typeof container.success === 'boolean' &&
-      (container.errorCode === undefined || typeof container.errorCode === 'string'),
-    )
+    value.containers.every((container) => {
+      if (!isRecord(container) ||
+        typeof container.containerId !== 'string' || !container.containerId.trim() ||
+        containerIds.has(container.containerId) ||
+        typeof container.name !== 'string' ||
+        typeof container.state !== 'string' ||
+        container.deleted !== true || container.success !== true ||
+        (container.errorCode !== undefined && container.errorCode !== '')) return false
+      containerIds.add(container.containerId)
+      return true
+    })
   )
 }
 
