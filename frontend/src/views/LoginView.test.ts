@@ -45,6 +45,35 @@ beforeEach(() => {
 })
 afterEach(() => { app.unmount(); host.remove() })
 
+describe('LoginView 初始化与登录表单语义', () => {
+  it('初始化说明创建首个 Root，两个密码字段均提示新密码', () => {
+    expect(host.querySelector('.access-description')?.textContent).toBe('创建首个 Root 管理账号。账号创建后，控制面功能将通过该会话进入。')
+    expect(host.textContent).not.toContain('唯一')
+    const passwords = host.querySelectorAll<HTMLInputElement>('input[type=password]')
+    expect(passwords).toHaveLength(2)
+    expect([...passwords].map((element) => element.autocomplete)).toEqual(['new-password', 'new-password'])
+    expect(passwords[1]!.closest('label')?.textContent).toContain('确认密码')
+    for (const request of Object.values(api)) expect(request).not.toHaveBeenCalled()
+  })
+
+  it('切换为登录后仅保留当前密码字段，返回初始化恢复两个新密码字段', async () => {
+    store.state = 'anonymous'
+    await nextTick()
+    expect(host.querySelector('.access-description')?.textContent).toBe('使用 Root 管理账号进入实时系统与服务控制台。')
+    const passwords = host.querySelectorAll<HTMLInputElement>('input[type=password]')
+    expect(passwords).toHaveLength(1)
+    expect(passwords[0]!.autocomplete).toBe('current-password')
+    expect(host.textContent).not.toContain('确认密码')
+
+    store.state = 'setup'
+    await nextTick()
+    expect([...host.querySelectorAll<HTMLInputElement>('input[type=password]')].map((element) => element.autocomplete)).toEqual(['new-password', 'new-password'])
+    expect(host.querySelector('.access-description')?.textContent).toContain('首个 Root')
+    for (const request of Object.values(api)) expect(request).not.toHaveBeenCalled()
+    expect(authenticated).not.toHaveBeenCalled()
+  })
+})
+
 describe('LoginView 初始化结果恢复', () => {
   it('已有账号切换登录并清理密码，不发认证事件或自动登录', async () => {
     api.bootstrapRoot.mockRejectedValue(new NcpApiError('AUTH_UNAVAILABLE', 'failure'))

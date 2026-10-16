@@ -58,6 +58,8 @@ const initialRequests = ['GET /api/v1/auth/status', 'POST /api/v1/auth/bootstrap
 async function submitAndReconcile(page: Page, fixture: Fixture) {
   await page.goto('/system', { waitUntil: 'domcontentloaded' })
   await expect(page.getByRole('heading', { name: '初始化 Root 控制台', exact: true })).toBeVisible()
+  await expect(page.locator('.access-description')).toHaveText('创建首个 Root 管理账号。账号创建后，控制面功能将通过该会话进入。')
+  await expect(page.locator('input[type="password"][autocomplete="new-password"]')).toHaveCount(2)
   await page.getByLabel('账号', { exact: true }).fill('fixture-root')
   await page.getByLabel('密码', { exact: true }).fill('fixture-only-password')
   await page.getByLabel('确认密码', { exact: true }).fill('fixture-only-password')
@@ -139,6 +141,7 @@ for (const scenario of [
     const fixture = await installBootstrapFixture(page, scenario.failure, ['setup', 'anonymous'])
     await submitAndReconcile(page, fixture)
     await expect(page.getByRole('heading', { name: '进入 NAS Control Plane', exact: true })).toBeVisible()
+    await expect(page.getByLabel('密码', { exact: true })).toHaveAttribute('autocomplete', 'current-password')
     await expect(page.getByRole('status')).toHaveText('控制台已初始化，请登录。')
     await expect(page.getByLabel('密码', { exact: true })).toHaveValue('')
     await expect(page.getByLabel('确认密码', { exact: true })).toHaveCount(0)

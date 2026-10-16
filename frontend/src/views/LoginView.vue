@@ -34,7 +34,7 @@ const isSetup = computed(() => authStore.state === 'setup')
 const title = computed(() => (isSetup.value ? '初始化 Root 控制台' : '进入 NAS Control Plane'))
 const description = computed(() =>
   isSetup.value
-    ? '创建唯一的 Root 管理账号。账号创建后，控制面功能将通过该会话进入。'
+    ? '创建首个 Root 管理账号。账号创建后，控制面功能将通过该会话进入。'
     : '使用 Root 管理账号进入实时系统与服务控制台。',
 )
 
@@ -109,7 +109,7 @@ async function submit() {
               v-model="password"
               :disabled="isSubmitting"
               type="password"
-              autocomplete="current-password"
+              :autocomplete="isSetup ? 'new-password' : 'current-password'"
               :minlength="isSetup ? 6 : 1"
               maxlength="256"
               required
