@@ -24,6 +24,9 @@ vi.mock('@/api/control', () => ({ requestSites: vi.fn(), requestIgnoredSites: vi
 const profile: SiteProfileInput = { name: 'Demo', description: '', iconUrl: '', category: 'web', primaryPort: 8080, launchUrl: '', favorite: false, sortOrder: 0, hidden: false }
 const site = { ...profile, id: 'manual:demo', projectId: 'manual:demo', ports: [8080], state: 'running', source: 'manual' } as Site
 interface ViewState {
+  query: string
+  selectedCategory: string
+  siteFilter: string
   draft: SiteProfileInput
   pendingIcon: File | null
   pendingIconPreview: string
@@ -586,5 +589,41 @@ describe('现有站点图标上传归属', () => {
     expect(view.unknownIcons.size).toBe(0)
     expect(messages.error).not.toHaveBeenCalled()
     expect(messages.success).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('站点状态筛选语义', () => {
+  it('单选筛选保留标签计数与列表行为，切换不清除搜索和分类', async () => {
+    store.sites = [site, { ...site, id: 'manual:stopped', name: 'Stopped', state: 'stopped' }, { ...site, id: 'manual:hidden', name: 'Hidden', hidden: true }]
+    store.ignoredSites = [{ ...profile, projectId: 'ignored', name: 'Ignored' }]
+    await nextTick()
+    const group = host.querySelector('[role="radiogroup"][aria-label="站点状态筛选"]')!
+    expect(group).not.toBeNull()
+    expect(group.querySelector('[role="tab"], [aria-selected], [aria-controls]')).toBeNull()
+    const buttons = [...group.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+    expect(buttons.map((button) => button.textContent)).toEqual(['运行中1', '全部站点2', '已隐藏1', '已忽略1'])
+    const names = () => [...host.querySelectorAll('.site-identity strong')].map((node) => node.textContent)
+    expect(names()).toEqual(['Demo'])
+    buttons[1]!.click(); await nextTick()
+    expect(names()).toEqual(['Demo', 'Stopped'])
+    buttons[2]!.click(); await nextTick()
+    expect(names()).toEqual(['Hidden'])
+    buttons[3]!.click(); await nextTick()
+    expect(names()).toEqual(['Ignored'])
+    expect(buttons[3]!.getAttribute('aria-checked')).toBe('true')
+    view.query = 'Demo'; view.selectedCategory = 'web'
+    buttons[3]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
+    await nextTick()
+    expect(document.activeElement).toBe(buttons[0])
+    expect(view.siteFilter).toBe('running')
+    expect(view.query).toBe('Demo')
+    expect(view.selectedCategory).toBe('web')
+    expect(names()).toEqual(['Demo'])
+    buttons[1]!.click(); await nextTick()
+    expect(names()).toEqual(['Demo'])
+    view.selectedCategory = 'other'; await nextTick()
+    expect(names()).toEqual([])
+    expect(host.textContent).toContain('没有匹配的站点')
   })
 })

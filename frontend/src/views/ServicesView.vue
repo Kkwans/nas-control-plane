@@ -499,7 +499,7 @@ function sitesForCategory(category: string) {
   <div class="page workspace-page sites-page">
     <WorkspaceHeader title="站点管理" description="快速启动 NAS 上的 Web 应用，并维护入口资料" :icon="Globe2" :stats="stats">
       <template #filters>
-        <SegmentedTabs v-model="siteFilter" :tabs="siteFilterTabs" accessible-label="站点状态筛选" />
+        <SegmentedTabs mode="filter" v-model="siteFilter" :tabs="siteFilterTabs" accessible-label="站点状态筛选" />
         <NcpSelect v-model="selectedCategory" class="category-filter" :options="categorySelectOptions" accessible-label="按分类筛选站点" />
       </template>
       <template #tools>
