@@ -289,6 +289,29 @@ describe('历史 tooltip 的时间和值', () => {
 
 
 describe('图例、单位与绘图区分层', () => {
+  it.each([false, true])('纵轴单位使用命名分组并保留单轴或双轴文本：双轴=%s', (dual) => {
+    mountChart({
+      timestamps: [start, start + minute],
+      series: [
+        { name: 'CPU', color: '#2468d8', values: [20, 25], unit: '%' },
+        ...(dual ? [{ name: '负载', color: '#d28a1b', values: [1, 2], unit: '', axis: 'right' as const }] : []),
+      ],
+    })
+    const groups = host.querySelectorAll('[role="group"][aria-label="纵轴单位"]')
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toBe(host.querySelector('.trend-chart__axis-units'))
+    expect([...groups[0]!.querySelectorAll('span')].map((span) => span.textContent)).toEqual(
+      dual ? ['左轴 · %', '右轴 · 负载'] : ['%'],
+    )
+  })
+
+  it.each([false, true])('图表无可用数据时不产生空单位分组：历史=%s', (history) => {
+    mountChart({ history, timestamps: [], series: [] })
+    expect(host.querySelector('[role="group"][aria-label="纵轴单位"]')).toBeNull()
+    expect(host.querySelector('.trend-chart__axis-units')).toBeNull()
+    expect(host.querySelector('[role="status"]')).not.toBeNull()
+  })
+
   it('网络单位拥有独立行，canvas 不再叠画图例或轴名', () => {
     mountChart({
       history: true,

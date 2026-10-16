@@ -298,7 +298,7 @@ const option = computed<EChartsOption>(() => ({
           <span class="trend-chart__legend-name">{{ item.name }}</span>
         </button>
       </div>
-      <div class="trend-chart__axis-units" :class="{ 'trend-chart__axis-units--dual': hasRightSeries }" aria-label="纵轴单位">
+      <div class="trend-chart__axis-units" :class="{ 'trend-chart__axis-units--dual': hasRightSeries }" role="group" aria-label="纵轴单位">
         <span>{{ hasRightSeries ? '左轴 · ' : '' }}{{ leftAxisUnit || '数值' }}</span>
         <span v-if="hasRightSeries">右轴 · {{ rightAxisLabel }}</span>
       </div>
