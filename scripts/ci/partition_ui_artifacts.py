@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""仅复制白名单 UI 证据，按稳定路径分为最多十六个有界制品。"""
+"""仅复制白名单 UI 证据，按稳定路径分为最多三十二个有界制品。"""
 
 import argparse
 from pathlib import Path
 import shutil
 
 PART_BYTES = 24 * 1024 * 1024
-MAX_PARTS = 16
+MAX_PARTS = 32
 # 为 ZIP 条目头、目录和 UTF-8 路径另留保守预算，避免大量空文件绕过大小限制。
 METADATA_BYTES = 1024 * 1024
 

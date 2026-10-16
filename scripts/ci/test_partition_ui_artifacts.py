@@ -68,8 +68,8 @@ class PartitionTests(unittest.TestCase):
             partition(self.source, self.destination, part_bytes=4)
         self.assertFalse(self.destination.exists())
 
-    def test_sixteen_parts_are_allowed_but_seventeenth_fails_without_partial_copy(self):
-        self.assertEqual(MAX_PARTS, 16)
+    def test_thirty_two_parts_are_allowed_but_next_fails_without_partial_copy(self):
+        self.assertEqual(MAX_PARTS, 32)
         for number in range(MAX_PARTS):
             self.write(f"run/ui-captures/{number}.png", b"12")
         self.assertEqual(partition(self.source, self.destination, part_bytes=2), MAX_PARTS)

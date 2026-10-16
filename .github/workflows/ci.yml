@@ -259,6 +259,151 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload fixture UI screenshots part 17
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 17 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-17
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-17/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 18
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 18 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-18
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-18/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 19
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 19 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-19
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-19/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 20
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 20 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-20
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-20/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 21
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 21 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-21
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-21/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 22
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 22 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-22
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-22/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 23
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 23 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-23
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-23/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 24
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 24 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-24
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-24/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 25
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 25 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-25
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-25/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 26
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 26 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-26
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-26/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 27
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 27 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-27
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-27/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 28
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 28 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-28
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-28/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 29
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 29 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-29
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-29/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 30
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 30 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-30
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-30/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 31
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 31 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-31
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-31/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload fixture UI screenshots part 32
+        if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 32 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncp-fixture-ui-${{ github.sha }}-${{ github.run_attempt }}-part-32
+          # 分片目录仅含白名单 PNG 与捕获坐标 JSON，保留 test-results 相对路径。
+          path: ${{ runner.temp }}/ncp-ui-artifacts/part-32/
+          if-no-files-found: error
+          retention-days: 14
+
   compose:
     name: Compose config
     runs-on: ubuntu-latest
