@@ -337,3 +337,11 @@
 - [9e8bb44](https://github.com/Kkwans/nas-control-plane/commit/9e8bb4461e294786e4c4c08863a7363abf3e9fc5) 落实既有M14精度计划：Agent行变更在原解码/TLS检查后拒绝原始protobuf不安全double和非有限数，安全小数、布尔/null及精确数字字符串保留。双namespace纯provider矩阵、现代转换、别名/策略优先级、零派发和范围负对照通过；根定向race×3、全仓构建及vet通过。无真实数据库、凭证或运行环境变更。批量镜像客户端串行派发作为下一独立计划模块推进，尚未报告实现完成。
 
 918f861的[实际CI 38854683734](https://github.com/Kkwans/nas-control-plane/actions/runs/38854683734) 随后确认4984单元/170文件通过、515E2E通过/5旧Compose fixture失败（新聚焦内容未纳旧集合、未知接收仍预期自动清单读取、旧同步端点断言）；均属于962d7d5迁移范围，不能在962实际完成前宣布修复闭环。
+
+### 批次派发、日志边界与 Compose 实测（2026-10-16 05:57 UTC）
+
+- [80f9853](https://github.com/Kkwans/nas-control-plane/commit/80f985377ebe055b82ede714e4cfbcf1639d3045) 将批量镜像删除改为每批最多50项、并发1；冻结全部选择，逐批复核归属与目标，仅已发送目标进入未知保护。页面往返停止后续派发，不复活旧进度、不重放；明确显示已删除/引用/未知/未发送。独立133项定向回归、根4999单元/170文件、类型/lint/构建预算通过。[af2aba4](https://github.com/Kkwans/nas-control-plane/commit/af2aba4bf622093f2e93bb5d742b5e43084a31ef) 新增4项实际浏览器待执行规格，覆盖151项50/50/50/1、两宽度中断再确认及下一批引用变化；使用浏览器时钟与持久证据账本，静态类型/lint/8项发现通过，不能当浏览器通过。
+- [9b9f583](https://github.com/Kkwans/nas-control-plane/commit/9b9f58350049476dd9c8c7c582d81882d73c6d19) 统一日志HTTP/SSE完整批次解码与安全字段投影，坏帧关闭后排队事件不得复活；坏分页/刷新保留已有数据，503与取消不重试。合法空文本、原始控制字符、游标和纳秒/零值时间保留；可选null字段属于明确宽容策略，不宣称后端实际输出null。补既有stream字段文档。独立134项定向通过；根全量5086/172快照及类型/lint/构建通过，之后新增2项测试另行定向验证；全OpenAPI通过。
+- [962d7d5 CI 38855447198](https://github.com/Kkwans/nas-control-plane/actions/runs/38855447198) 实际4984单元/170文件、532E2E通过/4失败，Go/Compose通过。16项新Compose中12完成，4项known/lost202两宽度失败于夹具错误地要求共享容器操作全部禁用。既有设计及42项准入/注册表回归确认Compose只与独立项目互斥，容器/创建仍共享；[57cbac0](https://github.com/Kkwans/nas-control-plane/commit/57cbac05e8bd404d9054cb62c8a1707af1bd6023) 仅修正规格到实际运行状态资格，保留项目/抽屉禁用及零额外写入账本，未扩大生产锁。新CI待验证。
+- [962分片1](https://github.com/Kkwans/nas-control-plane/actions/runs/38855447198/artifacts/12027308589) 的432源码及52关联制品散列匹配。4未完成账本各仅1个预期Compose POST，denied/errors为空；22PNG/22完整axe不代表16旅程全覆盖。22图去重21全部实际目检，未见文字裁剪、缺字、横向溢出或弹窗按钮出界；50控件各五点命中且至少44×44，60根宽度样本无横向溢出。32配置文件的两宽度实际图片仅显示底部，元数据另记录顶部/中段/底部及四步键盘循环，不能称顶部像素已审查。全部axe零violation，但22份对比度、20份aria-controls仍incomplete，未作全面无障碍通过宣称。
+- e318创建时钟修正后的实际E2E为532通过/4项上述Compose夹具失败，创建6项全部通过；新创建与项目修正后的完整像素证据仍继续核验。以上均为隔离fixture与临时测试，不是NAS实机验收。
