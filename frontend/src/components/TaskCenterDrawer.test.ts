@@ -35,6 +35,42 @@ describe('TaskCenterDrawer', () => {
     expect(dialog.getAttribute('data-body-class')).toBe('task-center-drawer__body'); expect(dialog.getAttribute('data-with-header')).toBe('false'); expect(host.querySelector('header')).toBeNull()
     const title = host.querySelector('h2')!; expect(title.textContent).toBe('最近任务'); expect(dialog.getAttribute('aria-labelledby')).toBe(title.id)
   })
+  it.each([
+    { name: '首次加载', jobs: [], overrides: { loading: ref(true), hasLoaded: ref(false) }, state: 'loading', title: '正在读取最近任务' },
+    { name: '读取失败', jobs: [], overrides: { error: ref('连接失败'), hasLoaded: ref(false) }, state: 'error', title: '最近任务读取失败' },
+    { name: '全无效记录', jobs: [], overrides: { invalidCount: ref(2) }, state: 'error', title: '记录无法读取' },
+    { name: '空集合', jobs: [], overrides: {}, state: 'empty', title: '尚无可展示记录' },
+    { name: '筛选无匹配', jobs: [job()], overrides: { filteredJobs: ref([]), query: ref('missing') }, state: 'empty', title: '没有匹配的记录' },
+    { name: '正常列表', jobs: [job()], overrides: {}, state: null, title: 'alpine:latest' },
+    { name: '后台刷新', jobs: [job()], overrides: { refreshing: ref(true) }, state: null, title: 'alpine:latest' },
+    { name: '刷新失败保留记录', jobs: [job()], overrides: { stale: ref(true), error: ref('暂时失败') }, state: null, title: 'alpine:latest' },
+  ])('$name：滚动容器不伪造命名区域，保留对话框标题与状态通知', async ({ jobs, overrides, state, title }) => {
+    await mount(jobs, overrides)
+    const container = host.querySelector('.task-list-region')!
+    expect(container.tagName).toBe('DIV')
+    for (const attribute of ['role', 'aria-label', 'aria-labelledby', 'aria-live', 'aria-busy', 'aria-hidden', 'tabindex']) {
+      expect(container.hasAttribute(attribute)).toBe(false)
+    }
+    expect(container.textContent).toContain(title)
+    expect(host.querySelectorAll('[role="region"], section[aria-label]:not([role="dialog"]), section[aria-labelledby]:not([role="dialog"])')).toHaveLength(0)
+    const dialog = host.querySelector('[role="dialog"]')!
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe('最近任务')
+    const feedback = host.querySelector('.task-feedback')!
+    expect(feedback.getAttribute('role')).toBe('status')
+    expect(feedback.getAttribute('aria-live')).toBe('polite')
+    expect(feedback.getAttribute('aria-atomic')).toBe('true')
+    if (state) {
+      const status = container.querySelector(`.resource-state--${state}`)!
+      expect(status.getAttribute('role')).toBe(state === 'error' ? 'alert' : 'status')
+      expect(status.getAttribute('aria-live')).toBe(state === 'error' ? 'assertive' : 'polite')
+    } else {
+      expect(container.querySelector('article')?.getAttribute('aria-label')).toBe('alpine:latest')
+      expect(container.querySelector('h3')?.textContent).toBe('alpine:latest')
+      expect(container.querySelector<HTMLButtonElement>('.task-detail-toggle')?.disabled).toBe(false)
+    }
+    if ('refreshing' in overrides) expect(feedback.textContent).toContain('正在刷新，保留上次记录')
+    if ('stale' in overrides) expect(feedback.textContent).toContain('当前记录可能已过期')
+  })
   it('筛选器名称由独立标签提供，不混入选项文本', async () => {
     await mount(); const controls = [...host.querySelectorAll('input, select')]
     expect(controls.map(control => document.getElementById(control.getAttribute('aria-labelledby')!)?.textContent)).toEqual(['搜索已加载记录', '任务类型', '任务状态'])

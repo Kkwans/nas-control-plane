@@ -41,3 +41,9 @@ JobSnapshot/get/list/SSE与OpenAPI新增可选progressLimited。旧库可读的l
 ## 独立浏览器证据专项
 
 新增14例390/1440像素静态fixture：受限running/completed/pending/cancel-requested/cancel-unknown及省略/false兼容，每例检查下载卡和任务中心。保留完整axe、实际文字Range/容器裁剪、截图及源码/图片散列、前后请求稳定和最终失败账本；GET精确来源白名单拒绝所有写、外部来源、未知API和真实WebSocket。仅隔离fixture中精确15秒的自动刷新计时器，其他计时器与axe保持运行；元数据记录抑制次数，明确不验证真实轮询或实际拉取。正常样式包含ellipsis不等同实际裁剪，使用几何判定而非样式值硬禁。ESLint、strict TypeScript、14例发现与独立静态审查通过；真实28张截图及无障碍结论等待远端CI。
+
+## 实际浏览器结果与任务列表语义（2026-10-16）
+
+c559c75 的 CI 38825577034 全绿：4150单元/146文件、479E2E，新增14例均通过。28截图、84关联制品散列及387源码散列匹配；每例11个GET、两类jobs请求各一次，无写/拒绝/页面错误，捕获期间请求稳定。28张独特PNG逐张目检，受限五状态警告/生命周期文字完整，兼容两状态保留42%与42 MB/100 MB；900px移动视口以下分页属于纵向延伸。完整axe零violation，但下载捕获保留两类incomplete，任务中心另有aria-prohibited-attr待人工检查。
+
+实际14份任务捕获均指向无role的div.task-list-region上的aria-label。该容器只负责滚动布局，外层已由可见“最近任务”h2命名dialog，现有状态分别由polite/status与assertive/alert通知，因此最小修复为移除不适用的标签，不新增重复region或改变通知。依据WAI-ARIA generic角色名称限制（https://www.w3.org/TR/wai-aria-1.2/#generic）及region设计建议（https://www.w3.org/WAI/ARIA/apg/patterns/landmarks/examples/region.html）。新增8状态组件合同，全量4158单元/146文件、lint、类型检查与构建预算通过；真实incomplete是否消失仍待新CI，不能把待检查项误称已确认violation。

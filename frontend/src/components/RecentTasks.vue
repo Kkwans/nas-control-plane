@@ -70,7 +70,8 @@ function progress(job: JobSnapshot) {
         </div>
         <p v-if="invalidCount" class="task-warning task-invalid">有 {{ invalidCount }} 条记录无法解析</p>
       </div>
-      <div class="task-list-region" aria-label="最近任务列表">
+      <!-- 仅作滚动布局；最近任务由外层对话框标题命名，状态由各自的 live region 通知。 -->
+      <div class="task-list-region">
         <ResourceState v-if="loading && !hasLoaded" state="loading" title="正在读取最近任务" />
         <ResourceState v-else-if="error && !hasLoaded" state="error" title="最近任务读取失败" :message="error" @retry="refresh" />
         <ResourceState v-else-if="!jobs.length && invalidCount" state="error" title="记录无法读取" message="返回的记录暂时无法解析，请刷新重试。" @retry="refresh" />
