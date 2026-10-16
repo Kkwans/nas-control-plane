@@ -512,14 +512,14 @@ async function captureRecovery(page: Page, info: TestInfo, api: RecoveryFixture,
   const screenshot = await page.screenshot({ path: png, animations: 'disabled', fullPage: true })
   const afterCapture = await recoveryGeometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await recoveryGeometry(page)
   const file = `${name}-capture-state.json`, path = info.outputPath('ui-captures', file)
-  await writeFile(path, JSON.stringify({ ...await recoveryProvenance(), fixtureOnly: true, nativeNASAcceptance: false, executionScope: 'CI browser with strict static fixture only', state, testTitle: info.title, screenshot: `${name}.png`, screenshotSha256: recoveryHash(screenshot), fullPage: true, scrollNormalization: 'all scrollers to 0,0 after reachability check', retryTargetBaseline: 'existing shared ResourceState 34px; no production style override', controlReachability, reachableState, before, afterCapture, afterAxe, chartsBefore, chartsAfter: await recoveryCharts(page), requestsBefore, requestsAfter: [...api.requests], allowedBackgroundPollCounts: Object.fromEntries(['GET /api/v1/monitoring/alerts', 'GET /api/v1/jobs'].map(target => [target, api.requests.slice(requestsBefore.length).filter(item => item === target).length])), history: api.history, denied: api.denied, writes: api.writes, errors: api.errors, axe }, null, 2))
+  await writeFile(path, JSON.stringify({ ...await recoveryProvenance(), fixtureOnly: true, nativeNASAcceptance: false, executionScope: 'CI browser with strict static fixture only', state, testTitle: info.title, screenshot: `${name}.png`, screenshotSha256: recoveryHash(screenshot), fullPage: true, scrollNormalization: 'all scrollers to 0,0 after reachability check', retryTargetBaseline: 'shared ResourceState 44px design token; no fixture style override', controlReachability, reachableState, before, afterCapture, afterAxe, chartsBefore, chartsAfter: await recoveryCharts(page), requestsBefore, requestsAfter: [...api.requests], allowedBackgroundPollCounts: Object.fromEntries(['GET /api/v1/monitoring/alerts', 'GET /api/v1/jobs'].map(target => [target, api.requests.slice(requestsBefore.length).filter(item => item === target).length])), history: api.history, denied: api.denied, writes: api.writes, errors: api.errors, axe }, null, 2))
   api.captures.push({ file, sha256: recoveryHash(await readFile(path)) })
   await info.attach(name, { path: png, contentType: 'image/png' })
   await info.attach(`${name}-state`, { path, contentType: 'application/json' })
   expect(axe.violations).toEqual([])
   for (const control of controlReachability) {
-    expect(control.bounds.width).toBeGreaterThanOrEqual(34)
-    expect(control.bounds.height).toBeGreaterThanOrEqual(34)
+    expect(control.bounds.width).toBeGreaterThanOrEqual(44)
+    expect(control.bounds.height).toBeGreaterThanOrEqual(44)
     expect(control.hits).toEqual([true, true, true, true, true])
   }
   const incidental = api.requests.slice(requestsBefore.length)
