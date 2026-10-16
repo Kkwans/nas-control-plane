@@ -92,6 +92,32 @@ async function state(page: Page) {
         inViewport: ring.left >= 0 && ring.top >= 0 && ring.right <= innerWidth && ring.bottom <= innerHeight,
         centerHit: points[0]!.hit, scrollWidth: control.scrollWidth, clientWidth: control.clientWidth }
     }),
+    ignoredRows: [...document.querySelectorAll<HTMLElement>('.ignored-sites .site-row')].map(row => {
+      const bounds = row.getBoundingClientRect()
+      const inspect = (selector: string) => {
+        const control = row.querySelector<HTMLElement>(selector)!
+        const rect = control.getBoundingClientRect()
+        const range = document.createRange(); range.selectNodeContents(control)
+        const lines = [...range.getClientRects()].filter(line => line.width && line.height)
+        const clips = []
+        for (let parent = control.parentElement; parent; parent = parent.parentElement) {
+          const css = getComputedStyle(parent), clip = parent.getBoundingClientRect()
+          clips.push({ x: /hidden|clip|auto|scroll/.test(css.overflowX), y: /hidden|clip|auto|scroll/.test(css.overflowY), bounds: clip.toJSON() })
+        }
+        const contained = (box: DOMRect) => clips.every(clip =>
+          (!clip.x || (box.left >= clip.bounds.left - 1 && box.right <= clip.bounds.right + 1)) &&
+          (!clip.y || (box.top >= clip.bounds.top - 1 && box.bottom <= clip.bounds.bottom + 1)))
+        const points = [[rect.left + rect.width / 2, rect.top + rect.height / 2], [rect.left + 3, rect.top + 3], [rect.right - 3, rect.bottom - 3]].map(([x, y]) => {
+          const hit = document.elementFromPoint(x!, y!)
+          return { x, y, hit: hit === control || (hit !== null && control.contains(hit)) }
+        })
+        return { text: control.textContent, bounds: rect.toJSON(), lines: lines.map(line => line.toJSON()), clips, points,
+          inViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+          contained: contained(rect) && rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom,
+          textContained: lines.length > 0 && lines.every(line => contained(line) && line.left >= rect.left - 1 && line.right <= rect.right + 1 && line.top >= rect.top - 1 && line.bottom <= rect.bottom + 1) }
+      }
+      return { bounds: bounds.toJSON(), status: inspect('.ignored-site-status'), restore: inspect('.ignored-site-restore') }
+    }),
     rows: [...document.querySelectorAll('.site-identity strong')].map(node => node.textContent).sort(),
   }))
 }
@@ -121,6 +147,29 @@ async function capture(page: Page, info: TestInfo, name: string, artifacts: unkn
   expect(captureFocus.ringContained).toBe(true)
   expect(Number.parseFloat(captureFocus.outline.width)).toBeGreaterThan(0)
   expect(captureFocus.outline.style).not.toBe('none')
+  if (captureFocus.text?.startsWith('已忽略')) {
+    await expect(page.locator('.ignored-sites').getByRole('button', { name: '恢复识别', exact: true })).toHaveCount(1)
+    await expect(page.locator('.ignored-site-status')).toHaveText('已忽略')
+    expect(before.ignoredRows).toHaveLength(1)
+    for (const row of before.ignoredRows) {
+      expect(row.status.text).toBe('已忽略')
+      expect(row.restore.text).toBe('恢复识别')
+      expect(row.restore.bounds.width).toBeGreaterThanOrEqual(44)
+      expect(row.restore.bounds.height).toBeGreaterThanOrEqual(44)
+      for (const control of [row.status, row.restore]) {
+        expect(control.bounds.width).toBeGreaterThan(0)
+        expect(control.bounds.height).toBeGreaterThan(0)
+        expect(control.inViewport).toBe(true)
+        expect(control.contained).toBe(true)
+        expect(control.textContained).toBe(true)
+        expect(control.points.every(point => point.hit)).toBe(true)
+      }
+      expect(row.status.bounds.right).toBeLessThanOrEqual(row.restore.bounds.left)
+      if (page.viewportSize()!.width <= 760) {
+        expect(Math.abs((row.status.bounds.top + row.status.bounds.bottom) / 2 - (row.restore.bounds.top + row.restore.bounds.bottom) / 2)).toBeLessThanOrEqual(1)
+      }
+    }
+  } else expect(before.ignoredRows).toHaveLength(0)
   const path = info.outputPath('ui-captures', `${name}.png`)
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = await page.screenshot({ path, fullPage: true, animations: 'disabled' })

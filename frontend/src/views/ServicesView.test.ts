@@ -8,6 +8,9 @@ import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import type { Site, SiteProfileInput } from '@/api/control'
 import ServicesView from './ServicesView.vue'
+import servicesSource from './ServicesView.vue?raw'
+import { readFileSync } from 'node:fs'
+import { compileStyle, parse } from 'vue/compiler-sfc'
 
 const messages = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }))
 vi.mock('element-plus', async () => {
@@ -625,5 +628,53 @@ describe('站点状态筛选语义', () => {
     view.selectedCategory = 'other'; await nextTick()
     expect(names()).toEqual([])
     expect(host.textContent).toContain('没有匹配的站点')
+  })
+})
+
+
+describe('已忽略站点文本操作布局', () => {
+  it('状态与恢复文本不使用会隐藏或压成图标尺寸的通用类，查看不发起恢复', async () => {
+    const restore = vi.spyOn(store, 'restore')
+    store.ignoredSites = [{ ...profile, projectId: 'ignored', name: 'Ignored' }]
+    view.siteFilter = 'ignored'
+    await nextTick()
+    const row = host.querySelector('.ignored-sites .site-row')!
+    expect(row.querySelector('.ignored-site-status')?.textContent).toBe('已忽略')
+    expect(row.querySelector('.ignored-site-actions > .ignored-site-restore')?.textContent).toBe('恢复识别')
+    expect(row.querySelector('.site-source, .row-actions')).toBeNull()
+    expect(restore).not.toHaveBeenCalled()
+  })
+
+  it('编译样式保留自适应 44px 文本目标，并用同优先级移动规则覆盖忽略行列数', () => {
+    const { descriptor } = parse(servicesSource)
+    const compiled = compileStyle({ source: descriptor.styles[0]!.content, filename: 'ServicesView.vue', id: 'data-v-ignored-layout', scoped: true })
+    expect(compiled.errors).toEqual([])
+    const tokens = compileStyle({ source: readFileSync('src/styles/tokens.css', 'utf8'), filename: 'tokens.css', id: 'tokens' })
+    expect(tokens.errors).toEqual([])
+    const touchTargets: string[] = []
+    tokens.rawResult!.root.walkDecls('--ncp-touch-target', declaration => { touchTargets.push(declaration.value) })
+    expect(touchTargets).toEqual(['44px'])
+    const style = document.createElement('style')
+    style.textContent = compiled.code
+    document.head.append(style)
+    try {
+      const rules = [...style.sheet!.cssRules]
+      const find = (rules: CSSRule[], selector: string) => rules.find(rule =>
+        rule.type === CSSRule.STYLE_RULE && (rule as CSSStyleRule).selectorText.replace(/\[data-v-ignored-layout\]/g, '') === selector) as CSSStyleRule
+      const restore = find(rules, '.ignored-site-restore').style
+      expect(restore.getPropertyValue('width')).toBe('auto')
+      expect(restore.getPropertyValue('min-width')).toBe('var(--ncp-touch-target)')
+      expect(restore.getPropertyValue('min-height')).toBe('var(--ncp-touch-target)')
+      expect(restore.getPropertyValue('white-space')).toBe('nowrap')
+      const desktop = find(rules, '.ignored-sites .site-row')
+      expect(desktop.style.getPropertyValue('grid-template-columns')).toBe('minmax(0, 1fr) auto auto')
+      const mobile = rules.find(rule => rule.type === CSSRule.MEDIA_RULE && (rule as CSSMediaRule).conditionText === '(max-width: 760px)') as CSSMediaRule
+      expect(rules.indexOf(mobile)).toBeGreaterThan(rules.indexOf(desktop))
+      const mobileRules = [...mobile.cssRules]
+      expect(find(mobileRules, '.ignored-sites .site-row').style.getPropertyValue('grid-template-columns')).toBe('minmax(0, 1fr) auto')
+      expect(find(mobileRules, '.ignored-sites .site-identity').style.getPropertyValue('grid-column')).toBe('1 / -1')
+      expect(find(mobileRules, '.ignored-site-status').style.getPropertyValue('grid-row')).toBe('2')
+      expect(find(mobileRules, '.ignored-site-actions').style.getPropertyValue('grid-row')).toBe('2')
+    } finally { style.remove() }
   })
 })

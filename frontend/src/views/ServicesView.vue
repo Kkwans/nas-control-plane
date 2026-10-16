@@ -613,8 +613,8 @@ function sitesForCategory(category: string) {
     <section v-if="siteFilter === 'ignored' && sitesStore.ignoredSites.length" class="directory-panel panel ignored-sites">
       <article v-for="site in sitesStore.ignoredSites" :key="site.projectId" class="site-row">
         <div class="site-identity"><div class="site-logo"><EyeOff :size="19" /></div><div><strong>{{ site.name || site.projectId }}</strong><p>{{ site.description || '自动识别站点已被忽略' }}</p></div></div>
-        <span class="site-source">已忽略</span>
-        <div class="row-actions"><ElButton @click="restoreIgnoredSite(site.projectId)">恢复识别</ElButton></div>
+        <span class="ignored-site-status">已忽略</span>
+        <div class="ignored-site-actions"><ElButton class="ignored-site-restore" @click="restoreIgnoredSite(site.projectId)">恢复识别</ElButton></div>
       </article>
     </section>
 
@@ -728,7 +728,10 @@ function sitesForCategory(category: string) {
 .site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--image{border-color:transparent;background:transparent}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:contain}
 .directory-panel{overflow:hidden}.site-row{display:grid;min-height:78px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.9rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:3px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}
-.ignored-sites .site-row{grid-template-columns:minmax(280px,1fr) 100px 140px}
+.ignored-sites .site-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.ignored-site-status { color: var(--ncp-text-subtle); font-size: .75rem; white-space: nowrap; }
+.ignored-site-actions { display: flex; justify-content: flex-end; min-width: 0; }
+.ignored-site-restore { width: auto; min-width: var(--ncp-touch-target); height: auto; min-height: var(--ncp-touch-target); padding: 10px 16px; white-space: nowrap; }
 .row-actions button.danger:hover{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
 .empty-sites{display:flex;min-height:220px;align-items:center;justify-content:center;gap:14px;color:var(--ncp-text-subtle)}.empty-sites h2{margin:0;color:var(--ncp-text);font-size:.95rem}.empty-sites p{margin:4px 0 0;font-size:.8rem}.editor-context{display:flex;align-items:center;gap:11px;margin:-5px 0 18px;padding:12px;border-radius:11px;background:var(--ncp-surface-quiet)}.editor-context>div:last-child{display:grid;min-width:0;gap:2px}.editor-context strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.editor-context span{color:var(--ncp-text-subtle);font-size:.74rem}.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.editor-grid :deep(.el-select),.editor-grid :deep(.el-input-number){width:100%}.field-label,.switch-grid label,.switch-grid span{display:flex;align-items:center;gap:6px}.switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.switch-grid label{min-height:48px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.switch-grid span{color:var(--ncp-text-muted);font-size:.8rem}
 .field-help{display:block;margin-top:5px;color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload{display:flex;align-items:center;gap:11px;margin-top:9px}.icon-upload input{display:none}.icon-upload>div{display:grid;justify-items:start;gap:5px}.icon-upload span{color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload__preview{display:grid;width:58px;height:58px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.icon-upload__preview:hover{border-color:rgba(52,116,212,.45);background:var(--ncp-primary-soft)}.icon-upload__preview img{width:100%;height:100%;object-fit:cover}
@@ -920,6 +923,10 @@ function sitesForCategory(category: string) {
   .discovery-issues article { grid-template-columns: 1fr; gap: 4px; padding-block: 11px; }
   .site-row { grid-template-columns: minmax(0, 1fr) auto; }
   .site-source, .site-visited { display: none; }
+  .ignored-sites .site-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ignored-sites .site-identity { grid-column: 1 / -1; }
+  .ignored-site-status { grid-column: 1; grid-row: 2; }
+  .ignored-site-actions { grid-column: 2; grid-row: 2; }
 }
 
 @media (max-width: 520px) {
