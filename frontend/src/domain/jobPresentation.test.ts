@@ -126,3 +126,29 @@ describe('容器创建任务展示', () => {
     expect(canRequestJobCancellation(job({ type, status, cancellable: true }))).toBe(false)
   })
 })
+
+
+describe('独立容器项目操作任务展示', () => {
+  it.each([
+    ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
+  ])('%s 仅描述记录，保留不确定性与保存优先级', (type, label) => {
+    expect(jobTypeLabel(type)).toBe(label)
+    for (const status of ['queued', 'running'] as const) expect(jobStateDescription(job({ type, status }))).toContain('尚未确认完成')
+    const completed = jobStateDescription(job({ type, status: 'completed' }))
+    expect(completed).toContain('任务记录标记为已完成')
+    expect(completed).toContain('逐容器回执与当前状态')
+    expect(completed).toContain('不代表所有容器当前健康或持续运行')
+    expect(completed).not.toContain('读回状态符合目标')
+    expect(jobStateDescription(job({ type, status: 'failed', errorCode: 'DOCKER_PROJECT_STATE_MISMATCH' }))).toContain('操作可能已执行')
+    expect(jobStateDescription(job({ type, status: 'failed' }))).toContain('勿重复提交')
+    expect(jobStateDescription(job({ type, status: 'interrupted' }))).toContain('项目执行结果未确认')
+    expect(jobStateDescription(job({ type, status: 'completed', cancellationStatus: 'unknown' }))).toContain('项目执行结果未确认')
+    for (const status of ['queued', 'running', 'completed', 'failed', 'interrupted'] as const) {
+      const pending = job({ type, status, persistenceStatus: 'pending', cancellable: true })
+      expect(jobStateDescription(pending)).toBe('任务结果正在保存，尚未确认最终结果。')
+      expect(isTerminalJob(pending)).toBe(false)
+      expect(canRequestJobCancellation(pending)).toBe(false)
+      expect(canRequestJobCancellation(job({ type, status, cancellable: true }))).toBe(false)
+    }
+  })
+})

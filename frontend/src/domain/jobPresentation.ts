@@ -20,6 +20,9 @@ export function jobStateLabel(job: JobSnapshot): string {
   return jobStatusOptions.find((option) => option.value === jobState(job))!.label
 }
 export function jobTypeLabel(type: string): string {
+  if (type === 'docker-project-start') return '项目启动'
+  if (type === 'docker-project-stop') return '项目停止'
+  if (type === 'docker-project-restart') return '项目重启'
   if (type === 'docker-container-create') return '容器创建'
   if (type === 'docker-container-start') return '容器启动'
   if (type === 'docker-container-stop') return '容器停止'
@@ -36,11 +39,21 @@ export function containerCreateStateDescription(state: string): string {
   if (state === 'failed' || state === 'interrupted') return '创建结果未确认，可能已产生副作用或残留容器；请只读核对实际状态，勿重复提交。'
   return ''
 }
+/** 通用任务展示只描述记录状态，不解析逐容器回执或推断项目当前状态。 */
+export function projectActionStateDescription(type: string, state: string): string {
+  if (!/^docker-project-(start|stop|restart)$/.test(type)) return ''
+  if (state === 'queued' || state === 'running') return '独立容器项目操作任务已接收，尚未确认完成。'
+  if (state === 'completed') return '任务记录标记为已完成；请核对任务详情中的逐容器回执与当前状态，不代表所有容器当前健康或持续运行。'
+  if (state === 'failed') return '项目操作可能已执行，读回状态可能不符合目标；请只读核对各容器实际状态，勿重复提交。'
+  if (state === 'interrupted') return '项目执行结果未确认，部分容器操作可能已执行；请只读核对各容器实际状态，勿重复提交。'
+  return ''
+}
 export function jobStateDescription(job: JobSnapshot): string {
   const state = jobState(job)
   if (state === 'persisting') return '任务结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
   if (job.type === 'docker-container-create') return containerCreateStateDescription(state)
+  if (/^docker-project-(start|stop|restart)$/.test(job.type)) return projectActionStateDescription(job.type, state)
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
   if (/^docker-container-(start|stop|restart)$/.test(job.type)) {
     if (state === 'completed') return '本次操作已返回且读回状态符合目标；不代表健康或持续状态，请刷新核对。'

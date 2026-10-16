@@ -16,6 +16,33 @@ function button(text: string) { return [...host.querySelectorAll('button')].find
 beforeEach(() => { beginSession(); vi.resetAllMocks(); api.read.mockResolvedValue(page()); api.auth.mockResolvedValue(undefined) })
 afterEach(() => { app?.unmount(); host?.remove() })
 describe('保存历史只读呈现', () => {
+  it.each([
+    ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
+  ])('无项目记录也可用 %s 中文类型精确筛选', async (type, label) => {
+    await mount()
+    const select = host.querySelector('select')!
+    expect(select.querySelector(`option[value="${type}"]`)?.textContent).toBe(label)
+    select.value = type; select.dispatchEvent(new Event('change')); await flush()
+    expect(api.read.mock.calls.at(-1)?.[0]).toEqual({ type, limit: 50 })
+  })
+  it.each([
+    ['queued', '尚未确认完成'], ['running', '尚未确认完成'], ['completed', '任务记录标记为已完成'],
+    ['failed', '操作可能已执行'], ['interrupted', '项目执行结果未确认'],
+  ])('项目历史 %s 无回执时不推断所有容器当前状态', async (status, description) => {
+    api.read.mockResolvedValue({ source: 'persisted', items: ['start', 'stop', 'restart'].map(action => ({ ...item(status), id: action, type: `docker-project-${action}`, reference: 'standalone', errorCode: status === 'failed' ? 'DOCKER_PROJECT_STATE_MISMATCH' : undefined })) })
+    await mount()
+    const records = [...host.querySelectorAll('.history-record')]
+    expect(records).toHaveLength(3)
+    for (const record of records) {
+      expect(record.textContent).toContain('保存记录：')
+      expect(record.textContent).toContain(description)
+      if (status === 'completed') expect(record.textContent).toContain('不代表所有容器当前健康或持续运行')
+      if (status === 'failed') expect(record.textContent).toContain('DOCKER_PROJECT_STATE_MISMATCH')
+      expect(record.textContent).not.toContain('读回状态符合目标')
+      expect(record.querySelector('progress')).toBeNull()
+      expect(record.textContent).not.toContain('请求取消')
+    }
+  })
   it('无创建记录时也可用中文类型精确查询创建历史', async () => {
     await mount()
     const select = host.querySelector('select')!

@@ -35,6 +35,19 @@ beforeEach(() => {
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers() })
 
 describe('任务中心观察与竞争', () => {
+  it.each([
+    ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
+  ])('%s 复用中文类型筛选和搜索且不可取消', async (type, label) => {
+    const project = job({ id: 'project-job', type, reference: 'standalone' })
+    api.list.mockResolvedValue(list([project, job()]))
+    const { state } = setup(); await flush()
+    expect(state.typeOptions.value).toContainEqual({ value: type, label })
+    state.query.value = label; expect(state.filteredJobs.value).toEqual([project])
+    state.query.value = ''; state.typeFilter.value = type
+    expect(state.filteredJobs.value).toEqual([project])
+    expect(state.canCancel(project)).toBe(false)
+    await state.requestCancel(project); expect(api.cancel).not.toHaveBeenCalled()
+  })
   it('创建任务复用中文类型筛选和搜索且不可取消', async () => {
     const create = job({ id: 'create-job', type: 'docker-container-create', reference: undefined })
     api.list.mockResolvedValue(list([create, job()]))

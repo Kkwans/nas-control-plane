@@ -20,6 +20,19 @@ function set(key: string, value: unknown) { (mock.state[key] as Ref<unknown>).va
 function button(text: string) { return [...host.querySelectorAll('button')].find(item => item.textContent?.includes(text))! }
 afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
+  it.each([
+    ['docker-project-start', '项目启动'], ['docker-project-stop', '项目停止'], ['docker-project-restart', '项目重启'],
+  ])('%s 无逐容器回执时不承诺当前健康，无进度和取消控件', async (type, label) => {
+    await mount([job({ type, status: 'completed', reference: 'standalone', cancellable: true })])
+    expect(host.textContent).toContain(label)
+    expect(host.textContent).toContain('任务记录标记为已完成')
+    expect(host.textContent).toContain('不代表所有容器当前健康或持续运行')
+    expect(host.textContent).not.toContain('读回状态符合目标')
+    button('查看详情').click(); await nextTick()
+    expect(host.textContent).toContain('此任务不支持取消')
+    expect(host.querySelector('progress')).toBeNull()
+    expect(host.querySelector('.task-cancel')).toBeNull()
+  })
   it('创建任务没有容器身份回执时仍保守展示，不推断容器 ID、进度或取消能力', async () => {
     await mount([job({ type: 'docker-container-create', status: 'completed', reference: undefined, cancellable: true })])
     expect(host.textContent).toContain('容器创建')
