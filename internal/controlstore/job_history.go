@@ -48,7 +48,7 @@ type JobHistoryPage struct {
 }
 
 // 文本先按 BLOB 字节长度投影；超限、NULL 及类型错误均不会把完整字段带入 Go。
-// 独立超限标记便于证明超限不是正常 NULL；不读取 layers_json、create_result_json 或任何执行字段。
+// 独立超限标记便于证明超限不是正常 NULL；不读取 layers_json、任何结果 JSON 或其他执行字段。
 // 这里只限制驱动返回的字段大小，不保证 SQLite 内部读取/计算的峰值内存。
 const jobHistoryColumns = `
  CASE WHEN typeof(id) = 'text' AND length(CAST(id AS BLOB)) <= 256 THEN id END,

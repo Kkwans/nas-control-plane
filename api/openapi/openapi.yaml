@@ -2652,6 +2652,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/projects/standalone/action-jobs/{action}:
+    post:
+      operationId: submitDockerProjectActionJob
+      summary: 持久接收独立容器项目生命周期任务
+      description: >-
+        正文仅接受 containerIds，1 至 128 个不重复的完整小写容器 ID，拒绝未知和重复 JSON 字段，正文上限16KiB。
+        冻结所选子集，running 持久确认后以独立5秒预算读取 inventory，确认每个目标唯一属于 standalone；
+        预检失败以 DOCKER_PROJECT_ACTION_PREFLIGHT_FAILED 结束且零派发。不按状态重选或补目标，预检不保证原子归属。
+        此后三种类型 docker-project-start/stop/restart 只调用一次既有 ControlStandaloneProject，沿用45秒预算；
+        不保证大型批次完成，不更改 Agent worker。与镜像删除、单容器操作共享单 worker 队列，总容量32、排队期限10分钟，
+        不提供跨旧同步入口互斥。HTTP断开不取消任务，不支持 cancel/retry 或重启自动重放；保存失败仅重存结果。
+        全回执身份、完整集合、每项动作和汇总一致才可保存最小 projectActionResult。
+        全部成功为 completed；明确反态为 failed/DOCKER_PROJECT_STATE_MISMATCH，操作已发生；
+        任一执行结果未知则 interrupted，可信完整回执可保留其他安全确认项。超时、传输失败或无效回执 interrupted 且无结果项。
+        结果仅证明本次调用及读回，不保证持续状态或健康。旧同步和 Compose 入口保持。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [start, stop, restart] }
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [containerIds]
+              properties:
+                containerIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 128
+                  uniqueItems: true
+                  items: { type: string, minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }
+      responses:
+        '202':
+          description: 已持久接收的原始 queued 快照；type=docker-project-start/stop/restart，reference=standalone，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes均为0，layers为空；无 projectActionResult、completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobSnapshot' }
+        '400':
+          description: DOCKER_PROJECT_ACTION_INVALID，参数不符合严格合同
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: Root 登录会话缺失或无效
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE 或 AGENT_DOCKER_CONTROL_UNAVAILABLE
   /api/v1/docker/containers/{containerID}/action-jobs/{action}:
     post:
       operationId: submitDockerContainerActionJob
@@ -4284,6 +4343,29 @@ components:
           format: date-time
           description: 已保存记录的更新时间，不是当前采样或响应时间。
         completedAt: { type: string, format: date-time }
+    DockerProjectActionJobResult:
+      type: object
+      additionalProperties: false
+      required: [projectId, kind, action, items]
+      description: 仅持久终态的安全回执；不含名称、原始错误或配置。items 按冻结请求顺序排列，ID不重复。completed要求全部succeeded；failed结果要求至少一个state-mismatch且无unknown；interrupted结果要求至少一个unknown。无可信回执时省略整个字段。
+      properties:
+        projectId: { type: string, enum: [standalone] }
+        kind: { type: string, enum: [standalone] }
+        action: { type: string, enum: [start, stop, restart] }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            additionalProperties: false
+            required: [containerId, outcome, state]
+            description: succeeded 的 state 为动作目标且无errorCode；state-mismatch为明确反态和DOCKER_CONTAINER_STATE_MISMATCH；unknown固定unknown状态和JOB_EXECUTION_INTERRUPTED，不将读回状态误报为执行成功。
+            properties:
+              containerId: { type: string, minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }
+              outcome: { type: string, enum: [succeeded, state-mismatch, unknown] }
+              state: { type: string, enum: [running, stopped, unknown] }
+              errorCode: { type: string, enum: [DOCKER_CONTAINER_STATE_MISMATCH, JOB_EXECUTION_INTERRUPTED] }
     DockerContainerCreateJobResult:
       type: object
       additionalProperties: false
@@ -4299,6 +4381,14 @@ components:
         started: { type: boolean }
     JobSnapshot:
       type: object
+      allOf:
+        - oneOf:
+            - not: { required: [projectActionResult] }
+            - required: [projectActionResult]
+              properties:
+                type: { type: string, enum: [docker-project-start, docker-project-stop, docker-project-restart] }
+                reference: { type: string, enum: [standalone] }
+                status: { type: string, enum: [completed, failed, interrupted] }
       oneOf:
         - not:
             required: [createResult]
@@ -4308,6 +4398,10 @@ components:
             status: { type: string, enum: [completed] }
       required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]
       properties:
+        projectActionResult:
+          description: 仅三个独立容器项目生命周期类型的已持久终态详情或 SSE 中出现；历史摘要不包含结果。结果待保存时不外露。
+          allOf:
+            - $ref: '#/components/schemas/DockerProjectActionJobResult'
         createResult:
           description: 可选的最小化创建回执，仅在 completed 的 docker-container-create 任务详情或 SSE 快照中出现；历史列表摘要不包含此字段。
           allOf:
@@ -4325,7 +4419,7 @@ components:
           description: 任务结果待持久化，包括未开始任务的排队超时结果。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，尚未确认最终结果。
         cancellable:
           type: boolean
-          description: 执行器是否支持取消；Compose、docker-image-remove、docker-container-create 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
+          description: 执行器是否支持取消；Compose、docker-image-remove、docker-container-create 、docker-project-start/stop/restart 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
         errorCode:
           type: string
           description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署、镜像删除、容器创建与单容器生命周期任务（docker-container-start/stop/restart），包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。

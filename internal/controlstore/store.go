@@ -178,25 +178,26 @@ type ComposeRevision struct {
 }
 
 type JobRecord struct {
-	CreateResultJSON   string    `json:"-"`
-	Revision           int64     `json:"-"`
-	CancellationStatus string    `json:"cancellationStatus,omitempty"`
-	ErrorCode          string    `json:"errorCode,omitempty"`
-	ID                 string    `json:"id"`
-	Type               string    `json:"type"`
-	Status             string    `json:"status"`
-	Reference          string    `json:"reference"`
-	Message            string    `json:"message"`
-	Progress           int       `json:"progress"`
-	ProgressLimited    bool      `json:"progressLimited"`
-	Error              string    `json:"error"`
-	DownloadedBytes    int64     `json:"downloadedBytes"`
-	TotalBytes         int64     `json:"totalBytes"`
-	SpeedBytes         int64     `json:"speedBytes"`
-	LayersJSON         string    `json:"layersJson"`
-	CreatedAt          time.Time `json:"createdAt"`
-	UpdatedAt          time.Time `json:"updatedAt"`
-	CompletedAt        time.Time `json:"completedAt"`
+	CreateResultJSON        string    `json:"-"`
+	ProjectActionResultJSON string    `json:"-"`
+	Revision                int64     `json:"-"`
+	CancellationStatus      string    `json:"cancellationStatus,omitempty"`
+	ErrorCode               string    `json:"errorCode,omitempty"`
+	ID                      string    `json:"id"`
+	Type                    string    `json:"type"`
+	Status                  string    `json:"status"`
+	Reference               string    `json:"reference"`
+	Message                 string    `json:"message"`
+	Progress                int       `json:"progress"`
+	ProgressLimited         bool      `json:"progressLimited"`
+	Error                   string    `json:"error"`
+	DownloadedBytes         int64     `json:"downloadedBytes"`
+	TotalBytes              int64     `json:"totalBytes"`
+	SpeedBytes              int64     `json:"speedBytes"`
+	LayersJSON              string    `json:"layersJson"`
+	CreatedAt               time.Time `json:"createdAt"`
+	UpdatedAt               time.Time `json:"updatedAt"`
+	CompletedAt             time.Time `json:"completedAt"`
 }
 
 type MetricSample struct {
@@ -858,6 +859,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"error_code", "TEXT NOT NULL DEFAULT ''"},
 		{"progress_limited", "INTEGER NOT NULL DEFAULT 0"},
 		{"create_result_json", "TEXT NOT NULL DEFAULT ''"},
+		{"project_action_result_json", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "jobs", column.name, column.definition); err != nil {
 			return err

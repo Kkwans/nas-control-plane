@@ -15,27 +15,28 @@ import (
 )
 
 type jobSnapshot struct {
-	CreateResult       *controlstore.ContainerCreateJobResult `json:"createResult,omitempty"`
-	ProgressLimited    bool                                   `json:"progressLimited,omitempty"`
-	CancellationStatus string                                 `json:"cancellationStatus,omitempty"`
-	PersistenceStatus  string                                 `json:"persistenceStatus,omitempty"`
-	Cancellable        bool                                   `json:"cancellable"`
-	ErrorCode          string                                 `json:"errorCode,omitempty"`
-	ID                 string                                 `json:"id"`
-	Type               string                                 `json:"type"`
-	Status             string                                 `json:"status"`
-	Reference          string                                 `json:"reference,omitempty"`
-	Message            string                                 `json:"message"`
-	Progress           int                                    `json:"progress"`
-	Error              string                                 `json:"error,omitempty"`
-	CreatedAt          time.Time                              `json:"createdAt"`
-	UpdatedAt          time.Time                              `json:"updatedAt"`
-	CompletedAt        *time.Time                             `json:"completedAt,omitempty"`
-	DownloadedBytes    int64                                  `json:"downloadedBytes"`
-	TotalBytes         int64                                  `json:"totalBytes"`
-	SpeedBytes         int64                                  `json:"speedBytes"`
-	Layers             map[string]jobLayer                    `json:"layers"`
-	ArtifactState      string                                 `json:"artifactState"`
+	ProjectActionResult *controlstore.ProjectActionJobResult   `json:"projectActionResult,omitempty"`
+	CreateResult        *controlstore.ContainerCreateJobResult `json:"createResult,omitempty"`
+	ProgressLimited     bool                                   `json:"progressLimited,omitempty"`
+	CancellationStatus  string                                 `json:"cancellationStatus,omitempty"`
+	PersistenceStatus   string                                 `json:"persistenceStatus,omitempty"`
+	Cancellable         bool                                   `json:"cancellable"`
+	ErrorCode           string                                 `json:"errorCode,omitempty"`
+	ID                  string                                 `json:"id"`
+	Type                string                                 `json:"type"`
+	Status              string                                 `json:"status"`
+	Reference           string                                 `json:"reference,omitempty"`
+	Message             string                                 `json:"message"`
+	Progress            int                                    `json:"progress"`
+	Error               string                                 `json:"error,omitempty"`
+	CreatedAt           time.Time                              `json:"createdAt"`
+	UpdatedAt           time.Time                              `json:"updatedAt"`
+	CompletedAt         *time.Time                             `json:"completedAt,omitempty"`
+	DownloadedBytes     int64                                  `json:"downloadedBytes"`
+	TotalBytes          int64                                  `json:"totalBytes"`
+	SpeedBytes          int64                                  `json:"speedBytes"`
+	Layers              map[string]jobLayer                    `json:"layers"`
+	ArtifactState       string                                 `json:"artifactState"`
 }
 
 type jobLayer struct {
@@ -70,6 +71,18 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 	} else {
 		job.CreateResult = result
 	}
+	projectResult, projectErr := controlstore.ParseProjectActionJobResult(record)
+	if projectErr != nil {
+		job.Status = "interrupted"
+		job.ErrorCode = "JOB_HISTORY_CORRUPT"
+		job.Message = "任务历史结果损坏，项目操作结果未确认，请只读刷新核对"
+	} else {
+		job.ProjectActionResult = projectResult
+	}
+	if err != nil || projectErr != nil {
+		job.CreateResult = nil
+		job.ProjectActionResult = nil
+	}
 	if !validJobLayers(record.LayersJSON) {
 		job.ErrorCode = "JOB_HISTORY_CORRUPT"
 		job.Message = "任务历史进度损坏，请检查数据库备份"
@@ -83,6 +96,11 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 
 // cloneJobSnapshot 必须在持有 registry 锁时调用（或输入已独立），避免可变字段逃逸。
 func cloneJobSnapshot(job jobSnapshot) jobSnapshot {
+	if job.ProjectActionResult != nil {
+		result := *job.ProjectActionResult
+		result.Items = append([]controlstore.ProjectActionJobItem(nil), result.Items...)
+		job.ProjectActionResult = &result
+	}
 	if job.CreateResult != nil {
 		result := *job.CreateResult
 		job.CreateResult = &result
