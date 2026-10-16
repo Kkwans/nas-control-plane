@@ -85,7 +85,6 @@ func TestTerminalWebSocketBridgesUnixAgentAndHostPTY(t *testing.T) {
 
 	secondConnection := waitForNextTerminalSession(t, ctx, server.URL)
 	defer secondConnection.CloseNow()
-	readStartedControl(t, ctx, secondConnection)
 }
 
 func waitForUnixSocket(ctx context.Context, socketPath string, agentErrors <-chan error) error {
@@ -120,17 +119,21 @@ func dialHostTerminal(t *testing.T, ctx context.Context, serverURL string) *webs
 
 func waitForNextTerminalSession(t *testing.T, ctx context.Context, serverURL string) *websocket.Conn {
 	t.Helper()
-	for {
-		connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(serverURL, "http")+"/ws/terminal?target=host", nil)
-		if err == nil {
-			return connection
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("previous terminal session was not terminated: %v", ctx.Err())
-		case <-time.After(25 * time.Millisecond):
-		}
+	connection, err := waitForTerminalStarted(ctx, terminalReadinessOps[*websocket.Conn]{
+		dial: func(ctx context.Context) (*websocket.Conn, error) {
+			connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(serverURL, "http")+"/ws/terminal?target=host", nil)
+			return connection, err
+		},
+		read: func(ctx context.Context, connection *websocket.Conn) (websocket.MessageType, []byte, error) {
+			return connection.Read(ctx)
+		},
+		close: func(connection *websocket.Conn) error { return connection.CloseNow() },
+		pause: pauseTerminalReadiness,
+	})
+	if err != nil {
+		t.Fatalf("wait for next terminal started control: %v", err)
 	}
+	return connection
 }
 
 func readStartedControl(t *testing.T, ctx context.Context, connection *websocket.Conn) {

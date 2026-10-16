@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
@@ -369,23 +368,33 @@ func writeTerminalError(ctx context.Context, connection terminalOutputWriter, er
 }
 
 func terminalErrorCode(err error, fallback string) string {
-	code := grpcstatus.Convert(err).Message()
-	if strings.HasPrefix(code, "TERMINAL_") {
-		return terminal.NormalizeErrorCode(code)
-	}
-	text := err.Error()
-	for _, candidate := range []string{
-		"TERMINAL_UNAVAILABLE", "TERMINAL_INITIALIZATION_FAILED", "TERMINAL_INITIALIZATION_TIMEOUT",
-		"TERMINAL_TARGET_UNAVAILABLE", "TERMINAL_SESSION_FAILED", "TERMINAL_INPUT_INVALID",
-		"TERMINAL_OUTPUT_CLOSED", "TERMINAL_OUTPUT_FAILED", "TERMINAL_STREAM_FAILED",
-		"TERMINAL_POC_UNAVAILABLE", "TERMINAL_POC_INITIALIZATION_FAILED", "TERMINAL_POC_TIMEOUT",
-		"TERMINAL_POC_OUTPUT_CLOSED", "TERMINAL_POC_OUTPUT_FAILED",
-	} {
-		if strings.Contains(text, candidate) {
-			return terminal.NormalizeErrorCode(candidate)
+	// FromError 会把包装层 Error 文本放入 Message；这里只取原始状态的固定码。
+	var carrier interface{ GRPCStatus() *grpcstatus.Status }
+	if errors.As(err, &carrier) {
+		if status := carrier.GRPCStatus(); status != nil {
+			if code, ok := knownTerminalErrorCode(status.Message()); ok {
+				return code
+			}
 		}
 	}
-	return terminal.NormalizeErrorCode(fallback)
+	if code, ok := knownTerminalErrorCode(fallback); ok {
+		return code
+	}
+	return "TERMINAL_SESSION_FAILED"
+}
+
+func knownTerminalErrorCode(code string) (string, bool) {
+	code = terminal.NormalizeErrorCode(code)
+	switch code {
+	case "TERMINAL_UNAVAILABLE", "TERMINAL_INITIALIZATION_FAILED", "TERMINAL_INITIALIZATION_TIMEOUT",
+		"TERMINAL_TARGET_UNAVAILABLE", "TERMINAL_SESSION_FAILED", "TERMINAL_INPUT_INVALID",
+		"TERMINAL_OUTPUT_CLOSED", "TERMINAL_OUTPUT_FAILED", "TERMINAL_STREAM_FAILED",
+		"TERMINAL_SESSION_LIMIT_REACHED", "TERMINAL_START_INVALID", "TERMINAL_MESSAGE_INVALID",
+		"TERMINAL_REQUEST_INVALID", "TERMINAL_STREAM_RECEIVE_FAILED", "TERMINAL_STREAM_SEND_FAILED":
+		return code, true
+	default:
+		return "", false
+	}
 }
 
 func terminalErrorMessage(code string) string {
@@ -398,6 +407,8 @@ func terminalErrorMessage(code string) string {
 		return "终端会话初始化失败，请检查 Agent 终端能力。"
 	case "TERMINAL_TARGET_UNAVAILABLE":
 		return "当前终端目标不可用，请确认主机或容器状态。"
+	case "TERMINAL_SESSION_LIMIT_REACHED":
+		return "终端会话数量已达上限，请等待已有会话关闭后重试。"
 	case "TERMINAL_INPUT_INVALID":
 		return "终端输入无效或超出允许范围。"
 	default:
