@@ -5441,6 +5441,7 @@ components:
         level: { type: string, enum: [error, warning, info, debug] }
         message: { type: string }
         rawMessage: { type: string, description: 未清理级别和时间前缀的原始日志 }
+        stream: { type: string, enum: [stdout, stderr], description: 容器日志输出流；系统和 Agent 日志可省略 }
   securitySchemes:
     RootSession:
       type: apiKey

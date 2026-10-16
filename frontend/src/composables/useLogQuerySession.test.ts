@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useLogQuerySession } from './useLogQuerySession'
 import type { followLogs, LogEntry, LogResponse } from '../api/control'
 import { beginSession, invalidateSession } from '../session/sessionLifecycle'
@@ -37,6 +37,7 @@ function setup() {
 }
 const query = { source: 'system' as const, query: '', hours: 6, limit: 200 }
 beforeEach(() => beginSession())
+afterEach(() => vi.unstubAllGlobals())
 
 describe('日志查询会话', () => {
   it('分页中切换条件释放 busy，旧分页成功不能覆盖新数据或游标', async () => {
@@ -134,6 +135,70 @@ describe('日志查询会话', () => {
     await pending
     expect(session.entries.value).toEqual([])
     expect(session.error.value).toBe('')
+    session.dispose()
+  })
+})
+
+
+describe('日志会话真实读取边界', () => {
+  it('同一查询刷新返回畸形数据时保留已有记录与接收时间', async () => {
+    const first = response([entry('A')], 'cursor-A')
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(first)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...first, entries: [{}], collectedAt: '2026-10-16T00:00:00Z' })))
+    vi.stubGlobal('fetch', fetcher)
+    const session = useLogQuerySession()
+    await session.load(query)
+    await session.load(query)
+    expect(session.entries.value).toEqual(first.entries)
+    expect(session.lastReceivedAt.value).toBe(first.collectedAt)
+    expect(session.loading.value).toBe(false)
+    expect(session.error.value).toContain('日志读取失败')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    session.dispose()
+  })
+
+  it('畸形分页不能污染已加载记录、游标与接收时间', async () => {
+    const first = response([entry('A')], 'cursor-A')
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(first)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...first, entries: [entry('B'), {}], nextCursor: 'poison' })))
+    vi.stubGlobal('fetch', fetcher)
+    const session = useLogQuerySession()
+    await session.load(query)
+    await session.loadMore()
+    expect(session.entries.value).toEqual(first.entries)
+    expect(session.nextCursor.value).toBe('cursor-A')
+    expect(session.lastReceivedAt.value).toBe(first.collectedAt)
+    expect(session.loadingMore.value).toBe(false)
+    expect(session.error.value).toContain('更多日志读取失败')
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    session.dispose()
+  })
+
+  it('畸形实时帧不能标记已连接，保留历史且失败后拒绝排队帧', async () => {
+    const listeners = new Map<string, (event: { data: string }) => void>()
+    const close = vi.fn()
+    vi.stubGlobal('EventSource', class {
+      static CLOSED = 2
+      close = close
+      addEventListener(name: string, callback: (event: { data: string }) => void) { listeners.set(name, callback) }
+    })
+    const first = response([entry('A')], 'cursor-A')
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(first))))
+    const session = useLogQuerySession()
+    await session.load(query)
+    session.syncFollow(true, 5, 200)
+    expect(session.followState.value).toBe('connecting')
+    listeners.get('logs')!({ data: JSON.stringify({ ...first, entries: [entry('B'), {}], nextCursor: 'poison' }) })
+    expect(session.followState.value).toBe('failed')
+    expect(close).toHaveBeenCalledOnce()
+    listeners.get('logs')!({ data: JSON.stringify(response([entry('C')])) })
+    expect(session.followState.value).toBe('failed')
+    expect(session.entries.value).toEqual(first.entries)
+    expect(session.nextCursor.value).toBe('cursor-A')
+    expect(session.lastReceivedAt.value).toBe(first.collectedAt)
+    expect(session.error.value).toContain('实时日志连接失败')
     session.dispose()
   })
 })

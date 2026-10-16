@@ -1,5 +1,6 @@
 import { parseResourceAlerts, type ResourceAlerts } from '@/domain/monitoring/alerts'
 import { parsePreferencesResponse } from './preferenceResponse'
+import { parseLogResponse } from './logResponse'
 import { requestCreatedSiteIcon, requestSiteIconUpload } from './siteCreatedIconOutcome'
 import { requestSiteProfileWrite } from './siteWriteOutcome'
 import { requestUserWrite } from './userWriteOutcome'
@@ -308,7 +309,7 @@ export function requestLogs(
   },
   signal?: AbortSignal,
 ): Promise<LogResponse> {
-  return request(`/api/v1/logs?${logParameters(input)}`, { signal })
+  return request(`/api/v1/logs?${logParameters(input)}`, { signal }, parseLogResponse)
 }
 
 export function requestUsers(signal?: AbortSignal): Promise<ManagedUser[]> {
@@ -374,19 +375,22 @@ export function followLogs(
   const parameters = logParameters(input)
   parameters.set('interval', String(intervalSeconds))
   const source = new EventSource(`/api/v1/logs/events?${parameters}`)
+  let failed = false
   source.addEventListener('logs', (event) => {
+    if (failed) return
     try {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as LogResponse
-      if (!Array.isArray(payload.entries) || typeof payload.collectedAt !== 'string')
-        throw new Error('invalid log stream')
+      const payload = parseLogResponse(JSON.parse((event as MessageEvent<string>).data))
       onLogs(payload)
     } catch {
+      failed = true
       source.close()
       onError('failed')
     }
   })
-  source.addEventListener('unavailable', () => onError('reconnecting'))
-  source.onerror = () => onError(source.readyState === EventSource.CLOSED ? 'failed' : 'reconnecting')
+  source.addEventListener('unavailable', () => { if (!failed) onError('reconnecting') })
+  source.onerror = () => {
+    if (!failed) onError(source.readyState === EventSource.CLOSED ? 'failed' : 'reconnecting')
+  }
   return source
 }
 
