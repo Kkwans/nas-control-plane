@@ -36,7 +36,7 @@ const createDrawerOpen = ref(false)
 const localImages = useDockerLocalImages({ active: computed(() => mode.value === 'local'), query: computed(() => props.query), containers: computed(() => props.containers), pageSize: computed(() => props.pageSize) })
 const downloads = useDockerImageDownloads(localImages.images, { onCreatedDownloadCompleted: () => localImages.refresh() })
 const {
-  images, loading, error, removeAdmissions, removeFailures, selectedImageIds, localPage, localPreference,
+  images, loading, error, removeAdmissions, removeFailures, bulkRemovalSummary, bulkRemovalRunning, selectedImageIds, localPage, localPreference,
   filteredImages, localPageCount, pagedImages, allVisibleSelected,
   someVisibleSelected, selectedImageCount, bulkRemovePending, toggleLocalSort, refresh,
   handleVisibleSelectionChange, handleImageSelectionChange, isRemovePending, confirmRemove,
@@ -114,6 +114,9 @@ onMounted(() => {
 
     <div v-if="mode === 'local'">
       <div v-if="error" class="inline-error"><span>{{ error }}</span><button type="button" @click="refresh">重新加载</button></div>
+      <div v-if="bulkRemovalSummary" class="inline-error removal-admission" role="status" aria-label="批量删除进度">
+        <span>已删除 {{ bulkRemovalSummary.removed }} · 仍被引用 {{ bulkRemovalSummary.inUse }} · 已发送结果未确认 {{ bulkRemovalSummary.unknown }} · {{ bulkRemovalRunning ? '等待发送' : '未发送' }} {{ bulkRemovalSummary.unsent }}<template v-if="bulkRemovalSummary.sending && bulkRemovalRunning"> · 正在处理 {{ bulkRemovalSummary.sending }}</template><template v-if="bulkRemovalSummary.unsent && !bulkRemovalRunning">；未发送的镜像需要重新确认，不会自动继续。</template></span>
+      </div>
       <div v-if="removeFailures.length" class="inline-error bulk-remove-error" role="alert">
         <div><strong>部分镜像删除失败</strong><ul><li v-for="failure in removeFailures" :key="failure.id">{{ failure.name }}：{{ failure.message }}</li></ul></div>
         <button type="button" @click="removeFailures = []">关闭</button>

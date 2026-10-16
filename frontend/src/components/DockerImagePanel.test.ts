@@ -62,7 +62,7 @@ beforeEach(() => {
   beginSession()
   downloads = downloadState(); hooks.downloads.mockReturnValue(downloads)
   hooks.local.mockReturnValue({
-    removeAdmissions: ref({}), images: ref([]), loading: ref(false), error: ref(''), removeFailures: ref([]), selectedImageIds: ref([]), localPage: ref(1),
+    bulkRemovalRunning: ref(false), bulkRemovalSummary: ref(null), removeAdmissions: ref({}), images: ref([]), loading: ref(false), error: ref(''), removeFailures: ref([]), selectedImageIds: ref([]), localPage: ref(1),
     localPreference: ref({ sortKey: 'name', sortDirection: 'asc' }), filteredImages: ref([]), localPageCount: ref(1), pagedImages: ref([]),
     allVisibleSelected: ref(false), someVisibleSelected: ref(false), selectedImageCount: ref(0), bulkRemovePending: ref(false),
     refresh: vi.fn(), dateLabel: (value: string) => value,
@@ -71,6 +71,23 @@ beforeEach(() => {
 afterEach(() => { for (const { app, host } of mounted.splice(0)) { app.unmount(); host.remove() } })
 
 describe('DockerImagePanel 下载观察状态', () => {
+  it('批量进度区分等待发送、未发送及已发送未知结果，不伪装后台任务', async () => {
+    const summary = ref({ total: 151, removed: 0, inUse: 0, unknown: 50, unsent: 101, sending: 50, running: true })
+    const pending = ref(true)
+    Object.assign(hooks.local(), { bulkRemovalSummary: summary, bulkRemovalRunning: pending, bulkRemovePending: pending })
+    const host = document.createElement('div'); document.body.append(host)
+    const app = createApp({ render: () => h(DockerImagePanel, { query: '', containers: [], pageSize: 20 }) })
+    app.mount(host); mounted.push({ app, host }); await nextTick()
+    const banner = host.querySelector('[aria-label="批量删除进度"]')!
+    expect(banner.textContent).toContain('等待发送 101')
+    expect(banner.textContent).toContain('已发送结果未确认 50')
+    expect(banner.textContent).not.toContain('任务')
+    pending.value = false; await nextTick()
+    expect(banner.textContent).toContain('未发送 101')
+    expect(banner.textContent).toContain('需要重新确认，不会自动继续')
+    expect(banner.textContent).not.toContain('正在处理')
+  })
+
   it('批量未知结果只展示只读镜像核验，不声称存在后台任务', async () => {
     const local = hooks.local() as { removeAdmissions: { value: unknown }; refresh: ReturnType<typeof vi.fn> }
     local.removeAdmissions.value = { 'sha256:fixture': { name: 'alpine', state: 'unknown', kind: 'bulk' } }

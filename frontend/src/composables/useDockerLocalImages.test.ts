@@ -179,3 +179,111 @@ describe('bulk removal ownership', () => {
     expect(state.removeAdmissions.value).toEqual({}); expect(api.success).toHaveBeenCalledWith('已删除 51 个本地镜像')
   })
 })
+
+function many(state: ReturnType<typeof useDockerLocalImages>, count = 151) {
+  const ids = Array.from({ length: count }, (_, i) => `sha256:${i.toString(16).padStart(64, '0')}`)
+  state.images.value = ids.map((id) => ({ ...fixture(), id })); select(state, ids)
+  api.read.mockResolvedValue({ images: state.images.value }); return ids
+}
+async function tick() { for (let i = 0; i < 10; i++) await Promise.resolve() }
+describe('bounded sequential bulk drain', () => {
+  it('sends 151 frozen IDs once with concurrency one and reserves queued targets without unknown admission', async () => {
+    const { state } = setup(); const ids = many(state)
+    const responses = Array.from({ length: 4 }, () => deferred<ReturnType<typeof receipt>>())
+    let running = 0; let maximum = 0
+    api.bulk.mockImplementation((batch: string[]) => {
+      expect(batch.every((id) => state.removeAdmissions.value[id]?.state === 'unknown')).toBe(true)
+      running++; maximum = Math.max(maximum, running)
+      return responses[api.bulk.mock.calls.length - 1]!.promise.finally(() => { running-- })
+    })
+    const pending = state.confirmRemoveSelected(); await tick()
+    expect(api.bulk).toHaveBeenCalledTimes(1)
+    expect(Object.keys(state.removeAdmissions.value)).toEqual(ids.slice(0, 50))
+    expect(state.isRemovePending(ids[150]!)).toBe(true)
+    await state.confirmRemove(state.images.value[150]!); expect(api.remove).not.toHaveBeenCalled()
+    select(state, [otherId]); state.localPage.value = 4
+    for (let i = 0; i < 4; i++) {
+      expect(api.bulk).toHaveBeenCalledTimes(i + 1)
+      responses[i]!.resolve(receipt(ids.slice(i * 50, (i + 1) * 50))); await tick()
+    }
+    await pending
+    expect(maximum).toBe(1)
+    expect(api.bulk.mock.calls.map(([batch]) => batch.length)).toEqual([50, 50, 50, 1])
+    expect(api.bulk.mock.calls.flatMap(([batch]) => batch)).toEqual(ids)
+    expect(state.bulkRemovalSummary.value).toEqual({ total: 151, removed: 151, inUse: 0, unknown: 0, unsent: 0, sending: 0, running: false })
+    expect(api.read).toHaveBeenCalledOnce()
+  })
+  it.each(['navigation', 'scope', 'invalidate', 'new-session'])('stops queued writes and suppresses late settlement after %s', async (change) => {
+    const { state, active } = setup(); const ids = many(state); const response = deferred<ReturnType<typeof receipt>>()
+    api.bulk.mockReturnValue(response.promise)
+    const pending = state.confirmRemoveSelected(); await tick(); const summary = { ...state.bulkRemovalSummary.value }
+    if (change === 'navigation') { active.value = false; active.value = true }
+    if (change === 'scope') scope.stop()
+    if (change === 'invalidate') invalidateSession()
+    if (change === 'new-session') beginSession()
+    response.resolve(receipt(ids.slice(0, 50))); await pending
+    expect(api.bulk).toHaveBeenCalledOnce(); expect(api.read).not.toHaveBeenCalled(); expect(api.success).not.toHaveBeenCalled()
+    expect(state.bulkRemovalSummary.value).toEqual(summary); expect(state.selectedImageIds.value).toEqual(ids)
+    if (change === 'navigation' || change === 'scope') expect(Object.keys(state.removeAdmissions.value)).toEqual(ids.slice(0, 50))
+    expect(state.removeAdmissions.value[ids[50]!]).toBeUndefined()
+  })
+  it('releases never-dispatched targets after navigation and requires fresh confirmation', async () => {
+    const { state, active } = setup(); const ids = many(state); const response = deferred<ReturnType<typeof receipt>>()
+    api.bulk.mockReturnValueOnce(response.promise)
+    const pending = state.confirmRemoveSelected(); await tick()
+    active.value = false; active.value = true
+    expect(state.bulkRemovalRunning.value).toBe(false)
+    expect(state.isRemovePending(ids[50]!)).toBe(true)
+    response.resolve(receipt(ids.slice(0, 50))); await pending
+    expect(state.isRemovePending(ids[0]!)).toBe(true)
+    expect(state.isRemovePending(ids[50]!)).toBe(false)
+    select(state, [ids[50]!]); api.bulk.mockResolvedValue(receipt([ids[50]!]))
+    const dialog = deferred<boolean>(); api.confirm.mockReturnValueOnce(dialog.promise)
+    const newer = state.confirmRemoveSelected()
+    expect(state.bulkRemovePending.value).toBe(true)
+    expect(state.bulkRemovalRunning.value).toBe(false)
+    dialog.resolve(true); await newer
+    expect(api.confirm).toHaveBeenCalledTimes(2)
+    expect(api.bulk).toHaveBeenLastCalledWith([ids[50]!])
+  })
+  it.each(['id', 'tags', 'missing', 'duplicate', 'in-use', 'admission'])('stops at changed queued %s without marking unsent targets unknown', async (change) => {
+    const { state } = setup(); const ids = many(state); const response = deferred<ReturnType<typeof receipt>>()
+    api.bulk.mockReturnValue(response.promise)
+    const pending = state.confirmRemoveSelected(); await tick(); const target = state.images.value[50]!
+    if (change === 'id') target.id = otherId
+    if (change === 'tags') target.repoTags.push('changed:tag')
+    if (change === 'missing') state.images.value.splice(50, 1)
+    if (change === 'duplicate') state.images.value.push({ ...target })
+    if (change === 'in-use') target.containers = 1
+    if (change === 'admission') state.removeAdmissions.value[target.id] = { name: 'competing', state: 'unknown' }
+    response.resolve(receipt(ids.slice(0, 50))); await pending
+    expect(api.bulk).toHaveBeenCalledOnce(); expect(api.read).toHaveBeenCalledOnce()
+    expect(state.bulkRemovalSummary.value).toMatchObject({ removed: 50, unknown: 0, unsent: 101, running: false })
+    expect(state.removeAdmissions.value[ids[51]!]).toBeUndefined(); expect(state.selectedImageIds.value).toContain(ids[51])
+  })
+  it('settles reordered mixed receipts immediately and continues after rejection with exact totals', async () => {
+    const { state } = setup(); const ids = many(state); const last = deferred<ReturnType<typeof receipt>>()
+    api.bulk.mockRejectedValueOnce(new Error('lost response'))
+      .mockResolvedValueOnce({ items: ids.slice(50, 100).reverse().map((imageId, i) => ({ imageId, removed: i < 20, errorCode: i < 20 ? undefined : i < 30 ? 'DOCKER_IMAGE_IN_USE' : 'DOCKER_IMAGE_REMOVE_FAILED' })) })
+      .mockImplementationOnce(async (batch: string[]) => receipt(batch)).mockReturnValueOnce(last.promise)
+    const pending = state.confirmRemoveSelected(); await tick()
+    expect(api.bulk).toHaveBeenCalledTimes(4)
+    expect(state.bulkRemovalSummary.value).toMatchObject({ removed: 70, inUse: 10, unknown: 71, unsent: 0 })
+    expect(state.removeAdmissions.value[ids[99]!]).toBeUndefined(); expect(state.removeFailures.value).toHaveLength(10)
+    last.resolve(receipt(ids.slice(150))); await pending
+    expect(state.bulkRemovalSummary.value).toMatchObject({ total: 151, removed: 71, inUse: 10, unknown: 70, unsent: 0 })
+    expect(state.selectedImageIds.value).toHaveLength(80); expect(Object.keys(state.removeAdmissions.value)).toHaveLength(70)
+    expect(api.read).toHaveBeenCalledOnce()
+  })
+  it('keeps a replacement session reservation when the old owner finishes late', async () => {
+    const first = setup().state; const firstScope = scope; const firstIds = many(first)
+    const oldResponse = deferred<ReturnType<typeof receipt>>(); api.bulk.mockReturnValueOnce(oldResponse.promise)
+    const pending = first.confirmRemoveSelected(); await tick(); beginSession()
+    const second = setup().state; const secondIds = many(second); const newResponse = deferred<ReturnType<typeof receipt>>()
+    api.bulk.mockReturnValue(newResponse.promise); const newer = second.confirmRemoveSelected(); await tick()
+    oldResponse.resolve(receipt(firstIds.slice(0, 50))); await pending
+    expect(second.bulkRemovePending.value).toBe(true); expect(second.isRemovePending(secondIds[150]!)).toBe(true)
+    scope.stop(); newResponse.resolve(receipt(secondIds.slice(0, 50))); await newer; firstScope.stop()
+    expect(api.bulk).toHaveBeenCalledTimes(2)
+  })
+})
