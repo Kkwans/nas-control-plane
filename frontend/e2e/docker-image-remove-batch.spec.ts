@@ -26,8 +26,14 @@ function deferred() {
 
 // 只允许指定来源的静态 GET 与精确 API 白名单。删除许可仅供一次真实确认点击消费；
 // 未知请求、重发、WebSocket 均失败关闭，不访问 Docker、NAS 或宿主机。
-async function fixture(page: Page, origin: string, mode: Mode) {
-  await page.clock.setFixedTime(new Date(stamp))
+async function fixture(page: Page, origin: string, mode: Mode, bounded?: ReturnType<typeof boundedTransport>) {
+  let snapshotTimestamp = Date.parse(stamp)
+  const currentStamp = async () => {
+    snapshotTimestamp = Math.max(snapshotTimestamp + 1, await page.evaluate(() => Date.now()))
+    return new Date(snapshotTimestamp).toISOString()
+  }
+  if (bounded) await page.clock.install({ time: new Date(stamp) })
+  else await page.clock.setFixedTime(new Date(stamp))
   await page.addInitScript(() => {
     // 本场景通过精确 GET 核验；任何意外 SSE 订阅直接暴露为页面错误。
     window.EventSource = class extends EventTarget {
@@ -44,8 +50,8 @@ async function fixture(page: Page, origin: string, mode: Mode) {
     ['/api/v1/system/summary', { ...summary, collectedAt: stamp }],
     ['/api/v1/sites', { collectedAt: stamp, sites: [], discovery: { status: 'complete', probeAvailable: true, candidateCount: 0, verifiedCount: 0, failedCount: 0, issues: [] } }],
     ['/api/v1/sites/ignored', []], ['/api/v1/jobs?type=docker-image-pull', { jobs: [] }],
-    ['/api/v1/docker/inventory', inventory],
-    ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
+    ['/api/v1/docker/inventory', bounded ? { ...inventory, engine: { ...inventory.engine, images: bounded.ids.length } } : inventory],
+    ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: bounded && listKey === 'docker.images.local' ? 200 : 10, sortKey: '', sortDirection: 'asc' }]),
   ])
   page.on('pageerror', (error) => errors.push(error.message))
   await page.routeWebSocket('**', (socket) => { denied.push(`WS ${socket.url()}`); socket.close() })
@@ -62,7 +68,20 @@ async function fixture(page: Page, origin: string, mode: Mode) {
     if (url.origin !== origin) { denied.push(target); return route.abort('blockedbyclient') }
     const readKey = url.pathname + url.search
     if (request.method() === 'GET' && readKey === '/api/v1/jobs') return route.fulfill({ json: { jobs: [] } })
+    if (bounded && request.method() === 'GET' && readKey === '/api/v1/docker/images') return route.fulfill({ json: { collectedAt: await currentStamp(), images: bounded.images } })
+    if (bounded && request.method() === 'POST' && readKey === removePath) {
+      const body: unknown = request.postDataJSON()
+      writes.push(body)
+      const batch = bounded.consume(body)
+      if (!batch) { denied.push(target); return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED' } }) }
+      try {
+        await batch.release.promise
+        bounded.images = bounded.images.filter((image) => !batch.ids.includes(image.id))
+        return await route.fulfill({ json: { items: batch.ids.map((imageId) => ({ imageId, removed: true })), removedCount: batch.ids.length, failedCount: 0, completed: true } })
+      } finally { bounded.finish() }
+    }
     if (request.method() === 'GET' && readKey === '/api/v1/docker/images') return route.fulfill({ json: { collectedAt: stamp, images: responded && mode === 'mixed' ? [{ ...images[1], containers: 1 }] : images } })
+    if (bounded && request.method() === 'GET' && readKey === '/api/v1/docker/inventory') return route.fulfill({ json: { ...inventory, collectedAt: await currentStamp(), engine: { ...inventory.engine, images: bounded.images.length } } })
     if (request.method() === 'GET' && reads.has(readKey)) return route.fulfill({ json: reads.get(readKey) })
     if (request.method() === 'POST' && url.pathname === removePath && !url.search && authorized) {
       authorized = false
@@ -109,7 +128,7 @@ async function geometry(region: Locator) {
     return { text: element.textContent, bounds: bounds.toJSON(), fields, buttons, viewport: { width: innerWidth, height: innerHeight }, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth } }
   })
 }
-async function capture(page: Page, info: TestInfo, api: Fixture, region: Locator, phase: string, expectedTexts: string[]) {
+async function capture(page: Page, info: TestInfo, api: Fixture, region: Locator, phase: string, expectedTexts: string[], capturedIds = imageIds) {
   await expect(page.locator('.el-message')).toHaveCount(0)
   await region.scrollIntoViewIfNeeded()
   await page.evaluate(() => document.fonts.ready)
@@ -121,7 +140,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, region: Locator
   await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
   const after = await geometry(region), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(region)
   const statePath = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
-  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(), phase, imageIds, expectedRequest: { imageIds }, screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors] }, null, 2))
+  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(), phase, imageIds: capturedIds, expectedRequest: capturedIds.length <= 50 ? { imageIds: capturedIds } : undefined, expectedBatches: Array.from({ length: Math.ceil(capturedIds.length / 50) }, (_, index) => capturedIds.slice(index * 50, index * 50 + 50)), screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors] }, null, 2))
   await info.attach(prefix, { path: png, contentType: 'image/png' })
   await info.attach(`${prefix}-axe-state`, { path: statePath, contentType: 'application/json' })
   for (const sample of [before, after, afterAxe]) {
@@ -231,3 +250,157 @@ for (const width of [390, 1440]) for (const valid of [true, false]) {
     } finally { api.release.resolve() }
   })
 }
+
+// 151 个目标只能按一次确认冻结的顺序串行发送；每次写入由对应测试显式许可。
+function boundedTransport() {
+  const ids = Array.from({ length: 151 }, (_, index) => `sha256:${(index + 1).toString(16).padStart(64, '0')}`)
+  const names = ids.map((_, index) => `fixture/bounded-${String(index + 1).padStart(3, '0')}:latest`)
+  const batches: Array<{ ids: string[]; release: ReturnType<typeof deferred> }> = []
+  let allowed: string[][] = [], active = 0, maximumActive = 0
+  return {
+    ids, names, batches, captures: [] as Array<{ screenshot: string; screenshotSha256: string; captureState: string; captureStateSha256: string }>,
+    images: ids.map((id, index) => ({ id, repoTags: [names[index]!], repoDigests: [], sizeBytes: 1024, createdAt: stamp, containers: 0 })),
+    authorize(targets: string[]) {
+      expect(active).toBe(0)
+      allowed = Array.from({ length: Math.ceil(targets.length / 50) }, (_, index) => targets.slice(index * 50, index * 50 + 50))
+    },
+    consume(body: unknown) {
+      const expected = allowed.shift()
+      if (!expected) return null
+      expect(body).toEqual({ imageIds: expected })
+      expect(active).toBe(0)
+      active += 1; maximumActive = Math.max(maximumActive, active)
+      const batch = { ids: expected, release: deferred() }
+      batches.push(batch)
+      return batch
+    },
+    finish() { active -= 1 },
+    get maximumActive() { return maximumActive },
+    releaseAll() { for (const batch of batches) batch.release.resolve() },
+  }
+}
+async function openBoundedSelection(page: Page, baseURL: string, width = 1440) {
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 })
+  const transport = boundedTransport(), api = await fixture(page, new URL(baseURL).origin, 'mixed', transport)
+  await page.goto('/docker', { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '镜像', exact: true }).click()
+  await expect(page.getByRole('checkbox', { name: /^选择镜像 fixture\/bounded-/ })).toHaveCount(151)
+  await page.getByRole('checkbox', { name: '选择当前页镜像', exact: true }).check()
+  await expect(page.locator('.selection-count')).toHaveText('已选 151 个')
+  return { api, transport }
+}
+async function confirmBounded(page: Page, transport: ReturnType<typeof boundedTransport>, ids: string[]) {
+  await page.getByRole('button', { name: '批量删除', exact: true }).click()
+  const confirmation = page.locator('.el-message-box')
+  await expect(confirmation).toContainText(`${ids.length} 个未被引用的镜像`)
+  transport.authorize(ids)
+  await confirmation.getByRole('button', { name: `删除 ${ids.length} 个`, exact: true }).click()
+}
+async function boundedLedger(info: TestInfo, api: Fixture, transport: ReturnType<typeof boundedTransport>, page: Page) {
+  expect(transport.maximumActive).toBe(1)
+  expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+  expect(api.requests.filter((request) => !request.startsWith('GET '))).toEqual(api.writes.map(() => `POST ${removePath}`))
+  const path = info.outputPath('ui-captures', `bounded-image-batch-${page.viewportSize()!.width}-ledger-capture-state.json`)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify({
+    ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false,
+    testTitle: info.title, project: info.project.name, retry: info.retry,
+    journeyCompleted: info.errors.length === 0, linkedCaptures: transport.captures,
+    imageIds: transport.ids, writes: api.writes, maximumActive: transport.maximumActive,
+    requests: api.requests, denied: api.denied, errors: api.errors,
+    summary: await page.getByRole('status', { name: '批量删除进度', exact: true }).textContent(),
+    unknown: await page.locator('.removal-admission--unknown').allTextContents(),
+  }, null, 2))
+  await info.attach('bounded-image-batch-ledger', { contentType: 'application/json', path })
+}
+
+test('151 个镜像按冻结选择串行发送 50/50/50/1，确认后选择变化不扩大或缩减请求', async ({ page, baseURL }, info) => {
+  const { api, transport } = await openBoundedSelection(page, baseURL!)
+  try {
+    await confirmBounded(page, transport, transport.ids)
+    await expect.poll(() => transport.batches.length).toBe(1)
+    // 原生复选框仍可调整选择，但不能改变已确认的目标快照。
+    await page.getByRole('checkbox', { name: `选择镜像 ${transport.names[150]}`, exact: true }).uncheck()
+    await expect(page.locator('.selection-count')).toHaveText('已选 150 个')
+    for (let index = 0; index < 4; index += 1) {
+      await expect.poll(() => transport.batches.length).toBe(index + 1)
+      expect(api.writes).toHaveLength(index + 1)
+      await expect(page.getByRole('button', { name: '批量删除', exact: true })).toBeDisabled()
+      transport.batches[index]!.release.resolve()
+    }
+    const status = page.getByRole('status', { name: '批量删除进度', exact: true })
+    await expect(status).toContainText('已删除 151')
+    await expect(status).toContainText('未发送 0')
+    expect(transport.batches.map((batch) => batch.ids.length)).toEqual([50, 50, 50, 1])
+    expect(transport.batches.flatMap((batch) => batch.ids)).toEqual(transport.ids)
+    await expect(page.locator('.removal-admission--unknown')).toHaveCount(0)
+    await boundedLedger(info, api, transport, page)
+  } finally { transport.releaseAll() }
+})
+
+for (const width of [390, 1440]) test(`${width}px 中断首批保留 50 未确认和 101 未发送，独立重新确认仅发送未发送目标`, async ({ page, baseURL }, info) => {
+  test.setTimeout(120_000)
+  const { api, transport } = await openBoundedSelection(page, baseURL!, width)
+  const status = page.getByRole('status', { name: '批量删除进度', exact: true })
+  try {
+    await confirmBounded(page, transport, transport.ids)
+    await expect.poll(() => transport.batches.length).toBe(1)
+    await expect(status).toContainText('等待发送 101')
+    const modes = page.getByRole('group', { name: '镜像来源', exact: true })
+    await modes.getByRole('button', { name: '线上仓库', exact: true }).click()
+    await modes.getByRole('button', { name: /^本地镜像/ }).click()
+    transport.batches[0]!.release.resolve()
+    await expect(page.getByRole('button', { name: '批量删除', exact: true })).toBeEnabled()
+    await expect(status).toContainText('已删除 0')
+    await expect(status).toContainText('已发送结果未确认 50')
+    await expect(status).toContainText('未发送 101')
+    await expect(status).toContainText('未发送的镜像需要重新确认，不会自动继续。')
+    const unknown = page.locator('.removal-admission--unknown')
+    await expect(unknown).toHaveCount(50)
+    for (const id of transport.ids.slice(0, 50)) await expect(unknown.filter({ hasText: id })).toHaveCount(1)
+    transport.captures.push(await capture(page, info, api, status, 'bounded-interrupted', ['已发送结果未确认 50', '未发送 101'], transport.ids))
+    transport.captures.push(await capture(page, info, api, unknown.first(), 'bounded-read-only', [transport.ids[0]!, '只读刷新镜像'], transport.ids))
+    const reads = api.requests.filter((request) => request === 'GET /api/v1/docker/images').length
+    await unknown.first().getByRole('button', { name: '只读刷新镜像', exact: true }).click()
+    await expect.poll(() => api.requests.filter((request) => request === 'GET /api/v1/docker/images').length).toBe(reads + 1)
+    await expect(unknown).toHaveCount(50)
+    await page.waitForTimeout(6000)
+    expect(api.writes).toEqual([{ imageIds: transport.ids.slice(0, 50) }])
+    // 新操作必须再次展示确认框；取消后仍无写入。
+    await page.getByRole('button', { name: '批量删除', exact: true }).click()
+    await expect(page.locator('.el-message-box')).toContainText('101 个未被引用的镜像')
+    await page.locator('.el-message-box').getByRole('button', { name: '取消', exact: true }).click()
+    expect(api.writes).toHaveLength(1)
+    await confirmBounded(page, transport, transport.ids.slice(50))
+    for (let index = 1; index < 4; index += 1) {
+      await expect.poll(() => transport.batches.length).toBe(index + 1)
+      transport.batches[index]!.release.resolve()
+    }
+    await expect(status).toContainText('已删除 101')
+    await expect(status).toContainText('未发送 0')
+    await expect(unknown).toHaveCount(50)
+    expect(transport.batches.slice(1).flatMap((batch) => batch.ids)).toEqual(transport.ids.slice(50))
+    await boundedLedger(info, api, transport, page)
+  } finally { transport.releaseAll() }
+})
+
+test('下一批目标只读刷新后变为被引用时，首批回执不能授权后续发送', async ({ page, baseURL }, info) => {
+  const { api, transport } = await openBoundedSelection(page, baseURL!)
+  try {
+    await confirmBounded(page, transport, transport.ids)
+    await expect.poll(() => transport.batches.length).toBe(1)
+    transport.images[50]!.containers = 1
+    await page.getByRole('button', { name: '刷新本地镜像', exact: true }).click()
+    await expect(page.locator('.resource-row').filter({ hasText: transport.names[50]! })).toContainText('1 个容器使用中')
+    transport.batches[0]!.release.resolve()
+    const status = page.getByRole('status', { name: '批量删除进度', exact: true })
+    await expect(status).toContainText('已删除 50')
+    await expect(status).toContainText('已发送结果未确认 0')
+    await expect(status).toContainText('未发送 101')
+    await expect(page.getByRole('button', { name: '批量删除', exact: true })).toBeEnabled()
+    await expect(page.locator('.removal-admission--unknown')).toHaveCount(0)
+    await page.waitForTimeout(6000)
+    expect(api.writes).toEqual([{ imageIds: transport.ids.slice(0, 50) }])
+    await boundedLedger(info, api, transport, page)
+  } finally { transport.releaseAll() }
+})
