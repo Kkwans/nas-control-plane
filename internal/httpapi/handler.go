@@ -333,6 +333,7 @@ func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.H
 			protected.Post("/docker/images/remove-job", api.removeDockerImageJob)
 			protected.Post("/docker/images/remove-batch", api.removeDockerImages)
 			protected.Post("/docker/containers", api.createDockerContainer)
+			protected.Post("/docker/containers/create-jobs", api.createContainerJob)
 			protected.Post("/docker/containers/{containerID}/action-jobs/{action}", api.containerActionJob)
 			protected.Post("/docker/projects/{projectID}/actions/{action}", api.controlStandaloneProject)
 			protected.Post("/docker/compose/projects/{projectID}/actions/{action}", api.controlComposeProject)

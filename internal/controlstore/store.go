@@ -178,6 +178,7 @@ type ComposeRevision struct {
 }
 
 type JobRecord struct {
+	CreateResultJSON   string    `json:"-"`
 	Revision           int64     `json:"-"`
 	CancellationStatus string    `json:"cancellationStatus,omitempty"`
 	ErrorCode          string    `json:"errorCode,omitempty"`
@@ -856,6 +857,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"cancellation_status", "TEXT NOT NULL DEFAULT ''"},
 		{"error_code", "TEXT NOT NULL DEFAULT ''"},
 		{"progress_limited", "INTEGER NOT NULL DEFAULT 0"},
+		{"create_result_json", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, "jobs", column.name, column.definition); err != nil {
 			return err

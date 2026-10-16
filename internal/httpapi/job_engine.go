@@ -78,6 +78,8 @@ type jobRegistry struct {
 	pulls          *jobQueue
 	removals       *jobQueue
 	compose        *jobQueue
+	creates        *jobQueue
+	createCapacity chan struct{}
 	capacity       chan struct{}
 	closeOnce      sync.Once
 	workersDone    chan struct{}
@@ -100,7 +102,7 @@ func newJobRegistry(store any) *jobRegistry {
 	return newJobRegistryWithClock(store, realJobQueueClock{})
 }
 func newJobRegistryWithClock(store any, clock jobQueueClock) *jobRegistry {
-	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: newJobQueue(), removals: newJobQueue(), compose: newJobQueue(), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background(), clock: clock, active: map[*jobEntry]struct{}{}, expiryDone: make(chan struct{})}
+	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: newJobQueue(), removals: newJobQueue(), compose: newJobQueue(), creates: newJobQueue(), createCapacity: make(chan struct{}, 1), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background(), clock: clock, active: map[*jobEntry]struct{}{}, expiryDone: make(chan struct{})}
 	if store == nil {
 		return r
 	}
@@ -254,6 +256,10 @@ func jobTerminal(status string) bool {
 func recordFromSnapshot(j jobSnapshot) controlstore.JobRecord {
 	layers, _ := json.Marshal(j.Layers)
 	record := controlstore.JobRecord{ProgressLimited: j.ProgressLimited, ID: j.ID, Type: j.Type, Status: j.Status, Reference: j.Reference, Message: j.Message, Error: j.Error, Progress: j.Progress, DownloadedBytes: j.DownloadedBytes, TotalBytes: j.TotalBytes, SpeedBytes: j.SpeedBytes, LayersJSON: string(layers), CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, CancellationStatus: j.CancellationStatus, ErrorCode: j.ErrorCode}
+	if j.CreateResult != nil {
+		encoded, _ := json.Marshal(j.CreateResult)
+		record.CreateResultJSON = string(encoded)
+	}
 	if j.CompletedAt != nil {
 		record.CompletedAt = *j.CompletedAt
 	}
@@ -333,7 +339,12 @@ func (r *jobRegistry) createRecordReserved(kind, reference string, total int64, 
 	e := &jobEntry{view: j, revision: 1, ctx: ctx, cancel: cancel, run: run, creating: run != nil}
 	if run != nil {
 		e.deadline = reservedAt.Add(jobQueueTTL)
-		e.release = func() { <-r.capacity }
+		e.release = func() {
+			<-r.capacity
+			if kind == containerCreateJobType {
+				<-r.createCapacity
+			}
+		}
 		r.activeMu.Lock()
 		r.active[e] = struct{}{}
 		r.activeMu.Unlock()
@@ -379,6 +390,8 @@ func (r *jobRegistry) createRecordReserved(kind, reference string, total int64, 
 				e.queue = r.pulls
 				if kind == "compose-deploy" {
 					e.queue = r.compose
+				} else if kind == containerCreateJobType {
+					e.queue = r.creates
 				} else if kind == imageRemoveJobType || isContainerActionJob(kind) {
 					e.queue = r.removals
 				}
@@ -404,13 +417,15 @@ func (r *jobRegistry) start() {
 		go r.worker(r.compose)
 		r.workers.Add(1)
 		go r.worker(r.removals)
+		r.workers.Add(1)
+		go r.worker(r.creates)
 		go r.flushLoop()
 		go r.expiryLoop()
 		go func() { r.workers.Wait(); close(r.workersDone) }()
 	})
 }
 func (r *jobRegistry) submit(kind, reference string, total int64, run func(context.Context, string)) (jobSnapshot, error) {
-	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType && !isContainerActionJob(kind) || run == nil {
+	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType && kind != containerCreateJobType && !isContainerActionJob(kind) || run == nil {
 		return jobSnapshot{}, errJobUnavailable
 	}
 	r.admission.Lock()
@@ -429,6 +444,15 @@ func (r *jobRegistry) submit(kind, reference string, total int64, run func(conte
 	default:
 		r.admission.Unlock()
 		return jobSnapshot{}, errJobQueueFull
+	}
+	if kind == containerCreateJobType {
+		select {
+		case r.createCapacity <- struct{}{}:
+		default:
+			<-r.capacity
+			r.admission.Unlock()
+			return jobSnapshot{}, errJobQueueFull
+		}
 	}
 	reservedAt := r.clock.Now()
 	r.admissions.Add(1)

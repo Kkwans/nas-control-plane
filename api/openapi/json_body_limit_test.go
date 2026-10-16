@@ -45,7 +45,7 @@ func TestJSONRequestBodyLimitContract(t *testing.T) {
 			}
 		}
 	}
-	for limit, want := range map[string]int{"8192": 6, "16384": 22, "1048576": 8} {
+	for limit, want := range map[string]int{"8192": 6, "16384": 23, "1048576": 8} {
 		if counts[limit] != want {
 			t.Errorf("JSON routes with %s-byte limit=%d, want %d", limit, counts[limit], want)
 		}

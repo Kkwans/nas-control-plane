@@ -1560,6 +1560,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/create-jobs:
+    post:
+      operationId: submitDockerContainerCreateJob
+      summary: 持久接收单容器创建任务
+      description: >-
+        接受与同步创建相同的 DockerContainerCreateRequest，支持仅创建或创建并启动；旧同步 POST /api/v1/docker/containers 仍返回201。
+        独立单 worker、容量1；queued、running 与结果待持久化任务均占容量，并共享全局容量32。排队期限10分钟，与执行预算分开；Server执行预算10分钟，Agent创建预算2分钟，失败清理独立预算15秒。
+        不支持取消、retry 或重启自动重放；HTTP断开不取消已接收任务，每个任务最多派发一次，保存失败仅重存结果。
+        请求配置只保存在内存，不写入数据库、日志、reference 或任务快照；reference 省略或为空。
+        completed 仅证明创建及所请求的启动调用得到确认，不保证容器继续运行或健康；createResult 只包含 containerId、created 和 started。
+        可能已派发的 RPC 错误（包括 START_FAILED、CLEANUP_FAILED）为 interrupted / artifactState=unknown，不自动重试。
+        重启后仍可读取持久化任务详情与成功回执；历史列表摘要不包含 createResult。
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerContainerCreateRequest'
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照；type=docker-container-create，reference省略或为空，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes均为0，layers为空对象；无 createResult、completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。queued 接收回执不是执行成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: 容器配置无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Root 登录会话缺失或无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE 或 AGENT_DOCKER_CONTROL_UNAVAILABLE（缺少容器创建能力）；未返回持久接收成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images/remove-batch:
     post:
       operationId: removeDockerImages
@@ -4232,10 +4284,34 @@ components:
           format: date-time
           description: 已保存记录的更新时间，不是当前采样或响应时间。
         completedAt: { type: string, format: date-time }
+    DockerContainerCreateJobResult:
+      type: object
+      additionalProperties: false
+      required: [containerId, created, started]
+      description: 最小化创建回执，不包含请求配置或实时运行状态；started 仅表示本次启动调用已确认，不保证持续运行。
+      properties:
+        containerId:
+          type: string
+          minLength: 64
+          maxLength: 64
+          pattern: '^[a-f0-9]{64}$'
+        created: { type: boolean, enum: [true] }
+        started: { type: boolean }
     JobSnapshot:
       type: object
+      oneOf:
+        - not:
+            required: [createResult]
+        - required: [createResult]
+          properties:
+            type: { type: string, enum: [docker-container-create] }
+            status: { type: string, enum: [completed] }
       required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]
       properties:
+        createResult:
+          description: 可选的最小化创建回执，仅在 completed 的 docker-container-create 任务详情或 SSE 快照中出现；历史列表摘要不包含此字段。
+          allOf:
+            - $ref: '#/components/schemas/DockerContainerCreateJobResult'
         id: { type: string }
         type: { type: string }
         status: { type: string, enum: [queued, running, completed, failed, interrupted, cancelled] }
@@ -4249,10 +4325,10 @@ components:
           description: 任务结果待持久化，包括未开始任务的排队超时结果。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，尚未确认最终结果。
         cancellable:
           type: boolean
-          description: 执行器是否支持取消；Compose、docker-image-remove 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
+          description: 执行器是否支持取消；Compose、docker-image-remove、docker-container-create 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
         errorCode:
           type: string
-          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署、镜像删除与单容器生命周期任务（docker-container-start/stop/restart），包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
+          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署、镜像删除、容器创建与单容器生命周期任务（docker-container-start/stop/restart），包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
         completedAt:
           type: string
           format: date-time

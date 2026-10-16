@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const legacyRecentJobsQuery = `SELECT ` + jobColumns + ` FROM jobs WHERE (? = '' OR type = ?) ORDER BY created_at_unix DESC, id DESC LIMIT ?`
+const legacyRecentJobsQuery = `SELECT ` + jobReadColumns + ` FROM jobs WHERE (? = '' OR type = ?) ORDER BY created_at_unix DESC, id DESC LIMIT ?`
 
 func readRecentTestQuery(t testing.TB, db *sql.DB, query string, args ...any) []JobRecord {
 	t.Helper()

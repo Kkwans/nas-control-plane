@@ -283,7 +283,7 @@ func TestJobMigrationRecoveryAndLegacyBridge(t *testing.T) {
 		}
 	}
 	legacy := requireJob(t, store, "legacy")
-	if legacy.Revision != 1 || legacy.CancellationStatus != "" || legacy.ErrorCode != "" || legacy.LayersJSON != "malformed legacy payload" {
+	if legacy.CreateResultJSON != "" || legacy.Revision != 1 || legacy.CancellationStatus != "" || legacy.ErrorCode != "" || legacy.LayersJSON != "malformed legacy payload" {
 		t.Fatalf("migration changed legacy data: %#v", legacy)
 	}
 	now := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)

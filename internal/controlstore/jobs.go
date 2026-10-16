@@ -21,6 +21,11 @@ const jobColumns = `id, type, status, reference, message, error, progress,
  created_at_unix, updated_at_unix, completed_at_unix,
  revision, cancellation_status, error_code, progress_limited`
 
+// 创建结果先按字节数投影，损坏或超限数据不会被完整加载到 Go。
+const jobReadColumns = jobColumns + `,
+ CASE WHEN typeof(create_result_json) = 'text' AND length(CAST(create_result_json AS BLOB)) <= 256
+ THEN create_result_json ELSE '!' END`
+
 func jobCompletedUnix(job JobRecord) int64 {
 	if job.CompletedAt.IsZero() {
 		return 0
@@ -30,12 +35,15 @@ func jobCompletedUnix(job JobRecord) int64 {
 
 // CreateJob 仅创建新记录；初始版本固定为 1，不使用调用方提供的 Revision。
 func (s *Store) CreateJob(ctx context.Context, job JobRecord) error {
-	result, err := s.database.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+	if _, err := ParseContainerCreateJobResult(job); err != nil {
+		return err
+	}
+	result, err := s.database.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`, create_result_json)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
  ON CONFLICT(id) DO NOTHING`, job.ID, job.Type, job.Status, job.Reference,
 		job.Message, job.Error, job.Progress, job.DownloadedBytes, job.TotalBytes,
 		job.SpeedBytes, job.LayersJSON, job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited)
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON)
 	if err != nil {
 		return err
 	}
@@ -55,13 +63,25 @@ func (s *Store) UpdateJob(ctx context.Context, job JobRecord, expectedRevision i
 	if expectedRevision < 1 || expectedRevision == math.MaxInt64 {
 		return 0, ErrJobInvalidRevision
 	}
+	// 类型不可变，不能使用调用方改写的类型绕过已保存记录的结果约束。
+	if job.Status == "completed" || job.CreateResultJSON != "" {
+		if err := s.database.QueryRowContext(ctx, `SELECT type FROM jobs WHERE id = ?`, job.ID).Scan(&job.Type); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, ErrJobNotFound
+			}
+			return 0, err
+		}
+	}
+	if _, err := ParseContainerCreateJobResult(job); err != nil {
+		return 0, err
+	}
 	err := s.mutateJobRevision(ctx, job.ID, expectedRevision, `UPDATE jobs SET
  status = ?, message = ?, error = ?, progress = ?, downloaded_bytes = ?,
  total_bytes = ?, speed_bytes = ?, layers_json = ?, updated_at_unix = ?,
- completed_at_unix = ?, cancellation_status = ?, error_code = ?, progress_limited = ?, revision = revision + 1
+ completed_at_unix = ?, cancellation_status = ?, error_code = ?, progress_limited = ?, create_result_json = ?, revision = revision + 1
  WHERE id = ? AND revision = ?`, job.Status, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON, job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited)
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON)
 	if err != nil {
 		return 0, err
 	}
@@ -111,7 +131,7 @@ func scanJob(row interface{ Scan(...any) error }) (JobRecord, error) {
 	var created, updated, completed int64
 	err := row.Scan(&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error,
 		&job.Progress, &job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
-		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode, &job.ProgressLimited)
+		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode, &job.ProgressLimited, &job.CreateResultJSON)
 	if err != nil {
 		return JobRecord{}, err
 	}
@@ -124,15 +144,15 @@ func scanJob(row interface{ Scan(...any) error }) (JobRecord, error) {
 }
 
 func (s *Store) Job(ctx context.Context, id string) (JobRecord, error) {
-	job, err := scanJob(s.database.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id = ?`, id))
+	job, err := scanJob(s.database.QueryRowContext(ctx, `SELECT `+jobReadColumns+` FROM jobs WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobRecord{}, ErrJobNotFound
 	}
 	return job, err
 }
 
-const recentJobsQuery = `SELECT ` + jobColumns + ` FROM jobs ORDER BY created_at_unix DESC, id DESC LIMIT ?`
-const recentJobsByTypeQuery = `SELECT ` + jobColumns + ` FROM jobs WHERE type = ? ORDER BY created_at_unix DESC, id DESC LIMIT ?`
+const recentJobsQuery = `SELECT ` + jobReadColumns + ` FROM jobs ORDER BY created_at_unix DESC, id DESC LIMIT ?`
+const recentJobsByTypeQuery = `SELECT ` + jobReadColumns + ` FROM jobs WHERE type = ? ORDER BY created_at_unix DESC, id DESC LIMIT ?`
 
 func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, error) {
 	if limit < 1 || limit > 500 {
@@ -165,7 +185,7 @@ func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, 
 func (s *Store) RecoverInterruptedJobs(ctx context.Context) error {
 	now := s.now().UTC().Unix()
 	_, err := s.database.ExecContext(ctx, `UPDATE jobs SET status = 'interrupted',
- message = '控制面重启，执行结果未确认', speed_bytes = 0,
+ message = '控制面重启，执行结果未确认', speed_bytes = 0, create_result_json = '',
  cancellation_status = CASE WHEN cancellation_status = 'requested' THEN 'unknown' ELSE cancellation_status END,
  updated_at_unix = ?, completed_at_unix = ?, revision = revision + 1
  WHERE status IN ('queued', 'running')`, now, now)
@@ -189,6 +209,18 @@ func (s *Store) DeleteJob(ctx context.Context, id string) error {
 
 // UpsertJob 仅供旧 HTTP 调用过渡使用，会重建缺失行；新 engine 禁止调用。
 func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
+	if job.Status == "completed" || job.CreateResultJSON != "" {
+		var kind string
+		err := s.database.QueryRowContext(ctx, `SELECT type FROM jobs WHERE id = ?`, job.ID).Scan(&kind)
+		if err == nil {
+			job.Type = kind
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	if _, err := ParseContainerCreateJobResult(job); err != nil {
+		return err
+	}
 	completedAt := int64(0)
 	if !job.CompletedAt.IsZero() {
 		completedAt = job.CompletedAt.UTC().Unix()
@@ -197,8 +229,8 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 		INSERT INTO jobs (
 			id, type, status, reference, message, error, progress,
 			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix, progress_limited
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at_unix, updated_at_unix, completed_at_unix, progress_limited, create_result_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			message = excluded.message,
@@ -211,9 +243,10 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 			updated_at_unix = excluded.updated_at_unix,
 			completed_at_unix = excluded.completed_at_unix,
 			progress_limited = excluded.progress_limited,
+			create_result_json = excluded.create_result_json,
 			revision = jobs.revision + 1
 	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
-		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt, job.ProgressLimited)
+		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt, job.ProgressLimited, job.CreateResultJSON)
 	return err
 }

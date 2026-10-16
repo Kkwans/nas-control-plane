@@ -15,26 +15,27 @@ import (
 )
 
 type jobSnapshot struct {
-	ProgressLimited    bool                `json:"progressLimited,omitempty"`
-	CancellationStatus string              `json:"cancellationStatus,omitempty"`
-	PersistenceStatus  string              `json:"persistenceStatus,omitempty"`
-	Cancellable        bool                `json:"cancellable"`
-	ErrorCode          string              `json:"errorCode,omitempty"`
-	ID                 string              `json:"id"`
-	Type               string              `json:"type"`
-	Status             string              `json:"status"`
-	Reference          string              `json:"reference,omitempty"`
-	Message            string              `json:"message"`
-	Progress           int                 `json:"progress"`
-	Error              string              `json:"error,omitempty"`
-	CreatedAt          time.Time           `json:"createdAt"`
-	UpdatedAt          time.Time           `json:"updatedAt"`
-	CompletedAt        *time.Time          `json:"completedAt,omitempty"`
-	DownloadedBytes    int64               `json:"downloadedBytes"`
-	TotalBytes         int64               `json:"totalBytes"`
-	SpeedBytes         int64               `json:"speedBytes"`
-	Layers             map[string]jobLayer `json:"layers"`
-	ArtifactState      string              `json:"artifactState"`
+	CreateResult       *controlstore.ContainerCreateJobResult `json:"createResult,omitempty"`
+	ProgressLimited    bool                                   `json:"progressLimited,omitempty"`
+	CancellationStatus string                                 `json:"cancellationStatus,omitempty"`
+	PersistenceStatus  string                                 `json:"persistenceStatus,omitempty"`
+	Cancellable        bool                                   `json:"cancellable"`
+	ErrorCode          string                                 `json:"errorCode,omitempty"`
+	ID                 string                                 `json:"id"`
+	Type               string                                 `json:"type"`
+	Status             string                                 `json:"status"`
+	Reference          string                                 `json:"reference,omitempty"`
+	Message            string                                 `json:"message"`
+	Progress           int                                    `json:"progress"`
+	Error              string                                 `json:"error,omitempty"`
+	CreatedAt          time.Time                              `json:"createdAt"`
+	UpdatedAt          time.Time                              `json:"updatedAt"`
+	CompletedAt        *time.Time                             `json:"completedAt,omitempty"`
+	DownloadedBytes    int64                                  `json:"downloadedBytes"`
+	TotalBytes         int64                                  `json:"totalBytes"`
+	SpeedBytes         int64                                  `json:"speedBytes"`
+	Layers             map[string]jobLayer                    `json:"layers"`
+	ArtifactState      string                                 `json:"artifactState"`
 }
 
 type jobLayer struct {
@@ -61,6 +62,14 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 		Layers: layers, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 		ArtifactState: jobArtifactUnknown,
 	}
+	result, err := controlstore.ParseContainerCreateJobResult(record)
+	if err != nil {
+		job.Status = "interrupted"
+		job.ErrorCode = "JOB_HISTORY_CORRUPT"
+		job.Message = "任务历史结果损坏，创建结果未确认，请只读刷新核对"
+	} else {
+		job.CreateResult = result
+	}
 	if !validJobLayers(record.LayersJSON) {
 		job.ErrorCode = "JOB_HISTORY_CORRUPT"
 		job.Message = "任务历史进度损坏，请检查数据库备份"
@@ -74,6 +83,10 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 
 // cloneJobSnapshot 必须在持有 registry 锁时调用（或输入已独立），避免可变字段逃逸。
 func cloneJobSnapshot(job jobSnapshot) jobSnapshot {
+	if job.CreateResult != nil {
+		result := *job.CreateResult
+		job.CreateResult = &result
+	}
 	if job.Layers != nil {
 		layers := make(map[string]jobLayer, len(job.Layers))
 		for id, layer := range job.Layers {
