@@ -25,11 +25,12 @@ const inventory = {
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 async function fixture(page: Page, origin: string) {
   expect(new URL(origin).hostname).toBe('127.0.0.1')
-  // 固定 Date 而非暂停时钟；axe、动画及普通异步计时器照常运行。
-  await page.clock.setFixedTime(new Date(stamp))
+  // 保持 Date 流动；固定 Date 会令 Vue capture/bubble invoker时间戳相同而跳过 RouterLink。
+  // 安装可观测时钟但从不 pause；axe、动画及普通异步计时器照常运行。
+  await page.clock.install({ time: new Date(stamp) })
   await page.addInitScript(() => {
-    const host = window as typeof window & { __actionJobsPolls: number; __actionJobsStreams: string[] }
-    host.__actionJobsPolls = 0; host.__actionJobsStreams = []
+    const host = window as typeof window & { __actionJobsPolls: number; __actionJobsStreams: string[]; __actionJobsDocument: string }
+    host.__actionJobsPolls = 0; host.__actionJobsStreams = []; host.__actionJobsDocument = crypto.randomUUID()
     class SilentSource extends EventTarget {
       static readonly CONNECTING = 0; static readonly OPEN = 1; static readonly CLOSED = 2
       readyState = 1; onopen: (() => void) | null = null; onerror: (() => void) | null = null
@@ -52,9 +53,9 @@ async function fixture(page: Page, origin: string) {
   const requests: RequestRecord[] = [], writes: RequestRecord[] = [], denied: string[] = [], errors: string[] = []
   const responses: Array<{ stage: string; target: string; status: number | 'aborted'; payload: unknown }> = []
   const captures: Array<{ file: string; sha256: string }> = [], checkpoints: Array<{ stage: string; requests: RequestRecord[]; writes: number }> = []
-  const state = { stage: 'bootstrap', inventory: structuredClone(inventory), inventoryFails: false, jobsFail: false, jobStatus: 200, job: receipt() as Record<string, unknown>, jobs: [] as Record<string, unknown>[] }
+  const state = { stage: 'bootstrap', journeyCompleted: false, inventory: structuredClone(inventory), inventoryFails: false, jobsFail: false, jobStatus: 200, job: receipt() as Record<string, unknown>, jobs: [] as Record<string, unknown>[] }
   let allowance: { action: Action; mode: 'accepted' | 'lost' | 'held' } | undefined
-  let permittedWrites = 0, inventoryRevision = 0
+  let permittedWrites = 0, inventoryTimestamp = Date.parse(stamp)
   const held = { received: deferred(), release: deferred(), delivered: deferred() }
   const reads = new Map<string, unknown>([
     ['/api/v1/auth/status', { initialized: true, authenticated: true, user: { id: 1, username: 'root', role: 'root' } }],
@@ -89,7 +90,8 @@ async function fixture(page: Page, origin: string) {
     const fail = () => reply({ code: 'FIXTURE_READ_UNAVAILABLE', message: '只读 fixture 失败' }, 503)
     if (target === '/api/v1/docker/inventory') {
       // Store 只接受较新快照；每次读回独立版本，不能用相同 collectedAt 假装清单已更新。
-      const collectedAt = new Date(Date.parse(stamp) + ++inventoryRevision).toISOString()
+      inventoryTimestamp = Math.max(inventoryTimestamp + 1, await page.evaluate(() => Date.now()))
+      const collectedAt = new Date(inventoryTimestamp).toISOString()
       return state.inventoryFails ? fail() : reply({ ...state.inventory, collectedAt })
     }
     if (target === '/api/v1/jobs') return state.jobsFail ? fail() : reply({ jobs: state.jobs })
@@ -122,9 +124,11 @@ const actionButton = (page: Page, action: Action) => {
   return page.viewportSize()!.width === 390 ? page.locator('.container-mobile-list').getByRole('button', { name: label, exact: true }) : page.getByRole('button', { name: `${label}容器`, exact: true }).filter({ visible: true })
 }
 async function navigate(page: Page, name: 'Docker' | '站点管理') {
+  const documentId = await page.evaluate(() => (window as typeof window & { __actionJobsDocument: string }).__actionJobsDocument)
   if (page.viewportSize()!.width === 390) await page.getByRole('button', { name: '打开主菜单', exact: true }).click()
   await page.locator('.app-sidebar').getByRole('link', { name, exact: true }).click()
   await expect(page).toHaveURL(name === 'Docker' ? /\/docker$/ : /\/sites$/)
+  expect(await page.evaluate(() => (window as typeof window & { __actionJobsDocument: string }).__actionJobsDocument)).toBe(documentId)
   await expect(page.locator('#app-main')).toBeFocused()
   if (name === 'Docker') await page.getByRole('button', { name: '容器', exact: true }).click()
 }
@@ -163,11 +167,12 @@ async function readonlyCheck(page: Page) {
 async function measure(page: Page, selector: string) {
   return page.evaluate(selector => {
     const root = document.querySelector<HTMLElement>(selector)!
-    const fields = [...root.querySelectorAll<HTMLElement>('h2,strong,p,.el-message-box__title,.el-message-box__message,button')]
+    const fields = root.matches('[role="tooltip"]') ? [root] : [...root.querySelectorAll<HTMLElement>('h2,strong,p,.el-message-box__title,.el-message-box__message,button')]
     return {
       viewport: { width: innerWidth, height: innerHeight }, root: { width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
+      tooltip: root.matches('[role="tooltip"]') ? { bounds: root.getBoundingClientRect().toJSON(), ownerTag: root.closest('main, [role="main"], [role="dialog"]')?.tagName ?? null, anchor: document.querySelector('.page-size-control:hover')?.getBoundingClientRect().toJSON() ?? null } : null,
       text: root.textContent, scroll: { x: scrollX, y: scrollY }, focus: { tag: document.activeElement?.tagName, text: document.activeElement?.textContent, label: document.activeElement?.getAttribute('aria-label') },
-      timerIsolation: { fixedDateOnly: true, suppressedTaskPollDelayMs: 15000, suppressedCount: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls, realPollingVerified: false },
+      timerIsolation: { clockMode: 'installed-running-never-paused', suppressedTaskPollDelayMs: 15000, suppressedCount: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls, realPollingVerified: false },
       mockedStreams: (window as typeof window & { __actionJobsStreams: string[] }).__actionJobsStreams,
       fields: fields.map(element => {
         const rect = element.getBoundingClientRect(), style = getComputedStyle(element)
@@ -179,7 +184,7 @@ async function measure(page: Page, selector: string) {
           if (css.overflowX !== 'visible' || css.overflowY !== 'visible') ancestors.push({ bounds: parent.getBoundingClientRect().toJSON(), x: css.overflowX, y: css.overflowY })
         }
         const points = [[rect.left + 5, rect.top + 5], [rect.right - 5, rect.top + 5], [rect.left + 5, rect.bottom - 5], [rect.right - 5, rect.bottom - 5], [rect.left + rect.width / 2, rect.top + rect.height / 2]]
-        return { tag: element.tagName, text: element.textContent, bounds: rect.toJSON(), lines: lines.filter(line => line.width && line.height).map(line => line.toJSON()), ancestors,
+        return { tag: element.tagName, text: element.textContent, tooltipRoot: element.matches('[role="tooltip"]'), decorativeArrows: [...element.querySelectorAll('.el-popper__arrow')].map(arrow => ({ text: arrow.textContent, bounds: arrow.getBoundingClientRect().toJSON() })), bounds: rect.toJSON(), lines: lines.filter(line => line.width && line.height).map(line => line.toJSON()), ancestors,
           clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, clientHeight: element.clientHeight, scrollHeight: element.scrollHeight,
           focusVisible: element.matches(':focus-visible'), outlineWidth: style.outlineWidth, outlineStyle: style.outlineStyle, outlineColor: style.outlineColor,
           disabled: element.matches(':disabled'), hits: points.map(([x, y]) => { const target = document.elementFromPoint(x!, y!); return Boolean(target && (target === element || element.contains(target))) }) }
@@ -187,7 +192,13 @@ async function measure(page: Page, selector: string) {
     }
   }, selector)
 }
-async function capture(page: Page, info: TestInfo, api: Fixture, state: string, modal = false, selectorOverride?: string) {
+async function capture(page: Page, info: TestInfo, api: Fixture, state: string, modal = false, selectorOverride?: string, preserveHover = false) {
+  // 本例捕获目标操作状态而非分页 hover；释放后布局回缩可能让静止指针落在无关分页控件。
+  // 显式移至中性页头并等待真实 tooltip关闭，不隐藏DOM、不删除axe规则或命中断言。
+  if (!preserveHover) {
+    await page.mouse.move(page.viewportSize()!.width / 2, 10)
+    await expect(page.getByRole('tooltip')).toHaveCount(0)
+  }
   await expect(page.locator('.el-message')).toHaveCount(0)
   await waitForPageReady(page); await page.evaluate(() => document.fonts.ready)
   const selector = selectorOverride ?? (modal ? '.ncp-container-action-confirmation' : '.action-protection')
@@ -213,7 +224,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
   const png = `${directory}/${prefix}.png`, screenshot = await page.screenshot({ path: png, fullPage: !modal, animations: 'disabled' })
   const afterCapture = await measure(page, selector), requestsAfterCapture = structuredClone(api.requests)
   const axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, selector)
-  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'source-inferred; no local browser run or pre-fix failure claimed', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, touchTargetBaseline: { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
+  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'CI 2c5f64e: fixed-Date RouterLink failure and released page-size tooltip region/occlusion; no local browser run', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: page.viewportSize()!.width / 2, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
   api.captures.push({ file: `${prefix}.png`, sha256: hash(screenshot) }); await info.attach(prefix, { path: png, contentType: 'image/png' })
   for (const [suffix, content] of [['capture-state', metadata], ['axe-capture-state', { ...metadata, axe }]] as const) {
     const file = `${prefix}-${suffix}.json`, path = `${directory}/${file}`, data = JSON.stringify(content, null, 2)
@@ -227,11 +238,25 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
     expect.soft(control.bounds.width).toBeGreaterThanOrEqual(minimumTarget); expect.soft(control.bounds.height).toBeGreaterThanOrEqual(minimumTarget)
   }
   for (const sample of [beforeCapture, afterCapture, afterAxe]) {
+    if (preserveHover) {
+      expect.soft(sample.tooltip?.ownerTag).toBe('MAIN')
+      expect.soft(sample.tooltip?.anchor).not.toBeNull()
+      if (sample.tooltip?.anchor) {
+        const gap = sample.tooltip.anchor.top - sample.tooltip.bounds.bottom
+        expect.soft(gap).toBeGreaterThanOrEqual(0); expect.soft(gap).toBeLessThanOrEqual(24)
+      }
+    }
     expect.soft(sample.root.scrollWidth).toBeLessThanOrEqual(sample.root.width + 1)
     expect.soft(sample.text).toEqual(beforeCapture.text); expect.soft(sample.focus).toEqual(beforeCapture.focus); expect.soft(sample.scroll).toEqual(beforeCapture.scroll)
     for (const field of sample.fields) {
-      if (field.clientWidth) expect.soft(field.scrollWidth, field.text ?? '').toBeLessThanOrEqual(field.clientWidth + 1)
-      if (field.clientHeight) expect.soft(field.scrollHeight, field.text ?? '').toBeLessThanOrEqual(field.clientHeight + 1)
+      // Tooltip装饰箭头在边框外，原始scrollHeight可能包含箭头；文字仍逐Range严查且记录箭头几何。
+      if (!field.tooltipRoot) {
+        if (field.clientWidth) expect.soft(field.scrollWidth, field.text ?? '').toBeLessThanOrEqual(field.clientWidth + 1)
+        if (field.clientHeight) expect.soft(field.scrollHeight, field.text ?? '').toBeLessThanOrEqual(field.clientHeight + 1)
+      } else {
+        expect.soft(field.decorativeArrows).toHaveLength(1)
+        expect.soft(field.decorativeArrows[0]?.text?.trim()).toBe('')
+      }
       for (const line of field.lines) {
         expect.soft(line.left).toBeGreaterThanOrEqual(Math.max(0, field.bounds.left) - 1)
         expect.soft(line.right).toBeLessThanOrEqual(Math.min(sample.viewport.width, field.bounds.right) + 1)
@@ -278,11 +303,13 @@ async function risk(page: Page, info: TestInfo, api: Fixture, state: string, con
   expect(api.writes).toHaveLength(writes)
 }
 async function finish(page: Page, info: TestInfo, api: Fixture) {
-  api.stage('finished')
+  api.assert()
+  api.state.journeyCompleted = api.state.journeyCompleted && info.errors.length === 0
+  api.checkpoints.push({ stage: api.state.stage, requests: structuredClone(api.requests), writes: api.writes.length })
   const path = info.outputPath('ui-captures', 'container-action-jobs-final-request-ledger-capture-state.json')
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts: api.captures, checkpoints: api.checkpoints, finalStage: api.state.stage, requests: api.requests, requestsSha256: hash(JSON.stringify(api.requests)), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors, timerIsolation: await page.evaluate(() => ({ fixedDateOnly: true, suppressedTaskPollDelayMs: 15000, count: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls })).catch(() => null) }, null, 2))
-  await info.attach('container-action-jobs-final-request-ledger', { path, contentType: 'application/json' }); api.assert()
+  await writeFile(path, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts: api.captures, checkpoints: api.checkpoints, finalStage: api.state.stage, journeyCompleted: api.state.journeyCompleted, requests: api.requests, requestsSha256: hash(JSON.stringify(api.requests)), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors, timerIsolation: await page.evaluate(() => ({ clockMode: 'installed-running-never-paused', suppressedTaskPollDelayMs: 15000, count: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls })).catch(() => null) }, null, 2))
+  await info.attach('container-action-jobs-final-request-ledger', { path, contentType: 'application/json' })
 }
 
 // 四条独立旅程 × 两个断点；每例唯一提交，终态例第二次为明确的新意图。
@@ -339,6 +366,7 @@ for (const width of [390, 1440]) {
       await page.getByRole('button', { name: '容器', exact: true }).click(); await expect(actionButton(page, 'start')).toBeEnabled()
       await capture(page, info, api, 'completed-released', false, width === 390 ? '.container-mobile-list .mobile-actions' : '.container-panel .container-actions')
       expect(api.writes).toHaveLength(1)
+      api.state.journeyCompleted = info.errors.length === 0
     } finally { await finish(page, info, api) }
   })
 
@@ -365,6 +393,7 @@ for (const width of [390, 1440]) {
       expect(api.requests.filter(row => row.target === '/api/v1/jobs/fixture-stop-job').length).toBeGreaterThan(before)
       await expect(release(page)).toBeDisabled(); await capture(page, info, api, 'missing-target-checkable')
       expect(api.writes).toHaveLength(1)
+      api.state.journeyCompleted = info.errors.length === 0
     } finally { api.held.release.resolve(); await finish(page, info, api) }
   })
 
@@ -385,8 +414,18 @@ for (const width of [390, 1440]) {
         await capture(page, info, api, `${status}-checked`)
         api.stage(`${status}-cancel-risk`); await risk(page, info, api, `${status}-keep`, false); await expect(actionButton(page, 'restart')).toBeDisabled()
         api.stage(`${status}-confirm-local-release`); await risk(page, info, api, `${status}-release`, true); await expect(actionButton(page, 'restart')).toBeEnabled()
+        if (status === 'failed') {
+          api.stage('released-page-size-help-hover')
+          const pagination = page.locator(width === 390 ? '.container-mobile-list .page-size-control' : '.container-panel .page-size-control')
+          await pagination.hover()
+          await expect(page.getByRole('tooltip')).toHaveText('该设置只作用于当前列表，并会保存到账号偏好中。')
+          // 独立主动 hover 保留实际 landmark/文本/定位证据，普通解除状态已严格核验按钮五点命中。
+          await capture(page, info, api, 'released-pagination-help-hover', false, '[role="tooltip"][aria-hidden="false"]', true)
+          await page.mouse.move(width / 2, 10); await expect(page.getByRole('tooltip')).toHaveCount(0)
+        }
       }
       expect(api.writes.map(row => row.target)).toEqual([`/api/v1/docker/containers/${containerId}/action-jobs/stop`, `/api/v1/docker/containers/${containerId}/action-jobs/restart`])
+      api.state.journeyCompleted = info.errors.length === 0
     } finally { await finish(page, info, api) }
   })
 
@@ -421,6 +460,7 @@ for (const width of [390, 1440]) {
       expect(api.requests.some(row => row.target === '/api/v1/jobs/history-only-completed')).toBe(false)
       api.stage('unknown-final-readonly-local-release'); await readonlyCheck(page); await expect(release(page)).toBeEnabled(); await expect(panel(page)).not.toContainText('任务 ID：')
       await risk(page, info, api, 'unknown-explicit-local-release', true); await expect(actionButton(page, 'restart')).toBeEnabled(); expect(api.writes).toHaveLength(1)
+      api.state.journeyCompleted = info.errors.length === 0
     } finally { await finish(page, info, api) }
   })
 }
