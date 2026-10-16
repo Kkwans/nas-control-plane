@@ -24,7 +24,7 @@ const router = createRouter({
       path: '/docker',
       name: 'docker',
       component: () => import('@/views/DockerView.vue'),
-      meta: { title: 'Docker 管理' },
+      meta: { title: 'Docker 管理', manualRefresh: true },
     },
     {
       path: '/system',
