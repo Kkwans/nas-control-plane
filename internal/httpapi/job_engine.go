@@ -379,7 +379,7 @@ func (r *jobRegistry) createRecordReserved(kind, reference string, total int64, 
 				e.queue = r.pulls
 				if kind == "compose-deploy" {
 					e.queue = r.compose
-				} else if kind == imageRemoveJobType {
+				} else if kind == imageRemoveJobType || isContainerActionJob(kind) {
 					e.queue = r.removals
 				}
 				e.queued = true
@@ -410,7 +410,7 @@ func (r *jobRegistry) start() {
 	})
 }
 func (r *jobRegistry) submit(kind, reference string, total int64, run func(context.Context, string)) (jobSnapshot, error) {
-	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType || run == nil {
+	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType && !isContainerActionJob(kind) || run == nil {
 		return jobSnapshot{}, errJobUnavailable
 	}
 	r.admission.Lock()

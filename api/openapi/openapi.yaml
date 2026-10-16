@@ -2600,6 +2600,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/{containerID}/action-jobs/{action}:
+    post:
+      operationId: submitDockerContainerActionJob
+      summary: 持久接收单容器启动、停止或重启任务
+      description: >-
+        仅接受完整小写容器 ID 和精确小写动作，不接受请求体；旧同步 actions 路由保留。
+        三种类型 docker-container-start、docker-container-stop、docker-container-restart 与镜像删除共享单 worker 队列，
+        并非全局互斥；总容量32，排队期限10分钟。任务不支持取消、retry 或重启自动重放。
+        运行预算45秒，HTTP断开不取消已接收任务。每个任务最多派发一次，保存失败仅重存结果。
+        completed 仅证明本次调用返回且读回 running（start/restart）或 stopped（stop），不保证持续状态或健康。
+        合法归属但明确反态为 failed / DOCKER_CONTAINER_STATE_MISMATCH，表示命令已返回但读回未达目标，不表示未执行。
+        回执缺失、归属不符或状态未知为 interrupted / DOCKER_CONTAINER_ACTION_RECEIPT_INVALID。
+        超时为 interrupted / JOB_EXECUTION_TIMEOUT；可能已派发的错误（包括 NOT_FOUND、ACTION_FAILED、INSPECT_FAILED）保守视为未知，
+        不自动重试。只有固定白名单确证派发前拒绝可 failed。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: containerID
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 64
+            maxLength: 64
+            pattern: '^[a-f0-9]{64}$'
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [start, stop, restart]
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照；type 为 docker-container-start/stop/restart，reference 为完整容器 ID，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes 均为0，layers为空对象；无 completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。queued 接收回执不是执行成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: DOCKER_CONTAINER_ACTION_INVALID，容器 ID、动作或非空正文不符合严格合同
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Root 登录会话缺失或无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL 或 JOB_ENGINE_UNAVAILABLE；未返回持久接收成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/containers/{containerID}/actions/{action}:
     post:
       operationId: controlDockerContainer
@@ -4191,10 +4249,10 @@ components:
           description: 任务结果待持久化，包括未开始任务的排队超时结果。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，尚未确认最终结果。
         cancellable:
           type: boolean
-          description: 执行器是否支持取消；Compose 与 docker-image-remove 为 false。实际操作仍由服务端状态校验决定。
+          description: 执行器是否支持取消；Compose、docker-image-remove 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
         errorCode:
           type: string
-          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署与镜像删除，包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
+          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署、镜像删除与单容器生命周期任务（docker-container-start/stop/restart），包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
         completedAt:
           type: string
           format: date-time
