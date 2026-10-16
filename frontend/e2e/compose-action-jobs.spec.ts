@@ -425,12 +425,22 @@ async function guards(page: Page, api: Fixture) {
   for (const label of ['启动', '停止', '重启']) await expect(drawer.locator('.project-lifecycle__actions').getByRole('button', { name: label, exact: true })).toBeDisabled()
   await page.keyboard.press('Escape'); await expect(drawer).not.toBeVisible()
   await page.getByRole('button', { name: '容器', exact: true }).click()
-  const containers = page.locator(page.viewportSize()!.width === 390 ? '.container-mobile-list' : '.container-panel')
-  const buttons = containers.getByRole('button', { name: page.viewportSize()!.width === 390 ? /^(启动|停止|重启)$/ : /^(启动|停止|重启)容器$/ })
-  expect(await buttons.count()).toBeGreaterThan(0)
-  for (const button of await buttons.all()) await expect(button).toBeDisabled()
+  const mobile = page.viewportSize()!.width === 390
+  const containers = page.locator(mobile ? '.container-mobile-list' : '.container-panel')
+  const rows = containers.locator(mobile ? '.container-card' : '.container-row')
+  await expect(rows).toHaveCount(api.state.inventory.containers.length)
+  // Compose 只与独立项目互斥；容器和创建继续共享准入，仍遵守各自状态限制。
+  for (const container of api.state.inventory.containers) {
+    const row = rows.filter({ has: page.locator('.container-name strong').filter({ hasText: new RegExp(`^${container.name}$`) }) })
+    const running = container.state === 'running'
+    const lifecycle = row.getByRole('button', { name: `${running ? '停止' : '启动'}${mobile ? '' : '容器'}`, exact: true })
+    await expect(lifecycle).toBeEnabled()
+    const restart = row.getByRole('button', { name: `重启${mobile ? '' : '容器'}`, exact: true })
+    if (running) await expect(restart).toBeEnabled()
+    else await expect(restart).toBeDisabled()
+  }
   await page.getByRole('button', { name: '镜像', exact: true }).click()
-  await expect(page.getByRole('button', { name: '从镜像 fixture:latest 创建容器', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '从镜像 fixture:latest 创建容器', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: '项目', exact: true }).click(); expect(api.writes).toHaveLength(writes)
 }
 for (const width of [390, 1440]) {
