@@ -26,13 +26,18 @@ const jobReadColumns = jobColumns + `,
  CASE WHEN typeof(create_result_json) = 'text' AND length(CAST(create_result_json AS BLOB)) <= 256
  THEN create_result_json ELSE '!' END,
  CASE WHEN typeof(project_action_result_json) = 'text' AND length(CAST(project_action_result_json AS BLOB)) <= 65536
- THEN project_action_result_json ELSE '!' END`
+ THEN project_action_result_json ELSE '!' END,
+ CASE WHEN typeof(compose_action_result_json) = 'text' AND length(CAST(compose_action_result_json AS BLOB)) <= 4096
+ THEN compose_action_result_json ELSE '!' END`
 
 func validateJobResults(job JobRecord) error {
 	if _, err := ParseContainerCreateJobResult(job); err != nil {
 		return err
 	}
-	_, err := ParseProjectActionJobResult(job)
+	if _, err := ParseProjectActionJobResult(job); err != nil {
+		return err
+	}
+	_, err := ParseComposeActionJobResult(job)
 	return err
 }
 
@@ -48,12 +53,12 @@ func (s *Store) CreateJob(ctx context.Context, job JobRecord) error {
 	if err := validateJobResults(job); err != nil {
 		return err
 	}
-	result, err := s.database.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`, create_result_json, project_action_result_json)
- VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+	result, err := s.database.ExecContext(ctx, `INSERT INTO jobs (`+jobColumns+`, create_result_json, project_action_result_json, compose_action_result_json)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
  ON CONFLICT(id) DO NOTHING`, job.ID, job.Type, job.Status, job.Reference,
 		job.Message, job.Error, job.Progress, job.DownloadedBytes, job.TotalBytes,
 		job.SpeedBytes, job.LayersJSON, job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON)
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON, job.ComposeActionResultJSON)
 	if err != nil {
 		return err
 	}
@@ -74,7 +79,7 @@ func (s *Store) UpdateJob(ctx context.Context, job JobRecord, expectedRevision i
 		return 0, ErrJobInvalidRevision
 	}
 	// 类型和引用不可变，不能使用调用方改写的元数据绕过已保存记录的结果约束。
-	checkMetadata := job.Status == "completed" || job.CreateResultJSON != "" || job.ProjectActionResultJSON != ""
+	checkMetadata := job.Status == "completed" || job.CreateResultJSON != "" || job.ProjectActionResultJSON != "" || job.ComposeActionResultJSON != ""
 	if checkMetadata {
 		if err := s.database.QueryRowContext(ctx, `SELECT type, reference FROM jobs WHERE id = ?`, job.ID).Scan(&job.Type, &job.Reference); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -89,10 +94,10 @@ func (s *Store) UpdateJob(ctx context.Context, job JobRecord, expectedRevision i
 	err := s.mutateJobRevision(ctx, job.ID, expectedRevision, `UPDATE jobs SET
  status = ?, message = ?, error = ?, progress = ?, downloaded_bytes = ?,
  total_bytes = ?, speed_bytes = ?, layers_json = ?, updated_at_unix = ?,
- completed_at_unix = ?, cancellation_status = ?, error_code = ?, progress_limited = ?, create_result_json = ?, project_action_result_json = ?, revision = revision + 1
+ completed_at_unix = ?, cancellation_status = ?, error_code = ?, progress_limited = ?, create_result_json = ?, project_action_result_json = ?, compose_action_result_json = ?, revision = revision + 1
  WHERE (? = 0 OR (type = ? AND reference = ?)) AND id = ? AND revision = ?`, job.Status, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON, job.UpdatedAt.UTC().Unix(),
-		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON,
+		jobCompletedUnix(job), job.CancellationStatus, job.ErrorCode, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON, job.ComposeActionResultJSON,
 		checkMetadata, job.Type, job.Reference)
 	if err != nil {
 		return 0, err
@@ -143,7 +148,7 @@ func scanJob(row interface{ Scan(...any) error }) (JobRecord, error) {
 	var created, updated, completed int64
 	err := row.Scan(&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error,
 		&job.Progress, &job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
-		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode, &job.ProgressLimited, &job.CreateResultJSON, &job.ProjectActionResultJSON)
+		&created, &updated, &completed, &job.Revision, &job.CancellationStatus, &job.ErrorCode, &job.ProgressLimited, &job.CreateResultJSON, &job.ProjectActionResultJSON, &job.ComposeActionResultJSON)
 	if err != nil {
 		return JobRecord{}, err
 	}
@@ -197,7 +202,7 @@ func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, 
 func (s *Store) RecoverInterruptedJobs(ctx context.Context) error {
 	now := s.now().UTC().Unix()
 	_, err := s.database.ExecContext(ctx, `UPDATE jobs SET status = 'interrupted',
- message = '控制面重启，执行结果未确认', speed_bytes = 0, create_result_json = '', project_action_result_json = '',
+ message = '控制面重启，执行结果未确认', speed_bytes = 0, create_result_json = '', project_action_result_json = '', compose_action_result_json = '',
  cancellation_status = CASE WHEN cancellation_status = 'requested' THEN 'unknown' ELSE cancellation_status END,
  updated_at_unix = ?, completed_at_unix = ?, revision = revision + 1
  WHERE status IN ('queued', 'running')`, now, now)
@@ -221,7 +226,7 @@ func (s *Store) DeleteJob(ctx context.Context, id string) error {
 
 // UpsertJob 仅供旧 HTTP 调用过渡使用，会重建缺失行；新 engine 禁止调用。
 func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
-	checkMetadata := job.Status == "completed" || job.CreateResultJSON != "" || job.ProjectActionResultJSON != ""
+	checkMetadata := job.Status == "completed" || job.CreateResultJSON != "" || job.ProjectActionResultJSON != "" || job.ComposeActionResultJSON != ""
 	if checkMetadata {
 		var kind, reference string
 		err := s.database.QueryRowContext(ctx, `SELECT type, reference FROM jobs WHERE id = ?`, job.ID).Scan(&kind, &reference)
@@ -243,8 +248,8 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 		INSERT INTO jobs (
 			id, type, status, reference, message, error, progress,
 			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix, progress_limited, create_result_json, project_action_result_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at_unix, updated_at_unix, completed_at_unix, progress_limited, create_result_json, project_action_result_json, compose_action_result_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status = excluded.status,
 			message = excluded.message,
@@ -259,11 +264,12 @@ func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
 			progress_limited = excluded.progress_limited,
 			create_result_json = excluded.create_result_json,
 			project_action_result_json = excluded.project_action_result_json,
+			compose_action_result_json = excluded.compose_action_result_json,
 			revision = jobs.revision + 1
 		WHERE ? = 0 OR (jobs.type = excluded.type AND jobs.reference = excluded.reference)
 	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
 		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
-		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON, checkMetadata)
+		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt, job.ProgressLimited, job.CreateResultJSON, job.ProjectActionResultJSON, job.ComposeActionResultJSON, checkMetadata)
 	if err != nil {
 		return err
 	}

@@ -51,7 +51,7 @@ func ParseProjectActionJobResult(job JobRecord) (*ProjectActionJobResult, error)
 		}
 		return nil, nil
 	}
-	if action == "" || job.Reference != "standalone" || len(raw) > maxProjectActionResultBytes || !utf8.ValidString(raw) {
+	if job.CreateResultJSON != "" || job.ComposeActionResultJSON != "" || action == "" || job.Reference != "standalone" || len(raw) > maxProjectActionResultBytes || !utf8.ValidString(raw) {
 		return nil, ErrJobProjectActionResultInvalid
 	}
 	if job.Status != "completed" && job.Status != "failed" && job.Status != "interrupted" {

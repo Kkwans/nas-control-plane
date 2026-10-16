@@ -32,6 +32,9 @@ func TestJSONRequestBodyLimitContract(t *testing.T) {
 			} else if strings.HasPrefix(path, "/api/v1/databases/") && path != "/api/v1/databases/project-preferences" {
 				limit = "1048576"
 			}
+			if path == "/api/v1/docker/compose/projects/{projectID}/action-jobs/{action}" {
+				limit = "65536"
+			}
 			counts[limit]++
 			body := operation.RequestBody.Value
 			for _, clause := range []string{"完整请求体最多 " + limit + " 字节（bytes）", "JSON 前后空白", "所有 JSON 值及其他尾部字节", "按字节而非字符计数", "恰好等于上限允许", "超过上限返回 413"} {
@@ -45,7 +48,7 @@ func TestJSONRequestBodyLimitContract(t *testing.T) {
 			}
 		}
 	}
-	for limit, want := range map[string]int{"8192": 6, "16384": 24, "1048576": 8} {
+	for limit, want := range map[string]int{"8192": 6, "16384": 24, "1048576": 8, "65536": 1} {
 		if counts[limit] != want {
 			t.Errorf("JSON routes with %s-byte limit=%d, want %d", limit, counts[limit], want)
 		}

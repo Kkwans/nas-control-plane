@@ -2652,6 +2652,68 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/compose/projects/{projectID}/action-jobs/{action}:
+    post:
+      operationId: submitComposeActionJob
+      summary: 持久接收 Compose 项目启动、停止或重启任务
+      description: >-
+        正文仅接受 workingDirectory/configFiles，严格拒绝未知、重复字段、null、尾随数据及无效 UTF-8。
+        原始和规范化 projectID 最多256字节，目录及每个路径最多4096字节，不接受控制字符；1至32个配置文件。
+        沿用既有 LifecycleRequest.Normalize 的卷目录、项目内 YAML 路径及规范化去重规则，冻结顺序和路径。
+        compose-start/stop/restart 与 compose-deploy 共用单 worker，总容量32，排队TTL10分钟。
+        running 持久确认后仅一次既有 ControlComposeProject，预算90秒；HTTP断开不取消任务。
+        不支持 cancel/retry，不重启重放，不回退同步入口；旧同步入口保持，不承诺全局互斥。
+        start 执行 compose start 而非 up；项目ID仅为关联元数据，实际目标由目录和文件确定。
+        完整回执通过身份、动作、Completed、1至1024项身份和状态一致性验证后，仅 completed 保存 composeActionResult。
+        执行失败、验证失败、能力不可用、超时、传输失败及坏回执均 interrupted，无部分结果；仅明确派发前拒绝可 failed。
+        成功只证明命令返回和一次状态读回，不保证健康、持续状态、完整配置服务集合或重启次数。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+          description: 原始及规范化值最多256 UTF-8字节，非空，无控制字符；不是CLI项目名参数。
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [start, stop, restart] }
+      requestBody:
+        required: true
+        description: 单一 application/json Content-Type；完整请求体最多 65536 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。路径上限按UTF-8字节计算。
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [workingDirectory, configFiles]
+              properties:
+                workingDirectory: { type: string, minLength: 1, maxLength: 4096 }
+                configFiles:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  uniqueItems: true
+                  items: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        '202':
+          description: 原始已持久queued快照；type=compose-start/stop/restart，reference为规范化projectId，cancellable=false；无composeActionResult、completedAt或pending。仅代表接收。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobSnapshot' }
+        '400':
+          description: COMPOSE_LIFECYCLE_INVALID
+        '401':
+          description: Root登录会话缺失或无效
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE或AGENT_DOCKER_CONTROL_UNAVAILABLE
   /api/v1/docker/projects/standalone/action-jobs/{action}:
     post:
       operationId: submitDockerProjectActionJob
@@ -4343,6 +4405,16 @@ components:
           format: date-time
           description: 已保存记录的更新时间，不是当前采样或响应时间。
         completedAt: { type: string, format: date-time }
+    ComposeActionJobResult:
+      type: object
+      additionalProperties: false
+      required: [projectId, action, state, serviceCount]
+      description: 仅completed的Compose生命周期Job；关联reference与type。start/restart要求running，stop要求stopped。不含服务身份、路径、配置或输出；历史摘要不加载或包含此结果。
+      properties:
+        projectId: { type: string, minLength: 1, maxLength: 256 }
+        action: { type: string, enum: [start, stop, restart] }
+        state: { type: string, enum: [running, stopped] }
+        serviceCount: { type: integer, minimum: 1, maximum: 1024 }
     DockerProjectActionJobResult:
       type: object
       additionalProperties: false
@@ -4383,6 +4455,12 @@ components:
       type: object
       allOf:
         - oneOf:
+            - not: { required: [composeActionResult] }
+            - required: [composeActionResult]
+              properties:
+                type: { type: string, enum: [compose-start, compose-stop, compose-restart] }
+                status: { type: string, enum: [completed] }
+        - oneOf:
             - not: { required: [projectActionResult] }
             - required: [projectActionResult]
               properties:
@@ -4398,6 +4476,10 @@ components:
             status: { type: string, enum: [completed] }
       required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]
       properties:
+        composeActionResult:
+          description: 已持久completed的Compose生命周期详情/SSE最小聚合结果；pending不外露。
+          allOf:
+            - $ref: '#/components/schemas/ComposeActionJobResult'
         projectActionResult:
           description: 仅三个独立容器项目生命周期类型的已持久终态详情或 SSE 中出现；历史摘要不包含结果。结果待保存时不外露。
           allOf:

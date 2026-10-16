@@ -256,6 +256,10 @@ func jobTerminal(status string) bool {
 func recordFromSnapshot(j jobSnapshot) controlstore.JobRecord {
 	layers, _ := json.Marshal(j.Layers)
 	record := controlstore.JobRecord{ProgressLimited: j.ProgressLimited, ID: j.ID, Type: j.Type, Status: j.Status, Reference: j.Reference, Message: j.Message, Error: j.Error, Progress: j.Progress, DownloadedBytes: j.DownloadedBytes, TotalBytes: j.TotalBytes, SpeedBytes: j.SpeedBytes, LayersJSON: string(layers), CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, CancellationStatus: j.CancellationStatus, ErrorCode: j.ErrorCode}
+	if j.ComposeActionResult != nil {
+		encoded, _ := json.Marshal(j.ComposeActionResult)
+		record.ComposeActionResultJSON = string(encoded)
+	}
 	if j.ProjectActionResult != nil {
 		encoded, _ := json.Marshal(j.ProjectActionResult)
 		record.ProjectActionResultJSON = string(encoded)
@@ -392,7 +396,7 @@ func (r *jobRegistry) createRecordReserved(kind, reference string, total int64, 
 				r.freezeLocked(e, j)
 			} else {
 				e.queue = r.pulls
-				if kind == "compose-deploy" {
+				if kind == "compose-deploy" || isComposeActionJob(kind) {
 					e.queue = r.compose
 				} else if kind == containerCreateJobType {
 					e.queue = r.creates
@@ -429,7 +433,7 @@ func (r *jobRegistry) start() {
 	})
 }
 func (r *jobRegistry) submit(kind, reference string, total int64, run func(context.Context, string)) (jobSnapshot, error) {
-	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType && kind != containerCreateJobType && !isContainerActionJob(kind) && !isProjectActionJob(kind) || run == nil {
+	if kind != "docker-image-pull" && kind != "compose-deploy" && kind != imageRemoveJobType && kind != containerCreateJobType && !isContainerActionJob(kind) && !isProjectActionJob(kind) && !isComposeActionJob(kind) || run == nil {
 		return jobSnapshot{}, errJobUnavailable
 	}
 	r.admission.Lock()

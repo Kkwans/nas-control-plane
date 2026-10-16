@@ -15,6 +15,7 @@ import (
 )
 
 type jobSnapshot struct {
+	ComposeActionResult *controlstore.ComposeActionJobResult   `json:"composeActionResult,omitempty"`
 	ProjectActionResult *controlstore.ProjectActionJobResult   `json:"projectActionResult,omitempty"`
 	CreateResult        *controlstore.ContainerCreateJobResult `json:"createResult,omitempty"`
 	ProgressLimited     bool                                   `json:"progressLimited,omitempty"`
@@ -79,7 +80,16 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 	} else {
 		job.ProjectActionResult = projectResult
 	}
-	if err != nil || projectErr != nil {
+	composeResult, composeErr := controlstore.ParseComposeActionJobResult(record)
+	if composeErr != nil {
+		job.Status = "interrupted"
+		job.ErrorCode = "JOB_HISTORY_CORRUPT"
+		job.Message = "任务历史结果损坏，Compose 操作结果未确认，请只读刷新核对"
+	} else {
+		job.ComposeActionResult = composeResult
+	}
+	if err != nil || projectErr != nil || composeErr != nil {
+		job.ComposeActionResult = nil
 		job.CreateResult = nil
 		job.ProjectActionResult = nil
 	}
@@ -96,6 +106,10 @@ func snapshotFromRecord(record controlstore.JobRecord) jobSnapshot {
 
 // cloneJobSnapshot 必须在持有 registry 锁时调用（或输入已独立），避免可变字段逃逸。
 func cloneJobSnapshot(job jobSnapshot) jobSnapshot {
+	if job.ComposeActionResult != nil {
+		result := *job.ComposeActionResult
+		job.ComposeActionResult = &result
+	}
 	if job.ProjectActionResult != nil {
 		result := *job.ProjectActionResult
 		result.Items = append([]controlstore.ProjectActionJobItem(nil), result.Items...)

@@ -27,7 +27,7 @@ func ParseContainerCreateJobResult(job JobRecord) (*ContainerCreateJobResult, er
 		}
 		return nil, nil
 	}
-	if !eligible || len(raw) > 256 {
+	if !eligible || len(raw) > 256 || job.ProjectActionResultJSON != "" || job.ComposeActionResultJSON != "" {
 		return nil, ErrJobCreateResultInvalid
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))

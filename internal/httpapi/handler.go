@@ -338,6 +338,7 @@ func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.H
 			protected.Post("/docker/projects/standalone/action-jobs/{action}", api.projectActionJob)
 			protected.Post("/docker/projects/{projectID}/actions/{action}", api.controlStandaloneProject)
 			protected.Post("/docker/compose/projects/{projectID}/actions/{action}", api.controlComposeProject)
+			protected.Post("/docker/compose/projects/{projectID}/action-jobs/{action}", api.composeActionJob)
 			protected.Delete("/docker/compose/projects/{projectID}", api.deleteDockerProject)
 			protected.Post("/docker/compose/config/read", api.readComposeConfig)
 			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
