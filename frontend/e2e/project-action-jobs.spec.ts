@@ -284,13 +284,23 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
     }))
   }
   await target.scrollIntoViewIfNeeded()
+  // 保留上述真实控件可达性，只规范普通全页证据的文档滚动位置。
+  const fullPage = !modal
+  const normalizeScroll = fullPage && !preserveHover
+  const scrollNormalization = await page.evaluate(normalize => {
+    const before = { x: scrollX, y: scrollY }, active = document.activeElement
+    if (normalize) window.scrollTo({ left: 0, top: 0, behavior: 'instant' })
+    return { applied: normalize, before, after: { x: scrollX, y: scrollY }, focusPreserved: document.activeElement === active }
+  }, normalizeScroll)
+  if (normalizeScroll) await expect.poll(() => page.evaluate(() => ({ x: scrollX, y: scrollY }))).toEqual({ x: 0, y: 0 })
+  expect(scrollNormalization.focusPreserved).toBe(true)
   const beforeCapture = await measure(page, selector), requestsBefore = structuredClone(api.requests)
   const prefix = `project-action-jobs-${state}-${page.viewportSize()!.width}`
   const directory = info.outputPath('ui-captures'); await mkdir(directory, { recursive: true })
-  const png = `${directory}/${prefix}.png`, screenshot = await page.screenshot({ path: png, fullPage: !modal, animations: 'disabled' })
+  const png = `${directory}/${prefix}.png`, screenshot = await page.screenshot({ path: png, fullPage, animations: 'disabled' })
   const afterCapture = await measure(page, selector), requestsAfterCapture = structuredClone(api.requests)
   const axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, selector)
-  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, executionScope: 'isolated static fixture; browser execution CI only', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: 1, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
+  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, executionScope: 'isolated static fixture; browser execution CI only', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: 1, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage, scrollNormalization, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
   api.captures.push({ file: `${prefix}.png`, sha256: hash(screenshot) }); await info.attach(prefix, { path: png, contentType: 'image/png' })
   for (const [suffix, content] of [['capture-state', metadata], ['axe-capture-state', { ...metadata, axe }]] as const) {
     const file = `${prefix}-${suffix}.json`, path = `${directory}/${file}`, data = JSON.stringify(content, null, 2)
@@ -333,6 +343,10 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
           if (parent.x !== 'visible') { expect.soft(line.left).toBeGreaterThanOrEqual(parent.bounds.left - 1); expect.soft(line.right).toBeLessThanOrEqual(parent.bounds.right + 1) }
           if (['hidden', 'clip'].includes(parent.y)) { expect.soft(line.top).toBeGreaterThanOrEqual(parent.bounds.top - 1); expect.soft(line.bottom).toBeLessThanOrEqual(parent.bounds.bottom + 1) }
         }
+      }
+      if (/^H[1-6]$/.test(field.tag) && field.bounds.top >= 0 && field.bounds.bottom <= sample.viewport.height
+        && field.bounds.left >= 0 && field.bounds.right <= sample.viewport.width) {
+        expect.soft(field.hits, field.text ?? '').toEqual([true, true, true, true, true])
       }
       if (field.tag === 'BUTTON') {
         expect.soft(field.bounds.width).toBeGreaterThanOrEqual(minimumTarget); expect.soft(field.bounds.height).toBeGreaterThanOrEqual(minimumTarget)
