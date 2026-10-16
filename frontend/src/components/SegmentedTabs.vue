@@ -66,7 +66,22 @@ function onKeydown(event: KeyboardEvent, index: number) {
   const buttons = Array.from(
     (event.currentTarget as HTMLButtonElement).closest(`[role="${groupRole.value}"]`)?.querySelectorAll<HTMLButtonElement>(`[role="${optionRole.value}"]`) ?? [],
   )
-  buttons[nextIndex]?.focus()
+  const nextButton = buttons[nextIndex]
+  nextButton?.focus()
+  if (nextButton) {
+    const group = nextButton.parentElement
+    if (group && group.scrollWidth > group.clientWidth) {
+      // focus() 可能保留部分可见的按钮；键盘切换还需露出完整文字及焦点环。
+      const bounds = nextButton.getBoundingClientRect()
+      const viewport = group.getBoundingClientRect()
+      const style = getComputedStyle(nextButton)
+      const ring = Math.max(0, (Number.parseFloat(style.outlineWidth) || 0) + (Number.parseFloat(style.outlineOffset) || 0))
+      const overflow = bounds.right + ring > viewport.right
+        ? bounds.right + ring - viewport.right
+        : bounds.left - ring < viewport.left ? bounds.left - ring - viewport.left : 0
+      group.scrollLeft += overflow
+    }
+  }
   selectTab(nextTab)
 }
 </script>

@@ -63,6 +63,26 @@ describe('SegmentedTabs 显式筛选语义', () => {
     }
     expect((await press(buttons[0]!, 'Tab')).defaultPrevented).toBe(false)
   })
+  it.each(['tabs', 'filter'] as const)('%s 横向溢出时键盘选中项及焦点环完整滚入视口', async (mode) => {
+    const { host, buttons, value } = mountTabs(mode)
+    const group = host.querySelector<HTMLElement>('.segmented-tabs')!
+    Object.defineProperties(group, { scrollWidth: { value: 400 }, clientWidth: { value: 300 } })
+    vi.spyOn(group, 'getBoundingClientRect').mockReturnValue({ left: 20, right: 320 } as DOMRect)
+    for (const button of buttons) { button.style.outlineWidth = '2px'; button.style.outlineStyle = 'solid'; button.style.outlineOffset = '2px' }
+    vi.spyOn(buttons[3]!, 'getBoundingClientRect').mockReturnValue({ left: 260, right: 340 } as DOMRect)
+    await press(buttons[0]!, 'End')
+    expect(document.activeElement).toBe(buttons[3])
+    expect(value.value).toBe('hidden')
+    expect(group.scrollLeft).toBe(24)
+    vi.spyOn(buttons[0]!, 'getBoundingClientRect').mockReturnValue({ left: 0, right: 80 } as DOMRect)
+    await press(buttons[3]!, 'Home')
+    expect(document.activeElement).toBe(buttons[0])
+    expect(group.scrollLeft).toBe(0)
+    vi.spyOn(buttons[2]!, 'getBoundingClientRect').mockReturnValue({ left: 130, right: 210 } as DOMRect)
+    await press(buttons[0]!, 'ArrowRight')
+    expect(group.scrollLeft).toBe(0)
+    expect(document.activeElement).toBe(buttons[2])
+  })
   it.each(['tabs', 'filter'] as const)('%s 整组禁用不更新值或焦点', async (mode) => {
     const { buttons, update } = mountTabs(mode, true)
     const focus = document.activeElement

@@ -178,7 +178,12 @@ for (const width of [390, 1440]) {
         await page.keyboard.press(key); await selected(index)
       }
       await page.keyboard.press('Space'); await selected(0)
-      await category.click(); await page.getByRole('option', { name: '工具', exact: true }).click()
+      await page.keyboard.press('Tab'); await expect(category).toBeFocused()
+      await page.keyboard.press('Enter')
+      await expect(page.getByRole('option', { name: '工具', exact: true })).toBeVisible()
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+      await expect(page.locator('.category-filter')).toContainText('工具')
       await search.fill('停止')
       await radios.nth(1).click()
       await expect.poll(rows).toEqual(['工具停止'])
