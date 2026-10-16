@@ -821,6 +821,7 @@ onMounted(() => {
 <style scoped>
 /* MessageBox 传送到页面根部；每条规则仅限容器或 Compose 专属类。 */
 :global(.ncp-container-action-confirmation .el-message-box__message) { overflow-wrap: anywhere; white-space: pre-line; max-height: min(50vh, 420px); overflow-y: auto; }
+:global(.ncp-container-action-confirmation .el-message-box__message:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: -2px; }
 :global(.ncp-container-action-confirmation .el-message-box__header),
 :global(.ncp-compose-action-confirmation .el-message-box__header) { min-height: var(--ncp-touch-target); padding-right: calc(var(--ncp-touch-target) + 8px); }
 :global(.ncp-container-action-confirmation .el-message-box__headerbtn),
