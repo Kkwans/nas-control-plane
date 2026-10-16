@@ -12,7 +12,7 @@ defineProps<{
 </script>
 
 <template>
-  <div class="grouped-directory panel" :aria-label="label">
+  <div class="grouped-directory panel" role="group" :aria-label="label">
     <div v-if="$slots.header" class="grouped-directory__column-header">
       <slot name="header" />
     </div>
@@ -20,7 +20,7 @@ defineProps<{
       <header class="grouped-directory__header">
         <div class="grouped-directory__title">
           <h3>{{ group.title }}</h3>
-          <span :aria-label="`${group.count} 项`">{{ group.count }}</span>
+          <span>{{ group.count }}<span class="sr-only"> 项</span></span>
         </div>
         <div v-if="$slots.actions" class="grouped-directory__actions">
           <slot name="actions" :group="group" />
