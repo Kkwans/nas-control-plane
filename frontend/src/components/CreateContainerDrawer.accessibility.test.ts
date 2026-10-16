@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp, h, nextTick, type App } from 'vue'
+import { createApp, h, nextTick, ref, type App } from 'vue'
 import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import CreateContainerDrawer from './CreateContainerDrawer.vue'
 import drawerSource from './CreateContainerDrawer.vue?raw'
@@ -14,6 +14,7 @@ const fetcher = vi.fn<typeof fetch>()
 let app: App | undefined
 let host: HTMLElement
 let styles: HTMLStyleElement
+const drawerOpen = ref(true)
 async function settle() { for (let i = 0; i < 30; i++) await nextTick() }
 function button(text: string) {
   const result = [...document.querySelectorAll<HTMLButtonElement>('button')].find((element) => element.textContent?.trim() === text)
@@ -23,6 +24,7 @@ function button(text: string) {
 async function click(text: string) { const target = button(text); target.focus(); target.click(); await settle() }
 
 beforeEach(async () => {
+  drawerOpen.value = true
   beginSession()
   fetcher.mockReset()
   const collectedAt = '2026-10-14T00:00:00Z'
@@ -43,7 +45,7 @@ beforeEach(async () => {
   const values = new Map([...tokens.matchAll(/(--ncp-[\w-]+):\s*([^;]+);/g)].map((match) => [match[1], match[2]]))
   styles.textContent = [...drawerSource.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((match) => match[1]).join('\n').replace(/var\((--ncp-[\w-]+)\)/g, (original, name: string) => values.get(name) || original)
   document.head.append(styles)
-  app = createApp({ render: () => h('div', [h('header', { class: 'fixture-topbar' }, '控制台'), h(CreateContainerDrawer, { modelValue: true, image: { id: 'alpine', repoTags: ['alpine:latest'], repoDigests: [], sizeBytes: 1, createdAt: collectedAt, containers: 0 } })]) })
+  app = createApp({ render: () => h('div', [h('header', { class: 'fixture-topbar' }, '控制台'), h(CreateContainerDrawer, { modelValue: drawerOpen.value, image: { id: 'alpine', repoTags: ['alpine:latest'], repoDigests: [], sizeBytes: 1, createdAt: collectedAt, containers: 0 } })]) })
   app.mount(host)
   await settle()
 })
@@ -58,6 +60,49 @@ afterEach(async () => {
 })
 
 describe('创建容器无障碍 DOM', () => {
+  it.each(['仅创建', '创建并启动'])('%s 的发起按钮在浏览器禁用失焦后仍能在取消时恢复，并支持再次打开', async action => {
+    for (const method of ['escape', 'close', 'back']) {
+      const opener = button(action)
+      opener.focus()
+      opener.click()
+      // JSDOM 不会像浏览器一样在按钮禁用后失焦；在焦点陷阱异步记录前模拟此行为。
+      opener.blur()
+      await settle()
+      expect(opener.disabled).toBe(true)
+      const dialog = document.querySelector<HTMLElement>('.create-confirmation-dialog')!
+      await vi.waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+      if (method === 'escape') document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
+      else if (method === 'close') dialog.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')!.click()
+      else button('返回修改').click()
+      await settle()
+      await vi.waitFor(() => expect(document.activeElement).toBe(opener))
+      expect(opener.disabled).toBe(false)
+      expect((dialog.closest('.el-overlay') as HTMLElement).style.display).toBe('none')
+    }
+    expect(fetcher.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+
+  it.each(['draft', 'session', 'drawer'])('%s 改变后不再主动恢复旧确认发起者焦点', async change => {
+    const opener = button('创建并启动')
+    opener.focus()
+    opener.click()
+    opener.blur()
+    await settle()
+    const dialog = document.querySelector<HTMLElement>('.create-confirmation-dialog')!
+    await vi.waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+    const focus = vi.spyOn(opener, 'focus')
+    if (change === 'draft') {
+      const name = document.querySelector<HTMLInputElement>('input[placeholder="例如 mysql-1"]')!
+      name.value = 'changed-draft'
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    } else if (change === 'session') invalidateSession()
+    else drawerOpen.value = false
+    await settle()
+    await vi.waitFor(() => expect((dialog.closest('.el-overlay') as HTMLElement).style.display).toBe('none'))
+    expect(focus).not.toHaveBeenCalledWith({ preventScroll: true })
+    focus.mockRestore()
+  })
+
   it.each([
     ['添加环境变量', 'env', '环境变量'],
     ['添加挂载', 'mount', '挂载'],

@@ -151,7 +151,7 @@ async function submitA(page: Page, runContainer = true) {
 }
 
 async function attemptSummary(page: Page) {
-  return notice(page).locator('article').last().innerText()
+  return notice(page).locator('.protection-status').last().innerText()
 }
 
 async function expectUnknown(page: Page, runContainer = true) {
@@ -199,7 +199,7 @@ async function sourceProvenance() {
 
 async function captureState(page: Page) {
   return notice(page).evaluate((panel) => {
-    const selectors = ['h2', 'article', 'article > strong', 'article > p', '.protection-actions', '.protection-actions button']
+    const selectors = ['h2', '.protection-status', '.protection-status > strong', '.protection-status > p', '.protection-actions', '.protection-actions button']
     return {
       viewport: { width: innerWidth, height: innerHeight },
       root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth },
@@ -267,7 +267,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, stateName: stri
   expect.soft(afterAxe.scroll).toEqual(beforeCapture.scroll)
   expect.soft(api.requests).toEqual(requestsBefore)
   expect.soft(beforeCapture.root.scrollWidth).toBeLessThanOrEqual(beforeCapture.root.clientWidth + 1)
-  const required = region === 'notice' ? ['h2', 'article > strong', 'article > p'] : ['.protection-actions', '.protection-actions button']
+  const required = region === 'notice' ? ['h2', '.protection-status > strong', '.protection-status > p'] : ['.protection-actions', '.protection-actions button']
   for (const control of beforeCapture.controls.filter((item) => required.includes(item.selector))) {
     expect.soft(control.visible && control.inViewport, JSON.stringify(control)).toBe(true)
     expect.soft(control.textContained, JSON.stringify(control)).toBe(true)
@@ -276,49 +276,76 @@ async function capture(page: Page, info: TestInfo, api: Fixture, stateName: stri
   expect.soft(axe.violations).toEqual([])
 }
 
+// 即使硬断言或软断言失败也保留最终请求账本；诊断写入失败不能遮盖原始测试错误。
+async function withFinalLedger(info: TestInfo, api: Awaited<ReturnType<typeof fixture>>, name: string, journey: (details: Record<string, unknown>) => Promise<void>) {
+  const details: Record<string, unknown> = {}
+  let assertionsFinished = false
+  let diagnosticFailure: unknown
+  try {
+    await journey(details)
+    assertionsFinished = true
+  } finally {
+    try {
+      const path = info.outputPath('ui-captures', `${name}-capture-state.json`)
+      await mkdir(info.outputPath('ui-captures'), { recursive: true })
+      await writeFile(path, JSON.stringify({ ...await sourceProvenance(), fixtureOnly: true, ...details,
+        journeyCompleted: assertionsFinished && info.errors.length === 0,
+        requests: api.requests, writes: api.writes, denied: api.denied,
+      }, null, 2))
+      await info.attach(name, { path, contentType: 'application/json' })
+    } catch (error) {
+      diagnosticFailure = error
+      console.warn('创建流程诊断账本保存失败；保留原始测试错误', error)
+    }
+  }
+  if (diagnosticFailure && info.errors.length === 0) throw diagnosticFailure
+}
+
 for (const width of [390, 1440]) {
   test(`${width}px 无效 202 保留会话保护；只读清单不能自动解锁或认领同名容器`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 900 })
     const api = await fixture(page)
-    await openImages(page); await openDraft(page)
-    api.allowOneCreate(); await submitA(page)
-    await expectUnknown(page)
-    await nameInput(page).fill('edited-current-draft')
-    await nameInput(page).press('Enter')
-    await expect(createButton(page)).toBeDisabled()
-    await expect(createOnlyButton(page)).toBeDisabled()
-    await closeDrawer(page, 'x')
-    await capture(page, info, api, 'immutable-notice', 'notice')
-    await capture(page, info, api, 'disabled-replay', 'actions')
-    for (const mode of ['empty', 'same-name', 'failure'] as const) {
-      api.inventory(mode)
-      const before = api.requests.length
-      await inspectButton(page).click()
-      await expect(notice(page)).toContainText(mode === 'failure' ? '容器清单未成功刷新' : '容器清单已刷新')
-      expect(api.requests.slice(before)).toEqual(['GET /api/v1/jobs?type=docker-container-create', `GET ${inventoryPath}`])
+    await withFinalLedger(info, api, `creation-unknown-result-${width}`, async () => {
+      await openImages(page); await openDraft(page)
+      api.allowOneCreate(); await submitA(page)
       await expectUnknown(page)
-      await expect(notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true }))[mode === 'failure' ? 'toBeDisabled' : 'toBeEnabled']()
+      await nameInput(page).fill('edited-current-draft')
+      await nameInput(page).press('Enter')
+      await expect(createButton(page)).toBeDisabled()
+      await expect(createOnlyButton(page)).toBeDisabled()
+      await closeDrawer(page, 'x')
+      await capture(page, info, api, 'immutable-notice', 'notice')
+      await capture(page, info, api, 'disabled-replay', 'actions')
+      for (const mode of ['empty', 'same-name', 'failure'] as const) {
+        api.inventory(mode)
+        const before = api.requests.length
+        await inspectButton(page).click()
+        await expect(notice(page)).toContainText(mode === 'failure' ? '容器清单未成功刷新' : '容器清单已刷新')
+        expect(api.requests.slice(before)).toEqual(['GET /api/v1/jobs?type=docker-container-create', `GET ${inventoryPath}`])
+        await expectUnknown(page)
+        await expect(notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true }))[mode === 'failure' ? 'toBeDisabled' : 'toBeEnabled']()
+        await expectOnePost(api)
+        if (mode === 'same-name') await capture(page, info, api, 'same-name-still-unknown', 'notice')
+      }
+      // 经过 SPA 标签切换、键盘激活禁用入口仍不能开启 B 或覆盖 A。
+      await page.getByRole('button', { name: '容器', exact: true }).click()
+      await page.getByRole('button', { name: '镜像', exact: true }).click()
+      await expectUnknown(page)
+      await capture(page, info, api, 'reopened-b-retains-a', 'notice')
+      await capture(page, info, api, 'reopened-b-disabled-replay', 'actions')
+      api.inventory('empty'); await inspectButton(page).click()
+      const release = notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true })
+      await expect(release).toBeEnabled(); await release.focus(); await release.press('Enter')
+      const confirmation = page.getByRole('dialog', { name: '解除创建防重复保护', exact: true })
+      await confirmation.getByRole('button', { name: '保留保护', exact: true }).click()
+      await expectUnknown(page)
+      await release.click()
+      await confirmation.getByRole('button', { name: '确认风险并解除', exact: true }).click()
+      await expect(notice(page)).toHaveCount(0)
+      await openDraft(page, 'alpine:3.20')
+      await expect(nameInput(page)).toHaveValue('alpine')
       await expectOnePost(api)
-      if (mode === 'same-name') await capture(page, info, api, 'same-name-still-unknown', 'notice')
-    }
-    // 经过 SPA 标签切换、键盘激活禁用入口仍不能开启 B 或覆盖 A。
-    await page.getByRole('button', { name: '容器', exact: true }).click()
-    await page.getByRole('button', { name: '镜像', exact: true }).click()
-    await expectUnknown(page)
-    await capture(page, info, api, 'reopened-b-retains-a', 'notice')
-    await capture(page, info, api, 'reopened-b-disabled-replay', 'actions')
-    api.inventory('empty'); await inspectButton(page).click()
-    const release = notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true })
-    await expect(release).toBeEnabled(); await release.focus(); await release.press('Enter')
-    const confirmation = page.getByRole('dialog', { name: '解除创建防重复保护', exact: true })
-    await confirmation.getByRole('button', { name: '保留保护', exact: true }).click()
-    await expectUnknown(page)
-    await release.click()
-    await confirmation.getByRole('button', { name: '确认风险并解除', exact: true }).click()
-    await expect(notice(page)).toHaveCount(0)
-    await openDraft(page, 'alpine:3.20')
-    await expect(nameInput(page)).toHaveValue('alpine')
-    await expectOnePost(api)
+    })
   })
 }
 
@@ -425,54 +452,55 @@ for (const width of [390, 1440]) for (const runContainer of [true, false]) {
     test.setTimeout(180_000)
     await page.setViewportSize({ width, height: 900 })
     const api = await fixture(page)
-    await openImages(page); await openDraft(page)
-    api.allowOneCreate({ status: 202, body: JSON.stringify(creationJobFixture(jobId)) })
-    await submitA(page, runContainer)
-    await expect(drawer(page)).toBeHidden()
-    await expect(notice(page)).toContainText('任务已受理，尚未确认创建完成')
-    await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
-    const release = notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true })
-    await page.setViewportSize({ width, height: 900 })
-    await capture(page, info, api, `${runContainer}-queued`, 'notice')
-    for (const sample of [
-      { phase: 'queued-read', job: creationJobFixture(jobId), status: 200 },
-      { phase: 'running', job: creationJobFixture(jobId, 'running'), status: 200 },
-      { phase: 'pending', job: { ...creationJobFixture(jobId, 'running'), persistenceStatus: 'pending' }, status: 200 },
-      { phase: '404', job: { code: 'JOB_NOT_FOUND', message: '不存在', requestId: 'fixture' }, status: 404 },
-      { phase: 'wrong-id', job: creationJobFixture('different-job', 'completed', runContainer), status: 200 },
-      { phase: 'wrong-started', job: creationJobFixture(jobId, 'completed', !runContainer), status: 200 },
-    ]) {
-      api.job(sample.job, sample.status)
-      await inspectButton(page).click()
-      await expect(inspectButton(page)).toBeEnabled()
-      await expect(release).toBeDisabled()
+    await withFinalLedger(info, api, `creation-exact-result-${runContainer}-${width}`, async details => {
+      await openImages(page); await openDraft(page)
+      api.allowOneCreate({ status: 202, body: JSON.stringify(creationJobFixture(jobId)) })
+      await submitA(page, runContainer)
+      await expect(drawer(page)).toBeHidden()
+      await expect(notice(page)).toContainText('任务已受理，尚未确认创建完成')
       await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
-      await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true, includeHidden: true })).toBeDisabled()
-      await capture(page, info, api, `${runContainer}-${sample.phase}`, 'notice')
-      await capture(page, info, api, `${runContainer}-${sample.phase}-locked`, 'actions')
-    }
-    api.job(creationJobFixture(jobId, 'completed', runContainer))
-    const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
-    await inspectButton(page).click()
-    const completedResponse = await completedResponsePromise
-    const completedJob: unknown = await completedResponse.json()
-    expect(completedResponse.status()).toBe(200)
-    expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', runContainer))
-    const result = page.getByRole('status', { name: '已确认的创建结果', exact: true })
-    await expect(result).toContainText(fixtureCreatedContainerId)
-    await expect(result).toContainText(runContainer ? '创建调用已确认创建并启动' : '创建调用已确认创建')
-    await expect(result).toContainText('不保证容器持续运行')
-    await capture(page, info, api, `${runContainer}-exact-completed`, 'notice')
-    await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true, includeHidden: true })).toBeEnabled()
-    await page.getByRole('button', { name: '容器', exact: true }).click()
-    await expect(result).toContainText(fixtureCreatedContainerId)
-    await expectOnePost(api, runContainer)
-    expect(api.requests.filter(target => target.startsWith('GET /api/v1/jobs/'))).toEqual(Array(7).fill(`GET ${jobPath}`))
-    expect(info.errors, '完整几何和axe断言通过后才记录流程完成').toEqual([])
-    const path = info.outputPath('ui-captures', `creation-exact-result-${runContainer}-${width}-capture-state.json`)
-    await mkdir(info.outputPath('ui-captures'), { recursive: true })
-    await writeFile(path, JSON.stringify({ ...await sourceProvenance(), fixtureOnly: true, journeyCompleted: true, requests: api.requests, writes: api.writes, denied: api.denied, completedStatus: completedResponse.status(), completedJob, result: await result.innerText() }, null, 2))
-    await info.attach('exact-job-result', { path, contentType: 'application/json' })
+      const release = notice(page).getByRole('button', { name: '解除本会话防重复保护', exact: true })
+      await page.setViewportSize({ width, height: 900 })
+      await capture(page, info, api, `${runContainer}-queued`, 'notice')
+      for (const sample of [
+        { phase: 'queued-read', job: creationJobFixture(jobId), status: 200 },
+        { phase: 'running', job: creationJobFixture(jobId, 'running'), status: 200 },
+        { phase: 'pending', job: { ...creationJobFixture(jobId, 'running'), persistenceStatus: 'pending' }, status: 200 },
+        { phase: '404', job: { code: 'JOB_NOT_FOUND', message: '不存在', requestId: 'fixture' }, status: 404 },
+        { phase: 'wrong-id', job: creationJobFixture('different-job', 'completed', runContainer), status: 200 },
+        { phase: 'wrong-started', job: creationJobFixture(jobId, 'completed', !runContainer), status: 200 },
+      ]) {
+        api.job(sample.job, sample.status)
+        await inspectButton(page).click()
+        await expect(inspectButton(page)).toBeEnabled()
+        await expect(release).toBeDisabled()
+        await expect(page.getByRole('status', { name: '已确认的创建结果', exact: true })).toHaveCount(0)
+        await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true, includeHidden: true })).toBeDisabled()
+        await capture(page, info, api, `${runContainer}-${sample.phase}`, 'notice')
+        await capture(page, info, api, `${runContainer}-${sample.phase}-locked`, 'actions')
+      }
+      api.job(creationJobFixture(jobId, 'completed', runContainer))
+      const completedResponsePromise = page.waitForResponse(value => new URL(value.url()).pathname === jobPath && value.request().method() === 'GET')
+      await inspectButton(page).click()
+      const completedResponse = await completedResponsePromise
+      const completedJob: unknown = await completedResponse.json()
+      details.completedStatus = completedResponse.status()
+      details.completedJob = completedJob
+      expect(completedResponse.status()).toBe(200)
+      expect(completedJob).toEqual(creationJobFixture(jobId, 'completed', runContainer))
+      const result = page.getByRole('status', { name: '已确认的创建结果', exact: true })
+      await expect(result).toContainText(fixtureCreatedContainerId)
+      await expect(result).toContainText(runContainer ? '创建调用已确认创建并启动' : '创建调用已确认创建')
+      await expect(result).toContainText('不保证容器持续运行')
+      details.result = await result.innerText()
+      await capture(page, info, api, `${runContainer}-exact-completed`, 'notice')
+      await expect(page.getByRole('button', { name: '从镜像 alpine:3.20 创建容器', exact: true, includeHidden: true })).toBeEnabled()
+      await page.getByRole('button', { name: '容器', exact: true }).click()
+      await expect(result).toContainText(fixtureCreatedContainerId)
+      await expectOnePost(api, runContainer)
+      expect(api.requests.filter(target => target.startsWith('GET /api/v1/jobs/'))).toEqual(Array(7).fill(`GET ${jobPath}`))
+      expect(info.errors, '完整几何和axe断言通过后才记录流程完成').toEqual([])
+    })
   })
 }
 

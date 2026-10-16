@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { Box, Cpu, HardDrive, Network, Plus, Shield, Trash2 } from '@lucide/vue'
 import { ElAlert, ElDialog, ElDrawer, ElEmpty, ElInput, ElInputNumber, ElMessage, ElSwitch, ElTooltip } from 'element-plus'
 
@@ -37,6 +37,7 @@ const emit = defineEmits<{
 const createJobs = useDockerContainerCreateJobs()
 const { blocked: createBlocked, entry: createEntry } = createJobs
 let previewToken: symbol | null = null
+let previewReturnFocus: { element: HTMLElement; opening: number; revision: number; session: number } | null = null
 
 const submitting = ref<'create' | 'start' | null>(null)
 const advancedOpen = ref(false)
@@ -351,7 +352,18 @@ function previewLabel(value: string | undefined, fallback: string) {
   return value?.trim() || fallback
 }
 
-function openSubmitPreview(runContainer: boolean) {
+async function restorePreviewFocus() {
+  const target = previewReturnFocus
+  previewReturnFocus = null
+  // Element Plus 先发 closed 再更新 v-model；先让事件栈结束，再等待取消保留后的按钮渲染。
+  await Promise.resolve()
+  await nextTick()
+  if (!target || !alive || !props.modelValue || previewOpen.value || submitting.value || createBlocked.value ||
+    target.opening !== opening || target.revision !== revision || !isCurrentSession(target.session) || !target.element.isConnected || target.element.matches(':disabled')) return
+  target.element.focus({ preventScroll: true })
+}
+
+function openSubmitPreview(runContainer: boolean, event?: Event) {
   if (createBlocked.value || submitting.value || !alive || !props.modelValue || draftSession === null || !isCurrentSession(draftSession)) return
   const input = buildInput(runContainer)
   const message = validationMessage(input)
@@ -359,8 +371,11 @@ function openSubmitPreview(runContainer: boolean) {
     ElMessage.warning(message)
     return
   }
+  // 保留操作会禁用按钮；浏览器可能立即移走焦点，必须在 Element Plus 开始捕获前记录发起者。
+  const opener = event?.currentTarget instanceof HTMLButtonElement ? event.currentTarget : document.activeElement
   const reservation = createJobs.reserve(runContainer)
   if (!reservation) return
+  previewReturnFocus = opener instanceof HTMLElement ? { element: opener, opening, revision, session: captureSession().generation } : null
   previewToken = reservation.token
   pendingInput.value = input
   previewOwner = { opening, revision, session: captureSession().generation }
@@ -488,7 +503,7 @@ async function executeSubmit() {
 
     <p v-if="createBlocked && !previewOpen" class="unresolved-attempt" role="status">创建任务已保留防重复保护。提交后关闭不会取消；请在 Docker 页面顶部只读核对任务与容器状态。任务受理不代表创建成功。</p>
 
-    <form class="container-form" @submit.prevent="openSubmitPreview(true)">
+    <form class="container-form" @submit.prevent="openSubmitPreview(true, $event)">
       <section class="form-section">
         <SectionHeader title="基础信息" description="设置名称、资源限制和重启策略" :icon="Box" heading-tag="h3" />
         <div class="form-grid">
@@ -592,8 +607,8 @@ async function executeSubmit() {
     <template #footer>
       <div class="drawer-actions">
         <ActionButton variant="secondary" @click="emit('update:modelValue', false)">{{ createBlocked ? '关闭' : '取消' }}</ActionButton>
-        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting) || createBlocked" @click="openSubmitPreview(false)">仅创建</ActionButton>
-        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting) || createBlocked" @click="openSubmitPreview(true)">创建并启动</ActionButton>
+        <ActionButton variant="secondary" :loading="submitting === 'create'" :disabled="Boolean(submitting) || createBlocked" @click="openSubmitPreview(false, $event)">仅创建</ActionButton>
+        <ActionButton variant="primary" :loading="submitting === 'start'" :disabled="Boolean(submitting) || createBlocked" @click="openSubmitPreview(true, $event)">创建并启动</ActionButton>
       </div>
     </template>
   </ElDrawer>
@@ -621,7 +636,7 @@ async function executeSubmit() {
     </div>
   </ElDialog>
 
-  <ElDialog v-model="previewOpen" class="create-confirmation-dialog" title="确认容器配置" width="min(680px, 92vw)" top="16px">
+  <ElDialog v-model="previewOpen" @closed="restorePreviewFocus" class="create-confirmation-dialog" title="确认容器配置" width="min(680px, 92vw)" top="16px">
     <div v-if="previewInput" class="create-preview" role="region" aria-label="容器配置详情" tabindex="0">
       <p class="preview-intro">请确认以下配置；取消不会创建任何 Docker 对象。</p>
       <dl class="preview-grid">

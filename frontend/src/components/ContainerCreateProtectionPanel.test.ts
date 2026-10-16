@@ -15,6 +15,16 @@ function mount(value: ContainerCreateAdmission | null, result: { containerId: st
   app.mount(host); mounted.push({ app, host }); return { host, check, release }
 }
 describe('容器创建保护面板', () => {
+  it('任务状态与完成结果使用允许 status 的通用容器且保留各自样式', () => {
+    const { host } = mount(entry(), { containerId: 'fixture-id', created: true, started: true })
+    const statuses = [...host.querySelectorAll('[role="status"]')]
+    expect(statuses).toHaveLength(2)
+    expect(statuses.every(node => node.tagName === 'DIV' && node.classList.contains('protection-status'))).toBe(true)
+    expect(statuses[0]!.getAttribute('aria-label')).toBe('已确认的创建结果')
+    expect(statuses[0]!.classList.contains('creation-result')).toBe(true)
+    expect(statuses[1]!.textContent).toContain('受理结果未知')
+  })
+
   it.each(['confirming', 'submitting'] as const)('%s 不能核对或解除', phase => {
     const { host } = mount(entry({ phase }))
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].every(button => button.disabled)).toBe(true)

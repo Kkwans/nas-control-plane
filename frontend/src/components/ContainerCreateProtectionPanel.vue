@@ -10,12 +10,12 @@ const phaseLabels = { confirming: '等待确认配置', submitting: '正在提�
   <section v-if="entry || result" class="create-protection panel" aria-label="容器创建防重复保护">
     <h2><ShieldCheck :size="19" />容器创建与结果核对</h2>
     <p>本登录会话跨路由保留保护。整页刷新、其他标签页和其他客户端不在保护范围内。关闭抽屉或离开页面不会取消任务。</p>
-    <article v-if="result" class="creation-result" role="status" aria-label="已确认的创建结果">
+    <div v-if="result" class="creation-result protection-status" role="status" aria-label="已确认的创建结果">
       <strong>{{ result.started ? '创建调用已确认创建并启动' : '创建调用已确认创建' }}</strong>
       <p class="identity">容器 ID：{{ result.containerId }}</p>
       <p>结果仅确认该次创建调用，不保证容器持续运行。下方清单为独立只读观察；同名容器或清单存在不能证明其他创建尝试的结果。</p>
-    </article>
-    <article v-if="entry" role="status">
+    </div>
+    <div v-if="entry" class="protection-status" role="status">
       <strong>{{ phaseLabels[entry.phase] }}</strong>
       <p>{{ entry.runContainer ? '创建并启动' : '仅创建' }} · 提交保留时间：{{ new Date(entry.reservedAt).toLocaleString('zh-CN', { hour12: false }) }}</p>
       <p v-if="entry.job" class="identity">任务 ID：{{ entry.job.id }} · 状态：{{ statusLabels[entry.job.status] }}</p>
@@ -27,14 +27,14 @@ const phaseLabels = { confirming: '等待确认配置', submitting: '正在提�
         <button type="button" :disabled="entry.checking || entry.phase === 'confirming' || entry.phase === 'submitting'" @click="$emit('check', entry)">{{ entry.checking ? '正在只读核对…' : '只读核对任务与容器' }}</button>
         <button type="button" :disabled="!containerCreateCanRelease(entry)" @click="$emit('release', entry)">解除本会话防重复保护</button>
       </div>
-    </article>
+    </div>
   </section>
 </template>
 <style scoped>
 .create-protection { display: grid; gap: 12px; padding: 18px; min-width: 0; }
 h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 1rem; }
 p { margin: 6px 0; color: var(--ncp-text-muted); font-size: .82rem; overflow-wrap: anywhere; }
-article { border-top: 1px solid var(--ncp-line); padding-top: 12px; min-width: 0; }
+.protection-status { border-top: 1px solid var(--ncp-line); padding-top: 12px; min-width: 0; }
 .identity { overflow-wrap: anywhere; font-family: var(--ncp-font-mono); }
 .protection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 button { min-height: max(44px, var(--ncp-touch-target)); padding: 8px 12px; border: 1px solid var(--ncp-line); border-radius: 8px; background: var(--ncp-surface); color: var(--ncp-text); cursor: pointer; }
