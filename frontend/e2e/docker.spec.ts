@@ -18,6 +18,27 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
   })
 
   await installMockApi(page)
+  const accepted = new Map<string, { projectId: string; action: string }>()
+  const jobReads: string[] = []
+  const stamp = '2026-10-14T18:00:00.000Z'
+  const job = (id: string, projectId: string, action: string) => ({ id, type: `compose-${action}`, reference: projectId, cancellable: false, status: 'queued', artifactState: 'unknown', message: '已排队', progress: 0, createdAt: stamp, updatedAt: stamp, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} })
+  await page.route('**/api/v1/docker/compose/projects/**', async route => {
+    const request = route.request(), url = new URL(request.url())
+    const match = /^\/api\/v1\/docker\/compose\/projects\/(backup-stack|media-stack)\/action-jobs\/(start|stop)$/.exec(url.pathname)
+    expect(request.method()).toBe('POST'); expect(url.search).toBe(''); expect(match).not.toBeNull()
+    const projectId = match![1]!, action = match![2]!, id = `fixture-${projectId}-${action}`
+    expect(request.postDataJSON()).toEqual({ workingDirectory: `/volume2/DockerProject/${projectId}`, configFiles: ['compose.yml'] })
+    expect(accepted.has(id)).toBe(false)
+    accepted.set(id, { projectId, action })
+    await route.fulfill({ status: 202, json: job(id, projectId, action) })
+  })
+  await page.route('**/api/v1/jobs/fixture-*', async route => {
+    const request = route.request(), url = new URL(request.url()), id = url.pathname.slice('/api/v1/jobs/'.length)
+    expect(request.method()).toBe('GET'); expect(url.search).toBe(''); expect(accepted.has(id)).toBe(true)
+    const { projectId, action } = accepted.get(id)!
+    jobReads.push(id)
+    await route.fulfill({ json: { ...job(id, projectId, action), status: 'completed', progress: 100, completedAt: stamp, composeActionResult: { projectId, action, state: action === 'stop' ? 'stopped' : 'running', serviceCount: 1 } } })
+  })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/docker', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
   await expect(page.getByRole('heading', { name: 'Docker 管理', exact: true })).toBeVisible({ timeout: routeNavigationTimeout })
@@ -31,8 +52,10 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
   await expect(startButton).toBeEnabled()
   await startButton.click()
   await expect(page.locator('.el-message-box')).toHaveCount(0)
-  await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/backup-stack/actions/start'))).toBe(true)
-  await expect(page.getByText('项目“备份任务”启动命令已受理，读回时服务均运行中。', { exact: true })).toBeVisible()
+  await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/backup-stack/action-jobs/start'))).toBe(true)
+  const result = page.getByRole('status', { name: '已确认的 Compose 操作结果', exact: true })
+  await expect(result).toContainText('项目 ID：backup-stack')
+  await expect(result).toContainText('该次观察状态：运行')
 
   const stopButton = page.getByRole('button', { name: '停止项目 媒体服务', exact: true })
   await expect(stopButton).toBeEnabled()
@@ -42,7 +65,12 @@ test('Docker 生命周期按影响确认并保持项目入口可键盘访问', a
   await expect(confirmation).toContainText('镜像、卷、Compose 文件和工作目录不会删除')
   await confirmation.getByRole('button', { name: '确认停止', exact: true }).click()
   await expect(confirmation).toHaveCount(0)
-  await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/media-stack/actions/stop'))).toBe(true)
+  await expect.poll(() => actionRequests.some((url) => url.includes('/docker/compose/projects/media-stack/action-jobs/stop'))).toBe(true)
+
+  await expect(result).toContainText('项目 ID：media-stack')
+  await expect(result).toContainText('该次观察状态：停止')
+  expect(actionRequests).toHaveLength(2)
+  expect(jobReads).toEqual(['fixture-backup-stack-start', 'fixture-media-stack-stop'])
 
   const projectIdentity = page.getByRole('button', { name: '查看 Docker 项目 备份任务', exact: true })
   await projectIdentity.focus()

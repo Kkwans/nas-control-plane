@@ -15,10 +15,8 @@ type Action = 'start' | 'stop' | 'restart'
 type Mode = 'completed' | 'wrong-project' | 'wrong-action' | 'verify-failed'
 type RequestRecord = { method: string; path: string; body: unknown }
 const stamp = '2026-10-14T18:00:00.000Z'
-const receipt = (action: Action) => ({ projectId, action, state: action === 'stop' ? 'stopped' : 'running', completed: true, output: '', services: [
-  { name: 'web', containerId: 'fixture-new-replica-1', state: action === 'stop' ? 'exited' : 'running', running: action !== 'stop' },
-  { name: 'web', containerId: 'fixture-new-replica-2', state: action === 'stop' ? 'created' : 'running', running: action !== 'stop' },
-] })
+const receipt = (action: Action) => ({ id: `fixture-${action}-job`, type: `compose-${action}`, reference: projectId, cancellable: false, status: 'queued', artifactState: 'unknown', message: '已排队', progress: 0, createdAt: stamp, updatedAt: stamp, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} })
+const completedJob = (action: Action) => ({ ...receipt(action), status: 'completed', progress: 100, completedAt: stamp, composeActionResult: { projectId, action, state: action === 'stop' ? 'stopped' : 'running', serviceCount: 2 } })
 const inventory = {
   collectedAt: stamp,
   engine: { ...overviewDocker.engine, containers: 1, containersRunning: 1, containersStopped: 0 },
@@ -40,7 +38,9 @@ async function fixture(page: Page, origin: string) {
   const requests: RequestRecord[] = [], denied: string[] = [], errors: string[] = []
   const writes: RequestRecord[] = []
   let currentInventory = structuredClone(inventory)
+  let inventoryTimestamp = Date.parse(stamp)
   let allowed: { mode: Mode; action: Action } | undefined
+  let acceptedAction: Action | undefined
   const reads = new Map<string, unknown>([
     ['/api/v1/auth/status', { initialized: true, authenticated: true, user: { id: 1, username: 'root', role: 'root' } }],
     ['/api/v1/preferences', { refreshIntervalSeconds: 5, interfaceDensity: 'comfortable', baseFontSize: 15, pageSize: 10, sidebarDefault: 'expanded', linkOpenMode: 'same-tab', siteDefaultProtocol: 'http', chineseFont: 'system', latinFont: 'system', navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'] }],
@@ -62,18 +62,22 @@ async function fixture(page: Page, origin: string) {
     const req = route.request(), url = new URL(req.url()), pathname = url.pathname
     if (url.origin !== origin) { denied.push(`HOST ${url.origin}`); return route.abort('blockedbyclient') }
     const body: unknown = req.postData() ? req.postDataJSON() : null
-    const entry = { method: req.method(), path: pathname, body }
+    const entry = { method: req.method(), path: pathname + url.search, body }
     requests.push(entry)
-    if (req.method() === 'GET' && pathname === '/api/v1/docker/inventory') return route.fulfill({ json: { ...currentInventory, collectedAt: new Date(await page.evaluate(() => Date.now())).toISOString() } })
-    if (req.method() === 'POST' && allowed && pathname === `/api/v1/docker/compose/projects/${encodeURIComponent(projectId)}/actions/${allowed.action}`) {
+    if (req.method() === 'GET' && !url.search && pathname === '/api/v1/docker/inventory') {
+      inventoryTimestamp = Math.max(inventoryTimestamp + 1, await page.evaluate(() => Date.now()))
+      return route.fulfill({ json: { ...currentInventory, collectedAt: new Date(inventoryTimestamp).toISOString() } })
+    }
+    if (req.method() === 'POST' && !url.search && allowed && pathname === `/api/v1/docker/compose/projects/${encodeURIComponent(projectId)}/action-jobs/${allowed.action}`) {
       const { mode, action } = allowed; allowed = undefined
       writes.push(entry)
-      expect(body).toEqual({ projectId, action, workingDirectory, configFiles })
+      expect(body).toEqual({ workingDirectory, configFiles })
       if (mode === 'verify-failed') return route.fulfill({ status: 409, json: { code: 'COMPOSE_LIFECYCLE_VERIFY_FAILED', message: 'fixture-private-output-must-not-render' } })
       const result = receipt(action)
-      if (mode === 'wrong-project') result.projectId = 'compose:other-project'
-      if (mode === 'wrong-action') result.action = 'start'
+      if (mode === 'wrong-project') result.reference = 'compose:other-project'
+      if (mode === 'wrong-action') result.type = 'compose-start'
       if (mode === 'completed') {
+        acceptedAction = action
         const stopped = action === 'stop'
         currentInventory = structuredClone(inventory)
         currentInventory.projects[0]!.state = stopped ? 'stopped' : 'running'
@@ -82,9 +86,11 @@ async function fixture(page: Page, origin: string) {
         currentInventory.engine.containersRunning = stopped ? 0 : 1
         currentInventory.engine.containersStopped = stopped ? 1 : 0
       }
-      return route.fulfill({ json: result })
+      return route.fulfill({ status: 202, json: result })
     }
-    if (req.method() === 'GET' && reads.has(pathname)) return route.fulfill({ json: reads.get(pathname) })
+    if (req.method() === 'GET' && !url.search && acceptedAction && pathname === `/api/v1/jobs/${receipt(acceptedAction).id}`) return route.fulfill({ json: completedJob(acceptedAction) })
+    if (req.method() === 'GET' && ['start', 'stop', 'restart'].some(action => pathname + url.search === `/api/v1/jobs?type=compose-${action}`)) return route.fulfill({ json: { jobs: [] } })
+    if (req.method() === 'GET' && !url.search && reads.has(pathname)) return route.fulfill({ json: reads.get(pathname) })
     denied.push(`${req.method()} ${pathname}`)
     return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED', message: '未预期请求已拒绝' } })
   })
@@ -104,6 +110,7 @@ async function provenance() {
   const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend']).split('\n').filter(Boolean)
   return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), trackedDiffSha256: createHash('sha256').update(git(['diff', 'HEAD', '--binary', '--', 'frontend'])).digest('hex'), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async (file) => [file, createHash('sha256').update(await readFile(resolve(root, file))).digest('hex')]))) }
 }
+const panel = (page: Page) => page.getByRole('region', { name: 'Compose 操作防重复保护', exact: true })
 const confirmation = (page: Page) => page.locator('.ncp-compose-action-confirmation')
 const actionButton = (page: Page, action: Action, projectName = name) => {
   const label = { start: '启动', stop: '停止', restart: '重启' }[action]
@@ -138,7 +145,7 @@ type Dismissal = { action: Action; activationKey: 'Enter' | 'Space'; method: 'ca
 const evidence = new WeakMap<Page, { api: Fixture; artifacts: Artifact[]; dismissals: Dismissal[] }>()
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string): Promise<void> {
-  // 保持时钟运行，完整 axe 依赖异步计时器；完成提示由真实 hover 暂停自动关闭。
+  // 保持时钟运行，完整 axe 依赖异步计时器；完成结果来自持久面板。
   await waitForPageReady(page)
   await page.evaluate(() => document.fonts.ready)
   if (state.endsWith('-confirmation')) {
@@ -174,13 +181,6 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
     expect(sample.semantic).toEqual(beforeCapture.semantic)
     expect(sample.focus).toEqual(beforeCapture.focus)
     expect(sample.scroll).toEqual(beforeCapture.scroll)
-    if (!state.endsWith('-confirmation') && !state.endsWith('completed') && sample.viewport.width === 1440) {
-      const tooltips = sample.controls.filter((control) => control.selector === '[role="tooltip"]')
-      expect(tooltips).toHaveLength(1); expect(sample.tooltipTrigger).toBeDefined()
-      const tip = tooltips[0]!.bounds, trigger = sample.tooltipTrigger!
-      expect(trigger.top - tip.bottom).toBeGreaterThanOrEqual(0); expect(trigger.top - tip.bottom).toBeLessThanOrEqual(24)
-      expect(Math.abs((trigger.left + trigger.right - tip.left - tip.right) / 2)).toBeLessThanOrEqual(4)
-    }
     if (state.endsWith('-confirmation')) {
       const buttons = sample.controls.filter((control) => control.selector === '.el-message-box button')
       expect(buttons).toHaveLength(3)
@@ -228,7 +228,7 @@ async function verifyDismissals(page: Page, api: Fixture, action: 'stop' | 'rest
         await page.keyboard.press(key)
         const focused = await dialog.evaluate((element, key) => {
           const active = document.activeElement!, style = getComputedStyle(active)
-          return { key, contained: element.contains(active), control: active.classList.contains('el-message-box__headerbtn') ? 'close' : active.textContent!.trim(),
+          return { key, contained: element.contains(active), control: active.classList.contains('el-message-box__headerbtn') ? 'close' : active.classList.contains('ncp-project-action-scope') ? 'frozen-scope' : active.textContent!.trim(),
             focusVisible: active.matches(':focus-visible'), outlineWidth: Number.parseFloat(style.outlineWidth), outlineStyle: style.outlineStyle, outlineColor: style.outlineColor }
         }, key)
         focusCycle.push(focused)
@@ -238,7 +238,10 @@ async function verifyDismissals(page: Page, api: Fixture, action: 'stop' | 'rest
         expect(focused.outlineStyle).toBe('solid')
         expect(focused.outlineColor).not.toMatch(/^(transparent|rgba\(0, 0, 0, 0\))$/)
       }
-      expect(new Set(focusCycle.map((focused) => focused.control))).toEqual(new Set(['close', '取消', action === 'stop' ? '确认停止' : '确认重启']))
+      expect(focusCycle).toHaveLength(8)
+      expect(new Set(focusCycle.slice(0, 4).map(focused => focused.control)).size).toBe(4)
+      expect(new Set(focusCycle.slice(4).map(focused => focused.control)).size).toBe(4)
+      expect(new Set(focusCycle.map((focused) => focused.control))).toEqual(new Set(['close', 'frozen-scope', '取消', action === 'stop' ? '确认停止' : '确认重启']))
       if (method === 'escape') await page.keyboard.press('Escape')
       else if (method === 'close') await dialog.locator('.el-message-box__headerbtn').click()
       else await dialog.getByRole('button', { name: '取消', exact: true }).click()
@@ -297,18 +300,19 @@ for (const width of [390, 1440]) {
         await dialog.getByRole('button', { name: '确认停止', exact: true }).click()
         await expect(dialog).toHaveCount(0)
       }
-      const success = page.locator('.el-message--success')
-      // Element Plus 的公开鼠标交互暂停本条提示，不改写页面/axe 计时器。
-      await success.hover()
-      await expect(success).toContainText(action === 'stop' ? '读回时服务均处于非运行状态' : '读回时服务均运行中')
-      await expect(success).not.toContainText(/健康|可用|部署成功/)
+      const success = page.getByRole('status', { name: '已确认的 Compose 操作结果', exact: true })
+      await expect(success).toContainText(action === 'stop' ? '该次观察状态：停止' : '该次观察状态：运行')
+      await expect(success).toContainText('服务观察项数：2')
+      await expect(success).toContainText('不保证健康、持续状态')
+      await expect(success).not.toContainText(containerId)
+      expect(api.requests.slice(before).filter(entry => entry.method === 'GET' && entry.path === `/api/v1/jobs/${receipt(action).id}`)).toHaveLength(1)
+      await page.mouse.move(1, 10)
+      await expect(page.locator('.el-message')).toHaveCount(0)
       await expect(page.locator('.action-error')).toHaveCount(0)
       await expect.poll(() => api.requests.slice(before).filter((entry) => entry.method === 'GET' && entry.path === '/api/v1/docker/inventory').length).toBe(1)
       expect(api.writes).toHaveLength(writesBefore + 1)
       await capture(page, info, api, `${action}-completed`)
-      await page.mouse.move(0, 0)
-      await page.clock.fastForward(6000)
-      await expect(page.locator('.el-message')).toHaveCount(0)
+      await page.mouse.move(1, 10)
       expect(api.requests.slice(before).filter((entry) => entry.method !== 'GET')).toEqual([api.writes[writesBefore]])
     }
   })
@@ -339,20 +343,28 @@ for (const width of [390, 1440]) {
       await expect(page.locator('.action-error')).toContainText('只读核对，勿重复提交')
       await expect(page.locator('.el-message--success')).toHaveCount(0)
       await expect(page.locator('main')).not.toContainText('fixture-private-output-must-not-render')
+      expect(api.requests.slice(before).filter(entry => entry.method === 'GET')).toEqual([])
+      await expect(panel(page)).toContainText('接收结果未知，请勿重复提交')
+      const intent = panel(page).getByRole('region', { name: '冻结的 Compose 提交意图', exact: true })
+      await expect(intent).toContainText(workingDirectory)
+      await expect(intent.getByRole('list').locator('li')).toHaveText(configFiles)
+      await panel(page).getByRole('button', { name: '只读核对任务与容器清单', exact: true }).click()
       await expect.poll(() => api.requests.slice(before).filter((entry) => entry.method === 'GET' && entry.path === '/api/v1/docker/inventory').length).toBe(1)
+      expect(api.requests.slice(before).filter(entry => entry.path.startsWith('/api/v1/jobs?')).map(entry => entry.path).sort()).toEqual(['restart', 'start', 'stop'].map(action => `/api/v1/jobs?type=compose-${action}`))
       await expect(page.getByText('清单已变化的项目', { exact: true }).filter({ visible: true })).toBeVisible()
-      await page.clock.fastForward(6000)
+      await page.mouse.move(1, 10)
       await expect(page.locator('.el-message')).toHaveCount(0)
-      await expect(page.locator('.action-error')).toContainText('结果尚未确认')
-      if (width === 1440) {
-        await actionButton(page, 'restart', '清单已变化的项目').hover()
-        await expect(page.getByRole('tooltip').filter({ hasText: '重启项目' })).toBeVisible()
+      await expect(panel(page)).toContainText('接收结果未知，请勿重复提交')
+      for (const action of ['start', 'stop', 'restart'] as const) {
+        const guarded = actionButton(page, action, '清单已变化的项目')
+        await expect(guarded).toBeDisabled()
+        expect(await guarded.evaluate(element => element instanceof HTMLButtonElement && element.disabled)).toBe(true)
       }
       await capture(page, info, api, mode)
       expect(api.writes).toHaveLength(writesBefore + 1)
       expect(api.requests.slice(before).filter((entry) => entry.method !== 'GET')).toEqual([api.writes[writesBefore]])
       expect(api.requests.slice(api.requests.findIndex((entry) => entry === api.writes[writesBefore]) + 1).every((entry) => entry.method === 'GET')).toBe(true)
-      await page.mouse.move(0, 0)
+      await page.mouse.move(1, 10)
     }
   })
 }
