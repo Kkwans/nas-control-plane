@@ -142,7 +142,9 @@ func (g *mobyContainerControlGateway) CreateContainer(ctx context.Context, spec 
 	created, err := g.client.ContainerCreate(ctx, options)
 	if err != nil {
 		if createdNetwork != "" {
-			_, _ = g.client.NetworkRemove(context.Background(), createdNetwork, client.NetworkRemoveOptions{})
+			cleanupContext, cancel := context.WithTimeout(context.Background(), containerCreateCleanupTimeout)
+			defer cancel()
+			_, _ = g.client.NetworkRemove(cleanupContext, createdNetwork, client.NetworkRemoveOptions{})
 		}
 		return ContainerSnapshot{}, err
 	}
