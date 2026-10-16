@@ -23,11 +23,19 @@ describe('项目删除防重复独立面板', () => {
     const buttons = host.querySelectorAll('button'); buttons[0]!.click(); buttons[1]!.click()
     expect(check).toHaveBeenCalledExactlyOnceWith(value); expect(release).not.toHaveBeenCalled()
   })
+  it.each(['confirming', 'submitting', 'unknown'] as const)('%s 状态使用允许 status 角色的通用元素', async phase => {
+    await mount([entry({ phase })])
+    const status = host.querySelector('.deletion-protection__status')
+    expect(status?.tagName).toBe('DIV')
+    expect(status?.getAttribute('role')).toBe('status')
+    expect(host.querySelector('article[role="status"]')).toBeNull()
+    expect(status?.querySelectorAll('button')).toHaveLength(2)
+  })
   it.each(['confirming', 'submitting'] as const)('%s 不允许核对或解除', async phase => {
     await mount([entry({ phase, inventoryChecked: true })]); expect([...host.querySelectorAll('button')].every(button => button.disabled)).toBe(true)
   })
   it('本轮成功只允许发出解除请求，不自行删除保护', async () => {
     const value = entry({ inventoryChecked: true, checkVersion: 2 }); await mount([value]); host.querySelectorAll('button')[1]!.click()
-    expect(release).toHaveBeenCalledExactlyOnceWith(value); expect(host.querySelector('article')).not.toBeNull()
+    expect(release).toHaveBeenCalledExactlyOnceWith(value); expect(host.querySelector('.deletion-protection__status[role="status"]')).not.toBeNull()
   })
 })

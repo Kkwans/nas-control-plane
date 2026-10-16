@@ -177,7 +177,7 @@ function journey(page: Page, info: TestInfo, api: Fixture) {
       const beforeScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }))
       const controls = await Promise.all([check(page), release(page)].map(geometry))
       const focus = controls[0]!
-      const text = await geometry(panel(page).locator('article p').first())
+      const text = await geometry(panel(page).locator('.deletion-protection__status p').first())
       const png = info.outputPath('ui-captures', `${name}.png`)
       await page.screenshot({ path: png, fullPage: true, animations: 'disabled' })
       const afterScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }))
