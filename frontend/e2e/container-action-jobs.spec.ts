@@ -59,8 +59,8 @@ async function fixture(page: Page, origin: string) {
     }
     const original = window.setTimeout.bind(window)
     const originalClear = window.clearTimeout.bind(window)
-    window.clearTimeout = (id?: number) => {
-      if (id !== undefined && noticeTimers.delete(id)) record('timer-clear', { id })
+    window.clearTimeout = (id?: Parameters<typeof window.clearTimeout>[0]) => {
+      if (typeof id === 'number' && noticeTimers.delete(id)) record('timer-clear', { id })
       return originalClear(id)
     }
     window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
@@ -221,9 +221,11 @@ async function measure(page: Page, selector: string) {
 }
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string, modal = false, selectorOverride?: string, preserveHover = false) {
   // 本例捕获目标操作状态而非分页 hover；释放后布局回缩可能让静止指针落在无关分页控件。
-  // 显式移至中性页头并等待真实 tooltip关闭，不隐藏DOM、不删除axe规则或命中断言。
+  // CI 448cb38两宽证据：页头中央(宽/2,10)撞入toast入场路径，mouseover清除3000ms timer。
+  // 改用左侧1px（toast保留至少16px横向边距），真实移出后由组件自然计时关闭。
+  // 同时等待真实tooltip关闭，不隐藏DOM、不删除axe规则或命中断言。
   if (!preserveHover) {
-    await page.mouse.move(page.viewportSize()!.width / 2, 10)
+    await page.mouse.move(1, 10)
     await expect(page.getByRole('tooltip')).toHaveCount(0)
   }
   // 不改原5秒断言；诊断文件不代表已验收capture，错误仍原样抛出。
@@ -281,7 +283,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
   const png = `${directory}/${prefix}.png`, screenshot = await page.screenshot({ path: png, fullPage: !modal, animations: 'disabled' })
   const afterCapture = await measure(page, selector), requestsAfterCapture = structuredClone(api.requests)
   const axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, selector)
-  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'CI 2c5f64e: fixed-Date RouterLink failure and released page-size tooltip region/occlusion; no local browser run', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: page.viewportSize()!.width / 2, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
+  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, gapBasis: 'CI 2c5f64e: fixed-Date RouterLink failure and released page-size tooltip region/occlusion; no local browser run', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: 1, y: 10, outsideNoticeHorizontalMargin: true, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
   api.captures.push({ file: `${prefix}.png`, sha256: hash(screenshot) }); await info.attach(prefix, { path: png, contentType: 'image/png' })
   for (const [suffix, content] of [['capture-state', metadata], ['axe-capture-state', { ...metadata, axe }]] as const) {
     const file = `${prefix}-${suffix}.json`, path = `${directory}/${file}`, data = JSON.stringify(content, null, 2)
@@ -478,7 +480,7 @@ for (const width of [390, 1440]) {
           await expect(page.getByRole('tooltip')).toHaveText('该设置只作用于当前列表，并会保存到账号偏好中。')
           // 独立主动 hover 保留实际 landmark/文本/定位证据，普通解除状态已严格核验按钮五点命中。
           await capture(page, info, api, 'released-pagination-help-hover', false, '[role="tooltip"][aria-hidden="false"]', true)
-          await page.mouse.move(width / 2, 10); await expect(page.getByRole('tooltip')).toHaveCount(0)
+          await page.mouse.move(1, 10); await expect(page.getByRole('tooltip')).toHaveCount(0)
         }
       }
       expect(api.writes.map(row => row.target)).toEqual([`/api/v1/docker/containers/${containerId}/action-jobs/stop`, `/api/v1/docker/containers/${containerId}/action-jobs/restart`])
