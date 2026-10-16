@@ -79,7 +79,8 @@ defineEmits<{ retry: [] }>()
 }
 .resource-state--error code { grid-column: 2; }
 .resource-state button {
-  min-height: 34px;
+  min-width: var(--ncp-touch-target);
+  min-height: var(--ncp-touch-target);
   padding: 0 11px;
   border: 1px solid currentColor;
   border-radius: var(--ncp-radius-sm);
