@@ -4,6 +4,7 @@ import { createApp, h, nextTick, type App } from 'vue'
 import type { MetricSample } from '@/api/control'
 import { NcpApiError } from '@/api/system'
 import { createManualRefreshRegistry, provideManualRefreshRegistry } from '@/composables/manualRefresh'
+import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import MonitoringView from './MonitoringView.vue'
 
 const mocks = vi.hoisted(() => ({ requestMetricSamples: vi.fn(), date: undefined as ((event: 'update:from' | 'update:to' | 'now' | 'clear' | 'apply', value?: unknown) => void) | undefined, sensor: undefined as ((value: string[]) => void) | undefined }))
@@ -51,8 +52,8 @@ function chart(title: string): Chart { return JSON.parse(host.querySelector(`[ar
 function chooseRange(value: string) { host.querySelector<HTMLButtonElement>(`[data-range="${value}"]`)!.click() }
 function sensors() { return JSON.parse(host.querySelector('[data-sensors]')!.getAttribute('data-sensors')!) as { modelValue: string[]; names: string[] } }
 
-beforeEach(() => { vi.clearAllMocks(); mocks.requestMetricSamples.mockResolvedValue([]) })
-afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.restoreAllMocks() })
+beforeEach(() => { beginSession(); vi.clearAllMocks(); mocks.requestMetricSamples.mockResolvedValue([]) })
+afterEach(() => { app?.unmount(); app = undefined; host?.remove(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('持久化监控历史页面', () => {
   it('renders mutually exclusive loading, successful empty, and charts states', async () => {
@@ -161,4 +162,156 @@ describe('持久化监控历史页面', () => {
     expect(chart('disk-io').emptyMessage).toBe('尚无可计算的相邻分钟样本。')
     expect(chart('disk-io').series[0]?.values).toEqual([null, null, null])
   })
+  it('keeps chart nodes, projections, sensors, count and read metadata while refreshing and after failure', async () => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0, { temperatures: [{ name: 'cpu', temperatureCelsius: 40 }] }), sample(1)])
+    mount(); await settle()
+    mocks.sensor?.([]); await settle()
+    const nodes = [...host.querySelectorAll('[data-chart]')]
+    const projections = nodes.map((node) => node.getAttribute('data-chart'))
+    const readAt = host.querySelector('time')!.getAttribute('datetime')
+    const pending = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(pending.promise)
+    const refresh = registry.refresh(); await settle()
+    expect(host.textContent).toContain('正在刷新，暂时显示上次成功读取的数据')
+    expect(host.querySelector('[aria-label="正在加载监控图表"]')).toBeNull()
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(nodes.length)
+    host.querySelectorAll('[data-chart]').forEach((node, index) => expect(node).toBe(nodes[index]))
+    expect(nodes.map((node) => node.getAttribute('data-chart'))).toEqual(projections)
+    expect(host.textContent).toContain('采样数量2')
+    pending.reject(new Error('offline'))
+    expect((await refresh).failed).toHaveLength(1); await settle()
+    expect(host.textContent).toContain('刷新失败，当前显示上次成功读取的旧数据')
+    expect(host.querySelector('time')!.getAttribute('datetime')).toBe(readAt)
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(nodes.length)
+    host.querySelectorAll('[data-chart]').forEach((node, index) => expect(node).toBe(nodes[index]))
+    expect(nodes.map((node) => node.getAttribute('data-chart'))).toEqual(projections)
+    expect(sensors().modelValue).toEqual([])
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(2, { memoryPercent: 80, temperatures: [{ name: 'cpu', temperatureCelsius: 45 }] })])
+    host.querySelector<HTMLButtonElement>('.resource-state button')!.click(); await settle()
+    expect(chart('memory').series[0]?.values).toEqual([80])
+    expect(sensors().modelValue).toEqual([])
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(nodes.length)
+    host.querySelectorAll('[data-chart]').forEach((node, index) => expect(node).toBe(nodes[index]))
+    expect(host.querySelector('.resource-state--error')).toBeNull()
+  })
+  it.each([
+    [sample(0), sample(0)],
+    [sample(1), sample(0)],
+    [sample(0, { collectedAt: 'invalid' })],
+    [sample(0, { temperatures: {} as MetricSample['temperatures'] })],
+  ])('does not publish an invalid candidate over a successful snapshot', async (...invalid) => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0), sample(1)])
+    mount(); await settle()
+    const before = chart('memory')
+    mocks.requestMetricSamples.mockResolvedValueOnce(invalid)
+    expect((await registry.refresh()).failed).toHaveLength(1); await settle()
+    expect(chart('memory')).toEqual(before)
+    expect(host.textContent).toContain('刷新失败')
+  })
+  it('replaces old data with a valid empty snapshot and retains that empty result on refresh failure', async () => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0)])
+    mount(); await settle()
+    mocks.requestMetricSamples.mockResolvedValueOnce([])
+    await registry.refresh(); await settle()
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+    expect(host.textContent).toContain('采样数量0')
+    expect(host.textContent).toContain('当前范围暂无样本')
+    const pending = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(pending.promise)
+    const refresh = registry.refresh(); await settle()
+    expect(host.textContent).toContain('当前范围暂无样本')
+    expect(host.querySelector('[aria-label="正在加载监控图表"]')).toBeNull()
+    pending.reject(new Error('offline')); await refresh; await settle()
+    expect(host.textContent).toContain('当前范围暂无样本')
+    expect(host.textContent).toContain('刷新失败')
+  })
+  it('clears successful data on an explicit range switch and isolates superseded manual outcomes', async () => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0)])
+    mount(); await settle()
+    const old = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(old.promise)
+    const refresh = registry.refresh(); await settle()
+    const signal = mocks.requestMetricSamples.mock.calls[1]![1] as AbortSignal
+    mocks.requestMetricSamples.mockRejectedValueOnce(new Error('new range failed'))
+    chooseRange('1h'); await settle()
+    expect(signal.aborted).toBe(true)
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+    expect(host.querySelector('time')).toBeNull()
+    expect(host.textContent).not.toContain('已读取范围')
+    old.resolve([sample(1, { memoryPercent: 99 })])
+    expect((await refresh).failed).toHaveLength(0); await settle()
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+    expect(host.textContent).toContain('监控历史加载失败')
+  })
+  it('keeps the successful rolling custom label until the new request succeeds', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date(base + 6 * 60 * 60_000))
+    mocks.requestMetricSamples.mockResolvedValue([sample(0)])
+    mount(); await settle()
+    mocks.date?.('update:from', new Date(base)); mocks.date?.('update:to', new Date()); mocks.date?.('apply'); await settle()
+    const oldLabel = host.querySelector('.monitor-history-note')!.textContent
+    const oldRead = host.querySelector('time')!.getAttribute('datetime')
+    vi.setSystemTime(new Date(base + 7 * 60 * 60_000))
+    const pending = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(pending.promise)
+    const refresh = registry.refresh(); await settle()
+    expect(mocks.requestMetricSamples.mock.calls[2]![0]).toEqual({ from: new Date(base + 60 * 60_000).toISOString(), to: new Date().toISOString() })
+    expect(host.querySelector('.monitor-history-note')!.textContent).toBe(oldLabel)
+    pending.reject(new Error('offline')); await refresh; await settle()
+    expect(host.querySelector('.monitor-history-note')!.textContent).toBe(oldLabel)
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(1)])
+    host.querySelector<HTMLButtonElement>('.resource-state button')!.click(); await settle()
+    expect(host.querySelector('.monitor-history-note')!.textContent).not.toBe(oldLabel)
+    expect(host.querySelector('time')!.getAttribute('datetime')).not.toBe(oldRead)
+  })
+  it('clears all historical data and messages at logout and ignores late results', async () => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0)])
+    mount(); await settle()
+    mocks.requestMetricSamples.mockRejectedValueOnce(new Error('offline'))
+    await registry.refresh(); await settle()
+    expect(host.textContent).toContain('刷新失败')
+    const pending = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(pending.promise)
+    const refresh = registry.refresh(); await settle()
+    const signal = mocks.requestMetricSamples.mock.calls[2]![1] as AbortSignal
+    invalidateSession(); await settle()
+    expect(signal.aborted).toBe(true)
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+    expect(host.querySelector('time')).toBeNull()
+    expect(host.textContent).not.toContain('已读取范围')
+    expect(host.textContent).not.toContain('刷新失败')
+    expect(host.textContent).not.toContain('监控历史加载失败')
+    expect(host.querySelector('[aria-label="正在加载监控图表"]')).toBeNull()
+    pending.resolve([sample(1)]); await refresh; await settle()
+    await registry.refresh(); await settle()
+    expect(mocks.requestMetricSamples).toHaveBeenCalledTimes(3)
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+  })
+  it('clears an already displayed refresh error and invalid range draft at logout', async () => {
+    mocks.requestMetricSamples.mockResolvedValueOnce([sample(0)])
+    mount(); await settle()
+    mocks.requestMetricSamples.mockRejectedValueOnce(new Error('offline'))
+    await registry.refresh(); await settle()
+    mocks.date?.('update:from', new Date(base + 60_000)); mocks.date?.('update:to', new Date(base))
+    mocks.date?.('apply'); await settle()
+    expect(host.textContent).toContain('MONITORING_READ_FAILED')
+    expect(host.textContent).toContain('请选择不超过 7 天')
+    invalidateSession(); await settle()
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    expect(host.textContent).not.toContain('MONITORING_READ_FAILED')
+    expect(host.textContent).not.toContain('请选择不超过 7 天')
+    expect(host.querySelector('time')).toBeNull()
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+  })
+  it('aborts pending work and unregisters manual refresh on unmount', async () => {
+    const pending = deferred<MetricSample[]>()
+    mocks.requestMetricSamples.mockReturnValueOnce(pending.promise)
+    mount()
+    const signal = mocks.requestMetricSamples.mock.calls[0]![1] as AbortSignal
+    app!.unmount(); app = undefined
+    expect(signal.aborted).toBe(true)
+    pending.resolve([sample(1)]); await settle()
+    expect((await registry.refresh()).requested).toBe(0)
+    expect(host.querySelectorAll('[data-chart]')).toHaveLength(0)
+  })
+
 })

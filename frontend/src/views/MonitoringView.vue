@@ -14,7 +14,7 @@ import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
 import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { monitoringChartTokens } from '@/domain/monitoring/chartTokens'
 import { buildHistoryCounterRates, buildHistoryTimeline, buildTemperatureIndex, historyValue, isHistoryCounter, projectHistoryGauge, projectTemperatureHistory } from '@/domain/monitoring/series'
-import { isAbortError } from '@/session/sessionLifecycle'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 
 type TimeRange = '1h' | '6h' | '24h' | '7d'
 type HistoryRange = TimeRange | { from: string; to: string }
@@ -37,13 +37,17 @@ const customTo = ref<Date | null>(null)
 const appliedRange = ref<HistoryRange>('6h')
 const appliedDuration = ref<number | null>(null)
 const loadedRangeLabel = ref('')
+const loadedAt = ref('')
+const hasSnapshot = ref(false)
 const samples = shallowRef<MetricSample[]>([])
-const status = ref<'loading' | 'error' | 'success'>('loading')
+const status = ref<'idle' | 'loading' | 'error' | 'success'>('loading')
 const loading = computed(() => status.value === 'loading')
 const rangeError = ref('')
 const loadError = ref({ message: '', code: '', nextStep: '' })
 const manualRefreshRegistry = useManualRefreshRegistry()
 let unregisterManualRefresh: (() => void) | undefined
+const session = captureSession()
+let disposed = false
 let loadSequence = 0
 let loadController: AbortController | null = null
 const latest = computed(() => samples.value.at(-1))
@@ -54,7 +58,7 @@ let sensorSelectionInitialized = false
 const temperatureIndex = computed(() => buildTemperatureIndex(samples.value))
 
 const stats = computed<WorkspaceStat[]>(() => [
-  { label: '采样数量', value: status.value === 'success' ? samples.value.length : '—' },
+  { label: '采样数量', value: hasSnapshot.value ? samples.value.length : '—' },
   { label: 'CPU', value: latest.value && historyValue(latest.value.cpuPercent) !== null ? `${latest.value.cpuPercent.toFixed(1)}%` : '—' },
   { label: '内存', value: latest.value && historyValue(latest.value.memoryPercent) !== null ? `${latest.value.memoryPercent.toFixed(1)}%` : '—' },
 ])
@@ -110,7 +114,16 @@ function describeLoadError(caught: unknown) {
   if (code === 'MONITORING_RANGE_INVALID') return { code, message: '服务端无法读取此时间范围。', nextStep: '请选择不超过 7 天的有效时间范围。' }
   return { code, message: '监控历史读取失败，请稍后重试。', nextStep: '确认 Server 可用后重试。' }
 }
-async function load() {
+function clearSnapshot() {
+  samples.value = []
+  hasSnapshot.value = false
+  loadedRangeLabel.value = ''
+  loadedAt.value = ''
+}
+function allowed() { return !disposed && !session.signal.aborted && isCurrentSession(session.generation) }
+type LoadOutcome = { status: 'success' | 'cancelled' } | { status: 'error'; message: string }
+async function load(retainSnapshot = true): Promise<LoadOutcome> {
+  if (!allowed()) return { status: 'cancelled' }
   let preciseRange = appliedRange.value
   if (typeof preciseRange !== 'string' && appliedDuration.value !== null) {
     const to = new Date()
@@ -121,15 +134,15 @@ async function load() {
   loadController?.abort()
   const controller = new AbortController()
   loadController = controller
-  samples.value = []
+  if (!retainSnapshot) clearSnapshot()
   status.value = 'loading'
   loadError.value = { message: '', code: '', nextStep: '' }
   try {
     const result = await requestMetricSamples(preciseRange, controller.signal)
-    if (sequence !== loadSequence || controller.signal.aborted) return
-    samples.value = result
-    if (!timeline.value.valid) throw new NcpApiError('MONITORING_HISTORY_INVALID', '历史时间戳无效。')
-    const names = temperatureIndex.value.names
+    if (!allowed() || sequence !== loadSequence || controller.signal.aborted) return { status: 'cancelled' }
+    // 候选数据完成投影校验后才发布，失败不能污染上次成功快照。
+    if (!buildHistoryTimeline(result).valid) throw new NcpApiError('MONITORING_HISTORY_INVALID', '历史时间戳无效。')
+    const names = buildTemperatureIndex(result).names
     if (!sensorSelectionInitialized && names.length) {
       selectedSensors.value = names.slice(0, 8)
       sensorSelectionInitialized = true
@@ -137,13 +150,19 @@ async function load() {
       const available = new Set(names)
       selectedSensors.value = selectedSensors.value.filter((name) => available.has(name)).slice(0, 8)
     }
+    samples.value = result
+    hasSnapshot.value = true
+    loadedAt.value = new Date().toISOString()
     loadedRangeLabel.value = describeRange(preciseRange)
     status.value = 'success'
+    return { status: 'success' }
   } catch (caught) {
-    if (sequence !== loadSequence || controller.signal.aborted || isAbortError(caught)) return
-    samples.value = []
+    if (!allowed() || sequence !== loadSequence || controller.signal.aborted || isAbortError(caught)) return { status: 'cancelled' }
     loadError.value = describeLoadError(caught)
     status.value = 'error'
+    return { status: 'error', message: loadError.value.message }
+  } finally {
+    if (loadController === controller) loadController = null
   }
 }
 
@@ -154,7 +173,7 @@ function selectQuickRange(value: TimeRange) {
   appliedRange.value = value
   appliedDuration.value = null
   rangeError.value = ''
-  void load()
+  void load(false)
 }
 function applyCustomRange() {
   const from = customFrom.value?.valueOf()
@@ -167,7 +186,7 @@ function applyCustomRange() {
   appliedRange.value = { from: new Date(from).toISOString(), to: new Date(to).toISOString() }
   appliedDuration.value = now - to <= 60_000 ? to - from : null
   rangeError.value = ''
-  void load()
+  void load(false)
 }
 function clearCustomRange() { selectQuickRange(range.value) }
 function useNow() {
@@ -175,18 +194,31 @@ function useNow() {
   customFrom.value ??= new Date(customTo.value.valueOf() - rangeMilliseconds[range.value])
 }
 async function handleManualRefresh() {
-  await load()
-  if (status.value === 'error') throw new Error(loadError.value.message)
+  const outcome = await load()
+  if (outcome.status === 'error') throw new Error(outcome.message)
 }
 
+function sessionEnded() {
+  loadSequence += 1
+  loadController?.abort()
+  clearSnapshot()
+  selectedSensors.value = []
+  sensorSelectionInitialized = false
+  rangeError.value = ''
+  loadError.value = { message: '', code: '', nextStep: '' }
+  status.value = 'idle'
+}
 onMounted(() => {
+  session.signal.addEventListener('abort', sessionEnded, { once: true })
   unregisterManualRefresh = manualRefreshRegistry?.register(handleManualRefresh)
-  void load()
+  if (allowed()) void load(false)
+  else sessionEnded()
 })
 onBeforeUnmount(() => {
   unregisterManualRefresh?.()
-  loadSequence += 1
-  loadController?.abort()
+  disposed = true
+  sessionEnded()
+  session.signal.removeEventListener('abort', sessionEnded)
 })
 </script>
 
@@ -213,13 +245,15 @@ onBeforeUnmount(() => {
     <ResourceAlertsPanel />
 
     <p v-if="rangeError" class="monitor-error" role="alert">{{ rangeError }}</p>
-    <p v-if="status === 'success'" class="monitor-history-note">已读取范围：{{ loadedRangeLabel }}。折线空白表示缺少可用样本；网络和磁盘为相邻分钟样本间的平均速率。</p>
-    <ResourceState v-if="status === 'error'" state="error" title="监控历史加载失败" :message="loadError.message" :code="loadError.code" :next-step="loadError.nextStep" @retry="load" />
-    <section v-else-if="loading" class="monitor-grid monitor-grid--loading" role="status" aria-live="polite" aria-label="正在加载监控图表">
+    <p v-if="hasSnapshot" class="monitor-history-note">已读取范围：{{ loadedRangeLabel }}。上次成功读取：<time :datetime="loadedAt">{{ new Date(loadedAt).toLocaleString('zh-CN', { hour12: false }) }}</time>。折线空白表示缺少可用样本；网络和磁盘为相邻分钟样本间的平均速率。</p>
+    <p v-if="hasSnapshot && loading" class="monitor-history-note" role="status">正在刷新，暂时显示上次成功读取的数据。</p>
+    <p v-if="hasSnapshot && status === 'error'" class="monitor-history-note" role="status">刷新失败，当前显示上次成功读取的旧数据。</p>
+    <ResourceState v-if="status === 'error'" state="error" title="监控历史加载失败" :message="loadError.message" :code="loadError.code" :next-step="loadError.nextStep" @retry="load()" />
+    <section v-if="loading && !hasSnapshot" class="monitor-grid monitor-grid--loading" role="status" aria-live="polite" aria-label="正在加载监控图表">
       <article v-for="item in 6" :key="item" class="chart-card panel" aria-hidden="true"><i v-for="line in 8" :key="line" class="ncp-skeleton"></i></article>
     </section>
-    <ResourceState v-else-if="!samples.length" state="empty" title="当前范围暂无样本" message="所选范围没有已保存的监控历史，请调整时间范围或稍后刷新。" />
-    <section v-else class="monitor-grid" aria-label="监控趋势图表">
+    <ResourceState v-else-if="hasSnapshot && !samples.length" state="empty" title="当前范围暂无样本" message="所选范围没有已保存的监控历史，请调整时间范围或稍后刷新。" />
+    <section v-else-if="hasSnapshot" class="monitor-grid" aria-label="监控趋势图表">
       <article class="chart-card panel" aria-labelledby="cpu-chart-title">
         <header>
           <span class="chart-card__icon" aria-hidden="true"><Cpu :size="18" /></span>
