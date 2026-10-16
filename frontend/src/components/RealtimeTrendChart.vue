@@ -282,7 +282,7 @@ const option = computed<EChartsOption>(() => ({
 </script>
 
 <template>
-  <div class="trend-chart" role="group" :aria-label="chartLabel" :aria-busy="!enoughData">
+  <div class="trend-chart" role="group" :aria-label="chartLabel" :aria-busy="!history && !enoughData">
     <template v-if="enoughData">
       <div class="trend-chart__legend" role="group" aria-label="图例，点击切换曲线">
         <button

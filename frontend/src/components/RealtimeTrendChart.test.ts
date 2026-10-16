@@ -44,6 +44,16 @@ function mountChart(props: { timestamps: (string | number)[]; series: TrendSerie
 }
 
 describe('趋势图的缺值文案', () => {
+  it.each(['', '所选范围没有已保存的样本。'])('历史空范围不标记为忙碌并保留空态提示：%s', (emptyMessage) => {
+    mountChart({ history: true, timestamps: [], series: [], emptyMessage })
+    expect(option).toBeUndefined()
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-label')).toBe('监控指标趋势图')
+    const status = host.querySelector('[role="status"]')
+    expect(status?.getAttribute('aria-live')).toBe('polite')
+    expect(status?.textContent).toContain(emptyMessage || '当前范围暂无监控样本。')
+  })
+
   it('最新样本不可用时不会把旧有限值宣布为当前值，null tooltip 也不会变成零', () => {
     mountChart({
       timestamps: ['2026-10-13T00:00:00Z', '2026-10-13T00:00:05Z'],
@@ -67,6 +77,7 @@ describe('趋势图的缺值文案', () => {
     expect(host.textContent).toContain('一条已保存样本，暂不能计算速率。')
     expect(host.textContent).not.toContain('实时样本')
     expect(host.textContent).toContain('接收最新样本：暂无数据')
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
   })
 
   it('历史全缺值保持空态并尊重专用提示', () => {
@@ -79,6 +90,20 @@ describe('趋势图的缺值文案', () => {
     expect(option).toBeUndefined()
     expect(host.textContent).toContain('当前范围没有可用温度读数。')
     expect(host.textContent).not.toContain('实时样本')
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('当前范围没有可用温度读数。')
+  })
+
+  it('历史全 null 样本不标记为忙碌并说明没有可用指标', () => {
+    mountChart({
+      history: true,
+      timestamps: [start, start + minute],
+      series: [{ name: '温度', color: '#000000', values: [null, null], unit: '°C' }],
+    })
+    expect(option).toBeUndefined()
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('当前范围暂无可用指标数据。')
+    expect(host.querySelector('.sr-only')?.textContent).toContain('温度最新样本：暂无数据')
   })
 })
 
@@ -89,6 +114,7 @@ describe('趋势图的默认实时模式', () => {
       series: [{ name: 'CPU', color: '#000000', values: [20, 25], unit: '%' }],
     })
     expect(option!.xAxis.type).toBe('category')
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
     expect(option!.xAxis.data).toEqual(['00:00:00', '00:00:05'])
     expect(option!.xAxis.min).toBeUndefined()
     expect(option!.yAxis.map((axis) => axis.min)).toEqual([0, 0])
@@ -150,6 +176,7 @@ describe('历史时间轴与独立缺口', () => {
     expect(option!.series[0]!.symbol!([start, 0], { dataIndex: 0 })).toBe('circle')
     expect(host.textContent).toContain('温度最新样本：0.0 °C')
     expect(host.textContent).not.toContain('趋势数据未就绪')
+    expect(host.querySelector('.trend-chart')?.getAttribute('aria-busy')).toBe('false')
   })
 
   it('两个计数样本只产生一个有效速率点时显示孤立圆点', () => {
