@@ -443,6 +443,7 @@ func (r *jobRegistry) submit(kind, reference string, total int64, run func(conte
 
 // abandonLocked 仅用于未创建成功的记录；正常释放必须已持久化终态。
 func (r *jobRegistry) abandonLocked(e *jobEntry) {
+	e.run = nil
 	if e.release != nil {
 		r.activeMu.Lock()
 		delete(r.active, e)
@@ -528,11 +529,14 @@ func (r *jobRegistry) execute(e *jobEntry) {
 		e.cancel()
 		return
 	}
+	// 执行资格只授予一次；历史 entry 不再持有执行闭包及其捕获的输入。
+	run := e.run
+	e.run = nil
 	e.started = true
 	e.owner = true
 	r.admission.Unlock()
 	e.opMu.Unlock()
-	e.run(e.ctx, j.ID)
+	run(e.ctx, j.ID)
 	e.opMu.Lock()
 	e.owner = false
 	r.release(e)
@@ -554,6 +558,8 @@ func (r *jobRegistry) stopBeforeStartLocked(e *jobEntry) bool {
 }
 
 func (r *jobRegistry) freezeLocked(e *jobEntry, j jobSnapshot) {
+	// 冻结结果后不会再派发；即使保存待重试，也只需要 pending 快照。
+	e.run = nil
 	now := r.clock.Now().UTC()
 	e.viewMu.Lock()
 	copyJobProgress(&j, e.view)
@@ -693,6 +699,7 @@ func (r *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
 	}
 	cancel := e.cancel
 	if jobTerminal(j.Status) {
+		e.run = nil
 		r.detachLocked(e)
 		r.release(e)
 	}
