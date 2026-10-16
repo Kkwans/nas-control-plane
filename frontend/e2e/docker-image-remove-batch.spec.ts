@@ -40,6 +40,18 @@ async function fixture(page: Page, origin: string, mode: Mode, bounded?: ReturnT
       constructor(url: string | URL) { super(); throw new Error(`Unexpected fixture EventSource: ${String(url)}`) }
     } as unknown as typeof EventSource
   })
+  if (bounded) await page.addInitScript(() => {
+    const events: Array<{ browserNow: number; performanceNow: number; text: string | null; bounds: object | null }> = []
+    ;(window as typeof window & { __boundedInventoryEvents: typeof events }).__boundedInventoryEvents = events
+    let previous: string | null | undefined
+    new MutationObserver(() => {
+      const banner = document.querySelector('.inventory-recovery'), text = banner?.textContent ?? null
+      if (text === previous) return
+      previous = text
+      events.push({ browserNow: Date.now(), performanceNow: performance.now(), text, bounds: banner?.getBoundingClientRect().toJSON() ?? null })
+    }).observe(document, { childList: true, subtree: true, characterData: true })
+  })
+  const inventoryReads: Array<{ collectedAt: string; browserNow: number }> = []
   const requests: string[] = [], denied: string[] = [], errors: string[] = []
   const writes: unknown[] = [], received = deferred(), release = deferred()
   let authorized = false, responded = false
@@ -81,7 +93,11 @@ async function fixture(page: Page, origin: string, mode: Mode, bounded?: ReturnT
       } finally { bounded.finish() }
     }
     if (request.method() === 'GET' && readKey === '/api/v1/docker/images') return route.fulfill({ json: { collectedAt: stamp, images: responded && mode === 'mixed' ? [{ ...images[1], containers: 1 }] : images } })
-    if (bounded && request.method() === 'GET' && readKey === '/api/v1/docker/inventory') return route.fulfill({ json: { ...inventory, collectedAt: await currentStamp(), engine: { ...inventory.engine, images: bounded.images.length } } })
+    if (bounded && request.method() === 'GET' && readKey === '/api/v1/docker/inventory') {
+      const collectedAt = await currentStamp()
+      inventoryReads.push({ collectedAt, browserNow: await page.evaluate(() => Date.now()) })
+      return route.fulfill({ json: { ...inventory, collectedAt, engine: { ...inventory.engine, images: bounded.images.length } } })
+    }
     if (request.method() === 'GET' && reads.has(readKey)) return route.fulfill({ json: reads.get(readKey) })
     if (request.method() === 'POST' && url.pathname === removePath && !url.search && authorized) {
       authorized = false
@@ -96,7 +112,7 @@ async function fixture(page: Page, origin: string, mode: Mode, bounded?: ReturnT
     denied.push(target)
     return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED', message: '未预期请求已拒绝' } })
   })
-  return { requests, denied, errors, writes, received, release, authorize() { expect(authorized).toBe(false); expect(writes).toHaveLength(0); authorized = true } }
+  return { requests, denied, errors, writes, inventoryReads, received, release, authorize() { expect(authorized).toBe(false); expect(writes).toHaveLength(0); authorized = true } }
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>
 async function provenance() {
@@ -128,19 +144,52 @@ async function geometry(region: Locator) {
     return { text: element.textContent, bounds: bounds.toJSON(), fields, buttons, viewport: { width: innerWidth, height: innerHeight }, root: { scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth } }
   })
 }
+async function inventoryCaptureState(page: Page, api: Fixture) {
+  return { ...await page.evaluate(() => {
+    const banner = document.querySelector('.inventory-recovery')
+    return {
+      browserNow: Date.now(), performanceNow: performance.now(), scroll: { x: scrollX, y: scrollY },
+      banner: banner ? { text: banner.textContent, bounds: banner.getBoundingClientRect().toJSON() } : null,
+      mutations: (window as typeof window & { __boundedInventoryEvents?: unknown[] }).__boundedInventoryEvents ?? [],
+    }
+  }), inventoryReads: [...api.inventoryReads] }
+}
 async function capture(page: Page, info: TestInfo, api: Fixture, region: Locator, phase: string, expectedTexts: string[], capturedIds = imageIds) {
+  const bounded = capturedIds.length > 50
+  const freshnessBeforeRefresh = bounded ? await inventoryCaptureState(page, api) : undefined
+  if (bounded) {
+    // 通过真实只读刷新建立新清单；保留自然时钟、恢复提示和所有已发送未知保护。
+    const writesBefore = structuredClone(api.writes), readsBefore = api.inventoryReads.length
+    const unknown = page.locator('.removal-admission--unknown')
+    const unknownBefore = await unknown.allTextContents()
+    await expect(unknown).toHaveCount(50)
+    const response = page.waitForResponse((item) => new URL(item.url()).pathname === '/api/v1/docker/inventory' && item.request().method() === 'GET')
+    const refresh = page.getByRole('button', { name: '立即刷新数据', exact: true })
+    await refresh.click()
+    expect((await response).ok()).toBe(true)
+    await expect.poll(() => api.inventoryReads.length).toBeGreaterThan(readsBefore)
+    await expect(refresh).toBeEnabled()
+    await expect(page.locator('.inventory-recovery')).toHaveCount(0)
+    await expect(unknown).toHaveCount(50)
+    expect(await unknown.allTextContents()).toEqual(unknownBefore)
+    expect(api.writes).toEqual(writesBefore)
+  }
   await expect(page.locator('.el-message')).toHaveCount(0)
   await region.scrollIntoViewIfNeeded()
   await page.evaluate(() => document.fonts.ready)
   await page.waitForTimeout(350)
   const before = await geometry(region), requestsBefore = [...api.requests]
+  const freshnessBeforeCapture = bounded ? await inventoryCaptureState(page, api) : undefined
   const prefix = `docker-image-remove-batch-${page.viewportSize()!.width}-${phase}`
   await mkdir(info.outputPath('ui-captures'), { recursive: true })
   const png = info.outputPath('ui-captures', `${prefix}.png`)
   await page.screenshot({ path: png, fullPage: false, animations: 'disabled' })
-  const after = await geometry(region), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(region)
+  const after = await geometry(region)
+  const freshnessAfterCapture = bounded ? await inventoryCaptureState(page, api) : undefined
+  const axe = await new AxeBuilder({ page }).analyze(), afterAxe = await geometry(region)
+  const freshnessAfterAxe = bounded ? await inventoryCaptureState(page, api) : undefined
   const statePath = info.outputPath('ui-captures', `${prefix}-axe-capture-state.json`)
-  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(), phase, imageIds: capturedIds, expectedRequest: capturedIds.length <= 50 ? { imageIds: capturedIds } : undefined, expectedBatches: Array.from({ length: Math.ceil(capturedIds.length / 50) }, (_, index) => capturedIds.slice(index * 50, index * 50 + 50)), screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors] }, null, 2))
+  await writeFile(statePath, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, testTitle: info.title, project: info.project.name, retry: info.retry, url: page.url(), phase, freshnessBeforeRefresh, freshnessBeforeCapture, freshnessAfterCapture, freshnessAfterAxe, imageIds: capturedIds, expectedRequest: capturedIds.length <= 50 ? { imageIds: capturedIds } : undefined, expectedBatches: Array.from({ length: Math.ceil(capturedIds.length / 50) }, (_, index) => capturedIds.slice(index * 50, index * 50 + 50)), screenshot: `${prefix}.png`, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), beforeCapture: before, afterCapture: after, afterAxe, axe, requestsBefore, requestsAfterAxe: [...api.requests], writes: [...api.writes], denied: [...api.denied], errors: [...api.errors] }, null, 2))
   await info.attach(prefix, { path: png, contentType: 'image/png' })
   await info.attach(`${prefix}-axe-state`, { path: statePath, contentType: 'application/json' })
   for (const sample of [before, after, afterAxe]) {
@@ -153,6 +202,10 @@ async function capture(page: Page, info: TestInfo, api: Fixture, region: Locator
       expect(button.bounds.width).toBeGreaterThanOrEqual(44); expect(button.bounds.height).toBeGreaterThanOrEqual(44)
       expect(button.hitTest, JSON.stringify(button)).toBe(true)
     }
+  }
+  if (bounded) for (const state of [freshnessBeforeCapture, freshnessAfterCapture, freshnessAfterAxe]) {
+    expect(state!.banner).toBeNull()
+    expect(state!.browserNow - Date.parse(state!.inventoryReads.at(-1)!.collectedAt)).toBeLessThanOrEqual(15_000)
   }
   expect(after).toEqual(before); expect(afterAxe).toEqual(before)
   expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
