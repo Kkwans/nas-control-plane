@@ -20,6 +20,9 @@ export function jobStateLabel(job: JobSnapshot): string {
   return jobStatusOptions.find((option) => option.value === jobState(job))!.label
 }
 export function jobTypeLabel(type: string): string {
+  if (type === 'docker-container-start') return '容器启动'
+  if (type === 'docker-container-stop') return '容器停止'
+  if (type === 'docker-container-restart') return '容器重启'
   return type === 'docker-image-remove' ? '镜像删除' : type === 'docker-image-pull' ? '镜像拉取' : type === 'compose-deploy' ? 'Compose 部署' : type
 }
 export function jobArtifactLabel(job: JobSnapshot): string {
@@ -30,6 +33,11 @@ export function jobStateDescription(job: JobSnapshot): string {
   if (state === 'persisting') return '任务结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
+  if (/^docker-container-(start|stop|restart)$/.test(job.type)) {
+    if (state === 'completed') return '本次操作已返回且读回状态符合目标；不代表健康或持续状态，请刷新核对。'
+    if (state === 'queued' || state === 'running') return '容器操作任务已接收，尚未确认完成。'
+    return '操作可能已执行，请只读核对容器状态，勿重复提交。'
+  }
   if (job.type === 'docker-image-remove' && state === 'completed') return '镜像删除任务已完成，可刷新本地镜像核验当前状态。'
   if (job.type === 'docker-image-remove' && (state === 'queued' || state === 'running')) return '删除任务已接收，尚未确认删除完成。'
   if (job.type === 'compose-deploy' && state === 'completed') return '部署命令已完成，配置与实际运行状态仍需核验。'

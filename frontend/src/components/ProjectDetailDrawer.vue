@@ -33,6 +33,7 @@ const props = withDefaults(defineProps<{
   hostName: string
   verifiedWebUrls?: Record<string, string>
   allowOperations?: boolean
+  blockedContainerIds?: string[]
   actionPending?: string | null
   projectActionPending?: ContainerAction | null
   projectActionErrors?: ProjectActionError[]
@@ -73,6 +74,7 @@ const currentStateLabel = computed(() => {
 })
 const currentStateTone = computed(() => props.projectActionPending ? 'pending' : props.project ? projectStateTone(props.project.state) : 'neutral')
 function projectActionDisabled(action: ContainerAction) {
+  if (props.containers.some(container => props.blockedContainerIds?.includes(container.id))) return true
   if (!props.project || props.projectActionPending || props.actionPending || !props.containers.length) return true
   const runningCount = props.containers.filter((container) => container.state === 'running').length
   if (action === 'start') return runningCount === props.containers.length
@@ -180,12 +182,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
               <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ presentDockerPorts(container.ports).map((port) => port.label).join('、') || '无公开端口' }}</dd></div>
             </dl>
             <div v-if="allowOperations" class="container-card__actions">
-              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending)" :content="container.state === 'running' ? '停止容器' : '启动容器'">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :content="container.state === 'running' ? '停止容器' : '启动容器'">
                 <button
                   :class="{ 'operation-button--danger': container.state === 'running' }"
                   class="operation-button"
                   type="button"
-                  :disabled="Boolean(actionPending)"
+                  :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))"
                   :aria-label="container.state === 'running' ? `停止 ${container.name}` : `启动 ${container.name}`"
                   @click="emit('action', container.id, container.state === 'running' ? 'stop' : 'start')"
                 >
@@ -194,8 +196,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
                   <Play v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending)" content="重启容器">
-                <button class="operation-button" type="button" :disabled="Boolean(actionPending)" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" content="重启容器">
+                <button class="operation-button" type="button" :disabled="Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
                   <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
                 </button>
               </ElTooltip>

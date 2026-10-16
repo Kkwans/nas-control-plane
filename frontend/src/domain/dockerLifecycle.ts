@@ -68,3 +68,11 @@ export function dockerContainerActionConfirmation(
     ? `将停止容器“${name}”。容器、镜像和卷不会删除，之后可以再次启动。`
     : `将重启容器“${name}”。容器、镜像和卷不会删除，期间服务会短暂中断。`
 }
+
+/** 后台动作确认绑定完整身份；接收后不能取消。 */
+export function dockerContainerActionJobConfirmation(
+  container: Pick<DockerContainer, 'id' | 'name' | 'image'>,
+  action: ContainerAction,
+) {
+  return `${dockerContainerActionConfirmation(container, action)} 完整容器 ID：${container.id}。确认后提交后台任务，接收不代表完成，任务不能取消。`
+}

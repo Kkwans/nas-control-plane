@@ -9,6 +9,8 @@ import { beginSession, invalidateSession } from '@/session/sessionLifecycle'
 import { useSystemStore } from '@/stores/system'
 import DockerView from './DockerView.vue'
 
+const refreshHandlers = vi.hoisted(() => new Set<() => Promise<void>>())
+vi.mock('@/composables/manualRefresh', () => ({ useManualRefreshRegistry: () => ({ register: (handler: () => Promise<void>) => { refreshHandlers.add(handler); return () => refreshHandlers.delete(handler) } }) }))
 const routeQuery = vi.hoisted(() => ({} as Record<string, string>))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery }), useRouter: () => ({ replace: vi.fn() }) }))
 vi.mock('@/stores/sites', () => ({ useSitesStore: () => ({ visibleSites: [] }) }))
@@ -19,7 +21,7 @@ vi.mock('@/composables/useListPreference', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   const stub = defineComponent({ setup: (_, { slots }) => () => h('div', slots.default?.()) })
-  return { ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('aside', [slots.header?.({ titleId: 'docker-view-drawer-test-title' }), slots.default?.()]) : null }), ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('aside', [slots.header?.({ titleId: 'docker-view-drawer-test-title' }), slots.default?.()]) : null }), ElInput: stub, ElTooltip: defineComponent({ props: { disabled: Boolean, triggerKeys: Array }, setup: (props, { slots }) => () => h('div', { 'data-tooltip-disabled': String(props.disabled), 'data-tooltip-trigger-keys': JSON.stringify(props.triggerKeys) }, slots.default?.()) }), ElMessage: { info: vi.fn(), error: vi.fn(), warning: vi.fn(), success: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 vi.mock('@/components/DockerImagePanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('@/components/ContainerLogDrawer.vue', () => ({ default: { render: () => null } }))
@@ -31,11 +33,11 @@ function inventory(offset = 0, empty = false): DockerInventory {
   return {
     collectedAt: new Date(Date.parse(collectedAt) + offset).toISOString(),
     projects: empty ? [] : [{ id: 'demo', name: 'demo-project', kind: 'standalone', workingDirectory: '/srv/demo', configFiles: ['compose.yaml'], containerCount: 1, runningCount: 1, state: 'running' }],
-    containers: empty ? [] : [{ id: 'demo-container', name: 'demo-web', image: 'demo:latest', state: 'running', status: 'Up', createdAt: collectedAt, projectId: 'demo', projectName: 'demo-project', serviceName: 'web', ports: [] }],
+    containers: empty ? [] : [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'demo-web', image: 'demo:latest', state: 'running', status: 'Up', createdAt: collectedAt, projectId: 'demo', projectName: 'demo-project', serviceName: 'web', ports: [] }],
     engine: { serverVersion: 'test', operatingSystem: 'Linux', architecture: 'amd64', containers: empty ? 0 : 1, containersRunning: empty ? 0 : 1, containersStopped: 0, images: 0 },
   }
 }
-function response(value: unknown) { return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } }) }
+function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }) }
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason: unknown) => void
@@ -57,7 +59,7 @@ let host: HTMLDivElement
 let pinia: Pinia
 let store: ReturnType<typeof useSystemStore>
 let fetcher: ReturnType<typeof vi.fn<typeof fetch>>
-async function settle() { for (let index = 0; index < 20; index++) await Promise.resolve(); await nextTick() }
+async function settle() { for (let index = 0; index < 80; index++) await Promise.resolve(); await nextTick() }
 async function mount() {
   app = createApp(DockerView)
   app.use(pinia)
@@ -66,6 +68,7 @@ async function mount() {
 }
 function selectContainers() { [...host.querySelectorAll<HTMLButtonElement>('.section-tabs button')].find((button) => button.textContent?.trim() === '容器')!.click() }
 beforeEach(() => {
+  refreshHandlers.clear()
   delete routeQuery.project
   vi.clearAllMocks()
   vi.mocked(ElMessageBox.confirm).mockResolvedValue(confirmed)
@@ -86,10 +89,11 @@ afterEach(() => { app?.unmount(); app = undefined; host.remove(); store.clear();
 
 function button(label: string) { return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)! }
 function posts() { return fetcher.mock.calls.filter(([, options]) => options?.method === 'POST') }
-function receipt(state = 'running') { return { containerId: 'demo-container', name: 'demo-web', action: 'restart', state } }
+function receipt(state = 'running') { return { containerId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'demo-web', action: 'restart', state } }
 function projectReceipt(state = 'running') { return { projectId: 'demo', kind: 'standalone', action: 'restart', state, completed: true, containers: [{ ...receipt(state), success: true }] } }
+function actionJob() { return { id: 'job-1', type: 'docker-container-restart', reference: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', status: 'queued', artifactState: 'unknown', cancellable: false, message: '已排队', progress: 0, createdAt: collectedAt, updatedAt: collectedAt, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} } }
 async function ready(container = true) {
-  fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response(container ? receipt() : projectReceipt()) : response(inventory()))
+  fetcher.mockImplementation(async (url, options) => options?.method === 'POST' ? (container ? response(actionJob(), 202) : response(projectReceipt())) : String(url).includes('/jobs/') ? response(actionJob()) : response(inventory()))
   await mount()
   if (container) { selectContainers(); await settle() }
 }
@@ -110,7 +114,7 @@ describe('DockerView 生命周期回执', () => {
     expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('true')
     pending.resolve(response(container ? receipt('stopped') : projectReceipt('stopped'))); await settle()
     expect(host.querySelector('.action-error')).not.toBeNull()
-    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe('false')
+    expect(tooltip().getAttribute('data-tooltip-disabled')).toBe(container ? 'true' : 'false')
     expect(posts()).toHaveLength(1)
   })
 
@@ -131,8 +135,9 @@ describe('DockerView 生命周期回执', () => {
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(1)
     expect(posts()[0]![1]?.redirect).toBe('error')
-    if (!container) expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'demo', kind: 'standalone', containerIds: ['demo-container'], action: 'restart' })
-    expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('读回时'))
+    if (!container) expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'demo', kind: 'standalone', containerIds: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'], action: 'restart' })
+    if (container) { expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成')); expect(ElMessage.success).not.toHaveBeenCalled() }
+    else expect(ElMessage.success).toHaveBeenCalledWith(expect.stringContaining('读回时'))
   })
   it.each([true, false])('状态未达目标保留警告，刷新成功不伪装完成 container=%s', async (container) => {
     await ready(container)
@@ -142,7 +147,7 @@ describe('DockerView 生命周期回执', () => {
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(ElMessage.warning).toHaveBeenCalled()
     expect(host.querySelector('.action-error')?.textContent).toContain('只读核对')
-    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(2)
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(container ? 1 : 2)
   })
   it.each([true, false])('未知回执与刷新失败分别保留且不自动重试 container=%s', async (container) => {
     await ready(container)
@@ -154,7 +159,7 @@ describe('DockerView 生命周期回执', () => {
     expect(posts()).toHaveLength(1)
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(host.querySelector('.action-error')?.textContent).toContain('可能已经执行')
-    expect(host.querySelector('.action-error')?.textContent).toContain('状态刷新失败')
+    if (!container) expect(host.querySelector('.action-error')?.textContent).toContain('状态刷新失败')
     expect(host.textContent).not.toContain('private-network-secret')
     await vi.advanceTimersByTimeAsync(15_000); await settle()
     expect(posts()).toHaveLength(1)
@@ -168,6 +173,7 @@ describe('DockerView 生命周期回执', () => {
     invalidateSession(); beginSession(); confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(0)
     expect(ElMessage.success).not.toHaveBeenCalled()
+    if (container) { app!.unmount(); app = undefined; await mount(); selectContainers(); await settle() }
     button(label).click(); await settle()
     expect(posts()).toHaveLength(1)
   })
@@ -471,7 +477,7 @@ it('取消释放期间出现新的项目操作时不抢回焦点', async () => {
 function containerLabel(entry: 'container' | 'drawer', action: string) { return entry === 'drawer' ? `${action} demo-web` : `${action}容器` }
 async function readyContainerEntry(entry: 'container' | 'drawer') {
   if (entry === 'drawer') routeQuery.project = 'demo'
-  await ready(entry === 'container')
+  await ready(true)
 }
 
 describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s', (entry) => {
@@ -488,18 +494,18 @@ describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s'
     expect(fetcher).toHaveBeenCalledTimes(1)
     expect(target.parentElement?.dataset.tooltipDisabled).toBe('true')
     expect(ElMessageBox.confirm).toHaveBeenCalledWith(
-      action === 'stop' ? '将停止容器“demo-web”。容器、镜像和卷不会删除，之后可以再次启动。' : '将重启容器“demo-web”。容器、镜像和卷不会删除，期间服务会短暂中断。',
+      (action === 'stop' ? '将停止容器“demo-web”。容器、镜像和卷不会删除，之后可以再次启动。' : '将重启容器“demo-web”。容器、镜像和卷不会删除，期间服务会短暂中断。') + ` 完整容器 ID：${'a'.repeat(64)}。确认后提交后台任务，接收不代表完成，任务不能取消。`,
       `确认${label}容器`,
       { confirmButtonText: `确认${label}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info', customClass: 'ncp-container-action-confirmation' },
     )
-    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...receipt(action === 'stop' ? 'stopped' : 'running'), action }) : response(inventory()))
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...actionJob(), type: `docker-container-${action}` }, 202) : String(_url).includes('/jobs/') ? response({ ...actionJob(), type: `docker-container-${action}` }) : response(inventory()))
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(1)
-    expect(posts()[0]![0]).toBe(`/api/v1/docker/containers/demo-container/actions/${action}`)
+    expect(posts()[0]![0]).toBe(`/api/v1/docker/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/action-jobs/${action}`)
     expect(posts()[0]![1]?.body).toBeUndefined()
-    expect(ElMessage.success).toHaveBeenCalledOnce()
-    expect(fetcher).toHaveBeenCalledTimes(3)
-    expect(target.parentElement?.dataset.tooltipDisabled).toBe('false')
+    expect(ElMessage.info).toHaveBeenCalledOnce(); expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    expect(target.parentElement?.dataset.tooltipDisabled).toBe('true')
   })
   it('启动无需确认，仅发送一次精确动作', async () => {
     await readyContainerEntry(entry)
@@ -507,13 +513,13 @@ describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s'
     store.inventory = observed; await settle()
     const target = button(containerLabel(entry, '启动'))
     expect(target.parentElement?.dataset.tooltipTriggerKeys).toBe('[]')
-    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...receipt(), action: 'start' }) : response(inventory()))
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...actionJob(), type: 'docker-container-start' }, 202) : String(_url).includes('/jobs/') ? response({ ...actionJob(), type: 'docker-container-start' }) : response(inventory()))
     target.click(); target.click(); await settle()
     expect(ElMessageBox.confirm).not.toHaveBeenCalled()
     expect(posts()).toHaveLength(1)
-    expect(posts()[0]![0]).toBe('/api/v1/docker/containers/demo-container/actions/start')
+    expect(posts()[0]![0]).toBe('/api/v1/docker/containers/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/action-jobs/start')
     expect(posts()[0]![1]?.body).toBeUndefined()
-    expect(ElMessage.success).toHaveBeenCalledOnce()
+    expect(ElMessage.info).toHaveBeenCalledOnce(); expect(ElMessage.success).not.toHaveBeenCalled()
   })
   it.each(['stale-session', 'unmount', 'disconnected', 'disabled', 'unexpected-rejection', 'confirmed'] as const)('不向失效或非取消操作恢复焦点：%s', async (condition) => {
     await readyContainerEntry(entry)
@@ -535,7 +541,7 @@ describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s'
     await settle()
     expect(focus).not.toHaveBeenCalled()
     expect(posts()).toHaveLength(condition === 'confirmed' ? 1 : 0)
-    expect(fetcher).toHaveBeenCalledTimes(condition === 'confirmed' ? 3 : 1)
+    expect(fetcher).toHaveBeenCalledTimes(condition === 'confirmed' ? 4 : 1)
   })
   it('取消释放后新同名动作仍占用，旧操作不抢焦点', async () => {
     await readyContainerEntry(entry)
@@ -570,4 +576,96 @@ describe.each(['container', 'drawer'] as const)('单容器键盘确认门禁 %s'
     expect(ElMessage.success).not.toHaveBeenCalled()
     if (entry === 'drawer') expect(host.querySelector('.detail-section [role="alert"]')?.textContent).toContain('可能已经')
   })
+})
+
+describe('单容器 Job 页面闭环', () => {
+  it('202只提示已接收，清单刷新或容器消失不清锁；同项目批量入口受保护', async () => {
+    await ready()
+    button('重启容器').click(); await settle()
+    expect(posts()).toHaveLength(1)
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(button('停止容器').disabled).toBe(true)
+    expect(button('重启容器').disabled).toBe(true)
+    expect(button('查看容器详情与日志').disabled).toBe(false)
+    const projectTab = [...host.querySelectorAll<HTMLButtonElement>('.section-tabs button')].find(item => item.textContent?.trim() === '项目')!
+    projectTab.click(); await settle()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
+    store.inventory = inventory(1000, true); await settle()
+    const panel = host.querySelector('[aria-label="单容器操作防重复保护"]')!
+    expect(panel.textContent).toContain('job-1')
+    expect(panel.textContent).toContain('a'.repeat(64))
+    expect([...panel.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === '解除本页防重复保护')!.disabled).toBe(true)
+    expect(posts()).toHaveLength(1)
+  })
+  it('卸载后晚202在重挂载面板可见，不通知旧视图或重复POST', async () => {
+    await ready()
+    const pending = deferred<Response>(); fetcher.mockReturnValueOnce(pending.promise)
+    button('重启容器').click(); await settle()
+    app!.unmount(); app = undefined
+    pending.resolve(response(actionJob(), 202)); await settle()
+    expect(ElMessage.info).not.toHaveBeenCalled()
+    await mount(); selectContainers(); await settle()
+    expect(host.querySelector('[aria-label="单容器操作防重复保护"]')?.textContent).toContain('job-1')
+    expect(button('重启容器').disabled).toBe(true)
+    button('重启容器').click(); await settle(); expect(posts()).toHaveLength(1)
+  })
+  it('未知接收先只读核对再明确风险确认，本地解除不重发', async () => {
+    await ready()
+    fetcher.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') throw new Error('offline')
+      return String(url).includes('/jobs') ? response({ jobs: [] }) : response(inventory())
+    })
+    button('重启容器').click(); await settle()
+    const panel = () => host.querySelector('[aria-label="单容器操作防重复保护"]')!
+    const control = (text: string) => [...panel().querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text)!
+    expect(control('解除本页防重复保护').disabled).toBe(true)
+    control('只读核对任务与状态').click(); await settle()
+    expect(control('解除本页防重复保护').disabled).toBe(false)
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    const releaseButton = control('解除本页防重复保护'); releaseButton.focus()
+    const restoreFocus = vi.spyOn(releaseButton, 'focus')
+    releaseButton.click(); await settle()
+    expect(restoreFocus).toHaveBeenCalledWith({ preventScroll: true })
+    expect(panel()).not.toBeNull(); expect(posts()).toHaveLength(1)
+    control('解除本页防重复保护').click(); await settle()
+    expect(ElMessageBox.confirm).toHaveBeenLastCalledWith(expect.stringContaining('之前操作可能仍已执行'), '解除本页防重复保护', expect.objectContaining({ confirmButtonText: '确认风险并解除' }))
+    expect(panel()).toBeNull(); expect(button('重启容器').disabled).toBe(false); expect(posts()).toHaveLength(1)
+  })
+  it('failed清单核对失败不解锁，精确completed才自动释放', async () => {
+    await ready(); button('重启容器').click(); await settle()
+    const panel = () => host.querySelector('[aria-label="单容器操作防重复保护"]')!
+    fetcher.mockImplementation(async url => String(url).includes('/jobs/') ? response({ ...actionJob(), status: 'failed', completedAt: collectedAt, errorCode: 'DOCKER_CONTAINER_STATE_MISMATCH' }) : response({ invalid: true }))
+    panel().querySelector<HTMLButtonElement>('button')!.click(); await settle()
+    expect(panel().textContent).toContain('DOCKER_CONTAINER_STATE_MISMATCH')
+    expect([...panel().querySelectorAll<HTMLButtonElement>('button')][1]!.disabled).toBe(true)
+    fetcher.mockImplementation(async url => String(url).includes('/jobs/') ? response({ ...actionJob(), status: 'completed', completedAt: collectedAt, progress: 100 }) : response(inventory()))
+    panel().querySelector<HTMLButtonElement>('button')!.click(); await settle()
+    expect(panel()).toBeNull(); expect(posts()).toHaveLength(1); expect(ElMessage.success).not.toHaveBeenCalled()
+  })
+})
+
+it('手动数据刷新精确核对已知Job一次，卸载取消注册且不递归或POST', async () => {
+  await ready(); button('重启容器').click(); await settle()
+  const previous = fetcher.mock.calls.filter(([url]) => String(url).includes('/jobs/')).length
+  await Promise.all([...refreshHandlers].map(handler => handler())); await settle()
+  expect(fetcher.mock.calls.filter(([url]) => String(url).includes('/jobs/')).length).toBe(previous + 1)
+  expect(posts()).toHaveLength(1)
+  app!.unmount(); app = undefined; expect(refreshHandlers.size).toBe(0)
+})
+
+it.each(['manual', 'panel'] as const)('stale清单读取没有成功资源时不误称核对完成或解锁：%s', async source => {
+  await ready(); button('重启容器').click(); await settle()
+  fetcher.mockImplementation(async url => String(url).includes('/jobs/') ? response({ ...actionJob(), status: 'failed', completedAt: collectedAt, errorCode: 'DOCKER_CONTAINER_STATE_MISMATCH' }) : response(inventory()))
+  const refresh = vi.spyOn(store, 'refresh').mockResolvedValue({ requested: ['inventory'], succeeded: [], failed: [] })
+  if (source === 'manual') await Promise.all([...refreshHandlers].map(handler => handler()))
+  else host.querySelector<HTMLButtonElement>('[aria-label="单容器操作防重复保护"] button')!.click()
+  await settle()
+  const panel = host.querySelector('[aria-label="单容器操作防重复保护"]')!
+  expect(panel.textContent).toContain('容器清单刷新失败')
+  expect(panel.textContent).not.toContain('容器清单已刷新')
+  expect([...panel.querySelectorAll<HTMLButtonElement>('button')][1]!.disabled).toBe(true)
+  expect(button('重启容器').disabled).toBe(true)
+  expect(posts()).toHaveLength(1)
+  expect(refresh).toHaveBeenCalledWith({ inventory: true, ...(source === 'panel' ? { force: true } : {}) })
+  refresh.mockRestore()
 })

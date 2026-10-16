@@ -6,10 +6,12 @@ import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
 import { composeActionStateMatches, dockerActionStateMatches, DockerActionOutcomeUnknownError } from '@/api/dockerActionOutcome'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
-import { NcpApiError, deleteDockerProject, requestContainerAction, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
+import { NcpApiError, deleteDockerProject, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
+import ContainerActionProtectionPanel from '@/components/ContainerActionProtectionPanel.vue'
+import { useDockerContainerActionJobs, containerActionCanRelease, type ContainerActionAdmission } from '@/composables/useDockerContainerActionJobs'
 import DockerImagePanel from '@/components/DockerImagePanel.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
 import ComposeEditorDrawer from '@/components/ComposeEditorDrawer.vue'
@@ -20,11 +22,12 @@ import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeade
 import SectionTabs, { type SectionTab } from '@/components/SectionTabs.vue'
 import CompactSegmentedFilter from '@/components/CompactSegmentedFilter.vue'
 import ResourcePagination from '@/components/ResourcePagination.vue'
+import { useManualRefreshRegistry } from '@/composables/manualRefresh'
 import { useListPreference } from '@/composables/useListPreference'
 import {
   dockerActionLabel,
   dockerActionNeedsConfirmation,
-  dockerContainerActionConfirmation,
+  dockerContainerActionJobConfirmation,
   dockerProjectActionConfirmation,
   dockerProjectActionDisabled,
   dockerProjectActionTargets,
@@ -45,6 +48,7 @@ type ProjectActionError = { containerId: string; name: string; message: string; 
 const pageRoot = useTemplateRef<HTMLElement>('pageRoot')
 const tooltipTarget = shallowRef<HTMLElement>()
 const route = useRoute()
+const manualRefreshRegistry = useManualRefreshRegistry()
 const router = useRouter()
 const systemStore = useSystemStore()
 const sitesStore = useSitesStore()
@@ -54,6 +58,8 @@ const stateFilter = ref<StateFilter>('all')
 const containerStateFilter = ref<ContainerStateFilter>('all')
 const activeView = ref<DockerViewMode>('projects')
 const actionPending = ref<string | null>(null)
+const containerJobs = useDockerContainerActionJobs()
+const { entries: containerAdmissions, blockedIds: blockedContainerIds } = containerJobs
 let containerActionOwner: symbol | null = null
 const projectActionPending = ref<{ projectId: string; action: ContainerAction } | null>(null)
 const projectDeletePending = ref<string | null>(null)
@@ -171,7 +177,11 @@ function projectStateTone(project: DockerProject) {
 function projectErrorsFor(projectId: string) {
   return projectActionErrors.value[projectId] ?? []
 }
+function projectHasProtectedContainer(project: DockerProject) {
+  return containersFor(project.id).some(container => blockedContainerIds.value.includes(container.id))
+}
 function projectActionDisabled(project: DockerProject, action: ContainerAction) {
+  if (projectHasProtectedContainer(project)) return true
   return dockerProjectActionDisabled(
     project,
     action,
@@ -179,6 +189,7 @@ function projectActionDisabled(project: DockerProject, action: ContainerAction) 
   )
 }
 function projectDeleteDisabledReason(project: DockerProject) {
+  if (projectHasProtectedContainer(project)) return '项目含有操作结果待核对的容器，请先核对。'
   return dockerProjectDeleteDisabledReason(
     project,
     Boolean(actionPending.value) || Boolean(projectActionPending.value) || Boolean(projectDeletePending.value),
@@ -231,6 +242,9 @@ async function performAction(containerId: string, action: ContainerAction) {
   const session = captureSession()
   const current = () => viewActive && isCurrentSession(session.generation)
   const container = inventory.value?.containers.find((item) => item.id === containerId)
+  if (!container) return null
+  const admission = containerJobs.reserve(containerId, action, container.name)
+  if (!admission) return null
   // 在禁用按钮前保存触发点；私有所有者避免相同容器动作的旧调用释放新锁。
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   let dismissed = false
@@ -243,7 +257,7 @@ async function performAction(containerId: string, action: ContainerAction) {
     if (dockerActionNeedsConfirmation(action)) {
       try {
         await ElMessageBox.confirm(
-          dockerContainerActionConfirmation(container ?? { name: containerId, image: '' }, action),
+          dockerContainerActionJobConfirmation({ id: admission.containerId, name: admission.name, image: container.image }, admission.action),
           `确认${dockerActionLabel(action)}容器`,
           { confirmButtonText: `确认${dockerActionLabel(action)}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info', customClass: 'ncp-container-action-confirmation' },
         )
@@ -254,34 +268,18 @@ async function performAction(containerId: string, action: ContainerAction) {
     }
     if (!current()) return null
     actionError.value = null
-    try {
-      const result = await requestContainerAction(containerId, action)
-      if (!current()) return null
-      if (dockerActionStateMatches(action, result.state)) {
-        ElMessage.success(`容器${dockerActionLabel(action)}命令已受理，读回时为${action === 'stop' ? '已停止' : '运行中'}。`)
-      } else {
-        failure = `容器${dockerActionLabel(action)}命令已受理，读回时尚未达到目标状态；请先只读核对。`
-        actionError.value = failure
-        ElMessage.warning(failure)
-      }
-    } catch (error) {
-      if (!current()) return null
-      failure = errorMessage(error, new DockerActionOutcomeUnknownError('container').message)
-      actionError.value = failure
-      if (error instanceof DockerActionOutcomeUnknownError) ElMessage.warning(failure)
-      else ElMessage.error(failure)
-    }
+    const outcome = await containerJobs.dispatch(admission)
     if (!current()) return null
-    // 刷新只更新清单，不能把未知回执改成成功，也不会重发操作。
-    try {
-      const refreshResult = await systemStore.refresh({ inventory: true, force: true })
-      if (current() && refreshResult.failed.length) {
-        actionError.value = [failure, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
-      }
-    } catch {
-      if (current()) actionError.value = [failure, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
+    if (outcome === 'accepted') {
+      ElMessage.info('容器操作任务已接收，尚未确认完成。可在防重复保护面板只读核对。')
+      void containerJobs.check(admission, refreshContainerInventory)
+    } else if (outcome) {
+      failure = outcome === 'rejected' ? '服务器明确拒绝接收容器操作，请检查会话或稍后重试。' : '容器操作接收未知，可能已经执行。请先只读核对，勿重复提交。'
+      actionError.value = failure
+      ElMessage.warning(failure)
     }
   } finally {
+    containerJobs.cancel(admission)
     if (viewActive && containerActionOwner === pendingOwner) {
       containerActionOwner = null
       actionPending.value = null
@@ -296,6 +294,33 @@ async function performAction(containerId: string, action: ContainerAction) {
   }
   return failure
 }
+async function refreshContainerInventory() {
+  const result = await systemStore.refresh({ inventory: true, force: true })
+  return result.succeeded.includes('inventory')
+}
+async function refreshDockerPage() {
+  const inventoryRead = systemStore.refresh({ inventory: true }).then(result => result.succeeded.includes('inventory'))
+  await Promise.all(containerAdmissions.value.filter(entry => entry.phase === 'known').map(entry => containerJobs.check(entry, () => inventoryRead)))
+  await inventoryRead
+}
+const unregisterManualRefresh = manualRefreshRegistry?.register(refreshDockerPage)
+async function releaseContainerProtection(entry: ContainerActionAdmission) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  // 每次解除前重新只读核对；确认框等待期间的新观察不能被旧确认覆盖。
+  await containerJobs.check(entry, refreshContainerInventory)
+  if (!viewActive || !containerJobs.alive()) return
+  const checked = containerAdmissions.value.find(item => item.token === entry.token)
+  if (!checked || !containerActionCanRelease(checked)) return
+  const version = checked.checkVersion
+  try {
+    await ElMessageBox.confirm('仅解除本登录会话的本页防重复保护，不会取消、撤销或重发任务。之前操作可能仍已执行；当前状态或核对失败都不能证明未接收。之后再次操作可能重复执行。确认自行承担此风险并解除？', '解除本页防重复保护', { confirmButtonText: '确认风险并解除', cancelButtonText: '保留保护', type: 'warning', customClass: 'ncp-container-action-confirmation' })
+    if (viewActive) containerJobs.release(checked, version)
+  } catch (decision) {
+    if (decision !== 'cancel' && decision !== 'close') return
+    await nextTick()
+    if (viewActive && containerJobs.alive() && containerAdmissions.value.some(item => item.token === checked.token && item.checkVersion === version) && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
+  }
+}
 async function performDetailAction(containerId: string, action: ContainerAction) {
   const projectId = selectedProject.value?.id
   const session = captureSession()
@@ -307,6 +332,7 @@ async function performDetailAction(containerId: string, action: ContainerAction)
   }
 }
 async function performProjectAction(project: DockerProject, action: ContainerAction) {
+  if (projectHasProtectedContainer(project)) return
   if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
   const session = captureSession()
   const current = () => viewActive && isCurrentSession(session.generation)
@@ -341,7 +367,7 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
         return
       }
     }
-    if (!current()) return
+    if (!current() || projectHasProtectedContainer(project) || actionTargets.some(container => blockedContainerIds.value.includes(container.id))) return
     projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
     actionError.value = null
     let result: DockerProjectActionResult | ComposeLifecycleResult | null = null
@@ -406,6 +432,7 @@ async function confirmDeleteProject(project: DockerProject) {
       { confirmButtonText: '删除项目', cancelButtonText: '取消', type: 'warning' },
     )
   } catch { return }
+  if (projectHasProtectedContainer(project)) return
   projectDeletePending.value = project.id
   actionError.value = null
   try {
@@ -457,7 +484,7 @@ watch(logOpen, (open) => {
     containerDrawerError.value = ''
   }
 }, { flush: 'sync' })
-onBeforeUnmount(() => { viewActive = false; detailRequest.invalidate() })
+onBeforeUnmount(() => { viewActive = false; detailRequest.invalidate(); unregisterManualRefresh?.() })
 
 watch([() => route.query.project, allProjects], ([projectId, items]) => {
   if (projectId && items.length && !items.some((project) => project.id === projectId)) void updateSelectedProject(null)
@@ -469,7 +496,7 @@ watch(projectPageCount, (count) => {
 onMounted(() => {
   // 提示仍传送到页面主地标内，避免表格裁切及 body 外悬浮内容。
   tooltipTarget.value = pageRoot.value?.closest<HTMLElement>('main, [role="main"]') ?? pageRoot.value ?? undefined
-  void systemStore.refresh({ inventory: true })
+  void refreshDockerPage()
 })
 </script>
 
@@ -492,12 +519,14 @@ onMounted(() => {
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
     </div>
 
+    <ContainerActionProtectionPanel :entries="containerAdmissions" @check="entry => containerJobs.check(entry, refreshContainerInventory)" @release="releaseContainerProtection" />
+
     <section v-if="inventory && (systemStore.inventoryErrorCode || systemStore.inventoryStale)" class="inventory-recovery panel" role="status">
       <div>
         <strong>{{ systemStore.inventoryErrorCode ? 'Docker 状态更新失败，显示上次数据' : 'Docker 状态尚未更新，显示上次数据' }}</strong>
         <span>上次更新：{{ inventory.collectedAt }}{{ systemStore.inventoryErrorCode ? `（${systemStore.inventoryErrorCode}）` : '' }}。项目和容器状态可能已变化。</span>
       </div>
-      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="systemStore.refresh({ inventory: true })">重新加载</ActionButton>
+      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="refreshDockerPage">重新加载</ActionButton>
     </section>
 
     <section v-if="inventoryLoading" class="resource-state panel" aria-live="polite" aria-busy="true">
@@ -509,7 +538,7 @@ onMounted(() => {
     <section v-else-if="inventoryUnavailable" class="resource-state resource-state--error panel" role="alert">
       <strong>Docker 状态读取失败</strong>
       <span>无法读取项目和容器列表{{ systemStore.inventoryErrorCode ? `（${systemStore.inventoryErrorCode}）` : '' }}。</span>
-      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="systemStore.refresh({ inventory: true })">重新加载</ActionButton>
+      <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="systemStore.inventoryRefreshing" @click="refreshDockerPage">重新加载</ActionButton>
     </section>
 
     <template v-else-if="activeView === 'images'">
@@ -616,6 +645,7 @@ onMounted(() => {
         :query="query"
         :state-filter="containerStateFilter"
         :action-pending="effectiveActionPending"
+        :blocked-container-ids="blockedContainerIds"
         :page-size="containerPageSize"
         @action="performAction"
         @details="openContainerDetails"
@@ -630,6 +660,7 @@ onMounted(() => {
       :verified-web-urls="verifiedWebUrlsFor(selectedProject?.id ?? '')"
       :allow-operations="true"
       :action-pending="effectiveActionPending"
+      :blocked-container-ids="blockedContainerIds"
       :project-action-pending="projectActionFor(selectedProject?.id ?? '')"
       :project-action-errors="projectErrorsFor(selectedProject?.id ?? '')"
       :container-action-error="selectedProjectContainerActionError"
@@ -646,6 +677,7 @@ onMounted(() => {
 
 <style scoped>
 /* MessageBox 传送到页面根部；每条规则仅限容器或 Compose 专属类。 */
+:global(.ncp-container-action-confirmation .el-message-box__message) { overflow-wrap: anywhere; }
 :global(.ncp-container-action-confirmation .el-message-box__header),
 :global(.ncp-compose-action-confirmation .el-message-box__header) { min-height: var(--ncp-touch-target); padding-right: calc(var(--ncp-touch-target) + 8px); }
 :global(.ncp-container-action-confirmation .el-message-box__headerbtn),

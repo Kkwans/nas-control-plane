@@ -8,8 +8,9 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { summary, overviewDocker } from './mockApi'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
-const containerId = 'fixture-action-container', projectId = 'fixture-action-project', name = '回执验证项目'
+const containerId = 'd'.repeat(64), projectId = 'fixture-action-project', name = '回执验证项目'
 const stamp = '2026-10-14T18:00:00.000Z'
+const admission = { id: 'fixture-container-restart-job', type: 'docker-container-restart', reference: containerId, cancellable: false, status: 'queued', artifactState: 'unknown', message: '任务已进入队列', progress: 0, createdAt: stamp, updatedAt: stamp, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} }
 const observed = (state = 'running') => ({ containerId, name: 'fixture-web', action: 'restart', state })
 const inventory = {
   collectedAt: stamp,
@@ -29,7 +30,7 @@ async function fixture(page: Page, standalone: boolean, origin: string) {
     }
     window.EventSource = SilentSource as unknown as typeof EventSource
   })
-  const path = standalone ? `/api/v1/docker/projects/${projectId}/actions/restart` : `/api/v1/docker/containers/${containerId}/actions/restart`
+  const path = standalone ? `/api/v1/docker/projects/${projectId}/actions/restart` : `/api/v1/docker/containers/${containerId}/action-jobs/restart`
   const requests: string[] = [], denied: string[] = [], errors: string[] = []
   const writes: Array<{ path: string; body: unknown }> = []
   let allowed: 'mismatch' | 'unknown' | undefined
@@ -61,7 +62,11 @@ async function fixture(page: Page, standalone: boolean, origin: string) {
       writes.push({ path: pathname, body })
       expect(body).toEqual(standalone ? { projectId, kind: 'standalone', containerIds: [containerId], action: 'restart' } : null)
       if (mode === 'unknown') return route.abort('failed')
-      return route.fulfill({ json: standalone ? { projectId, kind: 'standalone', action: 'restart', state: 'stopped', completed: true, containers: [{ ...observed('stopped'), success: true }] } : observed('stopped') })
+      if (!standalone) {
+        reads.set(`/api/v1/jobs/${admission.id}`, { ...admission, status: 'failed', completedAt: stamp, errorCode: 'DOCKER_CONTAINER_STATE_MISMATCH', error: '读回状态未达到目标' })
+        return route.fulfill({ status: 202, json: admission })
+      }
+      return route.fulfill({ json: { projectId, kind: 'standalone', action: 'restart', state: 'stopped', completed: true, containers: [{ ...observed('stopped'), success: true }] } })
     }
     if (req.method() === 'GET' && reads.has(pathname)) return route.fulfill({ json: reads.get(pathname) })
     denied.push(`${req.method()} ${pathname}`)
@@ -95,6 +100,23 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string) 
   await expect(page.locator('.el-message')).toHaveCount(0)
   await page.evaluate(() => document.fonts.ready)
   await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }))
+  if (state.startsWith('container-')) {
+    const panel = page.getByRole('region', { name: '单容器操作防重复保护' })
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText(containerId)
+    const requestsBefore = [...api.requests]
+    const png = info.outputPath(`docker-action-outcome-${state}-${page.viewportSize()!.width}.png`)
+    await page.screenshot({ path: png, fullPage: true, animations: 'disabled' })
+    await info.attach(state, { path: png, contentType: 'image/png' })
+    const axe = await new AxeBuilder({ page }).analyze()
+    const metadata = info.outputPath(`docker-action-outcome-${state}-${page.viewportSize()!.width}-state.json`)
+    await writeFile(metadata, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, state, testTitle: info.title, screenshotSha256: createHash('sha256').update(await readFile(png)).digest('hex'), requestsBefore, requestsAfterAxe: [...api.requests], writes: api.writes, denied: api.denied, axe }, null, 2))
+    await info.attach(`${state}-state`, { path: metadata, contentType: 'application/json' })
+    expect(api.requests).toEqual(requestsBefore)
+    expect(axe.violations, JSON.stringify(axe.violations)).toEqual([])
+    expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
+    return
+  }
   const actionLabel = state.startsWith('project-') ? `重启项目 ${name}` : '重启容器'
   const before = await geometry(page, actionLabel), requestsBefore = [...api.requests]
   const prefix = `docker-action-outcome-${state}-${page.viewportSize()!.width}`
@@ -135,19 +157,38 @@ for (const width of [390, 1440]) for (const standalone of [false, true]) {
       const dialog = page.locator('.el-message-box')
       await expect(dialog).toBeVisible(); expect(api.writes).toHaveLength(index); await expect(action).toBeDisabled()
       await dialog.getByRole('button', { name: '确认重启', exact: true }).click(); await expect(dialog).toHaveCount(0)
-      await expect(page.locator('.action-error')).toContainText(mode === 'mismatch' ? '目标' : '可能已经执行')
-      await expect(page.locator('.el-message--success')).toHaveCount(0); await expect(action).toBeEnabled()
-      expect(api.requests.filter((request) => request === 'GET /api/v1/docker/inventory')).toHaveLength(readsBefore + 1)
-      await expect(page.locator('.action-error')).toContainText(mode === 'mismatch' ? '目标' : '可能已经执行')
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      if (standalone) {
+        await expect(page.locator('.action-error')).toContainText(mode === 'mismatch' ? '目标' : '可能已经执行')
+        await expect(action).toBeEnabled()
+        expect(api.requests.filter((request) => request === 'GET /api/v1/docker/inventory')).toHaveLength(readsBefore + 1)
+      } else {
+        const panel = page.getByRole('region', { name: '单容器操作防重复保护' })
+        await expect(action).toBeDisabled()
+        if (mode === 'mismatch') {
+          await expect(page.locator('.el-message--info')).toContainText('已接收，尚未确认完成')
+          await expect(panel).toContainText('DOCKER_CONTAINER_STATE_MISMATCH')
+          await expect.poll(() => api.requests.filter((request) => request === 'GET /api/v1/docker/inventory').length).toBe(readsBefore + 1)
+        } else {
+          await expect(panel).toContainText('接收未知，勿重复提交')
+          await expect(page.locator('.action-error')).toContainText('可能已经执行')
+        }
+      }
       expect(api.writes).toHaveLength(index + 1)
       // 覆盖默认五秒刷新周期，观察未知结果不会触发自动写入重试。
       if (mode === 'unknown') await page.waitForTimeout(6000)
-      if (width === 1440) {
+      if (standalone && width === 1440) {
         await action.hover()
         await expect(page.getByRole('tooltip').filter({ hasText: standalone ? '重启项目' : '重启容器' })).toBeVisible()
       }
       await capture(page, info, api, `${standalone ? 'project' : 'container'}-${mode}`)
       expect(api.writes).toHaveLength(index + 1)
+      if (!standalone && mode === 'mismatch') {
+        await page.getByRole('button', { name: '解除本页防重复保护', exact: true }).click()
+        await page.locator('.ncp-container-action-confirmation').getByRole('button', { name: '确认风险并解除', exact: true }).click()
+        await expect(action).toBeEnabled()
+        expect(api.writes).toHaveLength(index + 1)
+      }
     }
   })
 }

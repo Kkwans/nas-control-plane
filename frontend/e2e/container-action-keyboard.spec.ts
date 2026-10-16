@@ -9,14 +9,13 @@ import { summary, overviewDocker } from './mockApi'
 import { waitForPageReady } from './pageReadiness'
 
 test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reducedMotion: 'reduce' } })
-const containerId = 'fixture-keyboard-container', projectId = 'fixture-keyboard-project', name = 'fixture-keyboard-web'
+const containerId = 'c'.repeat(64), projectId = 'fixture-keyboard-project', name = 'fixture-keyboard-web'
 type Action = 'start' | 'stop' | 'restart'
 type Surface = 'list' | 'drawer'
 type RequestRecord = { method: string; path: string; body: unknown }
 const stamp = '2026-10-14T18:00:00.000Z'
-// Single-container action receipts normalize stopped state (internal/docker/control.go);
-// inventory below deliberately keeps Docker's observed `exited` state.
-const receipt = (action: Action) => ({ containerId, name, action, state: action === 'stop' ? 'stopped' : 'running' })
+// 202 仅接收任务；完成与当前清单由后续只读 GET 核对。
+const receipt = (action: Action) => ({ id: `keyboard-${action}`, type: `docker-container-${action}`, reference: containerId, cancellable: false, status: 'queued', artifactState: 'unknown', message: '任务已进入队列', progress: 0, createdAt: stamp, updatedAt: stamp, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} })
 const inventory = {
   collectedAt: stamp,
   engine: { ...overviewDocker.engine, containers: 1, containersRunning: 1, containersStopped: 0 },
@@ -63,7 +62,7 @@ async function fixture(page: Page, origin: string) {
     const entry = { method: req.method(), path: pathname, body }
     requests.push(entry)
     if (req.method() === 'GET' && pathname === '/api/v1/docker/inventory') return route.fulfill({ json: { ...currentInventory, collectedAt: new Date(await page.evaluate(() => Date.now())).toISOString() } })
-    if (req.method() === 'POST' && allowed && pathname === `/api/v1/docker/containers/${containerId}/actions/${allowed}`) {
+    if (req.method() === 'POST' && allowed && pathname === `/api/v1/docker/containers/${containerId}/action-jobs/${allowed}`) {
       const action = allowed; allowed = undefined
       writes.push(entry)
       expect(body).toBeNull()
@@ -77,7 +76,8 @@ async function fixture(page: Page, origin: string) {
       currentInventory.engine.containersStopped = stopped ? 1 : 0
       const result = receipt(action)
       servedReceipts.push(result)
-      return route.fulfill({ json: result })
+      reads.set(`/api/v1/jobs/${result.id}`, { ...result, status: 'completed', progress: 100, completedAt: stamp })
+      return route.fulfill({ status: 202, json: result })
     }
     if (req.method() === 'GET' && reads.has(pathname)) return route.fulfill({ json: reads.get(pathname) })
     denied.push(`${req.method()} ${pathname}`)
@@ -135,6 +135,8 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string):
   await page.evaluate(() => document.fonts.ready)
   if (state.endsWith('-confirmation')) {
     await expect(confirmation(page)).toContainText(name)
+    await expect(confirmation(page)).toContainText(`完整容器 ID：${containerId}`)
+    await expect(confirmation(page)).toContainText('接收不代表完成，任务不能取消')
     await expect(confirmation(page)).toContainText('容器、镜像和卷不会删除')
   }
   await page.evaluate(() => scrollTo({ top: 0, left: 0, behavior: 'instant' }))
@@ -287,8 +289,9 @@ for (const width of [1440, 390]) for (const surface of ['list', 'drawer'] as con
           await confirm.focus(); await page.keyboard.press('Enter')
         }
         await expect(confirmation(page)).toHaveCount(0)
-        const success = page.locator('.el-message--success')
-        await expect(success).toContainText(`容器${{ start: '启动', stop: '停止', restart: '重启' }[action]}命令已受理，读回时为${action === 'stop' ? '已停止' : '运行中'}`)
+        const success = page.locator('.el-message--info')
+        await expect(success).toContainText('容器操作任务已接收，尚未确认完成')
+        await expect(page.locator('.el-message--success')).toHaveCount(0)
         await expect(success).not.toContainText(/健康|可用|部署成功/)
         await expect(page.locator('.action-error, .project-action-errors')).toHaveCount(0)
         await expect.poll(() => api.requests.slice(before).filter((entry) => entry.method === 'GET' && entry.path === '/api/v1/docker/inventory').length).toBe(1)
@@ -301,7 +304,7 @@ for (const width of [1440, 390]) for (const surface of ['list', 'drawer'] as con
         expect(record.requests.filter((entry) => entry.method !== 'GET')).toEqual([api.writes[writesBefore]])
         const writeIndex = record.requests.findIndex((entry) => entry.method === 'POST')
         expect(writeIndex).toBeGreaterThanOrEqual(0)
-        expect(record.requests.slice(writeIndex + 1)).toEqual([{ method: 'GET', path: '/api/v1/docker/inventory', body: null }])
+        expect(record.requests.slice(writeIndex + 1)).toEqual([{ method: 'GET', path: `/api/v1/jobs/keyboard-${action}`, body: null }, { method: 'GET', path: '/api/v1/docker/inventory', body: null }])
         expect(api.denied).toEqual([]); expect(api.errors).toEqual([])
         record.completed = true
       } finally { record.requests = structuredClone(api.requests.slice(before)) }

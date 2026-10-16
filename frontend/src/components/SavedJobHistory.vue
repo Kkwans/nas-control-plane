@@ -16,7 +16,7 @@ function focusPanel() { panel.value?.focus({ preventScroll: true }) }
 const id = useId()
 const typed = ref('')
 const inputError = ref('')
-const known = ['docker-image-pull', 'docker-image-remove', 'compose-deploy']
+const known = ['docker-image-pull', 'docker-image-remove', 'compose-deploy', 'docker-container-start', 'docker-container-stop', 'docker-container-restart']
 const types = computed(() => [...new Set([...known, ...(query.value.type ? [query.value.type] : []), ...(page.value?.items.map(item => item.type) ?? [])])])
 const unsupported = computed(() => error.value?.code === 'JOB_HISTORY_UNSUPPORTED')
 const unauthorized = computed(() => error.value?.code === 'AUTH_UNAUTHORIZED')

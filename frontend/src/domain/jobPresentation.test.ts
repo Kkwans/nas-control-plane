@@ -74,3 +74,26 @@ it('排队超时在保存期间保持活动，持久化后为失败', () => {
   expect(jobStateLabel(timeout)).toBe('失败')
   expect(isTerminalJob(timeout)).toBe(true)
 })
+
+describe('单容器操作任务展示', () => {
+  it.each([
+    ['docker-container-start', '容器启动'],
+    ['docker-container-stop', '容器停止'],
+    ['docker-container-restart', '容器重启'],
+  ])('%s 的名称、结果边界及不可取消能力', (type, label) => {
+    expect(jobTypeLabel(type)).toBe(label)
+    for (const status of ['queued', 'running'] as const) {
+      expect(jobStateDescription(job({ type, status }))).toBe('容器操作任务已接收，尚未确认完成。')
+      expect(canRequestJobCancellation(job({ type, status, cancellable: true }))).toBe(false)
+    }
+    expect(jobStateDescription(job({ type, status: 'completed' }))).toContain('本次操作已返回且读回状态符合目标')
+    expect(jobStateDescription(job({ type, status: 'completed' }))).toContain('不代表健康或持续状态')
+    expect(jobStateDescription(job({ type, status: 'failed' }))).toContain('操作可能已执行')
+    expect(jobStateDescription(job({ type, status: 'failed' }))).toContain('勿重复提交')
+    expect(jobStateDescription(job({ type, status: 'interrupted' }))).toContain('执行结果未确认')
+    const pending = job({ type, status: 'completed', persistenceStatus: 'pending' })
+    expect(jobStateDescription(pending)).toBe('任务结果正在保存，尚未确认最终结果。')
+    expect(isTerminalJob(pending)).toBe(false)
+    expect(canRequestJobCancellation(pending)).toBe(false)
+  })
+})
