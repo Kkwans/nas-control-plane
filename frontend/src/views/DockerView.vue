@@ -724,7 +724,7 @@ onMounted(() => {
             <ElTooltip :trigger-keys="[]" :disabled="Boolean(actionPending || projectActionPending || projectDeletePending)" :append-to="tooltipTarget" content="重启项目" placement="top">
               <ListIconButton :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" :label="`重启项目 ${project.name}`" @click="performProjectAction(project, 'restart')" />
             </ElTooltip>
-            <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
+            <ElTooltip :trigger-keys="[]" :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'" placement="top">
               <span class="project-action-tooltip-target">
                 <ListIconButton :icon="Trash2" tone="danger" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" :label="`删除项目 ${project.name}`" @click="confirmDeleteProject(project)" />
               </span>
@@ -760,7 +760,7 @@ onMounted(() => {
             <ActionButton variant="ghost" size="sm" :icon="Play" :loading="projectActionFor(project.id) === 'start'" :disabled="projectActionDisabled(project, 'start')" @click="performProjectAction(project, 'start')">启动</ActionButton>
             <ActionButton variant="danger" size="sm" :icon="Square" :loading="projectActionFor(project.id) === 'stop'" :disabled="projectActionDisabled(project, 'stop')" @click="performProjectAction(project, 'stop')">停止</ActionButton>
             <ActionButton variant="secondary" size="sm" :icon="RotateCcw" :loading="projectActionFor(project.id) === 'restart'" :disabled="projectActionDisabled(project, 'restart')" @click="performProjectAction(project, 'restart')">重启</ActionButton>
-            <ElTooltip :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
+            <ElTooltip :trigger-keys="[]" :append-to="tooltipTarget" :content="projectDeleteDisabledReason(project) || '删除已停止项目；保留镜像、卷和配置文件'">
               <span class="project-action-tooltip-target project-action-tooltip-target--mobile">
                 <ActionButton variant="danger" size="sm" :icon="Trash2" :loading="projectDeletePending === project.id" :disabled="Boolean(projectDeleteDisabledReason(project))" @click="confirmDeleteProject(project)">删除</ActionButton>
               </span>
