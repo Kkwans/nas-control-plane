@@ -14,6 +14,8 @@ test.use({ timezoneId: 'UTC', serviceWorkers: 'block', contextOptions: { reduced
 const containerId = 'a'.repeat(64), projectId = 'fixture-action-jobs', name = 'fixture-action-jobs-web'
 const stamp = '2026-10-16T01:00:00Z'
 type Action = 'start' | 'stop' | 'restart'
+type NoticeObservation = { event: string; dateNow: number; performanceNow: number; detail: unknown }
+type NoticeWindow = typeof window & { __actionJobsNoticeEvents: NoticeObservation[] }
 type RequestRecord = { stage: string; method: string; target: string; body: string | null }
 const receipt = (action: Action = 'restart') => ({ id: `fixture-${action}-job`, type: `docker-container-${action}`, reference: containerId, cancellable: false, status: 'queued', artifactState: 'unknown', message: '任务已进入队列', progress: 0, createdAt: stamp, updatedAt: stamp, downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {} })
 const inventory = {
@@ -43,10 +45,35 @@ async function fixture(page: Page, origin: string) {
       close() { this.readyState = 2 }
     }
     window.EventSource = SilentSource as unknown as typeof EventSource
+    const noticeHost = window as NoticeWindow
+    noticeHost.__actionJobsNoticeEvents = []
+    const record = (event: string, detail: unknown) => {
+      if (noticeHost.__actionJobsNoticeEvents.length < 200) noticeHost.__actionJobsNoticeEvents.push({ event, dateNow: Date.now(), performanceNow: performance.now(), detail })
+    }
+    const noticeTimers = new Set<number>()
+    for (const event of ['mouseover', 'mouseout', 'transitionrun', 'transitionend', 'transitioncancel']) {
+      document.addEventListener(event, e => {
+        const notice = e.target instanceof Element ? e.target.closest('.el-message') : null
+        if (notice) record(event, { text: notice.textContent, classes: notice.className, hovered: notice.matches(':hover') })
+      }, true)
+    }
     const original = window.setTimeout.bind(window)
+    const originalClear = window.clearTimeout.bind(window)
+    window.clearTimeout = (id?: number) => {
+      if (id !== undefined && noticeTimers.delete(id)) record('timer-clear', { id })
+      return originalClear(id)
+    }
     window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
       // 只隔离 useTaskCenter 的成功刷新 15 秒 timer；本专项不验证轮询。
       if (delay === 15_000) return -(++host.__actionJobsPolls)
+      if (delay === 3_000 && typeof handler === 'function') {
+        const id = original(function (this: Window, ...callbackArgs: unknown[]) {
+          noticeTimers.delete(id); record('timer-fire', { id })
+          return Reflect.apply(handler, this, callbackArgs)
+        }, delay, ...args)
+        noticeTimers.add(id); record('timer-schedule', { id, delay })
+        return id
+      }
       return original(handler, delay, ...args)
     }) as typeof window.setTimeout
   })
@@ -199,7 +226,37 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
     await page.mouse.move(page.viewportSize()!.width / 2, 10)
     await expect(page.getByRole('tooltip')).toHaveCount(0)
   }
-  await expect(page.locator('.el-message')).toHaveCount(0)
+  // 不改原5秒断言；诊断文件不代表已验收capture，错误仍原样抛出。
+  const noticeSample = () => page.evaluate(() => ({
+    dateNow: Date.now(), performanceNow: performance.now(),
+    events: (window as NoticeWindow).__actionJobsNoticeEvents,
+    timerIsolation: { clockMode: 'installed-running-never-paused', suppressedTaskPollDelayMs: 15000, count: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls },
+    focus: { tag: document.activeElement?.tagName, text: document.activeElement?.textContent },
+    notices: [...document.querySelectorAll<HTMLElement>('.el-message')].map(element => {
+      const style = getComputedStyle(element)
+      return { text: element.textContent, classes: element.className, hovered: element.matches(':hover'), bounds: element.getBoundingClientRect().toJSON(),
+        display: style.display, visibility: style.visibility, opacity: style.opacity, transform: style.transform, transitionDuration: style.transitionDuration,
+        connected: element.isConnected, ariaHidden: element.getAttribute('aria-hidden') }
+    }),
+  }))
+  const noticeBefore = await noticeSample(), noticeWaitStarted = performance.now()
+  try { await expect(page.locator('.el-message')).toHaveCount(0) }
+  catch (error) {
+    const elapsedMs = performance.now() - noticeWaitStarted
+    try {
+      const noticeAfter = await noticeSample()
+      const file = `container-action-jobs-${state}-${page.viewportSize()!.width}-notice-failure-capture-state.json`
+      const path = info.outputPath('ui-captures', file)
+      await mkdir(dirname(path), { recursive: true })
+      const data = JSON.stringify({ diagnosticOnly: true, acceptedCapture: false, fixtureOnly: true, nativeDockerAcceptance: false,
+        state, testTitle: info.title, elapsedMs, before: noticeBefore, after: noticeAfter }, null, 2)
+      await writeFile(path, data); api.captures.push({ file, sha256: hash(data) })
+      await info.attach(file, { path, contentType: 'application/json' })
+    } catch (diagnosticError) {
+      console.error('Notice failure diagnostic could not be saved:', diagnosticError)
+    }
+    throw error
+  }
   await waitForPageReady(page); await page.evaluate(() => document.fonts.ready)
   const selector = selectorOverride ?? (modal ? '.ncp-container-action-confirmation' : '.action-protection')
   // 解除后的旧列表沿用桌面40px、移动42px基线；本次新增面板/风险框必须44px。
@@ -308,7 +365,7 @@ async function finish(page: Page, info: TestInfo, api: Fixture) {
   api.checkpoints.push({ stage: api.state.stage, requests: structuredClone(api.requests), writes: api.writes.length })
   const path = info.outputPath('ui-captures', 'container-action-jobs-final-request-ledger-capture-state.json')
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts: api.captures, checkpoints: api.checkpoints, finalStage: api.state.stage, journeyCompleted: api.state.journeyCompleted, requests: api.requests, requestsSha256: hash(JSON.stringify(api.requests)), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors, timerIsolation: await page.evaluate(() => ({ clockMode: 'installed-running-never-paused', suppressedTaskPollDelayMs: 15000, count: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls })).catch(() => null) }, null, 2))
+  await writeFile(path, JSON.stringify({ ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, artifacts: api.captures, checkpoints: api.checkpoints, finalStage: api.state.stage, journeyCompleted: api.state.journeyCompleted, requests: api.requests, requestsSha256: hash(JSON.stringify(api.requests)), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors, noticeEvents: await page.evaluate(() => (window as NoticeWindow).__actionJobsNoticeEvents).catch(() => null), timerIsolation: await page.evaluate(() => ({ clockMode: 'installed-running-never-paused', suppressedTaskPollDelayMs: 15000, count: (window as typeof window & { __actionJobsPolls: number }).__actionJobsPolls })).catch(() => null) }, null, 2))
   await info.attach('container-action-jobs-final-request-ledger', { path, contentType: 'application/json' })
 }
 
