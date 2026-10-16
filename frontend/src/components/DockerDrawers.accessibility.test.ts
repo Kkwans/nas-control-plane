@@ -22,11 +22,19 @@ async function mount(state: DockerProject['state'] = 'running', pending = false)
     h(ContainerLogDrawer, { modelValue: detailsOpen.value, containerName: 'demo-web', loading: false, details: null, logs: { containerId: 'demo-web', collectedAt: '2026-10-15T12:00:00Z', tail: 1, entries: [{ timestamp: '2026-10-15T12:00:00Z', level: 'info', stream: 'stdout', message: 'ready' }] }, error: '', 'onUpdate:modelValue': updateDetails }),
   ]) })
   app.mount(host)
-  for (let index = 0; index < 8; index++) await nextTick()
-  await new Promise(resolve => setTimeout(resolve, 50))
-  await nextTick()
+  await waitForDetailsOpen()
 }
-afterEach(() => { app?.unmount(); host?.remove(); app = undefined; host = undefined; updateDetails.mockClear() })
+async function waitForDetailsOpen() {
+  await vi.waitFor(() => {
+    const drawer = document.querySelector('.container-detail-drawer')!
+    const overlay = drawer.closest<HTMLElement>('.el-overlay')!
+    expect(drawer.classList.contains('open')).toBe(true)
+    expect(overlay.style.display).not.toBe('none')
+    expect(overlay.classList.contains('el-drawer-fade-enter-active')).toBe(false)
+    expect(drawer.contains(document.activeElement)).toBe(true)
+  })
+}
+afterEach(() => { app?.unmount(); host?.remove(); app = undefined; host = undefined; updateDetails.mockClear(); vi.restoreAllMocks() })
 
 function stylesheet(name: string, id: string) {
   const filename = `${import.meta.dirname}/${name}.vue`
@@ -65,8 +73,37 @@ describe('Docker 抽屉真实 Element Plus 标题合同', () => {
     close.focus()
     expect(document.activeElement).toBe(close)
     close.click()
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // ElDrawer 在真实 Transition 的 afterLeave 中回传 false；固定延时不能证明两帧已执行。
+    await vi.waitFor(() => {
+      expect(drawer.closest<HTMLElement>('.el-overlay')!.style.display).toBe('none')
+      expect(updateDetails.mock.calls).toEqual([[false]])
+    })
+  })
+
+  it('关闭按钮等待真实退出动画完成后才回传一次 false', async () => {
+    await mount()
+    const drawer = document.querySelector('.container-detail-drawer')!
+    const overlay = drawer.closest<HTMLElement>('.el-overlay')!
+    const frames: FrameRequestCallback[] = []
+    // 只控制帧调度，保留真实按钮、ElDrawer、Teleport 和 Vue Transition。
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => frames.push(callback))
+    drawer.querySelector<HTMLButtonElement>('.el-drawer__close-btn')!.click()
     await nextTick()
+    expect(drawer.classList.contains('open')).toBe(false)
+    expect(overlay.classList.contains('el-drawer-fade-leave-active')).toBe(true)
+    expect(overlay.style.display).not.toBe('none')
+    expect(updateDetails.mock.calls).toEqual([])
+    expect(frames).toHaveLength(1)
+    frames.shift()!(performance.now())
+    await nextTick()
+    expect(updateDetails.mock.calls).toEqual([])
+    expect(overlay.style.display).not.toBe('none')
+    expect(frames).toHaveLength(1)
+    frames.shift()!(performance.now())
+    await nextTick()
+    expect(frames).toHaveLength(0)
+    expect(overlay.classList.contains('el-drawer-fade-leave-active')).toBe(false)
+    expect(overlay.style.display).toBe('none')
     expect(updateDetails.mock.calls).toEqual([[false]])
   })
 
@@ -77,12 +114,12 @@ describe('Docker 抽屉真实 Element Plus 标题合同', () => {
     const titleId = section.querySelector('h2')!.id
     expect(overlay.style.display).not.toBe('none')
     detailsOpen.value = false
-    for (let index = 0; index < 8; index++) await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(overlay.style.display).toBe('none')
+    await vi.waitFor(() => {
+      expect(overlay.style.display).toBe('none')
+      expect(updateDetails.mock.calls).toEqual([[false]])
+    })
     detailsOpen.value = true
-    for (let index = 0; index < 8; index++) await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await waitForDetailsOpen()
     expect(overlay.style.display).not.toBe('none')
     expect(section.querySelector('h2')!.id).toBe(titleId)
     expect(document.querySelectorAll('.container-detail-dialogs')).toHaveLength(1)
