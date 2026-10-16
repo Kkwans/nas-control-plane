@@ -22,7 +22,7 @@ const job = (fields: Record<string, unknown> = {}) => ({
 const scenarios = [
   { name: 'limited-running', fields: { progressLimited: true }, download: '下载中', task: '执行中', description: '' },
   { name: 'limited-completed', fields: { progressLimited: true, status: 'completed', artifactState: 'present', progress: 100, cancellable: false }, download: '已完成', task: '已完成', description: '' },
-  { name: 'limited-pending', fields: { progressLimited: true, status: 'completed', persistenceStatus: 'pending', progress: 100, cancellable: false }, download: '结果保存中', task: '结果保存中', description: '执行结果正在保存，尚未确认最终结果。' },
+  { name: 'limited-pending', fields: { progressLimited: true, status: 'completed', persistenceStatus: 'pending', progress: 100, cancellable: false }, download: '结果保存中', task: '结果保存中', description: '任务结果正在保存，尚未确认最终结果。' },
   { name: 'limited-cancel-requested', fields: { progressLimited: true, cancellationStatus: 'requested' }, download: '取消中', task: '取消请求已接收', description: '取消请求已接收，远端执行可能仍在继续。' },
   { name: 'limited-cancel-unknown', fields: { progressLimited: true, status: 'interrupted', cancellationStatus: 'unknown', cancellable: false }, download: '结果未确认', task: '结果未确认', description: '执行结果未确认，请检查实际资源状态。' },
   { name: 'legacy-omitted', fields: {}, download: '下载中', task: '执行中', description: '' },

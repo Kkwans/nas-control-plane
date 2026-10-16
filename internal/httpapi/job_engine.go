@@ -43,6 +43,10 @@ type jobEntry struct {
 	pending  *jobSnapshot
 	deleted  bool
 	owner    bool
+	started  bool
+	creating bool
+	deadline time.Time
+	queue    *jobQueue
 	queued   bool
 	release  func()
 	ctx      context.Context
@@ -66,18 +70,23 @@ type jobRegistry struct {
 	initErr        error
 	admission      sync.Mutex
 	stopped        bool
+	closing        bool
 	once           sync.Once
 	stop           chan struct{}
 	done           chan struct{}
 	workers        sync.WaitGroup
-	pulls          chan *jobEntry
-	removals       chan *jobEntry
-	compose        chan *jobEntry
+	pulls          *jobQueue
+	removals       *jobQueue
+	compose        *jobQueue
 	capacity       chan struct{}
 	closeOnce      sync.Once
 	workersDone    chan struct{}
 	contextMu      sync.RWMutex
 	storeParent    context.Context
+	clock          jobQueueClock
+	activeMu       sync.Mutex
+	active         map[*jobEntry]struct{}
+	expiryDone     chan struct{}
 }
 
 // JobEngine 必须由单一 server 持有；启动恢复不会重放任何远端操作。
@@ -88,7 +97,10 @@ func NewJobEngine(store any) (*JobEngine, error) {
 	return r, r.initErr
 }
 func newJobRegistry(store any) *jobRegistry {
-	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: make(chan *jobEntry, jobCapacity), removals: make(chan *jobEntry, jobCapacity), compose: make(chan *jobEntry, jobCapacity), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background()}
+	return newJobRegistryWithClock(store, realJobQueueClock{})
+}
+func newJobRegistryWithClock(store any, clock jobQueueClock) *jobRegistry {
+	r := &jobRegistry{admissionsDone: make(chan struct{}), jobs: map[string]*jobEntry{}, stop: make(chan struct{}), done: make(chan struct{}), pulls: newJobQueue(), removals: newJobQueue(), compose: newJobQueue(), capacity: make(chan struct{}, jobCapacity), workersDone: make(chan struct{}), storeParent: context.Background(), clock: clock, active: map[*jobEntry]struct{}{}, expiryDone: make(chan struct{})}
 	if store == nil {
 		return r
 	}
@@ -311,12 +323,21 @@ func (r *jobRegistry) create(kind, reference string) jobSnapshot {
 	return j
 }
 func (r *jobRegistry) createRecord(kind, reference string, total int64, run func(context.Context, string)) (jobSnapshot, error) {
-	now := time.Now().UTC()
+	return r.createRecordReserved(kind, reference, total, run, r.clock.Now())
+}
+func (r *jobRegistry) createRecordReserved(kind, reference string, total int64, run func(context.Context, string), reservedAt time.Time) (jobSnapshot, error) {
+	now := reservedAt.UTC()
 	ctx, cancel := context.WithCancel(context.Background())
 	j := jobSnapshot{ID: newJobID(), Type: kind, Reference: reference, Status: "queued", Message: "任务已进入队列", CreatedAt: now, UpdatedAt: now, TotalBytes: max(0, total), Layers: map[string]jobLayer{}, ArtifactState: jobArtifactUnknown, Cancellable: kind == "docker-image-pull"}
-	e := &jobEntry{view: j, revision: 1, ctx: ctx, cancel: cancel, run: run, queued: run != nil}
+	initial := cloneJobSnapshot(j)
+	e := &jobEntry{view: j, revision: 1, ctx: ctx, cancel: cancel, run: run, creating: run != nil}
 	if run != nil {
+		e.deadline = reservedAt.Add(jobQueueTTL)
 		e.release = func() { <-r.capacity }
+		r.activeMu.Lock()
+		r.active[e] = struct{}{}
+		r.activeMu.Unlock()
+		r.start()
 	}
 	if r.store != nil {
 		storeCtx, stop := r.storeContext()
@@ -330,14 +351,48 @@ func (r *jobRegistry) createRecord(kind, reference string, total int64, run func
 			intended.Revision = 1
 			if readErr != nil || !sameJobRecord(durable, intended) {
 				cancel()
+				e.opMu.Lock()
+				e.creating = false
+				e.pending = nil
+				r.abandonLocked(e)
+				e.opMu.Unlock()
 				return jobSnapshot{}, errJobPersist
 			}
 		}
 	}
+	e.opMu.Lock()
+	e.creating = false
 	r.mu.Lock()
 	r.jobs[j.ID] = e
 	r.mu.Unlock()
-	return cloneJobSnapshot(j), nil
+	if run != nil {
+		r.expireLocked(e)
+		if e.pending == nil {
+			r.admission.Lock()
+			stopped := r.closing
+			r.admission.Unlock()
+			if stopped {
+				j.Status = "interrupted"
+				j.Message = "控制面停止，任务未开始"
+				r.freezeLocked(e, j)
+			} else {
+				e.queue = r.pulls
+				if kind == "compose-deploy" {
+					e.queue = r.compose
+				} else if kind == imageRemoveJobType {
+					e.queue = r.removals
+				}
+				e.queued = true
+				e.queue.push(e)
+			}
+		}
+	}
+	shouldCancel := e.pending != nil
+	e.opMu.Unlock()
+	if shouldCancel {
+		e.cancel()
+	}
+	return initial, nil
 }
 func (r *jobRegistry) start() {
 	r.once.Do(func() {
@@ -350,6 +405,7 @@ func (r *jobRegistry) start() {
 		r.workers.Add(1)
 		go r.worker(r.removals)
 		go r.flushLoop()
+		go r.expiryLoop()
 		go func() { r.workers.Wait(); close(r.workersDone) }()
 	})
 }
@@ -374,80 +430,131 @@ func (r *jobRegistry) submit(kind, reference string, total int64, run func(conte
 		r.admission.Unlock()
 		return jobSnapshot{}, errJobQueueFull
 	}
+	reservedAt := r.clock.Now()
 	r.admissions.Add(1)
 	r.admission.Unlock()
 	defer r.admissions.Done()
-	j, err := r.createRecord(kind, reference, total, run)
+	j, err := r.createRecordReserved(kind, reference, total, run, reservedAt)
 	if err != nil {
-		<-r.capacity
 		return j, err
-	}
-	e := r.lookup(j.ID)
-	r.start()
-	if kind == "compose-deploy" {
-		r.compose <- e
-	} else if kind == imageRemoveJobType {
-		r.removals <- e
-	} else {
-		r.pulls <- e
 	}
 	return j, nil
 }
-func (r *jobRegistry) release(e *jobEntry) {
-	if e.release != nil && !e.owner && !e.queued {
+
+// abandonLocked 仅用于未创建成功的记录；正常释放必须已持久化终态。
+func (r *jobRegistry) abandonLocked(e *jobEntry) {
+	if e.release != nil {
+		r.activeMu.Lock()
+		delete(r.active, e)
+		r.activeMu.Unlock()
 		e.release()
 		e.release = nil
 	}
 }
-func (r *jobRegistry) worker(queue <-chan *jobEntry) {
+func (r *jobRegistry) release(e *jobEntry) {
+	if !e.owner && !e.queued && !e.creating && e.pending == nil && jobTerminal(e.snapshot().Status) {
+		r.abandonLocked(e)
+	}
+}
+func (r *jobRegistry) worker(queue *jobQueue) {
 	defer r.workers.Done()
 	for {
 		select {
 		case <-r.stop:
 			return
-		case e := <-queue:
-			e.opMu.Lock()
-			e.queued = false
-			j := e.snapshot()
-			if jobTerminal(j.Status) {
-				r.release(e)
-				e.opMu.Unlock()
-				continue
-			}
-			if e.ctx.Err() != nil {
-				j.Status = "interrupted"
-				j.Message = "控制面停止，任务未开始"
-				r.finishLocked(e, j)
-				e.opMu.Unlock()
-				continue
-			}
-			j.Status = "running"
-			j.Message = "正在执行任务"
-			j.UpdatedAt = time.Now().UTC()
-			if err := r.commit(e, j); err != nil {
-				j = e.snapshot()
-				j.Status = "interrupted"
-				j.Message = "任务未启动，状态保存失败"
-				j.ErrorCode = "JOB_PERSIST_FAILED"
-				r.finishLocked(e, j)
-				e.opMu.Unlock()
-				continue
-			}
-			e.owner = true
-			e.opMu.Unlock()
-			e.run(e.ctx, j.ID)
-			e.opMu.Lock()
-			e.owner = false
-			if jobTerminal(e.snapshot().Status) {
-				r.release(e)
-			}
-			e.cancel()
-			e.opMu.Unlock()
+		case <-queue.signal:
 		}
+		e := queue.pop()
+		if e == nil {
+			continue
+		}
+		r.execute(e)
 	}
 }
-func (r *jobRegistry) finishLocked(e *jobEntry, j jobSnapshot) {
-	now := time.Now().UTC()
+func (r *jobRegistry) execute(e *jobEntry) {
+	e.opMu.Lock()
+	e.queued = false
+	if e.deleted || e.started || e.pending != nil || jobTerminal(e.snapshot().Status) {
+		r.release(e)
+		e.opMu.Unlock()
+		return
+	}
+	if r.expireLocked(e) {
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	if r.stopBeforeStartLocked(e) {
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	j := e.snapshot()
+	j.Status = "running"
+	j.Message = "正在执行任务"
+	j.UpdatedAt = r.clock.Now().UTC()
+	err := r.commit(e, j)
+	// running 写入/ACK读回可能跨越期限；只有此后的资格授予才算开始。
+	if r.expireLocked(e) {
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	if r.stopBeforeStartLocked(e) {
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	if err != nil {
+		j = e.snapshot()
+		j.Status = "interrupted"
+		j.Message = "任务未启动，状态保存失败"
+		j.ErrorCode = "JOB_PERSIST_FAILED"
+		r.finishLocked(e, j)
+		e.opMu.Unlock()
+		return
+	}
+	r.admission.Lock()
+	if r.closing || e.ctx.Err() != nil {
+		r.admission.Unlock()
+		r.stopBeforeStartLocked(e)
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	if r.expireLocked(e) {
+		r.admission.Unlock()
+		e.opMu.Unlock()
+		e.cancel()
+		return
+	}
+	e.started = true
+	e.owner = true
+	r.admission.Unlock()
+	e.opMu.Unlock()
+	e.run(e.ctx, j.ID)
+	e.opMu.Lock()
+	e.owner = false
+	r.release(e)
+	e.opMu.Unlock()
+	e.cancel()
+}
+func (r *jobRegistry) stopBeforeStartLocked(e *jobEntry) bool {
+	r.admission.Lock()
+	stopped := r.closing
+	r.admission.Unlock()
+	if !stopped && e.ctx.Err() == nil {
+		return false
+	}
+	j := e.snapshot()
+	j.Status = "interrupted"
+	j.Message = "控制面停止，任务未开始"
+	r.freezeLocked(e, j)
+	return true
+}
+
+func (r *jobRegistry) freezeLocked(e *jobEntry, j jobSnapshot) {
+	now := r.clock.Now().UTC()
 	e.viewMu.Lock()
 	copyJobProgress(&j, e.view)
 	j = cloneJobSnapshot(j)
@@ -466,18 +573,22 @@ func (r *jobRegistry) finishLocked(e *jobEntry, j jobSnapshot) {
 		j.Progress = 100
 	}
 	e.pending = &j
+	e.view.PersistenceStatus = "pending"
+	e.view.Message = "执行已返回，结果等待保存"
+	if !e.started {
+		e.view.Message = "任务未开始，结果等待保存"
+	}
+	e.view.UpdatedAt = now
 	e.viewMu.Unlock()
+}
+func (r *jobRegistry) finishLocked(e *jobEntry, j jobSnapshot) {
+	r.freezeLocked(e, j)
+	j = cloneJobSnapshot(*e.pending)
 	if r.commit(e, j) == nil {
 		e.viewMu.Lock()
 		e.pending = nil
 		e.viewMu.Unlock()
 		r.release(e)
-	} else {
-		e.viewMu.Lock()
-		e.view.PersistenceStatus = "pending"
-		e.view.Message = "执行已返回，结果保存失败，正在重试"
-		e.view.UpdatedAt = now
-		e.viewMu.Unlock()
 	}
 }
 func (r *jobRegistry) update(id, status, message, errorMessage string, progress int) {
@@ -582,6 +693,7 @@ func (r *jobRegistry) cancel(id string) (jobSnapshot, bool, error) {
 	}
 	cancel := e.cancel
 	if jobTerminal(j.Status) {
+		r.detachLocked(e)
 		r.release(e)
 	}
 	e.opMu.Unlock()
@@ -771,7 +883,10 @@ func (r *jobRegistry) Close(ctx context.Context) error {
 	r.contextMu.Lock()
 	r.storeParent = ctx
 	r.contextMu.Unlock()
-	r.StopAdmission()
+	r.admission.Lock()
+	r.stopped = true
+	r.closing = true
+	r.admission.Unlock()
 	r.start()
 	r.closeOnce.Do(func() {
 		go func() {
@@ -801,12 +916,16 @@ func (r *jobRegistry) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	select {
+	case <-r.expiryDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	for _, e := range r.entries() {
 		if !lockJobContext(ctx, &e.opMu) {
 			return ctx.Err()
 		}
-		e.queued = false
-		r.release(e)
+		r.detachLocked(e)
 		j := e.snapshot()
 		if !jobTerminal(j.Status) && e.pending == nil {
 			j.Status = "interrupted"
@@ -822,6 +941,7 @@ func (r *jobRegistry) Close(ctx context.Context) error {
 				r.release(e)
 			}
 		}
+		r.release(e)
 		e.opMu.Unlock()
 	}
 	if err := ctx.Err(); err != nil {

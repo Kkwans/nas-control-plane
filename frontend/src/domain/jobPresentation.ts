@@ -27,7 +27,7 @@ export function jobArtifactLabel(job: JobSnapshot): string {
 }
 export function jobStateDescription(job: JobSnapshot): string {
   const state = jobState(job)
-  if (state === 'persisting') return '执行结果正在保存，尚未确认最终结果。'
+  if (state === 'persisting') return '任务结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
   if (job.type === 'docker-image-remove' && state === 'completed') return '镜像删除任务已完成，可刷新本地镜像核验当前状态。'

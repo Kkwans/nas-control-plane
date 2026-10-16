@@ -182,3 +182,24 @@ OpenAPI 更新 cancel 202 为“取消请求已接收，可能仍在执行”；
 `BenchmarkRecentJobsHistory` 仅使用临时 SQLite，比较旧结构/旧 OR 查询和新增索引/生产查询；各次最多读取 500 条，不设置耗时断言。2026-10-15 云环境 Linux/amd64、Xeon 8573C，`-benchtime=200ms -count=1` 的一次样本（混合/指定类型，毫秒）：1千条旧 6.50/2.86、新 2.39/1.65；1万条旧 43.14/16.73、新 2.38/2.43；10万条旧 430.18/141.71、新 2.31/2.36。最小历史指定类型实际返回 334 条，其余返回 500 条。测试初跑发现基准 fixture 将 1千条中三等分首类数量误写为 333，已改为 334 并完整重跑通过；生产实现未因此变更。
 
 基准不包含建库、插入或索引创建时间，也不是 NAS、冷缓存或并发负载结论。新增索引有一次性历史建索引成本、持续写入/磁盘成本；首次迁移仍受现有启动预算约束。`RecoverInterruptedJobs` 的 UPDATE、历史读取之外的恢复和反序列化工作未改变，因此不声称整个启动时间或进程内存已严格有界。持久历史完整分页、清理策略和部署仍在本片之外。聚焦测试、上述完整基准、完整 controlstore 包 race（58.565秒）、controlstore vet、全部 cmd 构建及 diff 空白检查均通过；独立审查无阻断问题且独立重跑聚焦测试通过。远端 CI 尚待主任务提交后验证。
+
+## 2026-10-16 独立排队 TTL
+
+### 合同与实施边界
+
+- 镜像拉取、Compose 部署、镜像删除统一排队 TTL 10 分钟，从共享容量预留时间起算，包含 INSERT 与 running 状态写入/读回耗时。`now >= deadline` 到期；deadline 保留单调时间，不增加持久化字段或迁移。
+- “开始”线性化点是 running 已确认落库后，在 entry `opMu` 与 admission 短锁内再次检查期限/关闭/取消并授予 `started/owner`。授权后不受排队 TTL 影响；本片不增加执行时限，也不保证真实 RPC 发出时刻早于 deadline。
+- 三个可摘除 FIFO 替代 payload channels；固定 worker 数仍为 3/1/1，总容量仍为 32。信号 channel 只唤醒，pop 后接力唤醒；短队列锁内没有 I/O、Agent 调用或等待 entry 锁。正常锁序是 entry → queue；worker pop 释放 queue 锁后才取 entry 锁。
+- 独立 250ms 扫描循环只快照最多 32 个 active reservations，不依赖 worker 或 flushLoop。逐项 TryLock 忙则跳过，worker 自检兜底；没有硬实时超时 SLA。扫描冻结 immutable pending、摘队，锁外取消本地 context，绝不做 DB I/O。
+- INSERT 中 reservation 已登记，但 entry 未公开到 jobs，flusher 不会更新尚未创建的行；到期可冻结本地结果，创建成功后不发布可执行项，POST 仍返回原始 queued 回执。创建失败不暴露 phantom，清理 active 后归还 token。
+- 超时落库为 `failed` / `JOB_QUEUE_TIMEOUT` / “排队等待超时，任务未开始执行”，保证零 run/Agent 调用。未保存时保持最后已提交状态，显示“任务未开始，结果等待保存”，不提前暴露终态、错误码或 CompletedAt。CAS 重试不改首次冻结结果；ACK 丢失只接受完全匹配的目标 revision。
+- 取消成功先赢则 cancelled/confirmed 并立即摘队；超时冻结先赢则取消不可覆盖。存储失败或 CAS 冲突保守占额，degraded 阻止新 admission。只有持久终态、无 owner、无 queue、无 creating、无 pending 才恰好释放一次。
+- StopAdmission 只停止新接收，Close 才禁止新执行授权。Close 使用原有统一预算等待 admission/worker/flusher/expiry 收尾，保留先前冻结结果；删除后旧 worker 指针不能执行、改写或复活记录。重启沿用 queued/running → interrupted，零重放，已保存 timeout 保持 failed。
+
+### 验证范围
+
+仅使用 fake clock、channel barrier 与临时 SQLite，不开监听器/socket/PTY/helper，不触及 Docker、NAS、凭据或生产。新增测试覆盖三类型期限前/等于/后、running CAS/ACK 读回跨界、每类 worker 堵塞、独立 ticker、重复四倍容量、取消与超时次序、存储失败/冲突/缺行/ACK 丢失、慢 INSERT、Close 同预算、旧指针删除及重启。旧取消容量测试改为多倍容量重复取消后及时释放，同时保留真实 32 活跃 reservation 拒绝测试。前端继续解析既有 failed/errorCode/pending 字段，无新状态或页面。
+
+本片实施与验证已完成：`go test -race ./internal/httpapi -run 'Test(Job|ImageRemove)' -count=3`、队列专用 `-race -run '^TestJobQueue' -count=10`、`go test ./api/openapi`、`go vet ./internal/httpapi ./api/openapi`、`go build ./cmd/...` 均通过。前端相关解析/呈现测试 89 项、Vue 类型检查、Vite 生产构建及 540 KiB bundle budget 均通过；构建仍有已有超过 500 kB 的 chunk 提示。未运行含 PTY 的全量 httpapi 集成套件，也未部署或核验真实 NAS。
+
+最终补充回归：前端全量 Vitest 146 文件、4,160 项通过（36.25 秒）；受通用 pending 文案影响的 `job-progress-limited.spec.ts` 同步精确期望，eslint、strict TypeScript 及 Playwright `--list` 14 项通过，仅静态检查，没有启动浏览器或监听服务。新增 barrier 主线程等待统一限时并在失败时明确报错，release 使用 once + cleanup，真实启动的测试引擎还以统一预算关闭，避免回归时测试无限等待或遗留循环。

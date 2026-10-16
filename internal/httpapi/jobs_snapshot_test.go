@@ -318,12 +318,20 @@ func TestJobQueueCancellationKeepsReservationsBounded(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		<-started
 	}
-	for i := 0; i < jobCapacity-3; i++ {
+	for i := 0; i < jobCapacity*3; i++ {
 		j, err := r.submit("docker-image-pull", "queued", 0, func(context.Context, string) { t.Error("cancelled queued task executed") })
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := r.cancel(j.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(r.capacity) != 3 || r.pulls.len() != 0 {
+		t.Fatalf("cancelled queue retained capacity: %d", len(r.capacity))
+	}
+	for i := 0; i < jobCapacity-3; i++ {
+		if _, err := r.submit("docker-image-pull", "queued", 0, func(context.Context, string) {}); err != nil {
 			t.Fatal(err)
 		}
 	}

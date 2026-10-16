@@ -494,7 +494,7 @@ func TestImageRemoveJobRecoveredHistoryNeverReplays(t *testing.T) {
 			t.Fatalf("recovered task scheduled: %+v", j)
 		}
 	}
-	if len(jobs.removals) != 0 || len(jobs.capacity) != 0 {
+	if jobs.removals.len() != 0 || len(jobs.capacity) != 0 {
 		t.Fatal("history recovery enqueued effects")
 	}
 }

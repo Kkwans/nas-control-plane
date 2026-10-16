@@ -77,6 +77,17 @@ describe('Job lifecycle optional protocol fields', () => {
     expect(source.close).toHaveBeenCalledOnce()
   })
 
+  it('keeps queue timeout pending subscribed and accepts the durable failure', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const subscription = subscribeJob('job-1', vi.fn())
+    const source = FakeEventSource.instances[0]!
+    source.emit('progress', { ...job('queued'), persistenceStatus: 'pending', message: '任务未开始，结果等待保存' })
+    expect(source.close).not.toHaveBeenCalled()
+    source.emit('progress', { ...job('queued'), status: 'failed', errorCode: 'JOB_QUEUE_TIMEOUT', message: '排队等待超时，任务未开始执行' })
+    await expect(subscription.done).resolves.toMatchObject({ status: 'failed', errorCode: 'JOB_QUEUE_TIMEOUT' })
+    expect(source.close).toHaveBeenCalledOnce()
+  })
+
   it.each([
     { cancellationStatus: 'stopped' }, { persistenceStatus: 'saved' }, { cancellable: 'false' }, { errorCode: 123 },
   ])('rejects invalid optional lifecycle fields: %j', async (fields) => {

@@ -4188,13 +4188,13 @@ components:
         persistenceStatus:
           type: string
           enum: [pending]
-          description: 执行结果待持久化。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，不代表执行失败。
+          description: 任务结果待持久化，包括未开始任务的排队超时结果。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，尚未确认最终结果。
         cancellable:
           type: boolean
           description: 执行器是否支持取消；Compose 与 docker-image-remove 为 false。实际操作仍由服务端状态校验决定。
         errorCode:
           type: string
-          description: 稳定错误码，例如 JOB_QUEUE_TIMEOUT、JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
+          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署与镜像删除，包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
         completedAt:
           type: string
           format: date-time

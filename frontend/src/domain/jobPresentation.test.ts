@@ -63,3 +63,14 @@ describe('进度受限证据单调合并', () => {
     expect(mergeJobSnapshot(job({ updatedAt: '2026-10-13T10:00:01Z' }), job({ progressLimited: true }))).toMatchObject({ updatedAt: '2026-10-13T10:00:01Z', progressLimited: true })
   })
 })
+
+it('排队超时在保存期间保持活动，持久化后为失败', () => {
+  const pending = job({ status: 'queued', persistenceStatus: 'pending', message: '任务未开始，结果等待保存' })
+  expect(jobStateDescription(pending)).toBe('任务结果正在保存，尚未确认最终结果。')
+  expect(isTerminalJob(pending)).toBe(false)
+  expect(canRequestJobCancellation(pending)).toBe(false)
+  const timeout = job({ status: 'failed', errorCode: 'JOB_QUEUE_TIMEOUT', message: '排队等待超时，任务未开始执行' })
+  expect(mergeJobSnapshot(pending, timeout)).toBe(timeout)
+  expect(jobStateLabel(timeout)).toBe('失败')
+  expect(isTerminalJob(timeout)).toBe(true)
+})
