@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
+	"strings"
 
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"google.golang.org/grpc/codes"
@@ -159,6 +161,9 @@ func (s *databaseService) Insert(ctx context.Context, request *structpb.Struct) 
 	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
+	if err := validateDatabaseMutationWireNumbers(request, "values"); err != nil {
+		return nil, err
+	}
 	result, err := s.provider.Insert(ctx, decoded)
 	return databaseResponse(result, err)
 }
@@ -166,6 +171,9 @@ func (s *databaseService) Insert(ctx context.Context, request *structpb.Struct) 
 func (s *databaseService) Update(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	var decoded ncpdatabase.UpdateRequest
 	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
+		return nil, err
+	}
+	if err := validateDatabaseMutationWireNumbers(request, "values", "keys"); err != nil {
 		return nil, err
 	}
 	result, err := s.provider.Update(ctx, decoded)
@@ -177,8 +185,34 @@ func (s *databaseService) Delete(ctx context.Context, request *structpb.Struct) 
 	if err := s.decodeConnectionRequest(request, &decoded, &decoded.Connection); err != nil {
 		return nil, err
 	}
+	if err := validateDatabaseMutationWireNumbers(request, "keys"); err != nil {
+		return nil, err
+	}
 	result, err := s.provider.Delete(ctx, decoded)
 	return databaseResponse(result, err)
+}
+
+// 仅检查 mutation 列值的原始 double；AsMap 会把 NaN/Inf 变成字符串。
+// 安全范围内的小数仍保持兼容，此检查不能恢复已经舍入的 decimal。
+func validateDatabaseMutationWireNumbers(request *structpb.Struct, fields ...string) error {
+	const maxSafeInteger = float64(1<<53 - 1)
+	for name, value := range request.GetFields() {
+		for _, field := range fields {
+			// 旧 namespace 的 JSON 解码接受大小写别名（含 Unicode 折叠）。
+			if !strings.EqualFold(name, field) {
+				continue
+			}
+			for _, cell := range value.GetStructValue().GetFields() {
+				if number, ok := cell.GetKind().(*structpb.Value_NumberValue); ok {
+					v := number.NumberValue
+					if math.IsNaN(v) || math.IsInf(v, 0) || v > maxSafeInteger || v < -maxSafeInteger {
+						return grpcstatus.Error(codes.InvalidArgument, string(ncpdatabase.CodeSQLInvalid))
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func decodeDatabaseRequest(request *structpb.Struct, destination any) error {

@@ -169,11 +169,11 @@ func tlsRPCFixtureRequest(operation databaseConnectionOperation, connection ncpd
 	case databaseOperationRows:
 		return ncpdatabase.RowsRequest{Connection: connection, Table: "fixture", Limit: 25, Offset: 3}
 	case databaseOperationInsert:
-		return ncpdatabase.InsertRequest{Connection: connection, Table: "fixture", Values: map[string]any{"value": json.Number("9007199254740993"), "decimal": json.Number("1234567890.123456789")}}
+		return ncpdatabase.InsertRequest{Connection: connection, Table: "fixture", Values: map[string]any{"value": "9007199254740993", "decimal": "1234567890.123456789"}}
 	case databaseOperationUpdate:
-		return ncpdatabase.UpdateRequest{InsertRequest: ncpdatabase.InsertRequest{Connection: connection, Table: "fixture", Values: map[string]any{"value": json.Number("9007199254740993")}}, Keys: map[string]any{"id": json.Number("9007199254740995")}}
+		return ncpdatabase.UpdateRequest{InsertRequest: ncpdatabase.InsertRequest{Connection: connection, Table: "fixture", Values: map[string]any{"value": "9007199254740993"}}, Keys: map[string]any{"id": "9007199254740995"}}
 	case databaseOperationDelete:
-		return ncpdatabase.DeleteRequest{Connection: connection, Table: "fixture", Keys: map[string]any{"id": json.Number("9007199254740995")}}
+		return ncpdatabase.DeleteRequest{Connection: connection, Table: "fixture", Keys: map[string]any{"id": "9007199254740995"}}
 	default:
 		panic("invalid fixture operation")
 	}

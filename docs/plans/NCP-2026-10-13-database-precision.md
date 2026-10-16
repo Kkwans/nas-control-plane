@@ -189,3 +189,11 @@ git diff --check
 隔离验证：临时SQLite三种DML及auto/省略模式确认写一次并展示返回值，零匹配保留列和未知影响数；499/500/501行更新及首行2MiB字节截断都在Rows.Close后核验完整写入。fake执行器覆盖错误/取消/扫描/关闭不重放。独立56项额外SQLite语法oracle与960组模式/驱动/错误路径通过race；完整database测试/race、5秒23412次fuzz通过。主任务精确快照database/OpenAPI测试和全仓Go build/vet通过；无真实PG/MySQL或NAS运行。
 
 主任务前端精确验收（05:31 UTC）：3013单元/113文件、全量lint、Vue类型、生产构建、权限与540KiB预算全部通过。首轮一项旧提示文案断言失败，恢复“展示结果”措辞后全量复验通过，未修改断言。UI与OpenAPI同步SQLite有限识别范围；实际后继CI继续核验。
+
+## M14-A 后续：旧 RPC mutation double 防护（2026-10-16）
+
+落实前述旧 RPC 不安全 double 拒绝：Insert values、Update values/keys、Delete keys 在既有解码与 TLS 策略校验之后、provider 调用之前检查原始 protobuf NumberValue。超出 ±(2^53−1)（含 ±2^53）及 NaN/Inf 返回稳定、无请求内容的 InvalidArgument/sql_invalid；旧 namespace 大小写及 Unicode 折叠别名同样检查。TLS 严格协议、策略错误优先级、凭证修订及 provider 行为不变。
+
+保留安全范围内小数、bool/null、精确数字字符串与现代客户端 json.Number 字符串传输；仅检查 mutation 映射直接列值，不扩展到嵌套对象、limit/offset 或读取入口。不承诺恢复已经舍入的小数，也不把 SQLite REAL 声称为任意精度存储。
+
+新增纯内存服务/protobuf 往返矩阵覆盖两个 namespace、所有 mutation 槽位、正负边界、非有限数、别名、策略优先级、精确字符串、现代编码链与范围负对照；安全请求 provider 恰好一次，不安全请求零次。既有 TLS 语义夹具改用精确数字字符串，原始 double 由独立新夹具测试。Go 1.26.4 下新增及相关共 11 项精确选择测试通过 race 验证，agentsocket go vet 与 git diff --check 通过；没有执行整个 agentsocket 套件、启动 socket/listener 或连接数据库/NAS。
