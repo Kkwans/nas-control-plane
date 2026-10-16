@@ -1,3 +1,9 @@
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import AxeBuilder from '@axe-core/playwright'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import type { MetricSample } from '../src/api/control'
 import { monitoringChartTokens } from '../src/domain/monitoring/chartTokens'
@@ -6,6 +12,7 @@ import { installMockApi, summary } from './mockApi'
 test.use({
   viewport: { width: 1440, height: 900 },
   timezoneId: 'UTC',
+  serviceWorkers: 'block',
   contextOptions: { reducedMotion: 'reduce' },
 })
 
@@ -365,5 +372,266 @@ for (const width of [320, 390]) {
     await expectSeparatedChartLayout(temperature)
     const overflow = await page.evaluate(() => Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) - window.innerWidth)
     expect(overflow, '传感器名称、标签与已关闭的下拉面板不能撑宽页面').toBeLessThanOrEqual(0)
+  })
+}
+
+// F10：所有历史请求均来自严格只读 fixture；实际浏览器与证据仅由 CI 执行。
+const recoveryEndpoint = '/api/v1/monitoring/samples'
+const recoveryHash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
+function recoveryBarrier() {
+  let release!: () => void
+  const promise = new Promise<void>(resolve => { release = resolve })
+  return { promise, release }
+}
+type RecoveryReply = {
+  range: '6h' | '1h' | 'precise'
+  outcome: 'success' | 'error' | 'empty'
+  value: number
+  held?: ReturnType<typeof recoveryBarrier>
+}
+async function recoveryFixture(page: Page, origin: string) {
+  expect(new URL(origin).hostname).toBe('127.0.0.1')
+  await page.clock.install({ time: new Date(summary.collectedAt) })
+  await installMockApi(page, { clock: false, manualRealtime: true })
+  const requests: string[] = [], denied: string[] = [], writes: string[] = [], errors: string[] = []
+  const replies: RecoveryReply[] = [], gates: ReturnType<typeof recoveryBarrier>[] = []
+  const history: Array<{ target: string; browserAt: string; from: string | null; to: string | null; outcome: string; samples: MetricSample[]; delivered: boolean }> = []
+  const captures: Array<{ file: string; sha256: string }> = []
+  const reads = new Set(['/api/v1/auth/status', '/api/v1/preferences', '/api/v1/system/capabilities', '/api/v1/system/summary', '/api/v1/docker/inventory', '/api/v1/sites', '/api/v1/sites/ignored', '/api/v1/monitoring/alerts'])
+  page.on('pageerror', error => errors.push(error.message))
+  await page.routeWebSocket('**', socket => { denied.push(`WS ${socket.url()}`); socket.close() })
+  await page.route('**/*', async route => {
+    const request = route.request(), url = new URL(request.url()), target = `${request.method()} ${url.pathname}${url.search}`
+    if (url.pathname.startsWith('/api/')) requests.push(target)
+    if (request.method() !== 'GET') writes.push(target)
+    if (url.origin !== origin || request.method() !== 'GET') { denied.push(target); return route.abort('blockedbyclient') }
+    if (url.pathname === recoveryEndpoint) {
+      const next = replies.shift(), from = url.searchParams.get('from'), to = url.searchParams.get('to')
+      const precise = from !== null && to !== null && [...url.searchParams.keys()].sort().join(',') === 'from,to' && Number.isFinite(Date.parse(to)) && Date.parse(to) - Date.parse(from) === 6 * 60 * minuteMs
+      const valid = next && (next.range === 'precise' ? precise : url.search === `?range=${next.range}`)
+      if (!valid || !next) { denied.push(target); return route.fulfill({ status: 503, json: { code: 'FIXTURE_DENIED' } }) }
+      const browserAt = await page.evaluate(() => new Date().toISOString())
+      const end = Date.parse(to ?? browserAt)
+      const samples = next.outcome === 'success' ? Array.from({ length: 61 }, (_, minute) => ({
+        ...sampleAt(minute, end - 60 * minuteMs), cpuPercent: next.value, memoryPercent: next.value + minute / 10,
+        temperatures: [{ name: 'fixture-recovery-sensor', temperatureCelsius: next.value + 10 }],
+      })) : []
+      const entry = { target, browserAt, from, to, outcome: next.outcome, samples, delivered: false }
+      history.push(entry)
+      if (next.held) await next.held.promise
+      await route.fulfill({ status: next.outcome === 'error' ? 503 : 200, headers: { 'Cache-Control': 'no-store' }, json: next.outcome === 'error' ? { code: 'MONITORING_READ_FAILED', message: 'Fixture refresh failed', requestId: 'fixture-monitoring-refresh' } : samples })
+      entry.delivered = true
+      return
+    }
+    if (url.pathname === '/api/v1/jobs' && !url.search) return route.fulfill({ json: { jobs: [] } })
+    if (reads.has(url.pathname + url.search)) return route.fallback()
+    if (!url.search && (['/', '/monitoring', '/favicon.svg'].includes(url.pathname) || /^\/assets\/[A-Za-z0-9_.-]+$/.test(url.pathname))) return route.fallback()
+    denied.push(target); return route.abort('blockedbyclient')
+  })
+  return { requests, denied, writes, errors, history, captures,
+    enqueue(range: RecoveryReply['range'], outcome: RecoveryReply['outcome'], value = 24, held = false) {
+      const gate = held ? recoveryBarrier() : undefined
+      if (gate) gates.push(gate)
+      replies.push({ range, outcome, value, held: gate })
+      return gate
+    },
+    release() { gates.forEach(gate => gate.release()) },
+    assert() { expect(replies).toHaveLength(0); expect(denied).toEqual([]); expect(writes).toEqual([]); expect(errors).toEqual([]); expect(history.every(item => item.delivered)).toBe(true) },
+  }
+}
+type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>
+async function recoveryProvenance() {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+  const git = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' })
+  const files = git(['ls-files', '--cached', '--others', '--exclude-standard', '--', 'frontend/src', 'frontend/e2e', 'frontend/index.html', 'frontend/package.json', 'frontend/pnpm-lock.yaml', 'frontend/vite.config.ts', 'frontend/playwright.config.ts']).split('\n').filter(Boolean)
+  return { sourceSha: git(['rev-parse', 'HEAD']).trim(), workingTree: git(['status', '--porcelain']), sourceHashes: Object.fromEntries(await Promise.all([...new Set(files)].sort().map(async file => [file, recoveryHash(await readFile(resolve(root, file)))]))) }
+}
+const recoveryNote = (page: Page) => page.locator('.monitor-history-note').filter({ has: page.locator('time') })
+async function recoveryCharts(page: Page) {
+  const cards = await page.locator('.monitor-grid:not(.monitor-grid--loading) .chart-card').evaluateAll(elements => elements.map(element => ({
+    title: element.getAttribute('aria-labelledby'),
+    latest: element.querySelector('.sr-only')?.textContent,
+    // 包含时间轴文字和真实折线；不是仅比较 fixture 输入或节点数量。
+    canvases: [...element.querySelectorAll('canvas')].map(canvas => canvas.toDataURL()),
+  })))
+  return cards.map(card => ({ ...card, canvases: card.canvases.map(recoveryHash) }))
+}
+async function stableRecoveryCharts(page: Page) {
+  await page.evaluate(() => document.fonts.ready)
+  await expect.poll(async () => {
+    const before = await recoveryCharts(page)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    return JSON.stringify(await recoveryCharts(page)) === JSON.stringify(before)
+  }, { message: '真实图表在字体就绪和两个绘制帧后稳定' }).toBe(true)
+}
+async function recoveryGeometry(page: Page) {
+  return page.locator('.workspace-page').evaluate(root => ({
+    browserAt: new Date().toISOString(),
+    focus: { tag: document.activeElement?.tagName, id: document.activeElement?.id, text: document.activeElement?.matches('button,input') ? document.activeElement.textContent : null, label: document.activeElement?.getAttribute('aria-label') },
+    scroll: [...document.querySelectorAll<HTMLElement>('*')].filter(element => element.scrollTop || element.scrollLeft).map(element => ({ tag: element.tagName, className: element.className, top: element.scrollTop, left: element.scrollLeft })),
+    heading: root.querySelector('h1')?.getBoundingClientRect().toJSON(),
+    viewport: { width: innerWidth, height: innerHeight },
+    root: { width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth },
+    note: root.querySelector('.monitor-history-note:has(time)')?.textContent ?? null,
+    readAt: root.querySelector('.monitor-history-note time')?.getAttribute('datetime') ?? null,
+    fields: [...root.querySelectorAll('.monitor-history-note,.resource-state--error,.resource-state--empty,.chart-card')].map(element => {
+      const box = element.getBoundingClientRect()
+      return { text: element.textContent, bounds: box.toJSON(), overflow: element.scrollWidth - element.clientWidth }
+    }),
+    controls: [...root.querySelectorAll('.resource-state button')].map(element => {
+      const box = element.getBoundingClientRect(), hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+      return { text: element.textContent, bounds: box.toJSON(), centerHit: !!hit && element.contains(hit) }
+    }),
+  }))
+}
+async function captureRecovery(page: Page, info: TestInfo, api: RecoveryFixture, state: string) {
+  await page.evaluate(() => document.fonts.ready)
+  await page.mouse.move(1, 10)
+  await expect(page.getByRole('tooltip')).toHaveCount(0)
+  await expect(page.locator('.el-message')).toHaveCount(0)
+  const controlReachability = []
+  for (const button of await page.locator('.resource-state--error').getByRole('button').all()) {
+    await button.scrollIntoViewIfNeeded()
+    controlReachability.push(await button.evaluate(element => {
+      const box = element.getBoundingClientRect()
+      const points = [[box.left + 5, box.top + 5], [box.right - 5, box.top + 5], [box.left + 5, box.bottom - 5], [box.right - 5, box.bottom - 5], [box.left + box.width / 2, box.top + box.height / 2]]
+      return { text: element.textContent, bounds: box.toJSON(), hits: points.map(([x, y]) => { const hit = document.elementFromPoint(x!, y!); return Boolean(hit && element.contains(hit)) }) }
+    }))
+  }
+  const reachableState = await recoveryGeometry(page)
+  // 先验证实际可达性，再还原滚动，避免 fullPage 的 sticky 页头覆盖中部证据。
+  await page.evaluate(() => {
+    for (const element of document.querySelectorAll<HTMLElement>('*')) if (element.scrollTop || element.scrollLeft) element.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  })
+  await stableRecoveryCharts(page)
+  const before = await recoveryGeometry(page), chartsBefore = await recoveryCharts(page), requestsBefore = [...api.requests]
+  const name = `monitoring-refresh-${page.viewportSize()!.width}-${state}`
+  await mkdir(info.outputPath('ui-captures'), { recursive: true })
+  const png = info.outputPath('ui-captures', `${name}.png`)
+  const screenshot = await page.screenshot({ path: png, animations: 'disabled', fullPage: true })
+  const afterCapture = await recoveryGeometry(page), axe = await new AxeBuilder({ page }).analyze(), afterAxe = await recoveryGeometry(page)
+  const file = `${name}-capture-state.json`, path = info.outputPath('ui-captures', file)
+  await writeFile(path, JSON.stringify({ ...await recoveryProvenance(), fixtureOnly: true, nativeNASAcceptance: false, executionScope: 'CI browser with strict static fixture only', state, testTitle: info.title, screenshot: `${name}.png`, screenshotSha256: recoveryHash(screenshot), fullPage: true, scrollNormalization: 'all scrollers to 0,0 after reachability check', retryTargetBaseline: 'existing shared ResourceState 34px; no production style override', controlReachability, reachableState, before, afterCapture, afterAxe, chartsBefore, chartsAfter: await recoveryCharts(page), requestsBefore, requestsAfter: [...api.requests], allowedBackgroundPollCounts: Object.fromEntries(['GET /api/v1/monitoring/alerts', 'GET /api/v1/jobs'].map(target => [target, api.requests.slice(requestsBefore.length).filter(item => item === target).length])), history: api.history, denied: api.denied, writes: api.writes, errors: api.errors, axe }, null, 2))
+  api.captures.push({ file, sha256: recoveryHash(await readFile(path)) })
+  await info.attach(name, { path: png, contentType: 'image/png' })
+  await info.attach(`${name}-state`, { path, contentType: 'application/json' })
+  expect(axe.violations).toEqual([])
+  for (const control of controlReachability) {
+    expect(control.bounds.width).toBeGreaterThanOrEqual(34)
+    expect(control.bounds.height).toBeGreaterThanOrEqual(34)
+    expect(control.hits).toEqual([true, true, true, true, true])
+  }
+  const incidental = api.requests.slice(requestsBefore.length)
+  // 提示与任务的已有只读轮询继续运行；历史刷新、其他读取与所有写入不能由捕获触发。
+  expect(incidental.every(target => ['GET /api/v1/monitoring/alerts', 'GET /api/v1/jobs'].includes(target))).toBe(true)
+  expect(api.denied).toEqual([]); expect(api.writes).toEqual([]); expect(api.errors).toEqual([])
+  for (const frame of [before, afterCapture, afterAxe]) {
+    expect(frame.root.scrollWidth).toBeLessThanOrEqual(frame.root.width + 1)
+    if (frame.heading) {
+      expect(frame.heading.top).toBeGreaterThanOrEqual(0)
+      expect(frame.heading.bottom).toBeLessThanOrEqual(frame.viewport.height)
+    }
+    for (const field of frame.fields) {
+      expect(field.bounds.left).toBeGreaterThanOrEqual(-1)
+      expect(field.bounds.right).toBeLessThanOrEqual(frame.viewport.width + 1)
+      expect(field.overflow).toBeLessThanOrEqual(1)
+    }
+  }
+  expect(afterCapture.focus).toEqual(before.focus); expect(afterAxe.focus).toEqual(before.focus)
+  expect(afterCapture.note).toBe(before.note); expect(afterAxe.note).toBe(before.note)
+  expect(await recoveryCharts(page)).toEqual(chartsBefore)
+}
+
+for (const width of [390, 1440]) {
+  test(`${width}px F10 同范围刷新保留图表和实际读取范围，失败可重试，空结果及切换范围清空`, async ({ page, baseURL }, info) => {
+    test.setTimeout(180_000)
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
+    const api = await recoveryFixture(page, new URL(baseURL!).origin)
+    let journeyCompleted = false
+    try {
+      api.enqueue('6h', 'success')
+      await page.goto('/monitoring', { waitUntil: 'domcontentloaded' })
+      await expect(chartCard(page, 'memory').locator('canvas')).toBeVisible()
+      api.enqueue('precise', 'success')
+      await page.getByRole('button', { name: '将结束时间设为现在', exact: true }).click()
+      await page.getByRole('button', { name: '应用精确时间范围', exact: true }).click()
+      await expect.poll(() => api.history.length).toBe(2)
+      await expect(page.getByRole('button', { name: '应用精确时间范围', exact: true })).toBeEnabled()
+      await expectSeriesPixels(chartCard(page, 'memory'), rgb(monitoringChartTokens.memory), ['left', 'center', 'right'])
+      await page.evaluate(() => document.fonts.ready)
+      await expect(page.locator('.monitor-grid .chart-card canvas')).toHaveCount(6)
+      await page.mouse.move(1, 10)
+      await stableRecoveryCharts(page)
+      const baseline = await recoveryCharts(page), note = await recoveryNote(page).innerText(), readAt = await recoveryNote(page).locator('time').getAttribute('datetime')
+      expect(baseline).toHaveLength(6)
+      expect(baseline.every(card => card.canvases.length > 0)).toBe(true)
+      const successfulRange = api.history[1]!
+      const rangeLabel = await page.evaluate(({ from, to }) => `${new Date(from!).toLocaleString('zh-CN', { hour12: false })} 至 ${new Date(to!).toLocaleString('zh-CN', { hour12: false })}`, successfulRange)
+      expect(note).toContain(rangeLabel)
+      await captureRecovery(page, info, api, 'successful-precise-range')
+
+      // 浏览器时钟继续流动；前进一分钟让移动范围变化可见，绝不使用宿主机时间。
+      await page.clock.fastForward(minuteMs)
+      const failure = api.enqueue('precise', 'error', 24, true)!
+      await page.getByRole('button', { name: '立即刷新数据', exact: true }).click()
+      await expect.poll(() => api.history.length).toBe(3)
+      expect(Date.parse(api.history[2]!.to!)).toBeGreaterThan(Date.parse(successfulRange.to!))
+      const retained = async () => {
+        await expect(recoveryNote(page)).toHaveText(note)
+        await expect(recoveryNote(page).locator('time')).toHaveAttribute('datetime', readAt!)
+        await expect(page.locator('.monitor-grid--loading')).toHaveCount(0)
+        await expect(page.locator('.resource-state--empty')).toHaveCount(0)
+        await page.mouse.move(1, 10)
+        expect(await recoveryCharts(page)).toEqual(baseline)
+      }
+      await expect(page.locator('.monitor-history-note[role="status"]')).toHaveText('正在刷新，暂时显示上次成功读取的数据。')
+      await retained()
+      await captureRecovery(page, info, api, 'held-refresh-retained')
+      failure.release()
+      const error = page.locator('.resource-state--error')
+      await expect(error).toContainText('MONITORING_READ_FAILED')
+      await expect(page.locator('.monitor-history-note[role="status"]')).toHaveText('刷新失败，当前显示上次成功读取的旧数据。')
+      await retained()
+      await error.getByRole('button', { name: '重试', exact: true }).focus()
+      await captureRecovery(page, info, api, 'failed-refresh-retained')
+
+      api.enqueue('precise', 'success', 54)
+      await error.getByRole('button', { name: '重试', exact: true }).press('Enter')
+      await expect(error).toHaveCount(0)
+      await expect(chartCard(page, 'memory').locator('.sr-only')).toContainText('60.0 %')
+      await expect(recoveryNote(page).locator('time')).not.toHaveAttribute('datetime', readAt!)
+      await expect(recoveryNote(page)).not.toHaveText(note)
+      await expect(page.locator('.monitor-history-note[role="status"]')).toHaveCount(0)
+      expect(await recoveryCharts(page)).not.toEqual(baseline)
+      await captureRecovery(page, info, api, 'retry-replaced-snapshot')
+
+      // 显式换范围必须立即移除旧图，即便新请求仍在等待。
+      const switched = api.enqueue('1h', 'success', 64, true)!
+      await page.getByRole('button', { name: '1 小时', exact: true }).click()
+      await expect.poll(() => api.history.length).toBe(5)
+      await expect(page.locator('.monitor-grid--loading')).toBeVisible()
+      await expect(page.locator('.trend-chart')).toHaveCount(0)
+      await expect(recoveryNote(page)).toHaveCount(0)
+      await captureRecovery(page, info, api, 'explicit-range-clears')
+      switched.release()
+      await expect(chartCard(page, 'memory').locator('.sr-only')).toContainText('70.0 %')
+      await expect(recoveryNote(page)).toContainText('已读取范围：1 小时')
+      api.enqueue('1h', 'empty')
+      await page.getByRole('button', { name: '立即刷新数据', exact: true }).click()
+      await expect(page.locator('.resource-state--empty')).toHaveCount(1)
+      await expect(page.locator('.trend-chart')).toHaveCount(0)
+      await expect(page.locator('.resource-state--error')).toHaveCount(0)
+      await expect(page.locator('.monitor-history-note[role="status"]')).toHaveCount(0)
+      await captureRecovery(page, info, api, 'successful-empty-replaces')
+      api.assert()
+      journeyCompleted = true
+    } finally {
+      api.release()
+      await mkdir(info.outputPath('ui-captures'), { recursive: true })
+      const path = info.outputPath('ui-captures', 'monitoring-refresh-final-request-ledger-capture-state.json')
+      await writeFile(path, JSON.stringify({ ...await recoveryProvenance(), fixtureOnly: true, nativeNASAcceptance: false, journeyCompleted, clockMode: 'installed-running-browser-time', linkedCaptures: api.captures, requests: api.requests, requestsSha256: recoveryHash(JSON.stringify(api.requests)), history: api.history, denied: api.denied, writes: api.writes, errors: api.errors }, null, 2))
+      await info.attach('monitoring-refresh-final-request-ledger', { path, contentType: 'application/json' })
+    }
   })
 }
