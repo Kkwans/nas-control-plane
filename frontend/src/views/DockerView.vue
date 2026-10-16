@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
@@ -441,8 +441,12 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
   try {
     if (dockerActionNeedsConfirmation(action)) {
       try {
+        const confirmationText = dockerProjectActionConfirmation(project, action, actionTargets.length) + (admission ? `\n冻结操作：${dockerActionLabel(admission.action)}；范围：${admission.containerIds.length} 个容器。\n${admission.containerIds.join('\n')}\n接收后在后台执行，离开页面不会取消；不支持取消或重试，已接收不代表完成。` : '')
+        const confirmationMessage = admission && admission.containerIds.length > 8
+          ? h('div', { tabindex: 0, role: 'region', 'aria-label': '冻结项目操作范围', class: 'ncp-project-action-scope' }, confirmationText)
+          : confirmationText
         await ElMessageBox.confirm(
-          dockerProjectActionConfirmation(project, action, actionTargets.length) + (admission ? `\n冻结操作：${dockerActionLabel(admission.action)}；范围：${admission.containerIds.length} 个容器。\n${admission.containerIds.join('\n')}\n接收后在后台执行，离开页面不会取消；不支持取消或重试，已接收不代表完成。` : ''),
+          confirmationMessage,
           `确认${dockerActionLabel(action)}项目`,
           {
             confirmButtonText: `确认${dockerActionLabel(action)}`,
@@ -821,7 +825,8 @@ onMounted(() => {
 <style scoped>
 /* MessageBox 传送到页面根部；每条规则仅限容器或 Compose 专属类。 */
 :global(.ncp-container-action-confirmation .el-message-box__message) { overflow-wrap: anywhere; white-space: pre-line; max-height: min(50vh, 420px); overflow-y: auto; }
-:global(.ncp-container-action-confirmation .el-message-box__message:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: -2px; }
+:global(.ncp-container-action-confirmation .el-message-box__message:focus-visible),
+:global(.ncp-container-action-confirmation .ncp-project-action-scope:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: -2px; }
 :global(.ncp-container-action-confirmation .el-message-box__header),
 :global(.ncp-compose-action-confirmation .el-message-box__header) { min-height: var(--ncp-touch-target); padding-right: calc(var(--ncp-touch-target) + 8px); }
 :global(.ncp-container-action-confirmation .el-message-box__headerbtn),

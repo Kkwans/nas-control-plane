@@ -95,7 +95,7 @@ async function fixture(page: Page, origin: string) {
     ['/api/v1/sites/ignored', []], ['/api/v1/jobs', { jobs: [] }],
     ['/api/v1/jobs?type=docker-image-pull', { jobs: [] }],
     ['/api/v1/docker/images', { collectedAt: stamp, images: [{ id: 'sha256:fixture-image', repoTags: ['fixture:latest'], repoDigests: [], sizeBytes: 1024, createdAt: stamp, containers: 0 }] }],
-    ...['docker.projects', 'docker.containers', 'docker.images.local'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
+    ...['docker.projects', 'docker.containers', 'docker.images.local', 'docker.image-downloads'].map((listKey): [string, unknown] => [`/api/v1/preferences/lists/${listKey}`, { listKey, pageSize: 10, sortKey: '', sortDirection: 'asc' }]),
   ])
   reads.set('/api/v1/job-history?limit=50', { source: 'persisted', items: [{ id: 'history-only-completed', type: 'docker-container-restart', reference: containerId, status: 'completed', message: '仅最后保存的历史', createdAt: stamp, updatedAt: stamp, completedAt: stamp }] })
   page.on('pageerror', error => errors.push(error.message))
@@ -230,9 +230,9 @@ async function measure(page: Page, selector: string) {
 }
 async function capture(page: Page, info: TestInfo, api: Fixture, state: string, modal = false, selectorOverride?: string, preserveHover = false) {
   // 本例捕获目标操作状态而非分页 hover；释放后布局回缩可能让静止指针落在无关分页控件。
-  // 显式移至中性页头并等待真实 tooltip关闭，不隐藏DOM、不删除axe规则或命中断言。
+  // 指针移到左边缘(1,10)，避开居中通知的真实悬停区；等待自然关闭，不隐藏DOM或修改计时器。
   if (!preserveHover) {
-    await page.mouse.move(page.viewportSize()!.width / 2, 10)
+    await page.mouse.move(1, 10)
     await expect(page.getByRole('tooltip')).toHaveCount(0)
   }
   // 不改原5秒断言；诊断文件不代表已验收capture，错误仍原样抛出。
@@ -290,7 +290,7 @@ async function capture(page: Page, info: TestInfo, api: Fixture, state: string, 
   const png = `${directory}/${prefix}.png`, screenshot = await page.screenshot({ path: png, fullPage: !modal, animations: 'disabled' })
   const afterCapture = await measure(page, selector), requestsAfterCapture = structuredClone(api.requests)
   const axe = await new AxeBuilder({ page }).analyze(), afterAxe = await measure(page, selector)
-  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, executionScope: 'isolated static fixture; browser execution CI only', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: page.viewportSize()!.width / 2, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
+  const metadata = { ...await provenance(), fixtureOnly: true, nativeDockerAcceptance: false, executionScope: 'isolated static fixture; browser execution CI only', state, testTitle: info.title, project: info.project.name, retry: info.retry, scope: selector, pointerIsolation: preserveHover ? { intentionalPageSizeHelpHover: true } : { x: 1, y: 10, unrelatedTooltipClosed: true }, touchTargetBaseline: preserveHover ? null : { pixels: minimumTarget, source: selectorOverride ? 'existing container action controls: desktop40/mobile42; not new protection UI' : 'new protection panel/dialog:44' }, fullPage: !modal, scrollPositions, controlReachability, screenshot: `${prefix}.png`, screenshotSha256: hash(screenshot), beforeCapture, afterCapture, afterAxe, requestsBefore, requestsAfterCapture, requestsAfterAxe: structuredClone(api.requests), responses: structuredClone(api.responses), writes: api.writes, denied: api.denied, errors: api.errors }
   api.captures.push({ file: `${prefix}.png`, sha256: hash(screenshot) }); await info.attach(prefix, { path: png, contentType: 'image/png' })
   for (const [suffix, content] of [['capture-state', metadata], ['axe-capture-state', { ...metadata, axe }]] as const) {
     const file = `${prefix}-${suffix}.json`, path = `${directory}/${file}`, data = JSON.stringify(content, null, 2)
@@ -546,6 +546,27 @@ test('390px 128 full IDs bounded confirmation keyboard cancel zero writes', asyn
     expect(before.scrollHeight).toBeGreaterThan(before.clientHeight); expect(before.box.height).toBeLessThanOrEqual(420); expect(before.overflowY).toMatch(/auto|scroll/); expect(before.rootWidth).toBeLessThanOrEqual(390)
     for (const field of before.ranges) for (const rect of field.rects) { expect.soft(rect.left).toBeGreaterThanOrEqual(before.box.left - 1); expect.soft(rect.right).toBeLessThanOrEqual(before.box.right + 1) }
     for (const control of before.controls) { expect.soft(control.bounds.height).toBeGreaterThanOrEqual(44); expect.soft(control.bounds.width).toBeGreaterThanOrEqual(44); expect.soft(control.hits).toEqual([true,true,true,true,true]) }
+    // 必须通过原生 Tab 到达冻结范围，并实际用键盘滚动；axe通过不替代行为证据。
+    const scope = dialog(page).getByRole('region', { name: '冻结项目操作范围', exact: true })
+    const scopeTabCycle = []
+    for (let i = 0; i < 12 && !await scope.evaluate(element => element === document.activeElement); i++) {
+      await page.keyboard.press('Tab'); scopeTabCycle.push((await measureLarge()).focus)
+    }
+    await expect(scope).toBeFocused()
+    const scopeFocus = (await measureLarge()).focus
+    expect(scopeFocus.visible).toBe(true); expect(parseFloat(scopeFocus.outlineWidth ?? '0')).toBeGreaterThanOrEqual(2); expect(scopeFocus.outlineStyle).toBe('solid')
+    expect(scopeFocus.outlineColor).not.toMatch(/^(transparent|rgba\(0, 0, 0, 0\))$/)
+    await page.keyboard.press('Home')
+    await expect.poll(async () => (await measureLarge()).scrollTop).toBeLessThanOrEqual(1)
+    const keyboardScrollBefore = await measureLarge(), keyboardRequestsBefore = structuredClone(api.requests)
+    await page.keyboard.press('PageDown')
+    await expect.poll(async () => (await measureLarge()).scrollTop).toBeGreaterThan(keyboardScrollBefore.scrollTop)
+    await expect(scope).toBeFocused()
+    const keyboardScrollAfter = await measureLarge()
+    expect(keyboardScrollAfter.focus.visible).toBe(true); expect(api.requests).toEqual(keyboardRequestsBefore)
+    const keyboardScrollData = JSON.stringify({ ...await provenance(), fixtureOnly: true, scopeTabCycle, scopeFocus, keyboardScrollBefore, keyboardScrollAfter, requestsBefore: keyboardRequestsBefore, requestsAfter: api.requests }, null, 2)
+    await writeFile(`${directory}/project-action-128-keyboard-scroll-capture-state.json`, keyboardScrollData)
+    api.captures.push({ file: 'project-action-128-keyboard-scroll-capture-state.json', sha256: hash(keyboardScrollData) })
     await message.hover(); await page.mouse.wheel(0, 100_000); await expect.poll(async () => { const sample = await measureLarge(); return sample.scrollHeight - sample.clientHeight - sample.scrollTop }).toBeLessThanOrEqual(1)
     const bottom = await measureLarge(), bottomRequestsBefore = structuredClone(api.requests)
     const bottomPath = `${directory}/project-action-128-confirmation-bottom.png`, bottomPNG = await page.screenshot({ path: bottomPath, animations: 'disabled' })
@@ -554,6 +575,7 @@ test('390px 128 full IDs bounded confirmation keyboard cancel zero writes', asyn
     await writeFile(`${directory}/project-action-128-confirmation-bottom-capture-state.json`, bottomData)
     api.captures.push({ file: 'project-action-128-confirmation-bottom.png', sha256: hash(bottomPNG) }, { file: 'project-action-128-confirmation-bottom-capture-state.json', sha256: hash(bottomData) })
     expect.soft(bottomAxe.violations).toEqual([]); expect.soft(bottomAfterScreenshot).toEqual(bottom); expect.soft(bottomAfterAxe).toEqual(bottom); expect.soft(api.requests).toEqual(bottomRequestsBefore)
+    await page.mouse.move(1, 10)
     // 原生 Tab/Shift+Tab 在对话框循环；不通过 DOM.focus 伪造焦点可见证据。
     const keyboardCycle = []
     for (let i = 0; i < 8; i++) {

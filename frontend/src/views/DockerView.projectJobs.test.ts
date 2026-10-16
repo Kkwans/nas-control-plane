@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { createApp, nextTick, type App } from 'vue'
+import { createApp, isVNode, nextTick, type App } from 'vue'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 
 import type { DockerInventory } from '@/api/system'
@@ -208,6 +208,22 @@ describe('standalone project Job view integration', () => {
     pending.resolve(response(job(), 202)); await settle()
     expect(posts()).toHaveLength(2); expect(panel().textContent).toContain('排队中'); expect(button('重启项目 demo-project').disabled).toBe(true)
     expect(ElMessage.info).toHaveBeenCalledTimes(1)
+  })
+  it('makes the full 128-target confirmation keyboard focusable without changing the frozen scope', async () => {
+    await ready()
+    const value = inventory()
+    value.containers = Array.from({ length: 128 }, (_, i) => ({ ...value.containers[0]!, id: i.toString(16).padStart(64, '0') }))
+    value.projects[0]!.containerCount = 128; value.projects[0]!.runningCount = 128
+    store.inventory = value
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    await settle(); await restart()
+    const message = vi.mocked(ElMessageBox.confirm).mock.calls[0]?.[0]
+    expect(isVNode(message)).toBe(true)
+    if (!isVNode(message)) throw new Error('expected focusable confirmation')
+    expect(message.props).toMatchObject({ tabindex: 0, role: 'region', 'aria-label': '冻结项目操作范围', class: 'ncp-project-action-scope' })
+    for (const container of value.containers) expect(message.children).toContain(container.id)
+    expect(posts()).toHaveLength(0)
+    expect(button('重启项目 demo-project').disabled).toBe(false)
   })
   it('rejects 129 targets before confirmation without splitting or dispatch', async () => {
     await ready(); const value = inventory(); value.containers = Array.from({ length: 129 }, (_, i) => ({ ...value.containers[0]!, id: i.toString(16).padStart(64, '0') })); value.projects[0]!.containerCount = 129; value.projects[0]!.runningCount = 129; store.inventory = value; await settle(); await restart()

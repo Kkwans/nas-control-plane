@@ -31,7 +31,8 @@ const inventory = {
   containers: [{ ...overviewDocker.containers[0]!, id: containerId, name: 'fixture-web', projectId, projectName: name, state: 'running', status: 'Up', ports: [] }],
 }
 async function fixture(page: Page, standalone: boolean, origin: string) {
-  await page.clock.setFixedTime(new Date(stamp))
+  // 浏览器时钟持续流动，避免 Vue 事件 invoker 的相同时间戳抑制后续点击。
+  await page.clock.install({ time: new Date(stamp) })
   // 使用已打开的静默内存流，禁止通用初始快照替换本例目标。
   await page.addInitScript(() => {
     class SilentSource extends EventTarget {
@@ -70,7 +71,8 @@ async function fixture(page: Page, standalone: boolean, origin: string) {
     requests.push(`${req.method()} ${pathname}${url.search}`)
     if (url.search && !(req.method() === 'GET' && pathname === '/api/v1/jobs' && ['?type=docker-project-start', '?type=docker-project-stop', '?type=docker-project-restart'].includes(url.search))) { denied.push(`${req.method()} ${pathname}${url.search}`); return route.abort('blockedbyclient') }
     if (req.method() === 'GET' && pathname === '/api/v1/docker/inventory') {
-      inventoryTime = Math.max(inventoryTime + 1, Date.now())
+      // 必须与页面校验使用同一时钟；CI 宿主时间会被视为未来快照并拒收。
+      inventoryTime = Math.max(inventoryTime + 1, await page.evaluate(() => Date.now()))
       return route.fulfill({ json: { ...inventory, collectedAt: new Date(inventoryTime).toISOString() } })
     }
     if (req.method() === 'POST' && pathname === path && allowed) {
