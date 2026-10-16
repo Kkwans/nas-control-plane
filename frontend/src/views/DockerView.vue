@@ -4,9 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { Boxes, Box, ExternalLink, Images, LoaderCircle, Play, RotateCcw, Search, Square, Trash2 } from '@lucide/vue'
 import { ElInput, ElMessage, ElMessageBox, ElTooltip } from 'element-plus'
 
-import { composeActionStateMatches, dockerActionStateMatches, DockerActionOutcomeUnknownError } from '@/api/dockerActionOutcome'
 import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
-import { NcpApiError, requestContainerDetails, requestContainerLogs, requestDockerProjectAction, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type ComposeLifecycleResult, type DockerInventory, type DockerProject, type DockerProjectActionResult } from '@/api/system'
+import { NcpApiError, requestContainerDetails, requestContainerLogs, type ContainerAction, type ContainerDetails, type ContainerLogsResult, type DockerProject } from '@/api/system'
 import ActionButton from '@/components/ActionButton.vue'
 import ContainerLogDrawer from '@/components/ContainerLogDrawer.vue'
 import DockerContainerPanel from '@/components/DockerContainerPanel.vue'
@@ -14,6 +13,8 @@ import ContainerCreateProtectionPanel from '@/components/ContainerCreateProtecti
 import { useDockerContainerCreateJobs, containerCreateCanRelease, type ContainerCreateAdmission } from '@/composables/useDockerContainerCreateJobs'
 import ProjectDeletionProtectionPanel from '@/components/ProjectDeletionProtectionPanel.vue'
 import { useDockerProjectDeletionProtection, projectDeletionCanRelease, type ProjectDeletionAdmission } from '@/composables/useDockerProjectDeletionProtection'
+import ComposeActionProtectionPanel from '@/components/ComposeActionProtectionPanel.vue'
+import { useComposeActionJobs, composeActionCanRelease, type ComposeActionAdmission, type ComposeActionCompletion } from '@/composables/useComposeActionJobs'
 import ProjectActionProtectionPanel from '@/components/ProjectActionProtectionPanel.vue'
 import { useDockerProjectActionJobs, projectActionCanRelease, type ProjectActionAdmission, type ProjectActionCompletion } from '@/composables/useDockerProjectActionJobs'
 import { captureDockerMutationFence } from '@/composables/dockerMutationFence'
@@ -49,7 +50,6 @@ import { presentDockerPorts } from '@/domain/dockerPorts'
 type StateFilter = 'all' | DockerProject['state']
 type ContainerStateFilter = 'all' | 'running' | 'stopped'
 type DockerViewMode = 'projects' | 'containers' | 'images'
-type DockerContainer = DockerInventory['containers'][number]
 type ProjectActionError = { containerId: string; name: string; message: string; scope?: 'project' | 'container' }
 
 const pageRoot = useTemplateRef<HTMLElement>('pageRoot')
@@ -84,7 +84,24 @@ const mutationFence = captureDockerMutationFence(creationSession)
 const projectJobs = useDockerProjectActionJobs()
 const { entry: projectAdmission } = projectJobs
 const projectResult = shallowRef<ProjectActionCompletion | null>(null)
-const composeReservations = new Map<symbol, ReturnType<typeof captureDockerMutationFence>>()
+const composeJobs = useComposeActionJobs()
+const { entry: composeAdmission } = composeJobs
+const composeResult = shallowRef<ComposeActionCompletion | null>(null)
+let manualInventoryRead: Promise<boolean> | null = null
+let manualRefreshReaders = 0
+const clearComposeResult = () => { composeResult.value = null }
+creationSession.signal.addEventListener('abort', clearComposeResult, { once: true })
+watch(composeAdmission, (entry, previous) => {
+  if (entry && entry.token !== previous?.token) composeResult.value = null
+  if (!composeJobs.alive()) { composeResult.value = null; return }
+  if (!viewActive || !entry || !entry.completionVersion) return
+  const result = composeJobs.consumeCompletion(entry, entry.completionVersion)
+  if (!result) return
+  composeResult.value = result
+  // 聚合结果是该次调用的历史证据，与当前清单刷新成功与否无关。
+  // 手动刷新已开始清单读取时复用它，避免强制刷新抢占其他核对。
+  void (manualInventoryRead ?? refreshContainerInventory())
+}, { immediate: true, flush: 'sync' })
 const clearProjectResult = () => { projectResult.value = null }
 creationSession.signal.addEventListener('abort', clearProjectResult, { once: true })
 watch(projectAdmission, (entry, previous) => {
@@ -94,7 +111,7 @@ watch(projectAdmission, (entry, previous) => {
   const result = projectJobs.consumeCompletion(entry, entry.completionVersion)
   if (!result) return
   projectResult.value = result
-  void refreshContainerInventory()
+  void (manualInventoryRead ?? refreshContainerInventory())
 }, { immediate: true, flush: 'sync' })
 const clearCreateResult = () => { createResult.value = null }
 creationSession.signal.addEventListener('abort', clearCreateResult, { once: true })
@@ -221,7 +238,7 @@ function projectHasProtectedContainer(project: DockerProject) {
   return containersFor(project.id).some(container => blockedContainerIds.value.includes(container.id))
 }
 function projectActionDisabled(project: DockerProject, action: ContainerAction) {
-  if (project.kind === 'standalone' ? projectJobs.blocked.value : mutationFence.otherMutationsBlocked.value) return true
+  if (project.kind === 'standalone' ? projectJobs.blocked.value : composeJobs.blocked.value) return true
   if (projectHasProtectedContainer(project)) return true
   return dockerProjectActionDisabled(
     project,
@@ -240,39 +257,6 @@ function projectDeleteDisabledReason(project: DockerProject) {
 }
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof NcpApiError ? error.message : fallback
-}
-function projectActionFailures(
-  result: DockerProjectActionResult | ComposeLifecycleResult,
-  targets: DockerContainer[],
-  action: ContainerAction,
-) {
-  if ('containers' in result) {
-    const failures = result.containers
-      .filter((item) => !item.success || !dockerActionStateMatches(action, item.state))
-      .map((item) => ({
-        containerId: item.containerId,
-        name: item.name || targets.find((container) => container.id === item.containerId)?.name || item.containerId.slice(0, 12),
-        message: item.success ? '命令已受理，读回时尚未达到目标状态；请先只读核对。' : '容器操作结果未确认，可能已经生效；请先只读核对，勿重复提交。',
-      }))
-    if (result.completed || failures.length) return failures
-    return targets.map((container) => ({
-      containerId: container.id,
-      name: container.name || container.id.slice(0, 12),
-      message: '项目回执未确认完成，请先只读核对状态，勿重复提交。',
-    }))
-  }
-  const failures = result.services
-    .map((service, index) => ({ service, index }))
-    .filter(({ service }) => !composeActionStateMatches(action, service.state))
-    .map(({ service, index }) => ({
-      containerId: `compose-service:${index}`,
-      name: service.name || service.containerId || '未命名服务',
-      message: `状态复核尚未达到目标；请先只读核对，勿重复提交。`,
-    }))
-  if (!result.completed && !failures.length) {
-    return [{ containerId: `project:${result.projectId}`, name: '项目操作', scope: 'project' as const, message: '项目回执未确认完成，请先只读核对状态，勿重复提交。' }]
-  }
-  return failures
 }
 async function updateSelectedProject(projectId: string | null) {
   const queryParameters = { ...route.query }
@@ -342,13 +326,22 @@ async function refreshContainerInventory() {
   return result.succeeded.includes('inventory')
 }
 async function refreshDockerPage() {
-  const inventoryRead = systemStore.refresh({ inventory: true }).then(result => result.succeeded.includes('inventory'))
-  await Promise.all(containerAdmissions.value.filter(entry => entry.phase === 'known').map(entry => containerJobs.check(entry, () => inventoryRead)))
-  const createEntry = createAdmission.value
-  if (createEntry && !['confirming', 'submitting', 'resolved'].includes(createEntry.phase)) await createJobs.check(createEntry, () => inventoryRead)
-  const projectEntry = projectAdmission.value
-  if (projectEntry && ['known', 'unknown'].includes(projectEntry.phase)) await projectJobs.check(projectEntry, () => inventoryRead)
-  await inventoryRead
+  const inventoryRead = manualInventoryRead ?? systemStore.refresh({ inventory: true }).then(result => result.succeeded.includes('inventory'))
+  manualInventoryRead = inventoryRead
+  manualRefreshReaders++
+  try {
+    await Promise.all(containerAdmissions.value.filter(entry => entry.phase === 'known').map(entry => containerJobs.check(entry, () => inventoryRead)))
+    const createEntry = createAdmission.value
+    if (createEntry && !['confirming', 'submitting', 'resolved'].includes(createEntry.phase)) await createJobs.check(createEntry, () => inventoryRead)
+    const projectEntry = projectAdmission.value
+    if (projectEntry && ['known', 'unknown'].includes(projectEntry.phase)) await projectJobs.check(projectEntry, () => inventoryRead)
+    const composeEntry = composeAdmission.value
+    if (composeEntry && ['known', 'unknown'].includes(composeEntry.phase)) await composeJobs.check(composeEntry, () => inventoryRead)
+    await inventoryRead
+  } finally {
+    manualRefreshReaders--
+    if (manualRefreshReaders === 0 && manualInventoryRead === inventoryRead) manualInventoryRead = null
+  }
 }
 const unregisterManualRefresh = manualRefreshRegistry?.register(refreshDockerPage)
 async function releaseCreateProtection(entry: ContainerCreateAdmission) {
@@ -410,10 +403,25 @@ async function releaseProjectActionProtection(entry: ProjectActionAdmission) {
     if (viewActive && projectJobs.alive() && projectAdmission.value?.token === checked.token && projectAdmission.value.checkVersion === version && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
   }
 }
+async function releaseComposeProtection(entry: ComposeActionAdmission) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  await composeJobs.check(entry, refreshContainerInventory)
+  if (!viewActive || !composeJobs.alive()) return
+  const checked = composeAdmission.value
+  if (!checked || checked.token !== entry.token || !composeActionCanRelease(checked)) return
+  const version = checked.checkVersion
+  try {
+    await ElMessageBox.confirm('仅解除本登录会话防重复保护，不会取消、重试或重发任务。先前 Compose 操作可能已经执行，再次提交可能重复执行。当前清单、空清单或状态变化不能证明先前未执行。确认自行承担重复执行风险并解除？', '解除 Compose 操作防重复保护', { confirmButtonText: '确认风险并解除', cancelButtonText: '保留保护', type: 'warning', customClass: 'ncp-compose-action-confirmation' })
+    if (viewActive && composeJobs.alive()) composeJobs.release(checked, version, true)
+  } catch (decision) {
+    if (decision !== 'cancel' && decision !== 'close') return
+    await nextTick()
+    if (viewActive && composeJobs.alive() && composeAdmission.value?.token === checked.token && composeAdmission.value.checkVersion === version && returnFocus?.isConnected && !returnFocus.matches(':disabled')) returnFocus.focus({ preventScroll: true })
+  }
+}
 async function performProjectAction(project: DockerProject, action: ContainerAction) {
   const session = captureSession()
-  const mutationFence = captureDockerMutationFence(session)
-  if (project.kind === 'standalone' ? projectJobs.blocked.value : mutationFence.otherMutationsBlocked.value) return
+  if (project.kind === 'standalone' ? projectJobs.blocked.value : composeJobs.blocked.value) return
   if (projectHasProtectedContainer(project)) return
   if (actionPending.value || projectActionPending.value || projectDeletePending.value) return
   const current = () => viewActive && isCurrentSession(session.generation)
@@ -427,22 +435,23 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
   // 原生 disabled 会先移走焦点，需在占用操作前保存真实键盘触发点。
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const admission = project.kind === 'standalone' ? projectJobs.reserve(actionTargets.map(container => container.id), action) : null
-  const composeToken = project.kind === 'compose' ? Symbol() : null
+  const composeEntry = project.kind === 'compose' ? composeJobs.reserve({ projectId: project.id, workingDirectory: project.workingDirectory, configFiles: project.configFiles }, action, project.name) : null
   if (project.kind === 'standalone' && !admission) {
     ElMessage.warning('项目操作仅支持 1–128 个唯一完整容器 ID；请先核对范围。')
     return
   }
-  if (composeToken && !mutationFence.reserve('compose', composeToken)) return
-  if (composeToken) composeReservations.set(composeToken, mutationFence)
+  if (project.kind === 'compose' && !composeEntry) {
+    ElMessage.warning('Compose 项目操作范围无效或存在待核对操作，请先核对工作目录和有序配置文件。')
+    return
+  }
   let dismissed = false
   projectActionPending.value = { projectId: project.id, action }
   const pendingOwner = projectActionPending.value
-  const failures: ProjectActionError[] = []
   try {
     if (dockerActionNeedsConfirmation(action)) {
       try {
-        const confirmationText = dockerProjectActionConfirmation(project, action, actionTargets.length) + (admission ? `\n冻结操作：${dockerActionLabel(admission.action)}；范围：${admission.containerIds.length} 个容器。\n${admission.containerIds.join('\n')}\n接收后在后台执行，离开页面不会取消；不支持取消或重试，已接收不代表完成。` : '')
-        const confirmationMessage = admission && admission.containerIds.length > 8
+        const confirmationText = dockerProjectActionConfirmation(project, action, actionTargets.length) + (admission ? `\n冻结操作：${dockerActionLabel(admission.action)}；范围：${admission.containerIds.length} 个容器。\n${admission.containerIds.join('\n')}\n接收后在后台执行，离开页面不会取消；不支持取消或重试，已接收不代表完成。` : composeEntry ? `\n冻结项目 ID：${composeEntry.projectId}；显示名称：${composeEntry.displayName}；操作：${dockerActionLabel(composeEntry.action)}。\n工作目录：${composeEntry.workingDirectory}\n有序配置文件：\n${composeEntry.configFiles.map((path, index) => `${index + 1}. ${path}`).join('\n')}\n实际目标由工作目录和有序配置文件决定；项目 ID 仅用于关联，不是 Compose -p 参数。当前清单中的容器数量仅为界面提示，不是冻结的 Compose 容器范围。\n接收后在后台执行，离开页面不会取消；不支持取消或重试，已接收不代表完成。` : '')
+        const confirmationMessage = (admission && admission.containerIds.length > 8) || composeEntry
           ? h('div', { tabindex: 0, role: 'region', 'aria-label': '冻结项目操作范围', class: 'ncp-project-action-scope' }, confirmationText)
           : confirmationText
         await ElMessageBox.confirm(
@@ -475,47 +484,20 @@ async function performProjectAction(project: DockerProject, action: ContainerAct
       }
       return
     }
-    if (!composeToken || !mutationFence.owns('compose', composeToken)) return
-    composeReservations.delete(composeToken)
-    let result: DockerProjectActionResult | ComposeLifecycleResult | null = null
-    try {
-      result = await requestDockerProjectAction({
-        id: project.id,
-        kind: project.kind,
-        workingDirectory: project.workingDirectory,
-        configFiles: project.configFiles,
-        containerIds: actionTargets.map((container) => container.id),
-      }, action)
-    } catch (error) {
+    if (composeEntry) {
+      const outcome = await composeJobs.dispatch(composeEntry)
       if (!current()) return
-      failures.push({
-        containerId: `project:${project.id}`,
-        name: '项目操作',
-        message: errorMessage(error, new DockerActionOutcomeUnknownError(project.kind).message),
-        scope: 'project',
-      })
-    }
-    if (!current()) return
-    if (!failures.length && result) failures.push(...projectActionFailures(result, actionTargets, action))
-    if (failures.length) {
-      projectActionErrors.value = { ...projectActionErrors.value, [project.id]: failures }
-      actionError.value = failures.some((failure) => failure.scope === 'project') ? failures[0]!.message : (project.kind === 'standalone' ? `项目${dockerActionLabel(action)}回执中有 ${failures.length} 个容器尚未确认达到目标；请先只读核对。` : `项目${dockerActionLabel(action)}回执中有 ${failures.length} 个服务尚未确认达到目标；请先只读核对，勿重复提交。`)
-      ElMessage.warning(actionError.value)
-    } else {
-      projectActionErrors.value = { ...projectActionErrors.value, [project.id]: [] }
-      ElMessage.success(project.kind === 'standalone'
-        ? `项目“${project.name}”${dockerActionLabel(action)}命令已受理，读回时目标容器均${action === 'stop' ? '已停止' : '运行中'}。`
-        : `项目“${project.name}”${dockerActionLabel(action)}命令已受理，读回时服务均${action === 'stop' ? '处于非运行状态' : '运行中'}。`)
-    }
-    try {
-      const refreshResult = await systemStore.refresh({ inventory: true, force: true })
-      if (current() && refreshResult.failed.length) actionError.value = [actionError.value, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
-    } catch {
-      if (current()) actionError.value = [actionError.value, 'Docker 状态刷新失败，请手动重新加载。'].filter(Boolean).join(' ')
+      if (outcome === 'accepted') {
+        ElMessage.info('Compose 操作任务已接收，尚未确认完成。请在防重复保护面板只读核对。')
+        void composeJobs.check(composeEntry, refreshContainerInventory)
+      } else if (outcome) {
+        actionError.value = outcome === 'rejected' ? '服务器明确拒绝接收 Compose 操作，请检查会话或稍后重试。' : 'Compose 操作接收未知，可能已经执行。请先只读核对，勿重复提交。'
+        ElMessage.warning(actionError.value)
+      }
     }
   } finally {
     if (admission) projectJobs.cancel(admission)
-    if (composeToken) { composeReservations.delete(composeToken); mutationFence.release('compose', composeToken) }
+    if (composeEntry) composeJobs.cancel(composeEntry)
     if (viewActive && projectActionPending.value === pendingOwner) {
       projectActionPending.value = null
       if (dismissed) {
@@ -620,8 +602,7 @@ watch(logOpen, (open) => {
   }
 }, { flush: 'sync' })
 onBeforeUnmount(() => {
-  for (const [token, fence] of composeReservations) fence.release('compose', token)
-  composeReservations.clear()
+  creationSession.signal.removeEventListener('abort', clearComposeResult)
   creationSession.signal.removeEventListener('abort', clearProjectResult)
   creationSession.signal.removeEventListener('abort', clearCreateResult); viewActive = false; detailRequest.invalidate(); unregisterManualRefresh?.() })
 
@@ -658,6 +639,7 @@ onMounted(() => {
       <span>{{ actionError }}</span><button type="button" @click="actionError = null">关闭</button>
     </div>
 
+    <ComposeActionProtectionPanel :entry="composeAdmission" :result="composeResult" @check="entry => composeJobs.check(entry, refreshContainerInventory)" @release="releaseComposeProtection" />
     <ProjectActionProtectionPanel :entry="projectAdmission" :result="projectResult" @check="entry => projectJobs.check(entry, refreshContainerInventory)" @release="releaseProjectActionProtection" />
 
     <ContainerCreateProtectionPanel :entry="createAdmission" :result="createResult" @check="entry => createJobs.check(entry, refreshContainerInventory)" @release="releaseCreateProtection" />
@@ -808,7 +790,7 @@ onMounted(() => {
       :blocked-container-ids="blockedContainerIds"
       :mutations-blocked="mutationFence.otherMutationsBlocked.value"
       :project-action-pending="projectActionFor(selectedProject?.id ?? '')"
-      :project-mutations-blocked="selectedProject?.kind === 'standalone' ? projectJobs.blocked.value : mutationFence.otherMutationsBlocked.value"
+      :project-mutations-blocked="selectedProject?.kind === 'standalone' ? projectJobs.blocked.value : composeJobs.blocked.value"
       :project-action-errors="projectErrorsFor(selectedProject?.id ?? '')"
       :container-action-error="selectedProjectContainerActionError"
       @action="performDetailAction"
@@ -824,6 +806,8 @@ onMounted(() => {
 
 <style scoped>
 /* MessageBox 传送到页面根部；每条规则仅限容器或 Compose 专属类。 */
+:global(.ncp-compose-action-confirmation .ncp-project-action-scope) { overflow-wrap: anywhere; white-space: pre-line; max-height: min(50vh, 420px); overflow-y: auto; }
+:global(.ncp-compose-action-confirmation .ncp-project-action-scope:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: -2px; }
 :global(.ncp-container-action-confirmation .el-message-box__message) { overflow-wrap: anywhere; white-space: pre-line; max-height: min(50vh, 420px); overflow-y: auto; }
 :global(.ncp-container-action-confirmation .el-message-box__message:focus-visible),
 :global(.ncp-container-action-confirmation .ncp-project-action-scope:focus-visible) { outline: 2px solid var(--ncp-primary); outline-offset: -2px; }

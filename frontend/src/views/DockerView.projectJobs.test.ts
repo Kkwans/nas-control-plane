@@ -236,7 +236,7 @@ function addCompose(stopped = false) {
   currentInventory.containers.push({ ...currentInventory.containers[0]!, id: secondId, projectId: 'compose', projectName: 'compose-project', state: stopped ? 'exited' : 'running' })
   store.inventory = currentInventory
 }
-function composeReceipt() { return { projectId: 'compose', action: 'restart', output: '', completed: true, state: 'running', services: [{ name: 'web', containerId: secondId, state: 'running', running: true }] } }
+function composeReceipt() { return { ...job(), id: 'compose-job', type: 'compose-restart', reference: 'compose' } }
 describe('Compose and standalone view leases', () => {
   it('real Compose lifecycle and eligible delete buttons are disabled by standalone admission', async () => {
     await ready(); addCompose(true); await settle()
@@ -249,7 +249,7 @@ describe('Compose and standalone view leases', () => {
     expect(posts()).toHaveLength(1)
     expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(0)
   })
-  it('Compose stays synchronous and holds a shared lease through confirmation then releases on cancel', async () => {
+  it('Compose holds a shared lease through confirmation and accepted background execution', async () => {
     await ready(); addCompose(); await settle()
     const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
     vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
@@ -257,13 +257,13 @@ describe('Compose and standalone view leases', () => {
     expect(button('重启项目 demo-project').disabled).toBe(true); expect(posts()).toHaveLength(0)
     confirmation.reject('cancel'); await settle()
     expect(button('重启项目 demo-project').disabled).toBe(false)
-    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response(composeReceipt()) : response(currentInventory))
+    fetcher.mockImplementation(async (url, options) => options?.method === 'POST' ? response(composeReceipt(), 202) : String(url).includes('/jobs/') ? response(composeReceipt()) : response(currentInventory))
     button('重启项目 compose-project').click(); await settle()
     expect(posts()).toHaveLength(1)
-    expect(posts()[0]![0]).toBe('/api/v1/docker/compose/projects/compose/actions/restart')
-    expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'compose', action: 'restart', workingDirectory: '/srv/demo', configFiles: ['compose.yaml'] })
-    expect(ElMessage.success).toHaveBeenCalledOnce()
-    expect(button('重启项目 demo-project').disabled).toBe(false)
+    expect(posts()[0]![0]).toBe('/api/v1/docker/compose/projects/compose/action-jobs/restart')
+    expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ workingDirectory: '/srv/demo', configFiles: ['compose.yaml'] })
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
   })
   it('unmounting a pending Compose confirmation releases its lease; late confirmation cannot dispatch', async () => {
     await ready(); addCompose(); await settle()
@@ -275,7 +275,7 @@ describe('Compose and standalone view leases', () => {
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(0)
   })
-  it('dispatched Compose retains its lease across SPA disposal until late settle, without stale UI', async () => {
+  it('dispatched Compose retains its lease across SPA disposal and late acceptance, without stale UI', async () => {
     await ready(); addCompose(); await settle()
     const pending = deferred<Response>(); fetcher.mockReturnValueOnce(pending.promise)
     button('重启项目 compose-project').click(); await settle()
@@ -283,8 +283,8 @@ describe('Compose and standalone view leases', () => {
     app!.unmount(); app = undefined; await mount()
     expect(button('重启项目 demo-project').disabled).toBe(true)
     const reads = fetcher.mock.calls.length
-    pending.resolve(response(composeReceipt())); await settle()
-    expect(button('重启项目 demo-project').disabled).toBe(false)
+    pending.resolve(response(composeReceipt(), 202)); await settle()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
     expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.warning).not.toHaveBeenCalled()
     expect(fetcher).toHaveBeenCalledTimes(reads)
   })
@@ -329,4 +329,15 @@ it('clears an old completed receipt as soon as a new frozen intent starts confir
   expect(posts()).toHaveLength(1)
   confirmation.reject('cancel'); await settle()
   expect(host.querySelector('[aria-label="项目操作防重复保护"]')).toBeNull()
+})
+
+it('manual completed project check shares its inventory request and retains the exact receipt on read failure', async () => {
+  await ready(); await restart(); observed = terminal('completed'); inventoryFailed = true
+  const before = fetcher.mock.calls.length
+  await Promise.all([...refreshHandlers].map(handler => handler())); await settle()
+  const reads = fetcher.mock.calls.slice(before)
+  expect(reads.filter(([url]) => String(url).includes('/jobs/'))).toHaveLength(1)
+  expect(reads.filter(([url]) => !String(url).includes('/jobs/'))).toHaveLength(1)
+  expect(panel().textContent).toContain('该次调用结果已保存')
+  expect(button('重启项目 demo-project').disabled).toBe(false)
 })

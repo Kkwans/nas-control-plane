@@ -9,7 +9,7 @@ const actions = { start: '启动', stop: '停止', restart: '重启' }
 const phases = { confirming: '等待确认冻结意图', submitting: '正在提交，尚未确认接收', unknown: '接收结果未知，请勿重复提交', known: '任务已接收，仍需核对结果', resolved: '该次调用结果已确认' }
 const statuses = { queued: '排队中', running: '执行中', completed: '任务执行结束，须核对已保存结果', failed: '任务失败，防重复保护仍保留', interrupted: '任务中断，执行结果可能未知，防重复保护仍保留' }
 const states = { running: '运行', stopped: '停止' }
-const resultLimits = '仅证明命令返回和一次状态观察，不保证健康、持续状态、配置服务完整性或重启次数。没有逐服务结果，当前清单不能证明该次操作的执行结果。'
+const resultLimits = '计数表示服务观察项数，同名副本可分别计入，不代表不同服务数或配置服务总数。仅证明命令返回和一次状态观察，不保证健康、持续状态、配置服务完整性或重启次数。没有逐服务结果，当前清单不能证明该次操作的执行结果。'
 const entryResult = computed(() => {
   const job = props.entry?.job
   return job?.status === 'completed' && job.persistenceStatus !== 'pending' ? job.composeActionResult : undefined
@@ -24,7 +24,7 @@ const uncertain = computed(() => props.entry?.phase === 'unknown' || (props.entr
     <div v-if="result" class="completed-result protection-status" role="status" aria-label="已确认的 Compose 操作结果">
       <strong>{{ actions[result.action] }}：该次调用聚合结果已保存</strong>
       <p class="identity">项目 ID：{{ result.projectId }}</p>
-      <p>该次观察状态：{{ states[result.state] }} · 观察到的服务数：{{ result.serviceCount }}</p>
+      <p>该次观察状态：{{ states[result.state] }} · 服务观察项数：{{ result.serviceCount }}</p>
       <p>{{ resultLimits }}</p>
     </div>
     <div v-if="entry" class="admission-status protection-status" role="status" aria-label="Compose 操作保护状态">
@@ -50,7 +50,7 @@ const uncertain = computed(() => props.entry?.phase === 'unknown' || (props.entr
       </details>
       <div v-if="entryResult" class="saved-results">
         <strong>已保存的聚合观察结果</strong>
-        <p>该次观察状态：{{ states[entryResult.state] }} · 观察到的服务数：{{ entryResult.serviceCount }}</p>
+        <p>该次观察状态：{{ states[entryResult.state] }} · 服务观察项数：{{ entryResult.serviceCount }}</p>
         <p>{{ resultLimits }}</p>
       </div>
       <p v-if="entry.checked && !entry.lastReadSucceeded">任务读取失败，不能判断未接收或未执行。</p>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { createApp, nextTick, type App } from 'vue'
+import { createApp, nextTick, isVNode, type App } from 'vue'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 
 import type { DockerInventory } from '@/api/system'
@@ -237,74 +237,175 @@ describe('DockerView 生命周期回执', () => {
 
 
 function composeInventory() { const value = inventory(); value.projects[0]!.kind = 'compose'; return value }
-function composeResult() { return { projectId: 'demo', action: 'restart', state: 'running', completed: true, output: 'private-command-output', services: [{ name: 'web', containerId: 'new-container', state: 'running', running: true }] } }
+function composeJob(action: 'start' | 'stop' | 'restart' = 'restart', completed = false) {
+  return { ...actionJob(), id: 'compose-job', type: `compose-${action}`, reference: 'demo',
+    ...(completed ? { status: 'completed', progress: 100, completedAt: collectedAt,
+      composeActionResult: { projectId: 'demo', action, state: action === 'stop' ? 'stopped' : 'running', serviceCount: 1 } } : {}) }
+}
+function composeProtection() { return host.querySelector('[aria-label="Compose 操作保护状态"]') }
+function composeControl(label: string) { return [...composeProtection()!.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === label)! }
 async function readyCompose() {
-  fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response(composeResult()) : response(composeInventory()))
+  fetcher.mockImplementation(async (url, options) => options?.method === 'POST' ? response(composeJob(), 202) : String(url).includes('/jobs/') ? response(composeJob()) : response(composeInventory()))
   await mount()
 }
 describe('DockerView Compose 生命周期证据', () => {
-  it('完成只报告读回观察，不显示命令日志', async () => {
+  it('202仅表示接收，精确GET完成只显示聚合观察，不显示命令日志', async () => {
     await readyCompose(); button('重启项目 demo-project').click(); await settle()
-    expect(ElMessage.success).toHaveBeenCalledWith('项目“demo-project”重启命令已受理，读回时服务均运行中。')
+    expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成'))
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
+    expect(composeProtection()?.textContent).toContain('compose-job')
+    expect(host.querySelector('[aria-label="已确认的 Compose 操作结果"]')).toBeNull()
+    fetcher.mockImplementation(async url => String(url).includes('/jobs/') ? response({ ...composeJob('restart', true), message: 'private-command-output' }) : response(composeInventory()))
+    composeControl('只读核对任务与容器清单').click(); await settle()
+    const result = host.querySelector('[aria-label="已确认的 Compose 操作结果"]')!
+    expect(result.textContent).toContain('该次调用聚合结果已保存')
+    expect(result.textContent).toContain('服务观察项数：1')
+    expect(result.textContent).toContain('不保证健康、持续状态、配置服务完整性或重启次数')
+    expect(result.textContent).toContain('没有逐服务结果')
     expect(host.textContent).not.toContain('private-command-output')
+    expect(composeProtection()).toBeNull()
+    expect(button('重启项目 demo-project').disabled).toBe(false)
     expect(posts()).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
+    const reads = fetcher.mock.calls.filter(([url]) => String(url).includes('/jobs/'))
+    expect(reads).toHaveLength(2)
+    for (const [url, options] of reads) { expect(url).toBe('/api/v1/jobs/compose-job'); expect(options).toMatchObject({ method: 'GET', cache: 'no-store', redirect: 'error' }) }
   })
-  it.each(['incomplete', 'wrong-project', 'verify-failed', 'all-target-incomplete'])('未完成或未知保持警告与只读刷新 %s', async (mode) => {
+  it.each(['legacy-200', 'wrong-project', 'verify-failed', 'missing-aggregate'])('未完成或未知保持警告与只读保护 %s', async (mode) => {
     await readyCompose()
-    fetcher.mockImplementation(async (_url, options) => {
-      if (options?.method !== 'POST') return response(composeInventory())
-      if (mode === 'verify-failed') return new Response(JSON.stringify({ code: 'COMPOSE_LIFECYCLE_VERIFY_FAILED', message: 'private-error 请重试', requestId: 'test' }), { status: 409 })
-      return response(mode === 'wrong-project' ? { ...composeResult(), projectId: 'other' } : mode === 'all-target-incomplete' ? { ...composeResult(), completed: false } : { ...composeResult(), completed: false, state: 'stopped', services: [{ name: 'web', state: 'exited', running: false }] })
+    fetcher.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') {
+        if (mode === 'legacy-200') return response({ projectId: 'demo', action: 'restart', completed: true, output: 'private-command-output', services: [] })
+        if (mode === 'verify-failed') return response({ code: 'COMPOSE_LIFECYCLE_VERIFY_FAILED', message: 'private-error 请重试', requestId: 'test' }, 409)
+        return response(composeJob(), 202)
+      }
+      if (String(url).includes('/jobs/')) return response(mode === 'wrong-project' ? { ...composeJob('restart', true), reference: 'other' } : { ...composeJob('restart', true), composeActionResult: undefined })
+      return response(composeInventory())
     })
     button('重启项目 demo-project').click(); await settle()
     expect(ElMessage.success).not.toHaveBeenCalled()
-    expect(ElMessage.warning).toHaveBeenCalled()
-    expect(host.querySelector('.action-error')?.textContent).toContain('只读核对')
-    for (const selector of ['.project-row-feedback', '.docker-mobile-list .project-action-errors']) {
-      const feedback = host.querySelector(selector)!
-      expect(feedback.querySelector('strong')?.textContent).toBe('项目操作需核对')
-      expect(feedback.textContent).not.toMatch(/项目操作失败|部分容器操作失败/)
-      expect(feedback.querySelector('li')?.textContent).toContain(mode === 'incomplete' ? '状态复核尚未达到目标' : mode === 'all-target-incomplete' ? '项目回执未确认完成' : '可能已经执行')
+    expect(composeProtection()).not.toBeNull()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
+    expect(composeControl('确认重复执行风险并解除本会话保护').disabled).toBe(true)
+    if (mode === 'legacy-200' || mode === 'verify-failed') {
+      expect(ElMessage.warning).toHaveBeenCalled()
+      expect(host.querySelector('.action-error')?.textContent).toContain('可能已经执行')
+      expect(composeProtection()?.textContent).toContain('接收结果未知')
+      expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(1)
+    } else {
+      expect(composeProtection()?.textContent).toContain('任务读取失败')
+      expect(fetcher.mock.calls.filter(([url]) => String(url).includes('/jobs/'))).toHaveLength(1)
     }
-    expect(host.textContent).not.toMatch(/private-error|请重试|private-command-output/)
+    expect(host.textContent).not.toMatch(/private-error|请重试|private-command-output|部分容器操作失败/)
+    expect(host.querySelector('[aria-label="已确认的 Compose 操作结果"]')).toBeNull()
     expect(posts()).toHaveLength(1)
-    expect(fetcher.mock.calls.filter(([, options]) => options?.method !== 'POST')).toHaveLength(2)
   })
-  it('冻结确认前项目和配置，阻止重复点击', async () => {
+  it('冻结确认前项目和原始有序配置，阻止重复点击', async () => {
     await readyCompose()
+    store.inventory!.projects[0]!.configFiles = ['z-base.yaml', './a-override.yaml']
     const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
     vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
     const target = button('重启项目 demo-project'); target.click(); target.click(); await settle()
-    store.inventory!.projects[0]!.id = 'changed'; store.inventory!.projects[0]!.workingDirectory = '/changed'; store.inventory!.projects[0]!.configFiles.push('later.yaml')
+    store.inventory!.projects[0]!.id = 'changed'; store.inventory!.projects[0]!.workingDirectory = '/changed'; store.inventory!.projects[0]!.configFiles.reverse(); store.inventory!.projects[0]!.configFiles.push('later.yaml')
     confirmation.resolve(confirmed); await settle()
     expect(ElMessageBox.confirm).toHaveBeenCalledOnce()
     expect(posts()).toHaveLength(1)
-    expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ projectId: 'demo', action: 'restart', workingDirectory: '/srv/demo', configFiles: ['compose.yaml'] })
+    expect(posts()[0]![0]).toBe('/api/v1/docker/compose/projects/demo/action-jobs/restart')
+    expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ workingDirectory: '/srv/demo', configFiles: ['z-base.yaml', './a-override.yaml'] })
     expect(posts()[0]![1]?.redirect).toBe('error')
+    expect([...host.querySelectorAll('[aria-label="按提交顺序冻结的配置文件"] li')].map(item => item.textContent)).toEqual(['z-base.yaml', './a-override.yaml'])
   })
   it('未知回执遇到刷新失败仍保留原分类，不自动重发', async () => {
     await readyCompose()
-    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ ...composeResult(), services: [] }) : response({ invalid: true }))
+    fetcher.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ invalid: true }) : response({ invalid: true }))
     button('重启项目 demo-project').click(); await settle()
     expect(host.querySelector('.action-error')?.textContent).toContain('可能已经执行')
-    expect(host.querySelector('.action-error')?.textContent).toContain('状态刷新失败')
+    composeControl('只读核对任务与容器清单').click(); await settle()
+    expect(composeProtection()?.textContent).toContain('接收结果未知')
+    expect(composeProtection()?.textContent).toContain('容器清单未成功刷新')
+    expect(composeProtection()?.textContent).toContain('任务读取失败')
+    expect(composeControl('确认重复执行风险并解除本会话保护').disabled).toBe(true)
     expect(ElMessage.success).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(15_000); await settle(); expect(posts()).toHaveLength(1)
   })
-  it.each(['unmount', 'session'])('迟到回执在 %s 后不通知或刷新', async (mode) => {
+  it.each(['unmount', 'session'])('确认期间 %s 后不派发或读取', async mode => {
+    await readyCompose()
+    const confirmation = deferred<Awaited<ReturnType<typeof ElMessageBox.confirm>>>()
+    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise)
+    button('重启项目 demo-project').click(); await settle()
+    if (mode === 'unmount') { app!.unmount(); app = undefined } else { invalidateSession(); beginSession() }
+    confirmation.resolve(confirmed); await settle()
+    expect(posts()).toHaveLength(0)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(ElMessage.info).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    if (app) { app.unmount(); app = undefined }
+    await mount(); button('重启项目 demo-project').click(); await settle()
+    expect(posts()).toHaveLength(1)
+  })
+  it('未知接收解除前重新读取当前证据，取消保留保护，明确风险确认不重发', async () => {
+    await readyCompose()
+    fetcher.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') throw new Error('private-network-secret')
+      return response(String(url).includes('/jobs?') ? { jobs: [] } : composeInventory())
+    })
+    button('重启项目 demo-project').click(); await settle()
+    const release = () => composeControl('确认重复执行风险并解除本会话保护')
+    expect(release().disabled).toBe(true)
+    composeControl('只读核对任务与容器清单').click(); await settle()
+    expect(release().disabled).toBe(false)
+    const listReads = () => fetcher.mock.calls.filter(([url]) => String(url).includes('/jobs?')).length
+    expect(listReads()).toBe(3)
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    release().click(); await settle()
+    expect(listReads()).toBe(6)
+    expect(composeProtection()).not.toBeNull()
+    expect(button('重启项目 demo-project').disabled).toBe(true)
+    expect(posts()).toHaveLength(1)
+    release().click(); await settle()
+    expect(listReads()).toBe(9)
+    expect(ElMessageBox.confirm).toHaveBeenLastCalledWith(expect.stringContaining('先前 Compose 操作可能已经执行'), '解除 Compose 操作防重复保护', expect.objectContaining({ confirmButtonText: '确认风险并解除' }))
+    expect(composeProtection()).toBeNull()
+    expect(button('重启项目 demo-project').disabled).toBe(false)
+    expect(posts()).toHaveLength(1)
+  })
+  it('解除时当前读取发现活动任务，不沿用旧的空列表证据', async () => {
+    await readyCompose()
+    let active = false
+    fetcher.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') throw new Error('offline')
+      return response(String(url).includes('/jobs?') ? { jobs: active && String(url).endsWith('compose-restart') ? [composeJob()] : [] } : composeInventory())
+    })
+    button('重启项目 demo-project').click(); await settle()
+    composeControl('只读核对任务与容器清单').click(); await settle()
+    expect(composeControl('确认重复执行风险并解除本会话保护').disabled).toBe(false)
+    active = true
+    composeControl('确认重复执行风险并解除本会话保护').click(); await settle()
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1)
+    expect(composeProtection()?.textContent).toContain('观察到活动 Compose 任务')
+    expect(composeProtection()?.textContent).toContain('接收结果未知')
+    expect(composeControl('确认重复执行风险并解除本会话保护').disabled).toBe(true)
+    expect(button('重启项目 demo-project').disabled).toBe(true)
+    expect(posts()).toHaveLength(1)
+  })
+  it.each(['unmount', 'session'])('迟到202在 %s 后不通知或刷新', async (mode) => {
     await readyCompose()
     const pending = deferred<Response>(); fetcher.mockReturnValueOnce(pending.promise)
     button('重启项目 demo-project').click(); await settle()
     if (mode === 'unmount') { app!.unmount(); app = undefined } else { invalidateSession(); beginSession() }
-    pending.resolve(response(composeResult())); await settle()
-    expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.warning).not.toHaveBeenCalled()
+    pending.resolve(response(composeJob(), 202)); await settle()
+    expect(ElMessage.info).not.toHaveBeenCalled(); expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.warning).not.toHaveBeenCalled()
     expect(fetcher).toHaveBeenCalledTimes(2); expect(posts()).toHaveLength(1)
+    if (mode === 'unmount') {
+      await mount()
+      expect(composeProtection()?.textContent).toContain('compose-job')
+      expect(button('重启项目 demo-project').disabled).toBe(true)
+      button('重启项目 demo-project').click(); await settle(); expect(posts()).toHaveLength(1)
+    }
   })
 })
 
-
-it('会话更换不重发旧项目请求，旧请求释放自身占用后新会话可操作', async () => {
+it('会话更换不重发旧项目请求，新视图仅派发新会话操作', async () => {
   await readyCompose()
   const first = deferred<Response>()
   fetcher.mockReturnValueOnce(first.promise)
@@ -313,18 +414,17 @@ it('会话更换不重发旧项目请求，旧请求释放自身占用后新会�
   expect(button('重启项目 demo-project').disabled).toBe(true)
   button('重启项目 demo-project').click(); await settle()
   expect(posts()).toHaveLength(1)
-  first.resolve(response(composeResult())); await settle()
+  first.resolve(response(composeJob(), 202)); await settle()
+  expect(ElMessage.info).not.toHaveBeenCalled()
   expect(ElMessage.success).not.toHaveBeenCalled()
   expect(fetcher).toHaveBeenCalledTimes(2)
+  app!.unmount(); app = undefined; await mount()
   expect(button('重启项目 demo-project').disabled).toBe(false)
-  const second = deferred<Response>()
-  fetcher.mockReturnValueOnce(second.promise)
   button('重启项目 demo-project').click(); await settle()
   expect(posts()).toHaveLength(2)
+  expect(ElMessage.info).toHaveBeenCalledOnce()
   expect(button('重启项目 demo-project').disabled).toBe(true)
-  second.resolve(response(composeResult())); await settle()
-  expect(ElMessage.success).toHaveBeenCalledOnce()
-  expect(button('重启项目 demo-project').disabled).toBe(false)
+  expect(composeProtection()?.textContent).toContain('compose-job')
 })
 
 // These tests exercise the real action gate with a mocked dialog decision; geometry
@@ -345,7 +445,10 @@ describe.each(['compose', 'standalone'] as const)('项目确认范围与取消�
     const commonOptions = { confirmButtonText: `确认${label}`, cancelButtonText: '取消', type: action === 'stop' ? 'warning' : 'info' }
     if (kind === 'compose') {
       const interruption = action === 'stop' ? '服务会中断' : '期间服务会短暂中断'
-      expect(message).toBe(`将通过 Compose ${label}项目“demo-project”。确认前最近一次清单观察到该项目 1 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`)
+      expect(isVNode(message)).toBe(true)
+      const confirmationText = isVNode(message) ? String(message.children) : String(message)
+      expect(confirmationText).toContain(`将通过 Compose ${label}项目“demo-project”。确认前最近一次清单观察到该项目 1 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`)
+      for (const detail of ['冻结项目 ID：demo', '显示名称：demo-project', '工作目录：/srv/demo', '1. compose.yaml', '不是 Compose -p 参数', '已接收不代表完成', '离开页面不会取消']) expect(confirmationText).toContain(detail)
       expect(options).toEqual({ ...commonOptions, customClass: 'ncp-compose-action-confirmation' })
     } else {
       expect(message).toContain(action === 'stop'
@@ -354,17 +457,17 @@ describe.each(['compose', 'standalone'] as const)('项目确认范围与取消�
       expect(message).toContain('冻结操作：'); expect(message).toContain('a'.repeat(64)); expect(message).toContain('已接收不代表完成')
       expect(options).toEqual({ ...commonOptions, customClass: 'ncp-container-action-confirmation' })
     }
-    fetcher.mockImplementation(async (_url, init) => {
-      if (init?.method !== 'POST') return response(String(_url).includes('/jobs/') ? projectJob(action) : kind === 'compose' ? composeInventory() : inventory())
-      const state = action === 'stop' ? 'stopped' : 'running'
-      return response(kind === 'compose'
-        ? { ...composeResult(), action, state, services: [{ name: 'web', state: action === 'stop' ? 'exited' : 'running', running: action !== 'stop' }] }
-        : projectJob(action), kind === 'compose' ? 200 : 202)
+    fetcher.mockImplementation(async (url, init) => {
+      const job = kind === 'compose' ? composeJob(action) : projectJob(action)
+      if (init?.method !== 'POST') return response(String(url).includes('/jobs/') ? job : kind === 'compose' ? composeInventory() : inventory())
+      return response(job, 202)
     })
     confirmation.resolve(confirmed); await settle()
     expect(posts()).toHaveLength(1)
-    if (kind === 'compose') { expect(JSON.parse(String(posts()[0]![1]?.body)).action).toBe(action); expect(ElMessage.success).toHaveBeenCalledOnce() }
-    else { expect(posts()[0]![0]).toBe(`/api/v1/docker/projects/standalone/action-jobs/${action}`); expect(ElMessage.success).not.toHaveBeenCalled(); expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成')) }
+    expect(posts()[0]![0]).toBe(kind === 'compose' ? `/api/v1/docker/compose/projects/demo/action-jobs/${action}` : `/api/v1/docker/projects/standalone/action-jobs/${action}`)
+    if (kind === 'compose') expect(JSON.parse(String(posts()[0]![1]?.body))).toEqual({ workingDirectory: '/srv/demo', configFiles: ['compose.yaml'] })
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining('尚未确认完成'))
   })
 
   describe.each(['cancel', 'close'])('%s 不代表同意', (decision) => {

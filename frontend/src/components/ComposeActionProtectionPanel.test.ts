@@ -56,7 +56,7 @@ describe('Compose 操作保护面板', () => {
   it.each(['queued', 'running', 'failed', 'interrupted'] as const)('%s 即使携带聚合字段也不展示成功证据', status => {
     const view = mount(entry({ phase: 'known', job: job({ status, composeActionResult: completed }) }))
     expect(view.host.querySelector('.saved-results')).toBeNull()
-    expect(view.host.textContent).not.toContain('观察到的服务数')
+    expect(view.host.textContent).not.toContain('服务观察项数')
     expect(view.buttons()[1]!.disabled).toBe(true)
     if (status === 'failed' || status === 'interrupted') expect(view.host.querySelector('[role="alert"]')).not.toBeNull()
   })
@@ -96,15 +96,17 @@ describe('Compose 操作保护面板', () => {
   it.each(['running', 'stopped'] as const)('完成结果仅展示 %s 聚合观察，没有虚构逐服务结果', state => {
     const result = { ...completed, state, action: state === 'stopped' ? 'stop' as const : 'restart' as const }
     const { host } = mount(null, result)
-    expect(host.textContent).toContain(`该次观察状态：${state === 'running' ? '运行' : '停止'} · 观察到的服务数：3`)
+    expect(host.textContent).toContain(`该次观察状态：${state === 'running' ? '运行' : '停止'} · 服务观察项数：3`)
     expect(host.textContent).toContain('不保证健康、持续状态、配置服务完整性或重启次数')
     expect(host.textContent).toContain('没有逐服务结果')
+    expect(host.textContent).toContain('计数表示服务观察项数，同名副本可分别计入，不代表不同服务数或配置服务总数')
+    expect(host.textContent).not.toContain('观察到的服务数')
     expect(host.querySelectorAll('li')).toHaveLength(0)
     expect(host.querySelectorAll('button')).toHaveLength(0)
   })
   it('领取后独立结果保留，status 使用合法容器', async () => {
     const view = mount(entry({ phase: 'resolved', job: job({ status: 'completed', composeActionResult: completed }) }), completed)
-    expect(view.host.querySelector('.saved-results')?.textContent).toContain('观察到的服务数：3')
+    expect(view.host.querySelector('.saved-results')?.textContent).toContain('服务观察项数：3')
     expect([...view.host.querySelectorAll('[role="status"]')].every(node => node.tagName === 'DIV')).toBe(true)
     view.current.value = null; await nextTick()
     expect(view.host.querySelector('.completed-result')?.textContent).toContain('demo')
