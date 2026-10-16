@@ -16,6 +16,31 @@ function button(text: string) { return [...host.querySelectorAll('button')].find
 beforeEach(() => { beginSession(); vi.resetAllMocks(); api.read.mockResolvedValue(page()); api.auth.mockResolvedValue(undefined) })
 afterEach(() => { app?.unmount(); host?.remove() })
 describe('保存历史只读呈现', () => {
+  it('无创建记录时也可用中文类型精确查询创建历史', async () => {
+    await mount()
+    const select = host.querySelector('select')!
+    expect(select.querySelector('option[value="docker-container-create"]')?.textContent).toBe('容器创建')
+    select.value = 'docker-container-create'; select.dispatchEvent(new Event('change')); await flush()
+    expect(api.read.mock.calls.at(-1)?.[0]).toEqual({ type: 'docker-container-create', limit: 50 })
+  })
+  it.each([
+    ['queued', '尚未确认创建完成'], ['running', '尚未确认创建完成'],
+    ['completed', '任务记录标记为已完成'],
+    ['failed', '可能已产生副作用或残留容器'], ['interrupted', '可能已产生副作用或残留容器'],
+  ])('创建历史 %s 仅展示保存记录，不推断容器 ID 或持续运行', async (status, description) => {
+    api.read.mockResolvedValue({ source: 'persisted', items: [{ ...item(status), id: 'create-job-id', type: 'docker-container-create' }] })
+    await mount()
+    const record = host.querySelector('.history-record')!
+    expect(record.textContent).toContain('容器创建')
+    expect(record.textContent).toContain('保存记录：')
+    expect(record.textContent).toContain(description)
+    if (status === 'completed') expect(record.textContent).toContain('不保证持续运行')
+    expect(record.querySelector('h3')?.textContent).toBe('create-job-id')
+    expect(record.textContent).not.toContain('容器 ID')
+    expect(record.textContent).not.toContain('createResult')
+    expect(record.querySelector('progress')).toBeNull()
+    expect(record.textContent).not.toContain('请求取消')
+  })
   it.each(['running', 'constructor', '__proto__', 'toString', 'unknown-state'])('状态 %s 仅来自保存值，未知标签纯文本', async status => {
     api.read.mockResolvedValue(page(status)); await mount()
     expect(host.textContent).toContain('仅显示最后保存的记录，可能落后于当前执行；不代表当前资源状态')

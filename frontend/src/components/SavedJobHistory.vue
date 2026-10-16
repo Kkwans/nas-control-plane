@@ -3,7 +3,7 @@ import { computed, nextTick, ref, useId, watch } from 'vue'
 import { ArrowRight, RefreshCw } from '@lucide/vue'
 import { useJobHistory } from '@/composables/useJobHistory'
 import { validHistoryType } from '@/api/jobHistory'
-import { jobTypeLabel } from '@/domain/jobPresentation'
+import { containerCreateStateDescription, jobTypeLabel } from '@/domain/jobPresentation'
 import { formatLocalTimestamp } from '@/lib/datetime'
 import { useAuthStore } from '@/stores/auth'
 
@@ -16,7 +16,7 @@ function focusPanel() { panel.value?.focus({ preventScroll: true }) }
 const id = useId()
 const typed = ref('')
 const inputError = ref('')
-const known = ['docker-image-pull', 'docker-image-remove', 'compose-deploy', 'docker-container-start', 'docker-container-stop', 'docker-container-restart']
+const known = ['docker-image-pull', 'docker-image-remove', 'compose-deploy', 'docker-container-create', 'docker-container-start', 'docker-container-stop', 'docker-container-restart']
 const types = computed(() => [...new Set([...known, ...(query.value.type ? [query.value.type] : []), ...(page.value?.items.map(item => item.type) ?? [])])])
 const unsupported = computed(() => error.value?.code === 'JOB_HISTORY_UNSUPPORTED')
 const unauthorized = computed(() => error.value?.code === 'AUTH_UNAUTHORIZED')
@@ -51,6 +51,7 @@ const stateLabels = new Map([['queued', '排队中'], ['running', '执行中'], 
       <article v-for="job in page?.items" :key="job.id" class="history-record" :aria-label="job.reference || job.id">
         <div class="history-top"><span>{{ jobTypeLabel(job.type) }}</span><span class="history-status">保存状态：{{ stateLabels.get(job.status) ?? job.status }}</span></div>
         <h3>{{ job.reference || job.id }}</h3>
+        <p v-if="job.type === 'docker-container-create' && containerCreateStateDescription(job.status)" class="history-notice">保存记录：{{ containerCreateStateDescription(job.status) }}</p>
         <p class="history-updated"><time :datetime="job.updatedAt">记录更新时间 {{ formatLocalTimestamp(job.updatedAt) }}</time></p>
         <details><summary>查看保存详情</summary><dl>
           <div><dt>完整 ID</dt><dd class="history-mono">{{ job.id }}</dd></div>

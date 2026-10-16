@@ -20,6 +20,18 @@ function set(key: string, value: unknown) { (mock.state[key] as Ref<unknown>).va
 function button(text: string) { return [...host.querySelectorAll('button')].find(item => item.textContent?.includes(text))! }
 afterEach(() => { app?.unmount(); host?.remove(); vi.clearAllMocks() })
 describe('TaskCenterDrawer', () => {
+  it('创建任务没有容器身份回执时仍保守展示，不推断容器 ID、进度或取消能力', async () => {
+    await mount([job({ type: 'docker-container-create', status: 'completed', reference: undefined, cancellable: true })])
+    expect(host.textContent).toContain('容器创建')
+    expect(host.textContent).toContain('任务记录标记为已完成')
+    expect(host.textContent).toContain('不保证持续运行')
+    expect(host.querySelector('h3')?.textContent).toBe('job-1')
+    button('查看详情').click(); await nextTick()
+    expect(host.textContent).toContain('此任务不支持取消')
+    expect(host.textContent).not.toContain('容器 ID')
+    expect(host.querySelector('progress')).toBeNull()
+    expect(host.querySelector('.task-cancel')).toBeNull()
+  })
   it('镜像删除接收不显示完成、字节进度或取消，并提供只读刷新', async () => {
     await mount([job({ type: 'docker-image-remove', status: 'queued', cancellable: false })])
     expect(host.textContent).toContain('镜像删除')

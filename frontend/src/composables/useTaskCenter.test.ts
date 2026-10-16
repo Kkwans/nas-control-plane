@@ -35,6 +35,17 @@ beforeEach(() => {
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers() })
 
 describe('任务中心观察与竞争', () => {
+  it('创建任务复用中文类型筛选和搜索且不可取消', async () => {
+    const create = job({ id: 'create-job', type: 'docker-container-create', reference: undefined })
+    api.list.mockResolvedValue(list([create, job()]))
+    const { state } = setup(); await flush()
+    expect(state.typeOptions.value).toContainEqual({ value: 'docker-container-create', label: '容器创建' })
+    state.query.value = '容器创建'; expect(state.filteredJobs.value).toEqual([create])
+    state.query.value = ''; state.typeFilter.value = 'docker-container-create'
+    expect(state.filteredJobs.value).toEqual([create])
+    expect(state.canCancel(create)).toBe(false)
+    await state.requestCancel(create); expect(api.cancel).not.toHaveBeenCalled()
+  })
   it('首次加载、混合类型、本地筛选和分页，部分及全量解析异常不当作空集合', async () => {
     const first = deferred<JobListResult>(); api.list.mockReturnValueOnce(first.promise)
     const { state } = setup(); expect(state.loading.value).toBe(true)

@@ -20,6 +20,7 @@ export function jobStateLabel(job: JobSnapshot): string {
   return jobStatusOptions.find((option) => option.value === jobState(job))!.label
 }
 export function jobTypeLabel(type: string): string {
+  if (type === 'docker-container-create') return '容器创建'
   if (type === 'docker-container-start') return '容器启动'
   if (type === 'docker-container-stop') return '容器停止'
   if (type === 'docker-container-restart') return '容器重启'
@@ -28,10 +29,18 @@ export function jobTypeLabel(type: string): string {
 export function jobArtifactLabel(job: JobSnapshot): string {
   return job.artifactState === 'present' ? '存在' : job.artifactState === 'deleted' ? '已不存在' : '未核实'
 }
+/** 创建历史仅有保存状态，不依赖详情回执，也不推断容器身份或当前状态。 */
+export function containerCreateStateDescription(state: string): string {
+  if (state === 'queued' || state === 'running') return '容器创建任务已接收，尚未确认创建完成。'
+  if (state === 'completed') return '任务记录标记为已完成；请核对任务详情中的创建回执与容器当前状态，不保证持续运行。'
+  if (state === 'failed' || state === 'interrupted') return '创建结果未确认，可能已产生副作用或残留容器；请只读核对实际状态，勿重复提交。'
+  return ''
+}
 export function jobStateDescription(job: JobSnapshot): string {
   const state = jobState(job)
   if (state === 'persisting') return '任务结果正在保存，尚未确认最终结果。'
   if (state === 'cancelling') return '取消请求已接收，远端执行可能仍在继续。'
+  if (job.type === 'docker-container-create') return containerCreateStateDescription(state)
   if (state === 'interrupted') return '执行结果未确认，请检查实际资源状态。'
   if (/^docker-container-(start|stop|restart)$/.test(job.type)) {
     if (state === 'completed') return '本次操作已返回且读回状态符合目标；不代表健康或持续状态，请刷新核对。'

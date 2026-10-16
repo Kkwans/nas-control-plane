@@ -97,3 +97,32 @@ describe('单容器操作任务展示', () => {
     expect(canRequestJobCancellation(pending)).toBe(false)
   })
 })
+
+describe('容器创建任务展示', () => {
+  const type = 'docker-container-create'
+  it('接收不代表完成，完成记录仍需核对详情回执与当前状态', () => {
+    expect(jobTypeLabel(type)).toBe('容器创建')
+    for (const status of ['queued', 'running'] as const) {
+      expect(jobStateDescription(job({ type, status }))).toBe('容器创建任务已接收，尚未确认创建完成。')
+    }
+    const description = jobStateDescription(job({ type, status: 'completed' }))
+    expect(description).toContain('任务记录标记为已完成')
+    expect(description).toContain('请核对任务详情中的创建回执与容器当前状态')
+    expect(description).not.toContain('回执已持久保存')
+    expect(description).toContain('不保证持续运行')
+  })
+  it.each(['failed', 'interrupted'] as const)('%s 不承诺无副作用，也不建议重放', status => {
+    const description = jobStateDescription(job({ type, status }))
+    expect(description).toContain('创建结果未确认')
+    expect(description).toContain('可能已产生副作用或残留容器')
+    expect(description).toContain('只读核对实际状态，勿重复提交')
+  })
+  it.each(['queued', 'running', 'completed', 'failed', 'interrupted'] as const)('%s 的 pending 仍未确认且不支持取消', status => {
+    const pending = job({ type, status, persistenceStatus: 'pending', cancellable: true })
+    expect(jobState(pending)).toBe('persisting')
+    expect(jobStateDescription(pending)).toBe('任务结果正在保存，尚未确认最终结果。')
+    expect(isTerminalJob(pending)).toBe(false)
+    expect(canRequestJobCancellation(pending)).toBe(false)
+    expect(canRequestJobCancellation(job({ type, status, cancellable: true }))).toBe(false)
+  })
+})
