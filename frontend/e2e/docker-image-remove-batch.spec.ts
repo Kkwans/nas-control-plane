@@ -194,12 +194,20 @@ for (const width of [390, 1440]) for (const valid of [true, false]) {
     const actualReceipt = page.waitForResponse((response) => new URL(response.url()).pathname === removePath && response.request().method() === 'POST')
       .then(async (response) => ({ status: response.status(), contentType: response.headers()['content-type'], body: await response.json() }))
     const captures: Awaited<ReturnType<typeof capture>>[] = []
+    const progress = page.getByRole('status', { name: '批量删除进度', exact: true })
+    const successNotice = page.locator('.el-message--success').filter({ hasText: /^已删除 \d+ 个本地镜像$/ })
     try {
       await confirmation.getByRole('button', { name: '删除 2 个', exact: true }).click()
       await api.received.promise
       expect(api.writes).toEqual([{ imageIds }])
       for (const action of actions) await expect(action).toBeDisabled()
-      await expect(page.getByText(/已删除/)).toHaveCount(0)
+      // 进度中的‘已删除 0’不是成功通知；仍须证明没有提前宣告任何删除成功。
+      await expect(successNotice).toHaveCount(0)
+      await expect(page.getByText(/^已删除 \d+ 个本地镜像$/)).toHaveCount(0)
+      await expect(progress).toContainText('已删除 0')
+      await expect(progress).toContainText('已发送结果未确认 2')
+      await expect(progress).toContainText('等待发送 0')
+      await expect(progress).toContainText('正在处理 2')
       api.release.resolve()
       const receiptResult = await actualReceipt
       expect(receiptResult).toEqual({ status: 200, contentType: 'application/json', body: receipt(mode) })
@@ -215,7 +223,11 @@ for (const width of [390, 1440]) for (const valid of [true, false]) {
         captures.push(await capture(page, info, api, failures, mode, [imageNames[1]!, '部分镜像删除失败']))
       } else {
         await expect(unknown).toHaveCount(2)
-        await expect(page.getByText(/已删除/)).toHaveCount(0)
+        await expect(successNotice).toHaveCount(0)
+        await expect(page.getByText(/^已删除 \d+ 个本地镜像$/)).toHaveCount(0)
+        await expect(progress).toContainText('已删除 0')
+        await expect(progress).toContainText('已发送结果未确认 2')
+        await expect(progress).toContainText('未发送 0')
         await expect(page.locator('.bulk-remove-error')).toHaveCount(0)
         for (const [index, id] of imageIds.entries()) {
           const admission = unknown.filter({ hasText: id })
