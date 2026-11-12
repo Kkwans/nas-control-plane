@@ -100,7 +100,17 @@ jobs:
       - name: Unit tests
         run: corepack pnpm test
       - name: Web artifact regression
-        run: node --test scripts/verify-web-assets.test.mjs
+        env:
+          NCP_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -f scripts/verify-web-assets.test.mjs ]; then
+            node --test scripts/verify-web-assets.test.mjs
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$NCP_RELEASE_TAG" ] && [ ! -e scripts/verify-web-assets.test.mjs ]; then
+            echo "Historical release tag predates web artifact regression; test unavailable."
+          else
+            echo "Web artifact regression test missing" >&2
+            exit 1
+          fi
       - name: Production build
         run: corepack pnpm run build
       - name: Install Chromium
@@ -111,15 +121,35 @@ jobs:
         run: corepack pnpm exec playwright test
       - name: Test UI artifact partitioning
         if: ${{ always() }}
-        run: python3 -m unittest discover -s ../scripts/ci -p 'test_*.py'
+        env:
+          NCP_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -f ../scripts/ci/partition_ui_artifacts.py ] && [ -f ../scripts/ci/test_partition_ui_artifacts.py ]; then
+            python3 -m unittest discover -s ../scripts/ci -p 'test_*.py'
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$NCP_RELEASE_TAG" ] && [ ! -e ../scripts/ci/partition_ui_artifacts.py ] && [ ! -e ../scripts/ci/test_partition_ui_artifacts.py ]; then
+            echo "Historical release tag predates UI artifact partitioning; no partition tests available."
+          else
+            echo "UI artifact partitioner or tests missing" >&2
+            exit 1
+          fi
       - name: Prepare bounded fixture UI artifacts
         id: prepare-ui-artifacts
         if: ${{ always() }}
+        env:
+          NCP_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          python3 ../scripts/ci/partition_ui_artifacts.py \
-            --source test-results \
-            --destination "${RUNNER_TEMP}/ncp-ui-artifacts" \
-            --github-output "$GITHUB_OUTPUT"
+          if [ -f ../scripts/ci/partition_ui_artifacts.py ] && [ -f ../scripts/ci/test_partition_ui_artifacts.py ]; then
+            python3 ../scripts/ci/partition_ui_artifacts.py \
+              --source test-results \
+              --destination "${RUNNER_TEMP}/ncp-ui-artifacts" \
+              --github-output "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$NCP_RELEASE_TAG" ] && [ ! -e ../scripts/ci/partition_ui_artifacts.py ] && [ ! -e ../scripts/ci/test_partition_ui_artifacts.py ]; then
+            echo "Historical release tag predates UI artifact partitioning; screenshot upload skipped."
+            echo "parts=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "UI artifact partitioner or tests missing" >&2
+            exit 1
+          fi
       - name: Upload fixture UI screenshots part 1
         if: ${{ always() && steps.prepare-ui-artifacts.outcome == 'success' && fromJSON(steps.prepare-ui-artifacts.outputs.parts) >= 1 }}
         uses: actions/upload-artifact@v4
