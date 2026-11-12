@@ -267,7 +267,25 @@ docker build \
 
 > `bin/ncp-server-linux-arm64` 是离线镜像构建所需的默认文件名。请将示例标签替换为当前发布标签。
 
-### 5. 启动 Compose 项目
+### 5. 首次准备数据目录与数据库凭据密钥
+
+Server 镜像以 `1000:100` 运行。启动 Compose 前，必须准备可写的数据目录和独立密钥文件；Compose 不会代替你生成密钥。以下命令仅用于**全新安装**，在仓库根目录执行：
+
+```bash
+cd /volume2/Project/nas-control-plane
+sudo install -d -o 1000 -g 100 -m 0700 data secrets
+sudo -u '#1000' ./bin/ncp-server-linux-arm64 database-key-init \
+  --path "$PWD/secrets/database-credentials.key"
+sudo stat -c '%a %u:%g %n' data secrets secrets/database-credentials.key
+```
+
+预期目录归属为 `1000:100`、权限为 `700`，密钥文件属主为 `1000`、权限为 `600`。安装命令不会输出密钥内容，且拒绝覆盖已有密钥。请确认当前 NAS 上 UID 1000 的账号可以读取并执行该二进制。
+
+**升级或恢复已有安装时，不要重新生成密钥，也不要删除已有密钥来重试。** 应保留原有 `data/ncp.sqlite` 与对应的 `secrets/database-credentials.key`，并将二者作为一组安全备份；丢失或换用其他密钥会使已保存的数据库凭据无法解密。已有数据目录的内容也必须能由 UID 1000 读写，已有密钥必须能由 UID 1000 读取；不要用放宽为全员可读写的方式解决权限问题。
+
+如果之前在缺少密钥时启动过旧 Compose，`secrets/database-credentials.key` 可能被 Docker 自动创建为目录。先停止并检查该部署，确认目录中没有需要保留的内容后再处理，不能把目录当作密钥文件。当前 Compose 会在源路径缺失时直接拒绝挂载，避免再次自动创建目录。
+
+### 6. 启动 Compose 项目
 
 必须先启动 Root Agent，再启动 Compose。这样 Server 才能绑定已经存在的 `/run/ncp`。
 
@@ -332,7 +350,8 @@ sudo sh deploy/systemd/install-agent.sh \
 cd deploy/console
 docker compose build server
 
-# 4. 重新创建 Server，Console 和数据目录保持不变
+# 4. 保留原有数据库凭据密钥；不要重新运行 database-key-init
+# 重新创建 Server，Console 和数据目录保持不变
 docker compose up -d --force-recreate server
 docker compose ps
 ```

@@ -190,3 +190,50 @@ describe('数据库 TLS 快照和目标隔离', () => {
     expect(apiMocks.loadDatabaseCatalog).toHaveBeenCalledTimes(1)
   })
 })
+
+
+describe('数据库项目归档并发归属', () => {
+  beforeEach(() => { invalidateSession(); setActivePinia(createPinia()); vi.resetAllMocks() })
+  it('一个项目保存失败不回滚其他项目已经完成的变更', async () => {
+    const store = useDatabaseStore()
+    let reject!: (error: Error) => void
+    apiMocks.updateDatabaseProjectPreference.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail })).mockResolvedValueOnce({})
+    const first = store.setProjectArchived('project:a', true).catch(() => {})
+    await store.setProjectArchived('project:b', true)
+    reject(new Error('rejected')); await first
+    expect(store.archivedProjectKeys).toEqual(['project:b'])
+  })
+  it('同一个项目保存中不能并发提交相反意图，完成后可重新操作', async () => {
+    const store = useDatabaseStore()
+    let resolve!: () => void
+    apiMocks.updateDatabaseProjectPreference.mockReturnValueOnce(new Promise<void>(done => { resolve = done })).mockResolvedValueOnce({})
+    const first = store.setProjectArchived('project:a', true)
+    await expect(store.setProjectArchived('project:a', false)).rejects.toMatchObject({ code: 'operation_busy' })
+    expect(apiMocks.updateDatabaseProjectPreference).toHaveBeenCalledTimes(1)
+    resolve(); await first
+    await store.setProjectArchived('project:a', false)
+    expect(store.archivedProjectKeys).toEqual([])
+  })
+  it('写入前开始的旧读取不能覆盖成功归档', async () => {
+    const store = useDatabaseStore()
+    let resolve!: (value: unknown[]) => void
+    apiMocks.requestDatabaseProjectPreferences.mockReturnValue(new Promise(done => { resolve = done }))
+    apiMocks.updateDatabaseProjectPreference.mockResolvedValue({})
+    const read = store.loadProjectPreferences()
+    await store.setProjectArchived('project:a', true)
+    resolve([]); await read
+    expect(store.archivedProjectKeys).toEqual(['project:a'])
+  })
+  it('写入期间开始的读取即使最后返回也不能覆盖已保存状态', async () => {
+    const store = useDatabaseStore()
+    let finishWrite!: () => void
+    let finishRead!: (value: unknown[]) => void
+    apiMocks.updateDatabaseProjectPreference.mockReturnValue(new Promise<void>(done => { finishWrite = done }))
+    apiMocks.requestDatabaseProjectPreferences.mockReturnValue(new Promise(done => { finishRead = done }))
+    const write = store.setProjectArchived('project:a', true)
+    const read = store.loadProjectPreferences()
+    finishWrite(); await write
+    finishRead([]); await read
+    expect(store.archivedProjectKeys).toEqual(['project:a'])
+  })
+})

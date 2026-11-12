@@ -22,6 +22,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Manual backfills must test/build the requested tag, not the default branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -71,6 +74,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Manual backfills must test/build the requested tag, not the default branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -410,11 +416,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Manual backfills must test/build the requested tag, not the default branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
       - name: Validate Compose
         run: docker compose -f deploy/console/docker-compose.yml config
+      - name: Validate deployment key contract
+        env:
+          NCP_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -f scripts/ci/check_deployment_contract.py ] && [ -f scripts/ci/test_deployment_contract.py ]; then
+            docker compose -f deploy/console/docker-compose.yml config --format json | python3 scripts/ci/check_deployment_contract.py
+            python3 -m unittest discover -s scripts/ci -p 'test_deployment_contract.py'
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$NCP_RELEASE_TAG" ]; then
+            # Historical tags predate this check; validate their original Compose above.
+            echo "Historical release tag has no deployment contract check; Compose config validated."
+          else
+            echo "Deployment contract checker or tests missing" >&2
+            exit 1
+          fi
 
   release:
     name: Publish ARM64 release
+    needs: [backend, frontend, compose]
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     runs-on: ubuntu-latest
     permissions:
@@ -422,6 +446,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Manual backfills must test/build the requested tag, not the default branch.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5

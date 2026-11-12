@@ -31,7 +31,12 @@ services:
       # Create this directory as NAS user 1000 before the first compose deployment.
       - ../../data:/data
       # Provisioned once by `ncp-server database-key-init`; never stored in Git.
-      - ../../secrets/database-credentials.key:/run/secrets/ncp-database-credentials.key:ro
+      - type: bind
+        source: ../../secrets/database-credentials.key
+        target: /run/secrets/ncp-database-credentials.key
+        read_only: true
+        bind:
+          create_host_path: false
     expose:
       - "8750"
     read_only: true

@@ -29,6 +29,9 @@ export const useDatabaseStore = defineStore('database', () => {
   const collectedAt = ref('')
   const archivedProjectKeys = ref<string[]>([])
   let discoverySequence = 0
+  let projectPreferenceRevision = 0
+  let projectPreferenceReadSequence = 0
+  const pendingProjectPreferences = new Set<string>()
   const connectionSequences = new Map<string, number>()
   watch(() => new Map(sources.value.map(item => [item.id, databaseSourceBinding(item)])), (next, previous) => {
     for (const [id, binding] of previous) {
@@ -67,14 +70,24 @@ export const useDatabaseStore = defineStore('database', () => {
 
   async function loadProjectPreferences(existingSession?: SessionContext) {
     const session = existingSession ?? captureSession()
+    const sequence = ++projectPreferenceReadSequence
+    const revision = projectPreferenceRevision
+    const readingDuringWrite = pendingProjectPreferences.size > 0
     const preferences = await requestDatabaseProjectPreferences(session.signal)
-    if (!isCurrentSession(session.generation)) return
+    // 写入前或写入中的读取不能覆盖乐观状态或较新的已完成写入。
+    if (!isCurrentSession(session.generation) || sequence !== projectPreferenceReadSequence ||
+      revision !== projectPreferenceRevision || readingDuringWrite || pendingProjectPreferences.size > 0) return
     archivedProjectKeys.value = preferences.filter((item) => item.archived).map((item) => item.projectKey)
   }
 
   async function setProjectArchived(projectKey: string, archived: boolean) {
     const session = captureSession()
-    const previous = archivedProjectKeys.value
+    if (pendingProjectPreferences.has(projectKey)) {
+      throw new NcpApiError('operation_busy', '此项目的归档状态正在保存，请稍后再操作。')
+    }
+    const previous = archivedProjectKeys.value.includes(projectKey)
+    pendingProjectPreferences.add(projectKey)
+    projectPreferenceRevision += 1
     const keys = new Set(archivedProjectKeys.value)
     if (archived) keys.add(projectKey)
     else keys.delete(projectKey)
@@ -82,9 +95,17 @@ export const useDatabaseStore = defineStore('database', () => {
     try {
       await updateDatabaseProjectPreference({ projectKey, archived }, session.signal)
     } catch (error) {
-      if (isCurrentSession(session.generation)) archivedProjectKeys.value = previous
+      if (isCurrentSession(session.generation)) {
+        // 仅回滚本项目，不撤销其他项目已经保存的归档变更。
+        const current = new Set(archivedProjectKeys.value)
+        if (previous) current.add(projectKey)
+        else current.delete(projectKey)
+        archivedProjectKeys.value = [...current]
+      }
       if (isAbortError(error) || !isCurrentSession(session.generation)) return
       throw error
+    } finally {
+      if (isCurrentSession(session.generation)) pendingProjectPreferences.delete(projectKey)
     }
   }
 
@@ -144,6 +165,9 @@ export const useDatabaseStore = defineStore('database', () => {
 
   function resetSessionState() {
     discoverySequence += 1
+    projectPreferenceRevision += 1
+    projectPreferenceReadSequence += 1
+    pendingProjectPreferences.clear()
     connectionSequences.clear()
     sources.value = []
     catalogs.value = {}

@@ -127,6 +127,7 @@ type keyFileDocument struct {
 // FileKeyProvider stores the deployment key ring in a separate root-managed
 // file. It never creates a replacement key implicitly when the file is
 // missing, because that would make existing credentials unrecoverable.
+// 同一路径的轮换只允许单个 provider 所有者；这里的锁不提供跨实例或跨进程协调。
 type FileKeyProvider struct {
 	path string
 	mu   sync.Mutex
@@ -153,7 +154,7 @@ func CreateFileKeyProvider(path string) (*FileKeyProvider, error) {
 		return nil, &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_create", Cause: errors.New("deployment key path is required")}
 	}
 	provider := &FileKeyProvider{path: filepath.Clean(path)}
-	if _, err := os.Stat(provider.path); err == nil {
+	if _, err := os.Lstat(provider.path); err == nil {
 		return nil, &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_create", Cause: errors.New("deployment key already exists")}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_create", Cause: err}
@@ -163,7 +164,8 @@ func CreateFileKeyProvider(path string) (*FileKeyProvider, error) {
 		return nil, &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_create", Cause: err}
 	}
 	document := keyFileDocument{CurrentVersion: 1, Keys: map[string]string{"1": base64.RawStdEncoding.EncodeToString(key)}}
-	if err := provider.write(document); err != nil {
+	// 初始化必须原子地拒绝任何已有目录项；预检不能防止并发创建。
+	if err := provider.writeFile(document, false); err != nil {
 		return nil, err
 	}
 	return provider, nil
@@ -258,6 +260,12 @@ func (p *FileKeyProvider) write(document keyFileDocument) error {
 }
 
 func (p *FileKeyProvider) writeLocked(document keyFileDocument) error {
+	return p.writeFile(document, true)
+}
+
+// 临时文件写入并同步后才发布。初始化使用硬链接实现原子 no-replace，
+// 轮换保留原有替换语义；不能用 Stat 后 Rename 实现“不覆盖”。
+func (p *FileKeyProvider) writeFile(document keyFileDocument, replace bool) error {
 	contents, err := json.Marshal(document)
 	if err != nil {
 		return &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_write", Cause: errors.New("deployment key file cannot be encoded")}
@@ -286,7 +294,12 @@ func (p *FileKeyProvider) writeLocked(document keyFileDocument) error {
 	if err := temporary.Close(); err != nil {
 		return &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_write", Cause: err}
 	}
-	if err := os.Rename(temporaryPath, p.path); err != nil {
+	if replace {
+		err = os.Rename(temporaryPath, p.path)
+	} else {
+		err = os.Link(temporaryPath, p.path)
+	}
+	if err != nil {
 		return &DatabaseError{Code: CodeKeyUnavailable, Operation: "key_write", Cause: err}
 	}
 	return nil
