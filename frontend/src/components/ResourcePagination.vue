@@ -20,5 +20,5 @@ function next() { if (props.mode === 'cursor') { if (props.hasNext && !props.loa
   </div>
 </template>
 <style scoped>
-.resource-pagination{display:flex;align-items:center;justify-content:center;gap:8px;color:var(--ncp-text-subtle);font-size:.78rem}.resource-pagination button{min-height:34px;padding:0 11px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font-weight:680}.resource-pagination button:disabled{cursor:not-allowed;opacity:.42}.resource-pagination strong{min-width:62px;color:var(--ncp-text);text-align:center}
+.resource-pagination{display:flex;flex-wrap:wrap;flex-shrink:0;align-items:center;justify-content:center;gap:8px;color:var(--ncp-text-subtle);font-size:.78rem}.resource-pagination button{flex-shrink:0;min-width:44px;min-height:44px;white-space:nowrap;padding:0 11px;border:1px solid var(--ncp-line);border-radius:8px;background:var(--ncp-surface);color:var(--ncp-text-muted);font-weight:680}.resource-pagination button:disabled{cursor:not-allowed;opacity:.42}.resource-pagination strong{min-width:62px;color:var(--ncp-text);text-align:center}
 </style>

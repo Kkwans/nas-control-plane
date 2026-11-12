@@ -1,0 +1,524 @@
+# 2026-10-13 改进验证记录
+
+## 基线
+
+- 基线5b81557，独立分支dot/ncp-modernization。
+- 前端117单测、lint、typecheck、build通过；controlstore/compose/database/docker测试通过。
+- 计划及开发分支CI提交f451fe2；对应run38368227961已启动，结果待确认。
+- 本地浏览器两次启动受socket权限限制；没有本轮UI截图通过结论。
+
+## M01 Job快照隔离
+
+- 对registry锁内对象深复制Layers及CompletedAt，覆盖创建、查询、列表、取消成功/失败、删除成功/回滚和持久化入口。
+- 保留存储IO在锁外，不改变API、不声称修复持久化乱序或取消状态机。
+- 聚焦 `go test ./internal/httpapi -run 'Test(JobSnapshot|JobRegistry|NormalizeJobSnapshot)' -count=1` 通过。
+- 相同筛选 `go test -race ... -count=10` 通过；使用可控fake并发，不连接Agent/Docker/PTY。
+- 下一阶段M06仍需解决旧写覆盖终态、删除后迟到UPSERT以及取消确认。
+
+## M02 图标响应隔离
+
+- 本地上传图标、同主机代理图标、默认图标统一发送 CSP `default-src 'none'; style-src 'unsafe-inline'; sandbox` 与 nosniff。
+- 修复直接导航上传SVG文档时缺失隔离策略的分支；保留图片字节及现有缓存机制。外部资源依赖SVG可能受策略限制，旧浏览器缓存不会立即更新。
+- 聚焦 `go test ./internal/httpapi -run 'Test(LocalSiteIcon|FallbackSiteIcon|ProxySiteIcon|SiteIconProxy)' -count=1` 通过。
+- 覆盖本地GET/304/Range、handler级HEAD、proxy SVG/PNG、fallback；HEAD不代表路由已支持HEAD。验证策略头、空body与Range字节，无真实站点访问。
+- 独立审查无阻塞项；真实浏览器脚本禁止执行/图像显示仍未验收，不称为净化SVG内容。
+- 初始分支CI f451fe2/run38368227961全通过；M01提交192fed6/run38368650031启动，结果待确认。
+
+## M04 数据库详情请求与凭据隔离
+
+- 来源切换、卸载、会话撤销时清空敏感草稿并取消观察；发现、自动连接、手动连接与诊断绑定目标和请求代次。
+- Store连接过程只在连接及目录读取均成功、请求仍有效时一起发布冻结凭据与目录；不提前缓存未验证的新凭据。
+- 首次发现有加载/失败重试/不存在分态；首次目录读取失败提供独立“重新读取目录”，连接错误不会误显示目录重试。
+- 13项聚焦测试通过，包含实际点击发现重试、目录重试并恢复；全量当前前端145测试、typecheck、lint通过。
+- 独立审查指出的目录重试缺口已补，未执行真实数据库或NAS操作；浏览器端到端仍待CI。
+
+## 已确认CI
+
+- f451fe2：38368227961 成功。
+- 192fed6：38368650031 成功。
+- 32b2a47：38368942080 成功。
+- b4b43a9：38369147701 截图任务已启动，尚未检查产物。
+
+## M03 Compose编辑事务与确认
+
+- 抽取工作区session，冻结保存内容；保存期间继续编辑保持dirty，跨项目/文件/关闭重开/注销/卸载隔离旧结果。
+- 校验绑定文本修订，确认使用同一冻结payload；重复提交持锁。关闭已提交Job仅停止订阅，不谎报后端取消。
+- 只有completed终态报告部署成功；部署成功更新实际基线，不重新读取覆盖后续编辑。
+- 16项单测通过，全前端145测试、typecheck/lint通过。新增2条受控延迟浏览器回归已通过测试发现，尚待远程执行；迟到校验使用JSON消费后的事件循环屏障，不用任意sleep。
+- 独立审查无新增P0/P1，未操作真实Compose项目。
+
+## M05 容器详情与日志查询隔离
+
+- 容器详情/日志共享一个目标请求作用域，切换、关闭、卸载或会话撤销后旧结果失效。
+- 日志查询拥有独立分页busy、历史请求和SSE代次；筛选切换重置分页状态；合并按来源/资源/流/id保持身份，不让旧历史覆盖较新的实时记录。
+- 新增9项单元测试及2条fixture浏览器回归；当前全量154项前端测试、typecheck、lint、生产build通过。
+- 浏览器测试仅发现解析通过，实际新增交互待CI。
+- b4b43a9/run38369147701与c2ee5ba/run38369388207均成功；48张本轮fixture截图已下载并核验artifact摘要，正在逐图审查，不能概括为全部视觉验收。
+
+## M07 Compose恢复第一切片
+
+- 回滚保留context values，但脱离原请求取消/超时，使用独立两分钟context预算；这不是同步磁盘IO或不响应取消runner的硬退出保证。
+- 同Manager、同规范目标路径的校验/备份/部署/回滚串行化，等待可取消，空闲锁回收。
+- CreateTemp独占创建0600唯一备份并Sync，固定时钟同秒不覆盖；部署与回滚错误均可追溯。
+- compose race×30、vet及agentsocket/httpapi的Compose聚焦测试通过；root另跑race×3通过。测试仅临时目录与fake，不执行Docker。
+- 独立审查无阻塞；修正20ms墙钟脆弱测试，用runner进入屏障取消、synctest虚拟截止时间及已取消ctx/空闲锁竞争回归。
+- 两包完整测试尝试被Unix socket权限限制阻塞，不称全量通过。基线hash、跨进程/软链接别名/lifecycle协调、结构化恢复状态及健康验收仍属后续工作，M07不标全完成。
+
+## 08:40 UTC CI 闭环与视觉证据
+
+- f06479ffa9cca04b911fbf68f01fe6c9ac33fb07：[CI 38370586768](https://github.com/Kkwans/nas-control-plane/actions/runs/38370586768) 全部必需检查成功；154项单元测试、76项浏览器测试、lint/typecheck/build及Go测试/vet/本机和ARM64构建、Compose验证通过。发布相关任务按条件跳过。
+- 该后代验证覆盖M03/M05/M07首切片，修正的是可见选择器点击；没有跳过失败测试。
+- [48张fixture截图审查](NCP-2026-10-13-visual-audit.md)确认分页、操作列、摘要及时间单位问题；不等同于完整交互/读屏/NAS验收。
+
+## M12 可读性首切片
+
+- 分页按钮至少44px且不拆字；Docker footer换行并解除嵌套同名样式叠加，操作列不再以超出容器的最小列宽布局。
+- 数据库说明与路径自然断行；日志时间选项保留单位空间。仅修改组件/页面CSS，保持已有交互逻辑。
+- 新增12项真实文字与元素边界Playwright用例，覆盖320/390/768/1280/1440相关视口；尚待CI运行和after截图检查。
+- 本地154项原有单元、typecheck、lint、生产构建通过；随后M11增加6项组件回归，合并检查单独记录。
+
+## M11 移动导航与模块活跃态
+
+- 00c5f8f：关闭态inert，打开后焦点循环/背景隔离，Escape/遮罩/路由恢复；实时断点及卸载清理；窄高滚动与数据库三级路由模块标注。
+- 新增6项组件与5项真实键盘浏览器测试；独立只读审查无阻塞。root最终全量160项测试、typecheck、lint、生产构建通过。浏览器尚待CI，不称读屏实测。
+- b208e40与00c5f8f均已远端确认，分别触发CI38371621964、38371717985，08:48 UTC仍在运行。
+
+## 08:55 UTC 后续闭环
+
+- b208e40/38371621964 与00c5f8f/38371717985成功；12项新增布局、5项导航浏览器测试已由CI执行。四类可读性问题的[修复后截图复核](NCP-2026-10-13-visual-verification.md)通过，数据库子路由视觉选中恢复。
+- 8d75639/38372051121终端输入取消首片CI通过。fake输入泵覆盖满缓冲、正常转发、错误与超时；独立审查无阻塞。尚未覆盖完整handler清理顺序的独立fake测试，容器同步写可能仍阻塞，会话撤销传播另行实施。
+- 2bb32b3存储首片：版本CAS/仅创建/条件删除与可重复迁移，controlstore race及HTTP Job兼容通过，双连接竞争20轮通过。旧运行时仍用兼容Upsert，本片不宣称B05已修复。
+- 补测旧接口INSERT revision=1及UPDATE保留取消/错误元数据，race通过。
+
+## 09:32 UTC 可靠性与导航闭环
+
+- db959e4总览收藏四态、08b1b96安全stale socket恢复及168855f Job运行时/协议均已获得各自完整CI成功。M09实际运行的是普通Linux CI隔离Unix socket与受控异常退出，不是NAS部署。
+- ca3aa18增加不安全HTTP方法来源检查、端口保留代理契约与稳定403映射；Go CI通过，首次整体CI受已有导航焦点测试失败影响。
+- 7060732两项Job浏览器测试通过；96通过/1失败的真实失败是窄高导航从769px回768px时CSS先隐藏焦点元素、MQL回调后到。9bf1de9修复焦点历史与过时断点事件，增加6项组件回归，保留原浏览器断言。
+- [9bf1de9 CI 38376241497](https://github.com/Kkwans/nas-control-plane/actions/runs/38376241497)全部必需检查成功，闭环上述导航失败及来源防护、Job浏览器验证。未跳过失败测试。
+- 41c9d5c辅助文字提升：数据库摘要与移动Docker元数据字号下限12px并随实际偏好缩放；路径换行。全前端194项单元、typecheck/lint/build通过；新增30项视口×字号浏览器用例已发现，执行和新截图尚待CI。
+- 来源防护尚未进行真实nginx/双站点浏览器攻击或NAS实机测试；Go原生Origin回退比较authority而非scheme，详细边界见来源方案。
+
+## 09:40 UTC 独立历史采集与辅助字号
+
+- [41c9d5c CI 38377160024](https://github.com/Kkwans/nas-control-plane/actions/runs/38377160024)成功：194项单元测试、127项浏览器测试（含30项新字号矩阵）、Go/Compose检查通过。90张fixture PNG已下载并核验SHA256；辅助文字截图视觉复核单独记录，不能仅以断言通过替代视觉验收。
+- e776c17已推送：M13-A服务生命周期采集、主样本/温度原子写、独立7天清理及HTTP/SSE零历史写入。两个独立后端审查无阻塞；四包TestMetrics race×3、完整controlstore race及go vet ./...通过；补测同分钟候选错误恢复和待写失败保持，OpenAPI检查通过。[CI 38377913634](https://github.com/Kkwans/nas-control-plane/actions/runs/38377913634)全部必需检查成功。
+- A仍保留HTTP/SSE直接summary读取；多标签消重、过期提示与流预算属于正在实施的B1。有界历史查询与完整图表缺口为B2，Docker对账为C。所有测试仅fake/临时SQLite，未采集真实主机或NAS指标。
+
+- [辅助文字截图复核](NCP-2026-10-13-secondary-text.md)：30张目标截图通过；共同基线47张RGB不变、12张预期变化，另1张日志滚动后全页捕获出现悬浮页头/skip-link异常，已安排视口断言与规范全页重拍，尚未关闭该异常。
+
+## 10:05 UTC 精度、共享实时与截图闭环
+
+- [9bcd424 CI 38379521199](https://github.com/Kkwans/nas-control-plane/actions/runs/38379521199)成功。数据库直接标量values/keys精度修复由HTTP/protobuf/临时SQLite回归验证，原代码负对照可重现相邻大主键舍入；不保证客户端已经舍入的JS Number、嵌套对象或数据库自身任意精度。
+- [6ca7d3b CI 38380342147](https://github.com/Kkwans/nas-control-plane/actions/runs/38380342147)成功。后端共享快照、连接/逐帧写预算、心跳及状态分离通过独立race十轮；正常Linux CI执行完整Go测试，包括实际loopback HTTP空闲6秒后再次发送和provider关闭EOF。全部使用fake源；Docker仍逐连接RPC，未宣称C已完成。
+- [37ed104 CI 38379835528](https://github.com/Kkwans/nas-control-plane/actions/runs/38379835528)与[实际截图/JSON复核](NCP-2026-10-13-logs-capture.md)关闭日志捕获异常验收：390px明确scrollY=120、header y=0、未聚焦skip-link在视口外，视口及回顶全页像素均正常。旧异常具体成因仍为推测。
+- B1前端独立审查修复了遗漏storage质量判断、fixture时钟漂移、EventSource未就绪注入，以及移动端隐藏状态提示等问题。最终228项单元、typecheck/lint/build通过；5项新浏览器场景与新状态截图待CI。
+
+
+## 10:27 UTC 历史查询边界与图表缺口
+
+- B1前端11d04d3的228项单元及5项新增实时新鲜度浏览器场景通过；该次完整CI失败于既有视觉测试暂停页面时钟后axe异步检查超时。f03775f将原严重/关键无障碍断言分离到正常推进时钟的独立测试，不删除断言、不放宽阈值。[CI 38382227692](https://github.com/Kkwans/nas-control-plane/actions/runs/38382227692)完整通过。
+- e213199历史查询后端：精确闭区间、同一只读快照、父样本与温度行双限额、8MiB完整JSON含换行限额、5秒协作取消预算；过大/无效/超时返回稳定错误，无部分数组。有效7天10081样本×6短名传感器返回5,050,583字节；7传感器超过65536温度行时明确拒绝。独立审查与race/取消/并发快照/全Unicode计数测试通过，[CI 38382724643](https://github.com/Kkwans/nas-control-plane/actions/runs/38382724643)完整成功。非驱动峰值内存硬上限或NAS性能实测。
+- 52a7d85历史图表：真实时间轴、每个缺口一个null、计数器重置/不安全整数不算速率；稀疏温度索引、最多八条选中曲线、有限搜索DOM；加载/错误/空数据与成功状态互斥。独立审查无阻塞，320项单元、typecheck/lint/build及六项新Chromium场景发现通过。像素测试有连续曲线正对照、保留两端要求和缺口无连线断言；[CI 38383466014](https://github.com/Kkwans/nas-control-plane/actions/runs/38383466014)完整通过，139项Chromium测试含六项新增历史图场景实际执行通过；截图独立视觉复核中，不等同于NAS实机验收。
+- M07外部修改回滚保护与明确恢复失败代码正在独立实施；不与上述已发布历史查询/图表修改混合提交。
+
+
+## 10:40 UTC Compose 恢复与视觉后续
+
+- [540e532 CI 38384406312](https://github.com/Kkwans/nas-control-plane/actions/runs/38384406312)全部必需检查成功。回滚前紧邻Rename比较原始字节，外部变更/删除/非普通文件/不可读取时跳过覆盖与重应用；通过严格RPC白名单和Job持久化区分恢复阶段结果。双轮独立race验证及321项前端单元、typecheck/lint/build/OpenAPI通过。bufconn与临时SQLite覆盖超时、取消和迟到结果，未运行真实Docker/NAS。
+- 这只是尽力缩小检查至写入窗口，不是跨进程原子CAS；新编辑基线和成功后外部修改检测未完成。重应用命令成功也不证明容器健康。
+- [历史图截图复核](NCP-2026-10-13-history-visual.md)实际打开16张监控PNG：缺口/独立传感器/错误/空态通过，但发现共享图表既有图例与单位重叠、单点分钟刻度重复，且缺长名称/八选中移动截图。已继续实施排版与相应覆盖，未将CI绿色等同于全部视觉通过。
+- M14-B1显式结果模式正在按更新后的数据库方案实现；保留Root SQL能力，不重复执行写语句，旧Agent须在执行前拒绝不支持的显式模式。
+
+
+## 11:12 UTC SQL 结果模式、真实交互与剩余截图检查
+
+- 76a461c交付M14-B1：显式结果模式与可选QueryWithOptions、已知/未知影响行数、行集关闭检查、成功后不重放的刷新、冻结SQL/mode与保留换行的确认预览。核心、RPC/HTTP和UI独立复核通过；355项前端单元与Go隔离race/build/vet/OpenAPI通过。
+- 76a461c首轮CI有146项浏览器通过、2项继承的监控多选测试失败。f9c3fc3未删除断言，移除监控fixture固定Date.now；独立Vue运行时及真实Element Plus DOM复现证明冻结时间令标签事件与父invoker时间戳相等，导致点击冒泡被丢弃。修正保留固定历史数据，允许UI时钟推进。
+- [f9c3fc3 CI 38387732185](https://github.com/Kkwans/nas-control-plane/actions/runs/38387732185)完整通过：355项单元、148项Chromium，以及Go与Compose检查。两项移动传感器下拉/搜索测试和七项SQL截图场景已实际执行。发布任务保持跳过。
+- 监控最终artifact中的四张320/390px下拉/搜索图已实际打开：长名称在限定宽度内换行、原始标签文字未解释为HTML、选中标记和第八项上限可见；既有28张监控与6张总览图与上一已审查轮RGB一致。
+- SQL结果、刷新失败提示、影响行数未知和确认换行在实际图中可读，但部分工作台元素截图被sticky面包屑覆盖顶部；现有产物缺滚动坐标，尚不能断定为产品控件不可达。正在规范化捕获并补视口/坐标/命中证据，不以CI通过替代视觉闭环。
+
+
+## 11:38 UTC 编辑基线与 SQL 视觉闭环
+
+- 47c078c已推送：Compose磁盘原始hash、必填基线、checked-only RPC、锁内两次写前核对和命令成功后核对；界面复读目标与冻结提交相等才推进hash，保留后续dirty编辑。三层独立审查通过；审查补齐revision存储期间取消检查及两种持久化交错，已提交revision不伪称撤销。
+- [47c078c CI 38390439962](https://github.com/Kkwans/nas-control-plane/actions/runs/38390439962)全部必需检查成功：420项前端单元、151项Chromium，Go及Compose检查通过。新兼容/冲突验证使用fake/tempfile/SQLite/bufconn，实际Compose E2E为浏览器mock API。未执行真实NAS部署。
+- [c4f4473 CI 38389527278](https://github.com/Kkwans/nas-control-plane/actions/runs/38389527278)通过，SQL截图规范化未改产品CSS/API。实际打开29张SQL图并核对9份JSON，135个工具栏命中点全部有效；控件在sticky页头下方、回顶全页与拍后scrollY为0。先前截图验收缺口在这些状态下关闭，[完整视觉证据](NCP-2026-10-13-sql-visual.md)保留成因边界。
+- 少数即时采样的补全菜单坐标落后滚动一帧，实际PNG位置正确；不把该非阻塞坐标限制隐藏成全部动态坐标稳定。
+- 下一片M08-B正在实现活动流会话租约、提交后撤销/到期、WS连接关闭和logs/jobs SSE写入预算；不宣称全部容器exec/PTY子进程已回收。
+
+
+## 12:10 UTC 活动流撤销闭环与后续切片
+
+- 7dc9d21已推送：活动流以数据库重验的会话租约准入，退出仅撤销当前token，改密/禁用/删除在提交后撤销该用户活动流；到期与父请求取消也清理。WS同时关闭浏览器和独占Agent连接，logs/jobs SSE补齐逐帧写入预算。三个独立审查通过，真实SQLite会话至四类流的隔离回归及race通过。
+- [7dc9d21 CI 38393981077](https://github.com/Kkwans/nas-control-plane/actions/runs/38393981077)全部必需检查成功：420项前端单元、151项Chromium，Go测试/vet及本机/ARM64构建、Compose配置检查通过；发布任务跳过。
+- 撤销保证限定在同一Service实例；Login/UpdatePassword最终状态重验不检测期间禁用再启用的ABA。关闭流传输不等同于容器exec或PTY全部子孙已结束。
+- M08-C1已进入实现：已取得容器attachment后的可中断I/O、总关闭预算和退出未确认分类；预会话握手、全局启动锁、主机PTY另片。M14-C同时实现保守结果字节计费、完整行前缀截断和RPC/HTTP编码边界，尚未形成完成或测试通过结论。
+
+
+## 12:23 UTC 容器终端有界关闭
+
+- M08-C1收紧为同一net.Conn与缓冲Reader的attachment契约，取消直接关闭连接；Write/Resize感知生命周期，Close总预算从入口开始。传输关闭、exec主进程退出核验、本地I/O收尾分别判断，无法确认时保存独立错误；日志不输出底层敏感错误。关闭中保留Manager配额。
+- 独立审查用纯fake负对照复现了首帧Send阻塞取消、Close先于本地Read收尾的缺口。最终采用唯一输出sender负责started及后续帧，等待已准入Read与输入gate使用剩余关闭预算，耗尽时明确本地清理未确认；不把返回RPC之前强制join依赖RPC返回的transport泵当作正确方案。
+- 最终28项新cleanup测试与4项M08-B回归，race重复20轮通过；独立复核race重复10轮通过。三包仅编译、terminal/agentsocket vet、server/agent构建及精确diff检查通过。实际连接用内存net.Pipe，Agent使用受控fake Session，退出超时/错误通过fake gateway注入；没有真实Docker/PTY/NAS操作。
+- 预会话ExecAttach握手、Manager.Start全局持锁、宿主机PTY和任意子孙进程清理仍不在此片。两秒Close预算加100ms最后通知及调度开销不能表述为严格2.000秒RPC保证；预算耗尽不能表述为全部本地owner已结束。
+
+
+## 12:27 UTC 数据库结果字节预算
+
+- M14-C核心、RPC/HTTP、UI/OpenAPI共21个文件冻结。1MiB保守结果计费与最终编码复核、Scanner复制前拒绝超大值、完整行前缀截断、固定offset整页失败、AsMap前节点/深度预算与稳定result_too_large已实现；不提高gRPC默认上限、不重放SQL。
+- 两路独立审查补齐自定义编码/匿名字段及旧protobuf展开边界，以及翻页、排序、页大小失败后的导航跳行问题；最终均无阻塞。首行超限明确提示不是无匹配或未写入，UI保留完整单元且写入错误先提示核对状态。
+- 完整database与OpenAPI包、agentsocket/httpapi数据库精确选择、三包相关race、四包vet及native/linux-arm64双命令构建通过。完整前端445测试、typecheck、lint、build/bundle预算和E2E源码检查通过；新浏览器用例与截图待分支CI。
+- 最终验证中一次过宽的agentsocket/httpapi测试选择触发既有Unix socket集成，bind被环境拒绝；没有创建listener、没有提权或绕过。该次整包测试明确不算通过，完整集成由授权普通Linux CI另验。测试没有访问用户电脑、NAS或真实生产数据库。
+
+
+## 12:41 UTC SQL结果验收与Docker共享采集
+
+- [41d8ac3 CI 38397786863](https://github.com/Kkwans/nas-control-plane/actions/runs/38397786863)完整通过：445项前端单元、154项Chromium及Go/构建/Compose检查。独立实际复核47张SQL PNG、15份JSON与225个控件命中点；预算/空前缀/写入风险提示可读。发现失败头仍写等待执行，b967c53已独立修复并补状态迁移测试，446项本地单元及类型/构建/lint通过，新CI待验收。
+- [6cb1688 CI 38397142273](https://github.com/Kkwans/nas-control-plane/actions/runs/38397142273)完整通过，闭环容器终端C1隔离验证。保留预握手、主机PTY和后代进程边界。
+- M13-C0十个代码/测试文件冻结，独立复核无阻塞；Docker SSE按需单worker、5秒最小启动间隔及RPC预算、深复制/容量/双年龄状态、最后需求取消和旧代结果拒绝。SSE只读缓存不等待Docker，GET仍新鲜直读且可与SSE并行；事件重连对账尚未交付。
+- 四包精确TestDockerRealtime测试及race三轮、独立race与六项既有纯fake SSE名额/慢读/心跳/写预算回归通过；全仓仅编译、受影响包vet、OpenAPI与diff检查通过。内存RPC检查1MiB JSON/3MiB protobuf完整清单预算，不改变全局gRPC上限；无真实Docker/NAS采集。
+
+
+## 12:43 UTC 图标隔离验证补齐
+
+- M02增加真实上传/读取handler的共享契约回归，核对恶意SVG与PNG原字节、内容类型、CSP和nosniff等响应；使用recorder/tempdir，不启动HTTP服务。
+- 三项Chromium用例分别验证独立文档脚本/onload阻止、iframe不透明源隔离及SVG/PNG解码与绿色像素兼容；同一未保护SVG正对照必须实际执行。Go独立固定CSP断言防止fixture与handler一同弱化。
+- 精确Go测试、ESLint、严格TypeScript及Playwright三项发现、独立审查和diff检查通过；审查删去了图片宿主上无意义的空属性断言。真实浏览器执行仍待分支CI，不将路由fixture重放描述为真实后端网络或NAS部署验证。
+
+
+## 12:49 UTC CI与视觉闭环
+
+- [b967c53 CI 38398946480](https://github.com/Kkwans/nas-control-plane/actions/runs/38398946480)完整通过：446项单元、154项Chromium。实际复核六张超限错误截图，四张能显示结果头的图仅标题文字像素改变为执行失败；独立校验225个控件命中点，未发现该修复的布局回归，完整证据见[预算视觉复核](NCP-2026-10-13-budget-visual.md)。
+- [88f36ef CI 38399324201](https://github.com/Kkwans/nas-control-plane/actions/runs/38399324201)完整通过，C0共享Docker SSE已闭环隔离验证；C1强刷新屏障另片实施中。
+- [ad412d8 CI 38399545409](https://github.com/Kkwans/nas-control-plane/actions/runs/38399545409)完整通过：446项单元、157项Chromium，含三项新增图标安全测试。未保护SVG正对照、受保护独立文档/iframe脚本与同源隔离、SVG/PNG像素兼容已在真实Chromium执行；网络响应为与真实handler回归锁定的fixture，不冒充实际部署验证。
+
+
+## 12:54 UTC 强刷新屏障与动态效果偏好
+
+- M13-C1共11个代码/测试文件冻结并完成分层独立审查：采集开始序号屏障、64等待者、共享串行化与取消、12秒HTTP等待，以及五个既有操作后调用的强制刷新。旧在途采集/Promise不得冒充操作后状态核对，过时请求不覆盖新状态但仍向自己的调用者准确返回结果。
+- collector race十轮、HTTP精确选择race二十轮与独立混合SSE/三个GET集成race五轮、八个既有sites及三个dashboard回归race十轮通过；48项store测试、110项相关前端测试、类型/lint/build、Go仅编译/build/vet和OpenAPI解析通过。完整分支CI尚待验收。
+- /readyz保留独立3秒探测，不纳入最长12秒强刷新屏障，仍可与共享源重叠；C2事件重连对账尚未完成。此片只保证规定共享读取路径的序列化，非整个进程所有Docker调用唯一。
+- 80cb4bc已独立推送：图表动画与xterm光标闪烁实时响应减少动态效果偏好，监听随组件销毁，重连读取当前偏好且不额外创建终端。27项聚焦单测与独立复核、类型/lint/build通过；mock ECharts/xterm测试不等于真实渲染验收。共享工作树469项前端测试同时包含C1，不能算作该独立提交的精确测试总数。
+
+
+## 13:10 UTC 事件断线对账
+
+- [80cb4bc CI 38400736140](https://github.com/Kkwans/nas-control-plane/actions/runs/38400736140)完整通过，454项单元、157项Chromium；[7855d23 CI 38400983759](https://github.com/Kkwans/nas-control-plane/actions/runs/38400983759)完整通过，469项单元、157项Chromium及Go/构建/Compose，闭环C1强刷新屏障。
+- C2共11个代码/测试文件冻结，两层独立审查无阻塞。首订阅与重连全量对账、epoch/需求代次保护、事件dirty合并、1/2/4/8/16/30秒退避及5秒周期真实采集已实现；旧Agent不支持新RPC明确不可用，需要配套升级。
+- 根审查发现Agent同步Send可能挡住provider EOF，已改为唯一sender与主生命周期分离；实际fake负对照证明在释放阻塞transport前handler可返回并释放Watch名额。reader协作取消后join，transport sender不能在RPC返回前强制join。
+- 核心fake race三轮、Agent独立fake/bufconn race二十轮、五包TestDockerRealtime组合race及编译/vet检查通过。1KiB帧限额、旧Agent协议不匹配、无ready超时、SDK Err/EOF、64需求、重连删除、storm合并和取消代次均覆盖；完整CI待验收。无真实Docker/NAS操作。
+
+
+## 13:15 UTC JSON请求类型契约
+
+- M10-B二十个代码/测试/规格文件冻结并独立审查；35个JSON路由在四个decoder校验单一application/json，六个auth/user错误出口统一415及requestId。保留Origin/认证/依赖预检、UseNumber、11个无body动作和multipart上传。可选inspect按实际空体判断并保留首字节及原Close。
+- 根独立TestJSON race通过（3.422s），审查独立全矩阵与OpenAPI通过；35路由缺失/plain/重复头拒绝与正确MIME错误JSON回归，no-side-effect计数、敏感信息不回显、真实临时SQLite CLI生命周期均覆盖。四处decoder去掉guard及恢复旧ContentLength判断的五个overlay负对照全部按预期失败，未改工作树产品文件。
+- 现有37项审计筛选Go回归、六个前端API文件121项测试、新文件lint及Vue类型检查通过；前端契约实际调用35个API函数、11个无body动作与FormData，415无自动重试或清除会话。完整分支CI待验收。
+- CLI仍无需Origin，但JSON必须显式Content-Type；原无头或curl默认表单JSON有意变为415。LimitReader隐藏限额后尾部的问题另片，不混称已修复。没有更改真实安全设置、凭据或生产环境。
+
+
+## 13:26 UTC 完整请求体限额
+
+- [f2580b7 CI 38403123167](https://github.com/Kkwans/nas-control-plane/actions/runs/38403123167)完整通过，469项单元与157项Chromium；[4ddda99 CI 38403759891](https://github.com/Kkwans/nas-control-plane/actions/runs/38403759891)完整通过，521项单元与157项Chromium，Go/构建/Compose均通过。
+- M10-C九个文件冻结且独立审查无发现：四decoder先读取完整有界body，再严格解码；保持8KiB/16KiB/1MiB容量，完整空白与尾部计入，35路由超限统一413，保留原400/415及认证来源优先级和数字精度。
+- 新增测试覆盖读取边界/分块、读取错误、取消/空读、35路由无副作用、inspect前缀与Close及保护顺序。旧四decoder的overlay负对照产生432项预期失败，证明隐藏尾部等缺陷可被捕捉。冻结后race通过20.041s，安全HTTP回归2.095s、go build ./...、OpenAPI、87项前端契约测试与vue-tsc、diff检查通过。完整CI待验收。
+- 不启动本地网络服务、不无限drain、不修改HTTP timeout；取消依赖底层Reader配合。限额是payload完整字节预算，不是进程总内存硬上限。无NAS、真实Docker或生产操作。
+
+## 13:36 UTC 完整请求体限额 CI 闭环
+
+- 208bc58262445180cbea87ea2ae91b2b70e08575 已推送并核对远端；[CI 38405801295](https://github.com/Kkwans/nas-control-plane/actions/runs/38405801295)完整通过：556项前端单元、157项Chromium，Go检查与Compose均成功，发布任务跳过。
+- 主机PTY H1正独立审查：已发现并修正初版在直属child自然退出后立即关闭master导致尾部输出丢失的问题；尾部排空与迟到父取消的并发回归仍在补充。不把未冻结工作树或未执行的真实PTY用例计为已验收。
+
+## 13:38 UTC 主机 PTY 取消与回收
+
+- H1改用一次非阻塞RawConn系统调用与可取消gate；Resize不再通过File.Fd恢复阻塞。Write部分成功不重放，共享预算；Close保存首次结果并分别报告本地清理/直属child回收未确认。
+- 独立审查发现自然Wait后立即abort会丢失尾部输出，已改为排空立即可读内容，在EOF/EAGAIN结束；自然退出后的输入拒绝不破坏尾部。父取消watcher保留到排空/关闭，覆盖未开始Read时迟到取消；deadline与receipt同时就绪时再次核对凭据。
+- 独立纯fake `TestHostCleanup|TestHostRawTransport` race十轮通过；实现方生命周期race十轮及Agent分类测试通过，全包仅编译检查、Darwin/amd64 Agent包交叉编译通过。无本地真实PTY、Shell或子进程用例执行。
+- 新增隔离CI用例验证O_NONBLOCK、真实PTY读取消/写背压和零/非零/信号终止直属child回收，尚待完整CI。启动前locale/能力探测、Manager.Open持锁和容器attach握手不在本片范围；保持既有readiness流程，不额外添加无截止的等待。
+
+## 13:44 UTC 主机 PTY 隔离 CI 闭环
+
+- 96070cd00476e26bbd9ac8b69f236033b67f7e7e 已推送并核对远端；[CI 38406804798](https://github.com/Kkwans/nas-control-plane/actions/runs/38406804798)的Go、前端及Compose均通过，发布任务跳过。
+- 隔离Linux完整go test执行terminal包3.165s成功，包含保留的交互PTY及新增O_NONBLOCK、空读取消、写背压和直属child零/非零/信号回收测试；本地未执行这些真实内核/子进程用例。此证据不等于NAS实机验证或任意进程树清理保证。
+- H2开启预留与短锁发布正在实现，独立审查同步进行；不因等待CI停止后续授权开发。
+
+## 13:48 UTC 开启预留与并发发布
+
+- H2四个代码/测试文件冻结：Manager.Open的Start/Metadata/拒绝后Close移出全局锁，opening/live/closing原子计费；晚到取消不发布，Close返回前不释放资源名额。默认上限及协议不变。
+- Agent初始失败也记录安全清理分类，不泄露未发布ID、底层错误或用户输入。独立审查补上裸主错误与带码Close错误组合的分类回归，次级取消/目标错误不再改变原Internal映射。
+- 实现方组合纯fake选择器race二十轮、独立审查同一选择器race五轮通过；覆盖TestTerminalStartReservation、既有TestManager、关闭预留与启动中取消回归。根Go构建、冻结hash和diff检查通过。完整CI待验收。
+- 无本地PTY/子进程/监听器或NAS操作；不合作的Start/Metadata仍占预留，单次启动期限、SDK握手与任意第三方实现panic不由该片保证。
+
+## 13:55 UTC 开启预留 CI 与日志导出进展
+
+- 037f91f306d6fea7f6acbd971b8a25b455de2529已推送并核对远端；[CI 38408120860](https://github.com/Kkwans/nas-control-plane/actions/runs/38408120860)完整通过，556项前端单元/157项Chromium，Go/Compose均成功，发布跳过。
+- M15-A当前页导出代码及纯前端验证正在收尾；独立审查覆盖2MiB准确UTF-8边界、控制字符可逆转义、字段白名单、旧会话与未应用查询禁用、URL清理，发现同步click触发销毁后重访问anchor的边界并已修复。实际下载与布局截图仍待新增隔离浏览器用例执行。
+- OpenAPI仅纠正原有“全部日志已脱敏”的过度描述：系统/Agent只覆盖已识别模式，容器不保证脱敏。无接口或权限变更；OpenAPI测试通过0.559s。
+
+## 13:57 UTC 日志当前页导出待验收
+
+- M15-A七个前端文件冻结，新增当前页明确范围/条数的UTF-8日志快照下载、200条/2MiB硬限额、字段白名单、控制字符转义、未应用筛选/旧会话禁用与对象URL释放；导出不新增API请求或自动分享。
+- 最终全量前端51文件610项单元通过，lint、类型、format与生产构建通过，最大bundle518.0KiB低于540KiB预算；独立审查早一轮606项通过后，补充了四项单元回归。最终fixture改动后lint/diff及独立E2E类型检查通过。
+- 新增16项Playwright用例覆盖真实下载事件与文件字节、当前页/第二页、UTF-8/时间精度、资源释放、搜索草稿、来源代次、SSE快照、退出/导航、键盘及四宽度100%/200%截图和axe。尚未在本地执行真实浏览器；CI与实际截图复核仍是未完成门槛。
+
+## 14:10 UTC 日志导出浏览器发现回归
+
+- ff92b16的[CI 38409445080](https://github.com/Kkwans/nas-control-plane/actions/runs/38409445080)前端E2E为170通过/3失败；Go、Compose与前端其他阶段通过。两个既有页面回归测试发现390/768视口body宽717/1451，实际八张新截图确认说明文字逃逸为工具栏右侧第二列。
+- 根因是横向wrap规则延续到窄屏column布局及说明的100% flex-basis。修复显式关闭column wrapping、重置说明basis，并让分页/跟随控件在放大字体下换行；页大小选择器改为随rem增宽，避免“5…”裁切。
+- 第三个失败是新增SSE快照用例点击隐藏Element Plus input；改为真实可见switch包装元素，不使用force。原有overflow断言不变；新增导出用例补充100%/200% body/main宽度及分页文字不裁切断言。
+- 独立源码审查、59项聚焦测试、lint/类型与fixture类型检查通过，替换CI与实际像素复核尚待执行。初次失败事实及制品hash见[日志导出视觉复核](NCP-2026-10-13-log-export-visual.md)，不得追溯改写为通过。
+
+## 14:12 UTC locale 探测资源边界
+
+- H3四文件冻结并独立审查：仅locale探测继承父context，750ms预算、100ms WaitDelay及32KiB固定stdout；stderr丢弃，完整成功且精确命中才选C.UTF-8，否则C，不缓存。
+- 精确纯fake/data/config选择器二十轮15.115s、race一轮1.781s通过，独立相同选择器也通过；全包仅编译、vet及本机/ARM64命令构建通过。实际locale/helper/PTY/监听器未在本地运行。
+- CI helper覆盖成功/失败/超限/父取消及管道未关闭；继承管道模拟由两个测试直属child持有真实exec stdout-copy管道，各自唯一Wait owner和有界失败清理，不能据此宣称生产回收任意后代。取消测试记录Wait后的context错误，防止把探测deadline误作显式父取消通过。
+- WaitDelay不抢占Process.Wait或PATH/启动中的内核等待，H2预留不会因未知owner提前释放；Bash能力CombinedOutput仍为独立缺口。
+- 日志窄屏修复37354be已推送并核对远端，[替换CI 38411236238](https://github.com/Kkwans/nas-control-plane/actions/runs/38411236238)进行中，未将初次失败改写为通过。
+
+## 14:20 UTC 日志视觉闭环与实时测试修正
+
+- 37354be替换CI为172通过/1失败；实际8张PNG确认390/768恢复视口宽度，导出说明完整回到按钮下方，四宽度200%根字号“5 条”不再省略。原始失败及新制品hash分别保留在[视觉复核](NCP-2026-10-13-log-export-visual.md)，不是浏览器真实zoom验收。
+- 剩余失败的精确原因：共享installMockApi将EventSource替换为不发HTTP的内存事件源，测试等待HTTP路由永远不会发生。单文件修正改为页面初始化后观察当前事件源，检查实际开关aria状态、URL参数及单实例，再保留真实Blob下载字节、点击后实时条目显示、文件快照不变和流未重启断言；不将模拟SSE描述为真实网络传输。
+- 610项单元、lint、类型、独立fixture类型与源码审查通过，替换浏览器CI仍待执行。
+- H3 41689c0的[CI 38411607938](https://github.com/Kkwans/nas-control-plane/actions/runs/38411607938)Go/Compose通过，terminal包4.118s包含实际locale helper回归；完整CI因同一日志fixture失败而未通过（172通过/1失败），不是locale失败。
+
+## 14:26 UTC Bash 能力探测资源边界
+
+- H4三文件冻结并独立审查：保留Root、原参数/rc/脚本/环境，共享同一可比较writer对stdout+stderr合计最多32KiB；原750ms context新增100ms WaitDelay，同步Run保留唯一Wait责任。
+- 仅完整成功且context有效、未超限时解析；任一失败三个能力布尔值全部false，errors.Join保留运行/取消/超限原因，不记录捕获内容。共享parser、容器路径和ready-FD未改。
+- 精确16项fake/config/parser/主机及容器metadata选择器0.790s、race1.801s通过；独立最终race1.802s，全包仅编译、vet、本机构建和冻结hash/diff通过。实际helper仅编译，fd1/fd2继承管道、双流输出与取消行为待隔离CI。
+- 容器探测的截断、非零部分成功、状态确认与非TTY多路帧解析仍需单独设计；H4不宣称覆盖所有探测生产者，也不承诺硬墙钟或任意后代回收。
+- b5c4844已推送，最终日志fixture复验[CI 38412715113](https://github.com/Kkwans/nas-control-plane/actions/runs/38412715113)进行中，真实下载与模拟SSE的覆盖边界保持明确。
+
+## 14:27 UTC 日志导出与locale完整CI闭环
+
+- [b5c4844 CI 38412715113](https://github.com/Kkwans/nas-control-plane/actions/runs/38412715113)整体成功，51文件610项单元、173/173项Chromium，Go/Compose通过，发布跳过。
+- 最后一项实时快照场景通过：模拟日志事件到达后页面更新，但真实下载文件仍是点击前快照且事件源未重启。37354be八图视觉闭环适用于未变化的前端产品代码；不将模拟事件源描述为真实网络SSE。后代完整CI同时覆盖H3实际locale helper。
+
+
+## 14:36 UTC Bash 能力探测完整 CI 闭环
+
+- cadd8b8192bb57951b7c009f26bda8c02d53b7da 的 [CI 38413659465](https://github.com/Kkwans/nas-control-plane/actions/runs/38413659465)整体成功；Go/Compose通过，前端51文件610项单元、173项浏览器测试通过，发布跳过。
+- 继续容器能力探测完整帧、有界捕获和退出状态确认；静态补丁审查不替代编译、race与运行验收。
+
+## 14:42 UTC 容器预探测完整性
+
+- 三文件实现仅修改容器能力预探测：32KiB捕获加哨兵、完整帧校验、取消/关闭回调收尾、非Running且零退出才接受输出；失败前缀不再报告能力。
+- 30项纯fake测试0.011s，race 1.038s；独立审查及此前20轮race1.288s通过，补充缺失Reader/Conn用例后再次复验。全包仅编译、vet、命令构建及diff检查通过。
+- 不在本地运行Docker/PTY/真实helper或NAS；SDK预读、解码缓冲、attach前握手、Close不返回和远程进程退出仍保留各自边界。完整隔离CI待运行。
+
+## 14:48 UTC 容器预探测完整 CI 闭环
+
+- e1230e7e3d2dd4dfaa4cac1d36b0dc6c6b62c994 已推送并核验远端。[CI 38415818563](https://github.com/Kkwans/nas-control-plane/actions/runs/38415818563)整体成功，Go/Compose通过，前端610项单元和173项浏览器测试通过，发布跳过。
+- 继续M15-B最近任务抽屉：复用当前registry列表、显式状态和镜像取消能力；尚未宣称新的任务中心浏览器或像素验收通过。
+
+## 14:50 UTC 镜像产物未知状态修正
+
+- 复现completed且artifactState=unknown、未加载或无匹配镜像清单时误显示已删除的问题。保留任务完成状态，独立显示镜像未核实；明确deleted及取消/保存优先级保持不变。
+- 15项下载状态测试、精确lint通过；主任务复核三文件diff，当前工作树完整类型检查及生产构建通过，最大chunk518.0KiB低于540KiB预算。匹配本地标签仅代表已加载快照中的正向证据，不保证资源仍实时存在。
+- 与正在实施的任务抽屉分开提交；此片不包含新抽屉源码。隔离CI及新文案布局截图仍待验收。
+
+## 14:57 UTC 最近任务中心本地验收
+
+- M15-B新增顶栏异步抽屉、最近混合任务列表、本地筛选分页和详情、可取消镜像任务的明确请求反馈；不增加后端API或逐任务SSE。
+- 生命周期及UI独立源码审查完成；55文件652项单元、lint、typecheck、生产构建及包预算通过。19项新浏览器fixture已通过独立tsc、lint及发现，包括旧镜像页未知产物回归；尚未实际执行Chromium或确认截图。
+- 正常关闭先停止观察、离场动效结束后卸载；会话失效立即清理。采样列表不是完整历史，隐藏状态和模拟HTTP不能证明真实NAS任务执行。
+- 84ed52be1daefd91c32690d11ae79490ceff663b的[CI 38417036094](https://github.com/Kkwans/nas-control-plane/actions/runs/38417036094)整体成功，613项前端单元、173项浏览器，Go/Compose通过，发布跳过。旧镜像页新增产物文案的专项截图由任务中心fixture追加验收。
+
+## 15:12 UTC 最近任务浏览器问题修复
+
+- 首轮f06daee隔离CI为181通过/11失败；不跳过失败fixture。修复默认drawer header重复banner、过滤select精确标签和取消禁用控件后的焦点；轮询移除当前任务时焦点回到关闭入口。
+- 短高视口改为抽屉整体自然滚动，标题不透明sticky保持关闭入口。fixture修正暂停时钟竞争，采样前等待实际抽屉几何稳定；增加滚动后完整可见及命中检查，PNG改为视口截图。
+- 655项单元、lint、完整类型检查/构建和540KiB预算通过；独立审查后补齐两处边界。浏览器19项全部保留，修复后的实际CI与详情截图尚待复验。
+- 原始失败证据、17张实际PNG及摘要保留在[任务中心视觉报告](NCP-2026-10-13-task-center-visual.md)。首轮390/200%仅证据不足，不把未证实的问题描述为已复现不可滚动。
+
+## 15:24 UTC 任务抽屉 Teleport 布局修正
+
+- 8b90897的[CI 38420147521](https://github.com/Kkwans/nas-control-plane/actions/runs/38420147521)为189通过/3失败，新任务19项中16通过；剩余三个200%字号用例在长详情滚动后关闭按钮不在视口。655项单元及Go/Compose通过。
+- 实际像素进一步发现桌面100%在最后滚动后也会移走标题，旧断言执行得过早。原选择器依赖第三方Teleport根节点继承scope，实际body仍保留默认20px间距并滚动整段。
+- 改用ElDrawer公开body-class接口与专属直接子级选择器，不改其他抽屉；所有视口标题sticky。补充计算样式、零padding/滚动容器和最后滚动后的关闭按钮完整可见及命中断言，19项浏览器测试不变。
+- 655项单元、lint、类型/构建及包预算通过；精确3文件diff复核，实际替换CI与像素仍待验收。
+
+## 15:26 UTC SQLite连接设置恢复
+
+- 修复auth/controlstore/自有credential池连接替换后丢失原有PRAGMA：每次连接建立恢复原设置，不改DSN、全局driver、池配置、迁移或外部DB所有权。
+- 真实临时SQLite复现与修复覆盖外键/级联、原busy值、回收与中断、memory路径、共享文件、重复迁移和非目标池隔离。初始10ms测试在race下不可靠，改为SQL内部执行标记触发取消，保留真实物理连接变化断言。
+- 独立四包精确race×20、完整auth/controlstore、vet及build通过，实施者有限credential回归通过；未操作真实用户数据库。auth不新增超时；现有busy等待可能超出context等边界保持明确，未声称本片解决锁竞争。
+
+## 15:34 UTC 任务中心滚动fixture证据完善
+
+- 2b756a的[CI 38421871034](https://github.com/Kkwans/nas-control-plane/actions/runs/38421871034)191通过/1失败，新任务18/19通过；唯一失败为390/100%查看详情按钮滚动后视口比例0.9946733117，未满足完整可见要求。没有断言时刻的几何制品，不能把取整推断写成已确认根因。
+- 仅调整fixture为显式居中滚动并等待两帧稳定，保留100%可见和中心命中要求；几何/截图提前到断言之前，记录裁切祖先以便后续诊断。不修改产品源码，也不跳过或降低断言。
+- 独立TypeScript、lint及19项发现通过；实际替换浏览器结果仍待CI。
+
+
+## 15:42 UTC 任务中心与SQLite完整CI
+
+- c5938afc673999771fc3b86abac535cfe4a1d072的[CI 38423448527](https://github.com/Kkwans/nas-control-plane/actions/runs/38423448527)全部必需任务通过，655项前端单元、192项Chromium fixture（含全部19项任务中心）；Go与Compose通过，发布跳过。
+- 先前11→3→1的浏览器失败均保留历史，不降低完整可见/中心命中断言；最终制品逐图及几何复核进行中，CI绿色本身不代替像素审查。
+- 本次也覆盖SQLite修复0ef6d96：该提交自身Go/Compose已通过，其唯一前端失败由后代fixture修正闭环。不代表NAS实机或生产部署。
+
+
+## 15:45 UTC 初始化部分成功恢复
+
+- M17仅在bootstrap不确定结果/已初始化后只读查询一次状态，区分已初始化未登录、未初始化、未确认及真正认证成功；不自动重放账号或会话写入。响应校验拒绝缺少Root用户的伪认证状态。
+- 视图保留账号并清除所属密码，重复提交受限，操作revision阻止旧Promise覆盖新输入/错误或触发认证事件。既有nil Auth构造器和Go生产逻辑未变。补齐已有503的OpenAPI说明及fake/Recorder回归。
+- 独立审查无阻断问题；46项聚焦前端测试，完整57文件696项单元、lint、类型检查、生产构建与540KiB预算通过。OpenAPI全套、精确HTTP可用性race和限定vet通过。浏览器交互/截图由隔离fixture另行验收，尚不计为已完成。
+
+- 新增四项浏览器fixture覆盖503/409/网络不确定/复核失败后的只读恢复，390/1440及200%根字号的真实文本行框、axe和截图；本地仅执行独立类型、lint和测试发现。错误码采用anywhere换行防止长码挤出窄屏，实际像素结果待CI。
+
+
+## 15:47 UTC 任务中心实际视觉闭环
+
+33张精确c5938af制品PNG与几何已逐项复核，八组滚动后关闭/查看详情入口完整可见且命中，Teleport布局、长内容折行与旧镜像未知产物文案通过。证据、摘要及未覆盖边界见[视觉报告](NCP-2026-10-13-task-center-visual.md#c5938af最终验收2026-10-13-1547-utc)。本记录不把真实CI成功扩展为NAS实机验收。
+
+
+## 15:55 UTC 总览大字号时间裁切修复
+
+- c5938af的390px/200%根字号实际截图暴露总览摘要“上次更新”右侧裁切；根因是等宽且不换行的列，body无横向溢出并不能证明文字完整。
+- 仅总览在既有1040px断点下允许摘要换行，列最小宽度随根字号，保留完整时间及标签，不改共享WorkspaceHeader或隐藏数据。
+- 八项总览单元、限定lint、类型检查、生产构建/包预算通过；新增十项隔离fixture覆盖320/390/768/1280/1440与15/30px根字号，逐文字行检查自身及裁切祖先并在断言前保存PNG/JSON。实际Chromium与新截图待CI，未将源码推断当成视觉验收。
+
+
+## 15:58 UTC 容器终端握手取消与晚取消收尾
+
+- M08-C3在实际SDK升级握手前即拥有每次拨号的连接，context取消触发唯一Close并join回调；原SDKReader预读与可选CloseWrite保持，成功后解绑启动预算。协商gate串行初始化版本，失败可重试、等待可取消；探测gate/协商也计入原两秒，最终交互Create+Attach共用独立两秒。
+- 有效session晚取消交给Manager唯一Close owner，收尾期间仍占closing名额；保留主取消码以及连接/退出未确认因果。只对握手写请求后的取消标记远端退出未确认，普通未取消SDK错误和Attach后探测超时仍保留既有边界。
+- 实际SDK加内存Conn验证阻塞Write/Read/非101收尾取消、预读、幂等Close、join、并发隔离、共享预算与真实Engine式缺shell后备；没有真实Docker/监听器/PTY。独立审查发现的截止瞬间测试竞态改为等待取消完成，断言不降低。
+- 独立相关race×25/cleanup×10及最终合并race×20、全包仅编译、vet/build通过；发布后完整CI待验，不宣称整个Open硬两秒或远端进程均被杀死。
+
+
+## 16:01 UTC 初始化恢复完整CI与像素
+
+ab7c102的[CI 38425178060](https://github.com/Kkwans/nas-control-plane/actions/runs/38425178060)通过696项单元、196项浏览器及Go/Compose；六张实际恢复PNG确认503/409后登录表单与未确认重查，密码清理及窄屏长错误码可读。详细证据和根字号/fullPage/模拟边界见[视觉报告](NCP-2026-10-13-bootstrap-visual.md)。复核成功的说明仍偏红，另用稳定状态码区分中性提示与真正错误，不更改认证流程。
+
+
+## 16:05 UTC 容器握手修复完整CI
+
+d146b11的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/runs/38426843759)全部必需任务通过：19个Go包（terminal5.848s）、vet、原生及ARM64构建、Compose，696项前端单元及206项浏览器。最新握手验证为真实SDK加内存假连接；现有helper由隔离CI执行，不宣称真实Docker/用户NAS验证。
+
+
+## 16:07 UTC 总览摘要实际可读性闭环
+
+5ad0fc2的[CI 38426367491](https://github.com/Kkwans/nas-control-plane/actions/runs/38426367491)通过696项单元/206项浏览器及Go/Compose。十张PNG及逐对JSON确认320至1440五宽度、15/30px根字号下六个摘要字段完整，原390/30px更新时间裁切消失。证据与保留的极窄页头省略等边界见[视觉报告](NCP-2026-10-13-overview-readability-visual.md)。
+
+
+## 16:10 UTC 站点部分成功反馈
+
+- M18-A覆盖save/create/remove/restore/icon/favorite成功写入后的同步失败，显示部分成功而非错误地重放操作。编辑器保留真实创建ID和新草稿，只读同步后继续编辑；所有迟到结果按会话/编辑归属隔离，收藏按资源独立等待。
+- 独立审查发现创建后图标分支仍按旧selectedSite及保存期间可换文件的遗漏，已分别按已保存ID路由、保存期阻止图标变更修复。后置刷新不进入图标补偿删除catch。
+- 完整58文件720项单元（含24项聚焦）、限定lint、类型及生产构建/包预算通过；五项新隔离浏览器fixture覆盖只读重试、返回ID、草稿和旧请求，实际浏览器/截图待验。图标上传失败且补偿删除失败仍是明确M18-B边界。
+
+
+## 16:12 UTC 初始化提示色复验
+
+82d69fc的[CI 38427377203](https://github.com/Kkwans/nas-control-plane/actions/runs/38427377203)通过697项单元/206项浏览器及Go/Compose。六张恢复状态实际PNG确认普通复核提示为中性蓝灰色，未确认状态仍警示，390双倍根字号长码折行保持，未新增裁切；截图仅覆盖这六态，不扩展为全部错误态视觉验收。
+
+
+## 16:18 UTC 站点读取协议校验
+
+- GET sites/ignored拒绝缺核心集合、坏身份与坏数组项，不将坏成功响应变成权威空表；整份拒绝而非过滤丢行。兼容旧服务端缺discovery及nullish辅助字段/ports、忽略项空name与额外字段。
+- OpenAPI将POST/PUT/ignored返回资料与输入分开，声明projectId和实际metadata；单测序列化真实Go SiteProfile验证schema，没有运行endpoint或数据库。
+- 生产POST/PUT校验接线明确未启用，防止未知写结果被现有UI误当可重复提交的普通失败；新增回归固定这一分阶段边界。
+- 独立76项API聚焦及OpenAPI全套通过，完整59文件789项单元、lint/typecheck/生产构建与预算通过。隔离浏览器回归待CI；未知写入与图标补偿并未因此解决。
+
+
+## 16:23 UTC 站点恢复提示对比度修正
+
+3eecaa7首次实际CI为720项单元通过、209项浏览器通过/2失败；两项新建恢复场景的重试按钮白字浅蓝底仅2.5:1，未达4.5:1。实际两张100%PNG还发现重复toast覆盖标题，200%及两个场景后续分支因前置失败未执行。改用专属深品牌蓝交互样式，并保留内联说明、去掉重复toast；扩大视口/关闭目标证据，不跳过原axe门槛。替换CI与新像素待验，原失败见[报告](NCP-2026-10-13-site-sync-visual.md)。
+
+
+## 16:33 UTC 站点恢复CI与未知写结果本地就绪
+
+- M18-A/读取前置后代`b0c21a9`的[CI 38430440344](https://github.com/Kkwans/nas-control-plane/actions/runs/38430440344)绿色：59文件789项单元、211项浏览器及Go/Compose通过。四张实际PNG与对应JSON已逐图复核通过，见[站点恢复视觉报告](NCP-2026-10-13-site-sync-visual.md)；关闭32×22px、重试116×32px不代表44px触控目标，200%根字号不代表浏览器整页zoom。此前`b2c64c`的[CI 38429724168](https://github.com/Kkwans/nas-control-plane/actions/runs/38429724168)为789项单元、209项浏览器通过/2项同样的对比度失败；该失败由后代修正闭环，不抹去历史。
+- M18-B实际diff已接线POST/PUT成功状态的运行时响应校验，坏JSON/空体/资料或身份无效统一为`SITE_WRITE_UNKNOWN`。PUT保留原目标；POST无可信ID时不猜记录、不继续上传或补偿。图标失败后仅一次既有DELETE，补偿失败保留真实创建ID；成功DELETE返回后再次检查会话，避免旧操作启动读取及污染新会话loading。
+- 编辑器未知结果保留草稿，暂停提交和图标上传；GET-only核对覆盖两表存在/忽略/冲突/均缺失/失败及未知创建ID，核对成功也不解锁当前操作。收藏按资源暂停本页重复提交，其他资源不受阻，只读刷新不解锁；限制并非跨页面持久锁。
+- 实施者报告完整59文件821项单元、lint、typecheck、生产构建及包预算通过；独立审查在最后竞态修复前通过820项，最终修复复审无阻断。主线程独立复跑59文件821项单元通过（20.61s），diff检查通过；本次文档维护核对实际源码及测试diff。新增10项M18-B浏览器fixture已编写，静态检查与用例发现通过，尚未实际执行或推送；上面的789/211绿色不是M18-B验证结果。
+- 两GET非原子；未发现记录不证明补偿成功、未来不会出现或图标文件已清理；即使已确认DELETE，服务端迟到图标upsert仍可能发生。未知POST没有可信ID就无法识别本次记录。普通POST/PUT网络失败未在本片全面解决；不扩展为全部F09、真实NAS或部署验收。
+
+## 16:44 UTC 站点未知结果CI闭环与用户读取分态
+
+416dab4 的 [CI 38432043941](https://github.com/Kkwans/nas-control-plane/actions/runs/38432043941)通过 821 项单元 / 221 项浏览器（新增10项未知写入回归）、Go与Compose；四张新说明图片与几何JSON已经逐图复核通过，390px大字号提示完整、关闭与核对按钮可见可命中，详见[未知结果画面验收](NCP-2026-10-13-site-unknown-visual.md)。
+
+M19-A 已实现独立账号/规则 GET、响应契约校验、已确认策略与草稿分离、策略未知时禁止密码相关提交、会话与旧读取隔离。独立审查113项聚焦通过；主线程61文件918项完整单元、lint、类型与生产构建/包预算通过。新增7项浏览器回归静态检查通过、实际执行待CI，写操作弹窗实例归属和更广泛未知写入恢复不属于本片完成项。未调用真实账号接口或操作NAS。
+
+## 16:52 UTC 用户弹窗实例与提交归属
+
+M19-B独立创建锁与按账号的改密/状态/删除锁在关窗后继续保留；旧操作不能关闭新弹窗、清新密码或发错提示，已确认结果仍更新正确目录。关闭清敏感草稿，自己的改密重新登录定时逻辑只属于原页面会话。独立审查通过61文件934项纯mock单元；实施者补充4项回归后，主线程最终复跑61文件938项通过；主线程lint、类型、构建及包预算通过。7项新增浏览器用例静态检查就绪，尚未执行；不调用真实账号服务，不把关闭等同服务端取消。
+
+## 16:56 UTC 用户读取分态实际浏览器验收
+
+cd40981 的 [CI 38433465603](https://github.com/Kkwans/nas-control-plane/actions/runs/38433465603)完整通过918项单元与228项浏览器、Go和Compose。四张规则错误状态实际PNG及几何JSON复核通过，390px/200%提示完整、重试按钮可见可命中，无文档横向溢出。观察到390px账号卡片不显示最近登录和创建时间，属现有隐藏行为；普通/users截图为空账号，不能证明长账号名布局。M19-B的2d2e58e仍待独立CI，当前验收不包含其七项新增用例。
+
+## 17:02 UTC 用户弹窗浏览器等待失败与独立SQL小修复
+
+2d2e58e 的 CI38434299337 为938单元通过、233浏览器通过/2失败；两项改密A/B用例卡在fixture对204空响应的Response.finished等待，尚未走完后续归属断言。不能称这两项行为已通过。正在改用与生产204分支一致的后续只读目录对账作为屏障；无trace可证明底层Chromium完成事件的具体原因，保留不确定性，不删除用例。
+
+0a106ae已独立推送PostgreSQL CR行注释终止符修复；仅PG识别最先CR/LF，SQLite/MySQL维持原有LF行为，SQL原文/显式模式/单次执行不变。Go1.26.4纯函数/fake runner、race、包编译、vet和独立审查通过；未连接真实数据库，CI待验。
+
+## 17:05 UTC 账号移动日期恢复
+
+M20将原先窄屏隐藏的最近登录/创建时间恢复为有标签的卡片信息；长中英文账号名和值可换行，1050px以下卡片布局属于明确设计选择，桌面五列保留。脚本区逐字不变，独立审查43项视图测试通过，主线程938项完整单元、lint、类型及构建/预算通过。8项新浏览器用例覆盖四宽度及双根字体，静态检查通过，实际像素待验。
+
+用户弹窗fixture的204屏障修正已以5ca6e8c推送：仅成功改密分支在释放前注册GET目录对账屏障，其他JSON路径和全部归属断言保持，未新增任意等待或跳过失败。替换CI尚待完成。
+
+## 17:19 UTC 移动账号实际画面与页头补充
+
+fe92e45 的 [CI 38435982303](https://github.com/Kkwans/nas-control-plane/actions/runs/38435982303)为938单元通过、239浏览器通过/4失败，四项均为默认字号“可用”状态对比度4.24:1不足4.5:1；200%用例通过。24张实际PNG/8份JSON确认长名称、日期与32个操作目标完整可读/可命中，卡片没有新增几何阻断。M19-B七项用例全部通过，先前两项204等待失败由5ca6e8c闭环；本轮Go及Compose通过，亦覆盖0a106ae的PG注释修复。
+
+2fe81d2已将状态改用既有深绿色令牌；43项视图测试及静态构建通过，独立复核仅此令牌改变，替换CI仍待完成。像素复核另发现320px/200%页头描述和摘要标签被省略，现以本页scoped覆盖取消clamp/ellipsis并允许摘要换行，不改共享组件及脚本/模板。相同8项fixture增加页头完整文本、行框、裁切和两项页面按钮命中证据，43项视图测试、lint、类型、构建/预算及E2E静态检查通过；新页头像素未验。
+
+
+## 终端 P：单连接尝试归属与退出隔离
+
+- 每次连接在 nextTick 前冻结目标和认证代次；旧消息、计时器、输入、resize 与关闭事件不能操作新连接。认证中止/pagehide/卸载同步撤销输入，清理项各自容错，粘贴内容随 owner 清除。
+- connecting 显示取消，目标锁定；本地 socket 收到实际 close 前维持 closing，不自动重连、不宣称远端进程退出或服务端名额已回收。保持现有握手预算、键盘、多行确认与减少动态效果。
+- 独立审查及36项终端 fake/domain 测试通过（28项组件）；主线程完整前端61文件964项测试、lint、类型检查、生产构建和540KiB预算通过。
+- 新增六项浏览器 fixture 已通过 ESLint、严格 TypeScript 与发现检查；全部使用内存 WebSocket，浏览器执行/390与1440实际画面仍待本次CI。无真实PTY、Docker、NAS或生产凭据操作；后端容量仍为1，多标签及应用输出队列预算不在本次范围。
+- 同期既有界面：2fe81d2/run38437299969与ce336c6/run38438068385均938项单元、243项浏览器及Go/Compose通过；ce336c6的48张实际PNG与8JSON已逐项复核，页头/卡片信息及操作命中通过，详见用户移动视觉记录。
+
+## 偏好设置响应契约前置
+
+- GET/PUT完整解码十项偏好字段，合法服务端边界、默认值、未来字符串导航ID及额外字段保持兼容；坏数组、重复/非字符串ID及非法字段在进入store前拒绝。返回导航数组副本，不更改输入。
+- GET沿用CONTROL_RESPONSE_INVALID；成功状态但JSON/shape无效的PUT返回PreferencesWriteUnknownError/PREFERENCES_WRITE_UNKNOWN，明确仅为API层的未知写结果，不追加请求。HTTP错误、网络错误和Abort语义不变。
+- 修正OpenAPI pageSize为实际后端1–200、默认10，不把原文档枚举强加到合法响应。
+- 43项新契约测试与独立220项API复核通过。主任务对本模块精确副本完整65文件1158项单元、全量lint、Vue类型检查、生产构建和540KiB预算通过；CI待验。
+- 当前设置页仍可能显示通用失败并调度更新的草稿；固定会话/加载基线、可见未知结果及只读核对由独立设置归属切片继续，不能把本API补丁描述为已完成全部保存行为修复。未调用真实偏好API或NAS。
+
+## 设置基线与串行保存
+
+- 在 cb33321 响应契约基础上实现可信读取门槛、固定认证与编辑 token、store 串行保存队列，普通导航保留意图，退出立即清除未发送队列。旧 GET/PUT 不得覆盖新草稿和预览。
+- 非法成功响应暂停自动写入，保留草稿；只读核实后明确确认才重新保存。保留网络错误原有语义，不声称所有传输异常都已完成结果核对。
+- 主任务独立运行全量66文件1175项单元、全量lint、Vue类型检查、生产构建与540KiB预算通过；17项新组件回归包含未知结果回改旧值和旧页面重试归属。
+- 六项新增纯mock浏览器fixture通过ESLint、严格TypeScript与发现检查；实际浏览器、390/1440截图与新CI仍待执行。未访问真实设置API、NAS、Docker或生产环境。
+- 前置aa02293完整CI38446484647通过1158单元、263浏览器及Go/Compose；DNS全部十项行为与地标修复通过。原单制品34,020,460字节超出读取上限，2a4a58e以24MiB载荷/1MiB元数据预算分片，11项临时文件测试通过，实际分包及最新DNS像素待复核。
+
+## 终端 M0 可选容量接线
+
+- 新增 Agent CLI 容量参数默认1、显式范围1–4，经 SocketConfig 接入生产Manager；内部零值保持兼容，注入Manager与非零配置冲突明确拒绝。POC仍固定1，部署参数和权限不变。
+- Serve在任何listener和live provider初始化前验证配置；纯解析测试保留旧旗标行为，真实组查询仍在启动前执行。
+- 四份独立fake host/container Session验证输出、输入、resize、唯一Close、退役ID、第五会话拒绝以及opening/live/closing混合计数。独立复核race五次及主任务race三次、扩大既有fake回归通过；主任务Agent/Server编译和三包vet通过。新CI仍待验。
+- 仅源码与纯fake测试，不证明真实四路终端、进程/内存硬上限、全部后代退出或多标签可用；没有启动真实终端、Docker或NAS。
+
+## 终端 B 输入输出预算
+
+- 每attempt256KiB待xterm回调二进制字节、16KiB单输出帧；32KiB UTF-8输入完整准入，64KiB投影发送积压预算。预留回调幂等且关闭后失效，超长输入不拆分、不重放；过载按当前owner清理。
+- 保留多行粘贴确认，计入归一化和bracketed包装；单字节投影超限、回调同步/重复/乱序/退役后、write异常与零长输出均有纯fake回归。close控制仍尽力发送，不宣称总内存或所有网络缓存硬上限。
+- 主任务67文件1198单元、全量lint、Vue类型与生产构建540KiB预算通过；独立源码审查无阻断。原六项浏览器用例保留，新增七项预算用例，静态检查与13项发现通过；实际CI和截图待验。
+- 没有连接真实终端、Docker或NAS，不代表多标签或部署完成。
+
+## 终端 M1a 面板归属提取
+
+- 提取真实per-panel资源与响应状态，页面注册表保留opening/live/closing精确lease；隐藏面板保持有界输出，只有选中面板可输入、fit和聚焦。仍仅显示一个面板，无自动连接或标签UI。
+- 切换清理粘贴与延迟交互，页面卸载先全局撤销再清理各面板；独立审查发现的重入dispose→兄弟输入/resize与xterm尺寸超出PTY限制均修复并新增回归。
+- 保留所有P+B现有断言，测试明确提供非零假布局。主任务69文件1214项单元、全量lint、Vue类型、生产构建与540KiB预算通过；独立75项聚焦回归通过。CI及真实Chromium回归待验，不宣称真实多终端或NAS验证。
+
+## 终端 M1b 四面板标签界面
+
+- 四个独立本地owner，新建/切换不连接，明确按钮才启动；隐藏面板保持有界输出且inert，关闭活动连接需确认，退役连接在准确onclose前继续计数，最后关闭生成未连接空面板。
+- tablist/tabpanel与左右/Home/End焦点，独立关闭按钮和准确容量说明；独立审查发现的同步选择、迟到焦点及失效确认事件问题已修复，保留全部P+B断言。
+- 主任务69文件1226单元、全量lint、Vue类型、构建与540KiB预算通过；独立87项聚焦通过。九项新浏览器用例静态检查通过，原13项保留，22项发现通过；实际Chromium、390/1440截图与native inert待CI。
+- 前置63623f1的13项终端浏览器及两张溢出PNG/JSON已实际通过，整体CI仍因设置字体菜单夹具四项失败而失败；791be11同样13项终端通过、整体四项设置失败。不将局部通过写成整体绿色。详情见终端预算视觉记录。

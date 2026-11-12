@@ -78,10 +78,15 @@ func (api *handler) uploadSiteIcon(response http.ResponseWriter, request *http.R
 		return
 	}
 	previous := profile.LocalIconName
-	profile.LocalIconName = fileName
-	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
-		_ = os.Remove(target)
+	swapped, err := api.controlStore.CompareAndSwapSiteIcon(request.Context(), siteID, previous, fileName)
+	if err != nil {
+		// 提交结果可能不确定，保留候选文件，避免删除数据库已引用的图标。
 		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_SAVE_FAILED", "图标资料保存失败。")
+		return
+	}
+	if !swapped {
+		_ = os.Remove(target)
+		api.writeError(response, request, http.StatusConflict, "SITE_ICON_CONFLICT", "站点或图标已变更，请刷新后重试。")
 		return
 	}
 	if previous != "" {
@@ -105,6 +110,7 @@ func (api *handler) siteIcon(response http.ResponseWriter, request *http.Request
 		return
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
+	protectSiteIconResponse(response)
 	http.ServeFile(response, request, target)
 }
 
@@ -166,10 +172,7 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 	}
 	response.Header().Set("Cache-Control", "private, max-age=3600")
 	response.Header().Set("Content-Type", contentType)
-	response.Header().Set("X-Content-Type-Options", "nosniff")
-	if contentType == "image/svg+xml" {
-		response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	}
+	protectSiteIconResponse(response)
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(content)
 }
@@ -177,11 +180,17 @@ func (api *handler) siteIconProxy(response http.ResponseWriter, request *http.Re
 func writeSiteIconFallback(response http.ResponseWriter) {
 	response.Header().Set("Cache-Control", "private, max-age=300")
 	response.Header().Set("Content-Type", "image/svg+xml")
-	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
-	response.Header().Set("X-Content-Type-Options", "nosniff")
+	protectSiteIconResponse(response)
 	response.Header().Set("X-NCP-Icon-Fallback", "true")
 	response.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(response, siteIconFallbackSVG)
+}
+
+// 图标即使被作为独立文档打开，也不能获得控制台同源脚本权限。
+// 对所有图标统一设置，避免上传、代理和回退路径的策略再次分叉。
+func protectSiteIconResponse(response http.ResponseWriter) {
+	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func validSiteIconProxyTarget(target *url.URL, publicHost string) bool {
@@ -211,9 +220,13 @@ func (api *handler) deleteSiteIcon(response http.ResponseWriter, request *http.R
 		return
 	}
 	previous := profile.LocalIconName
-	profile.LocalIconName = ""
-	if _, err := api.controlStore.UpsertSiteProfile(request.Context(), profile); err != nil {
+	swapped, err := api.controlStore.CompareAndSwapSiteIcon(request.Context(), profile.ProjectID, previous, "")
+	if err != nil {
 		api.writeError(response, request, http.StatusInternalServerError, "SITE_ICON_DELETE_FAILED", "图标删除失败。")
+		return
+	}
+	if !swapped {
+		api.writeError(response, request, http.StatusConflict, "SITE_ICON_CONFLICT", "站点或图标已变更，请刷新后重试。")
 		return
 	}
 	if previous != "" && api.siteAssetsDirectory != "" {

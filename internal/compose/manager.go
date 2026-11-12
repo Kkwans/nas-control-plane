@@ -3,22 +3,27 @@ package compose
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	pathpkg "path"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxConfigBytes = 2 << 20
 
+const defaultRollbackTimeout = 2 * time.Minute
+
 type FileSnapshot struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-	Size    int64  `json:"size"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Content     string `json:"content"`
+	ContentHash string `json:"contentHash"`
+	Size        int64  `json:"size"`
 }
 
 type ProjectConfig struct {
@@ -51,6 +56,7 @@ type DeployRequest struct {
 	ConfigFiles      []string `json:"configFiles"`
 	TargetPath       string   `json:"targetPath"`
 	Content          string   `json:"content"`
+	BaseContentHash  string   `json:"baseContentHash"`
 }
 
 type DeployResult struct {
@@ -70,75 +76,203 @@ type Runner interface {
 func (manager *Manager) Deploy(ctx context.Context, request DeployRequest) (DeployResult, error) {
 	workingDirectory, err := validateWorkingDirectory(request.WorkingDirectory)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 	}
 	targetPath, err := validateConfigPath(workingDirectory, request.TargetPath)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 	}
 	configFiles := make([]string, 0, len(request.ConfigFiles))
 	targetKnown := false
 	for _, value := range request.ConfigFiles {
 		configPath, err := validateConfigPath(workingDirectory, value)
 		if err != nil {
-			return DeployResult{}, err
+			return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", err)
 		}
 		configFiles = append(configFiles, configPath)
 		targetKnown = targetKnown || configPath == targetPath
 	}
 	if !targetKnown {
-		return DeployResult{}, errors.New("compose target is not part of project config")
+		return DeployResult{}, coded("COMPOSE_REQUEST_INVALID", errors.New("compose target is not part of project config"))
 	}
-	validation, err := manager.Validate(ctx, ValidateRequest{Path: targetPath, Content: request.Content})
+	request.WorkingDirectory = workingDirectory
+	request.TargetPath = targetPath
+	request.ConfigFiles = configFiles
+	return manager.deploy(ctx, request)
+}
+
+// deploy 只接收已通过路径校验和规范化的请求；将事务单独拆出便于隔离文件系统测试。
+func (manager *Manager) deploy(ctx context.Context, request DeployRequest) (DeployResult, error) {
+	if err := ctx.Err(); err != nil {
+		return DeployResult{}, err
+	}
+	expected, err := parseContentHash(request.BaseContentHash)
+	if err != nil {
+		return DeployResult{}, coded("COMPOSE_BASELINE_INVALID", err)
+	}
+	unlock, err := manager.lockTarget(ctx, request.TargetPath)
 	if err != nil {
 		return DeployResult{}, err
 	}
-	original, err := os.ReadFile(targetPath)
-	if err != nil {
-		return DeployResult{}, err
+	defer unlock()
+	workingDirectory, targetPath, configFiles := request.WorkingDirectory, request.TargetPath, request.ConfigFiles
+	// 原文只捕获一次；校验和后续备份始终使用本次编辑会话批准的磁盘基线。
+	original, mode, err := readCurrentContent(targetPath, expected, manager.readFile)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return DeployResult{}, contextErr
 	}
-	info, err := os.Stat(targetPath)
 	if err != nil {
-		return DeployResult{}, err
+		return DeployResult{}, contentVerificationError(err, "COMPOSE_CONFIG_CONFLICT", "COMPOSE_CONFIG_UNVERIFIED")
+	}
+	validation, err := manager.validateContent(ctx, targetPath, request.Content)
+	if err != nil {
+		return DeployResult{}, coded("COMPOSE_CONFIG_INVALID", err)
 	}
 	backupDirectory := pathpkg.Join(workingDirectory, ".ncp-backups")
 	if err := os.MkdirAll(backupDirectory, 0o700); err != nil {
 		return DeployResult{}, err
 	}
-	backupPath := pathpkg.Join(backupDirectory, manager.now().UTC().Format("20060102T150405Z")+"-"+pathpkg.Base(targetPath))
-	if err := os.WriteFile(backupPath, original, 0o600); err != nil {
+	backupPath, err := writeBackup(backupDirectory, manager.now().UTC().Format("20060102T150405Z")+"-"+pathpkg.Base(targetPath)+"-*", original)
+	if err != nil {
 		return DeployResult{}, err
 	}
-	if err := atomicWrite(targetPath, []byte(request.Content), info.Mode().Perm()); err != nil {
-		return DeployResult{}, err
+	result := DeployResult{
+		ProjectID: request.ProjectID, TargetPath: targetPath, BackupPath: backupPath,
+		Services: validation.Services,
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	// 对实际写入的原始字节计算摘要，不规范化 YAML 或移除空白。
+	submitted := []byte(request.Content)
+	submittedHash := sha256.Sum256(submitted)
+	if err := atomicWriteGuarded(targetPath, submitted, mode, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, _, err := readCurrentContent(targetPath, expected, manager.readFile)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		return contentVerificationError(err, "COMPOSE_CONFIG_CONFLICT", "COMPOSE_CONFIG_UNVERIFIED")
+	}); err != nil {
+		return result, err
 	}
 	output, deployErr := manager.runner.Deploy(ctx, workingDirectory, configFiles)
 	if deployErr != nil {
-		restoreErr := atomicWrite(targetPath, original, info.Mode().Perm())
-		if restoreErr == nil {
-			_, restoreErr = manager.runner.Deploy(ctx, workingDirectory, configFiles)
+		// 原部署可能已超时或取消；回滚 context 保留追踪信息并设置独立时间预算。
+		// 此预算不保证同步磁盘操作或不响应取消的 runner 在截止时硬退出。
+		timeout := manager.rollbackTimeout
+		if timeout <= 0 {
+			timeout = defaultRollbackTimeout
 		}
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		restoreErr := manager.restoreConfig(targetPath, original, mode, submittedHash)
 		if restoreErr != nil {
-			return DeployResult{}, fmt.Errorf("compose deploy failed and rollback failed: %v; rollback: %w", deployErr, restoreErr)
+			code := ErrorCode(restoreErr)
+			if code != "COMPOSE_DEPLOY_ROLLBACK_CONFLICT" && code != "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED" {
+				code = "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED"
+			}
+			return result, coded(code, errors.Join(deployErr, restoreErr))
 		}
-		return DeployResult{}, fmt.Errorf("compose deploy failed and previous version was restored: %w", deployErr)
+		if _, reapplyErr := manager.runner.Deploy(rollbackCtx, workingDirectory, configFiles); reapplyErr != nil {
+			return result, coded("COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED", errors.Join(deployErr, reapplyErr))
+		}
+		// 只确认重新应用命令成功，不代表容器、镜像或健康状态已恢复。
+		return result, coded("COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED", deployErr)
 	}
-	return DeployResult{
-		ProjectID: request.ProjectID, TargetPath: targetPath, BackupPath: backupPath,
-		Services: validation.Services, Output: output, Completed: true,
-	}, nil
+	// 命令成功只说明应用命令已结束；目标核对失败不能自动恢复或宣称发布完成。
+	result.Output = output
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	_, _, postcheckErr := readCurrentContent(targetPath, submittedHash, manager.readFile)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if postcheckErr != nil {
+		return result, contentVerificationError(postcheckErr, "COMPOSE_DEPLOY_POSTCHECK_CONFLICT", "COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED")
+	}
+	result.Completed = true
+	return result, nil
+}
+
+// IsDeployErrorCode 仅允许已知部署业务失败穿过 RPC 边界，禁止转发任意错误文本。
+func IsDeployErrorCode(code string) bool {
+	switch code {
+	case "COMPOSE_DEPLOY_ROLLBACK_CONFLICT", "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED",
+		"COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED", "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED",
+		"COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED", "COMPOSE_DEPLOY_FAILED",
+		"COMPOSE_CONFIG_INVALID", "COMPOSE_REQUEST_INVALID",
+		"COMPOSE_BASELINE_INVALID", "COMPOSE_BASELINE_UNSUPPORTED",
+		"COMPOSE_CONFIG_CONFLICT", "COMPOSE_CONFIG_UNVERIFIED",
+		"COMPOSE_DEPLOY_POSTCHECK_CONFLICT", "COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED":
+		return true
+	default:
+		return false
+	}
 }
 
 type Manager struct {
-	runner Runner
-	now    func() time.Time
+	runner          Runner
+	now             func() time.Time
+	rollbackTimeout time.Duration
+	restoreConfig   func(string, []byte, os.FileMode, [sha256.Size]byte) error
+	readFile        func(string) ([]byte, error)
+	locksMu         sync.Mutex
+	targetLocks     map[string]*targetLock
+}
+
+// 锁覆盖基线核对、校验、备份、部署、回滚和成功后核对；不同目标仍可并行。
+type targetLock struct {
+	token chan struct{}
+	users int
+}
+
+func (manager *Manager) lockTarget(ctx context.Context, target string) (func(), error) {
+	manager.locksMu.Lock()
+	if manager.targetLocks == nil {
+		manager.targetLocks = make(map[string]*targetLock)
+	}
+	lock := manager.targetLocks[target]
+	if lock == nil {
+		lock = &targetLock{token: make(chan struct{}, 1)}
+		lock.token <- struct{}{}
+		manager.targetLocks[target] = lock
+	}
+	lock.users++
+	manager.locksMu.Unlock()
+	releaseReference := func() {
+		manager.locksMu.Lock()
+		defer manager.locksMu.Unlock()
+		lock.users--
+		if lock.users == 0 {
+			delete(manager.targetLocks, target)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		releaseReference()
+		return nil, ctx.Err()
+	case <-lock.token:
+		if err := ctx.Err(); err != nil {
+			lock.token <- struct{}{}
+			releaseReference()
+			return nil, err
+		}
+		return func() {
+			lock.token <- struct{}{}
+			releaseReference()
+		}, nil
+	}
 }
 
 func NewManager(runner Runner) *Manager {
 	if runner == nil {
 		runner = OSRunner{}
 	}
-	return &Manager{runner: runner, now: time.Now}
+	return &Manager{runner: runner, now: time.Now, rollbackTimeout: defaultRollbackTimeout, restoreConfig: guardedRestoreConfig, readFile: os.ReadFile}
 }
 
 func (manager *Manager) Read(ctx context.Context, request ReadRequest) (ProjectConfig, error) {
@@ -155,18 +289,11 @@ func (manager *Manager) Read(ctx context.Context, request ReadRequest) (ProjectC
 		if err != nil {
 			return ProjectConfig{}, err
 		}
-		info, err := os.Stat(path)
+		snapshot, err := readFileSnapshot(path, os.ReadFile)
 		if err != nil {
 			return ProjectConfig{}, err
 		}
-		if info.Size() > maxConfigBytes {
-			return ProjectConfig{}, errors.New("compose config is too large")
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return ProjectConfig{}, err
-		}
-		files = append(files, FileSnapshot{Path: path, Name: pathpkg.Base(path), Content: string(content), Size: info.Size()})
+		files = append(files, snapshot)
 	}
 	return ProjectConfig{ProjectID: request.ProjectID, WorkingDirectory: workingDirectory, Files: files, CollectedAt: manager.now().UTC()}, nil
 }
@@ -176,10 +303,14 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	if request.Content == "" || len(request.Content) > maxConfigBytes {
+	return manager.validateContent(ctx, configPath, request.Content)
+}
+
+func (manager *Manager) validateContent(ctx context.Context, configPath, content string) (ValidationResult, error) {
+	if content == "" || len(content) > maxConfigBytes {
 		return ValidationResult{}, errors.New("compose content is empty or too large")
 	}
-	normalized, err := manager.runner.Validate(ctx, pathpkg.Dir(configPath), request.Content)
+	normalized, err := manager.runner.Validate(ctx, pathpkg.Dir(configPath), content)
 	if err != nil {
 		return ValidationResult{Valid: false, Services: make([]string, 0)}, err
 	}
@@ -201,6 +332,9 @@ func (OSRunner) Validate(ctx context.Context, workingDirectory, content string) 
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", fmt.Errorf("compose validation failed: %s", strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
@@ -216,6 +350,9 @@ func (OSRunner) Deploy(ctx context.Context, workingDirectory string, configFiles
 	command.Dir = workingDirectory
 	output, err := command.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", fmt.Errorf("compose deploy failed: %s", strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
@@ -277,6 +414,23 @@ func extractServiceNames(normalized string) []string {
 }
 
 func atomicWrite(target string, content []byte, mode os.FileMode) error {
+	return atomicWriteGuarded(target, content, mode, nil)
+}
+
+// guardedRestoreConfig 在临时文件写完后、最终 Rename 紧前检查当前内容。
+// 这只是尽力缩短检查到写入的窗口，并非跨进程原子 CAS；外部写入仍可能发生竞态。
+func guardedRestoreConfig(target string, content []byte, mode os.FileMode, expected [sha256.Size]byte) error {
+	return atomicWriteGuarded(target, content, mode, func() error {
+		return verifyCurrentContent(target, expected, os.ReadFile)
+	})
+}
+
+func verifyCurrentContent(target string, expected [sha256.Size]byte, readFile func(string) ([]byte, error)) error {
+	_, _, err := readCurrentContent(target, expected, readFile)
+	return contentVerificationError(err, "COMPOSE_DEPLOY_ROLLBACK_CONFLICT", "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED")
+}
+
+func atomicWriteGuarded(target string, content []byte, mode os.FileMode, beforeRename func() error) error {
 	temporary, err := os.CreateTemp(pathpkg.Dir(target), ".ncp-compose-*")
 	if err != nil {
 		return err
@@ -298,5 +452,34 @@ func atomicWrite(target string, content []byte, mode os.FileMode) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	if beforeRename != nil {
+		if err := beforeRename(); err != nil {
+			return err
+		}
+	}
 	return os.Rename(temporaryPath, target)
+}
+
+// CreateTemp 使用独占创建，固定时钟或同秒部署也不会覆盖已有备份。
+func writeBackup(directory, pattern string, content []byte) (string, error) {
+	file, err := os.CreateTemp(directory, pattern)
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }

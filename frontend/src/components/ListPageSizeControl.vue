@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onMounted, ref, shallowRef, watch } from 'vue'
 import { ElInputNumber, ElTooltip } from 'element-plus'
 
 import NcpSelect, { type NcpSelectOption } from '@/components/NcpSelect.vue'
@@ -14,6 +14,13 @@ const options: NcpSelectOption[] = [
 const { pageSize, saving, error, setPageSize } = useListPreference(props.listKey)
 const selected = ref('10')
 const customValue = ref(10)
+const controlRoot = shallowRef<HTMLElement>()
+const tooltipTarget = shallowRef<HTMLElement>()
+
+onMounted(() => {
+  // 弹窗中的帮助留在弹窗内，其余优先归属最近的主内容地标。
+  tooltipTarget.value = controlRoot.value?.closest<HTMLElement>('main, [role="main"], dialog, [role="dialog"], [role="alertdialog"]') ?? controlRoot.value
+})
 
 watch(pageSize, (value) => {
   selected.value = presets.includes(value) ? String(value) : 'custom'
@@ -30,8 +37,8 @@ async function updateCustom(value: number | undefined) {
 </script>
 
 <template>
-  <ElTooltip :content="error || '该设置只作用于当前列表，并会保存到账号偏好中。'" placement="top">
-    <div class="page-size-control" :class="{ saving }">
+  <ElTooltip :append-to="tooltipTarget" :teleported="Boolean(tooltipTarget)" :content="error || '该设置只作用于当前列表，并会保存到账号偏好中。'" placement="top">
+    <div ref="controlRoot" class="page-size-control" :class="{ saving }">
       <span>每页</span>
       <NcpSelect v-model="selected" :options="options" accessible-label="选择每页数量" @update:model-value="updatePreset" />
       <ElInputNumber

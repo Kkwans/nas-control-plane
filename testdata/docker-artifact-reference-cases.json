@@ -1,0 +1,604 @@
+[
+  {
+    "name": "Hub alpine:latest = alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub alpine:latest = library/alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub alpine:latest = docker.io/alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub alpine:latest = docker.io/library/alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub alpine:latest = index.docker.io/alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = library/alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = docker.io/alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = docker.io/library/alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = index.docker.io/alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub library/alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "library/alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = library/alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = docker.io/alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = docker.io/library/alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = index.docker.io/alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "docker.io/alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = library/alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = docker.io/alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = docker.io/library/alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = index.docker.io/alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub docker.io/library/alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "docker.io/library/alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = library/alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = docker.io/alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = docker.io/library/alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = index.docker.io/alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "index.docker.io/alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = library/alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = docker.io/alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = docker.io/library/alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = index.docker.io/alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "index.docker.io/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "Hub index.docker.io/library/alpine:latest = index.docker.io/library/alpine:latest",
+    "reference": "index.docker.io/library/alpine:latest",
+    "candidate": "index.docker.io/library/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "team/alpine:v1 vs docker.io/team/alpine:v1",
+    "reference": "team/alpine:v1",
+    "candidate": "docker.io/team/alpine:v1",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "library/nested/alpine:v1 vs docker.io/library/nested/alpine:v1",
+    "reference": "library/nested/alpine:v1",
+    "candidate": "docker.io/library/nested/alpine:v1",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "library/nested/alpine:v1 vs nested/alpine:v1",
+    "reference": "library/nested/alpine:v1",
+    "candidate": "nested/alpine:v1",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "example.com/library/alpine:latest vs alpine:latest",
+    "reference": "example.com/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "example.com/library/alpine:latest vs example.com/alpine:latest",
+    "reference": "example.com/library/alpine:latest",
+    "candidate": "example.com/alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "docker.io:443/library/alpine:latest vs alpine:latest",
+    "reference": "docker.io:443/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "localhost/alpine:latest vs alpine:latest",
+    "reference": "localhost/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "localhost:5000/alpine:latest vs localhost/alpine:latest",
+    "reference": "localhost:5000/alpine:latest",
+    "candidate": "localhost/alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "registry-1.docker.io/library/alpine:latest vs alpine:latest",
+    "reference": "registry-1.docker.io/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "EXAMPLE.com/alpine:Latest vs example.com/alpine:Latest",
+    "reference": "EXAMPLE.com/alpine:Latest",
+    "candidate": "example.com/alpine:Latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "DOCKER.IO/library/alpine:latest vs alpine:latest",
+    "reference": "DOCKER.IO/library/alpine:latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "Registry/alpine:latest vs registry/alpine:latest",
+    "reference": "Registry/alpine:latest",
+    "candidate": "registry/alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "[::1]:5000/alpine:latest vs [::1]:5000/alpine:latest",
+    "reference": "[::1]:5000/alpine:latest",
+    "candidate": "[::1]:5000/alpine:latest",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "alpine:Latest vs alpine:latest",
+    "reference": "alpine:Latest",
+    "candidate": "alpine:latest",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine:v1 vs alpine:v2",
+    "reference": "alpine:v1",
+    "candidate": "alpine:v2",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs docker.io/library/alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "docker.io/library/alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs alpine@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reference": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs docker.io/library/alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "docker.io/library/alpine:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "alpine:v1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs alpine:v2@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine:v1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine:v2@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine:latest vs alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine:latest",
+    "candidate": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": true
+  },
+  {
+    "name": "alpine@sha384:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs library/alpine@sha384:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine@sha384:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "library/alpine@sha384:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "alpine@sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa vs library/alpine@sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reference": "alpine@sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "library/alpine@sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag vs docker.io/library/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "reference": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "candidate": "docker.io/library/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag vs example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "reference": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "candidate": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "a__b/c---d:_Tag.1 vs docker.io/a__b/c---d:_Tag.1",
+    "reference": "a__b/c---d:_Tag.1",
+    "candidate": "docker.io/a__b/c---d:_Tag.1",
+    "present": true,
+    "valid": true
+  },
+  {
+    "name": "invalid ''",
+    "reference": "",
+    "candidate": "",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid ' '",
+    "reference": " ",
+    "candidate": " ",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid '\\talpine:latest'",
+    "reference": "\talpine:latest",
+    "candidate": "\talpine:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine:latest '",
+    "reference": "alpine:latest ",
+    "candidate": "alpine:latest ",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine:latest\\n'",
+    "reference": "alpine:latest\n",
+    "candidate": "alpine:latest\n",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine:latest\\xa0'",
+    "reference": "alpine:latest ",
+    "candidate": "alpine:latest ",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine'",
+    "reference": "alpine",
+    "candidate": "alpine",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "reference": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid '<none>:<none>'",
+    "reference": "<none>:<none>",
+    "candidate": "<none>:<none>",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'Alpine:latest'",
+    "reference": "Alpine:latest",
+    "candidate": "Alpine:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'team/Alpine:latest'",
+    "reference": "team/Alpine:latest",
+    "candidate": "team/Alpine:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'docker.io//alpine:latest'",
+    "reference": "docker.io//alpine:latest",
+    "candidate": "docker.io//alpine:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'https://docker.io/alpine:latest'",
+    "reference": "https://docker.io/alpine:latest",
+    "candidate": "https://docker.io/alpine:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine:'",
+    "reference": "alpine:",
+    "candidate": "alpine:",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'",
+    "reference": "alpine:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "candidate": "alpine:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine@sha256:abc'",
+    "reference": "alpine@sha256:abc",
+    "candidate": "alpine@sha256:abc",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'",
+    "reference": "alpine@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "candidate": "alpine@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine@unknown:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "reference": "alpine@unknown:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine@unknown:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "reference": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'docker.io/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag'",
+    "reference": "docker.io/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "candidate": "docker.io/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag'",
+    "reference": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "candidate": "example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:tag",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'alpine@SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+    "reference": "alpine@SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "candidate": "alpine@SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid 'a___b:latest'",
+    "reference": "a___b:latest",
+    "candidate": "a___b:latest",
+    "present": false,
+    "valid": false
+  },
+  {
+    "name": "invalid inventory",
+    "reference": "alpine:latest",
+    "candidate": "alpine:latest\n",
+    "present": false,
+    "valid": true
+  }
+]

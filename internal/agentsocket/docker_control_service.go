@@ -257,10 +257,7 @@ func decodeProjectActionRequest(request *structpb.Struct) (docker.ProjectActionR
 	result := docker.ProjectActionRequest{
 		ProjectID: projectID, Kind: kind, ContainerIDs: containerIDs, Action: action,
 	}
-	if _, err := result.Normalize(); err != nil {
-		return docker.ProjectActionRequest{}, err
-	}
-	return result, nil
+	return result.Normalize()
 }
 
 func decodeComposeProjectRequest(request *structpb.Struct) (ncpcompose.LifecycleRequest, error) {
@@ -290,8 +287,5 @@ func decodeComposeProjectRequest(request *structpb.Struct) (ncpcompose.Lifecycle
 	result := ncpcompose.LifecycleRequest{
 		ProjectID: projectID, WorkingDirectory: workingDirectory, ConfigFiles: configFiles, Action: action,
 	}
-	if _, err := result.Normalize(); err != nil {
-		return ncpcompose.LifecycleRequest{}, err
-	}
-	return result, nil
+	return result.Normalize()
 }

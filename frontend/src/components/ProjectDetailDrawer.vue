@@ -33,6 +33,9 @@ const props = withDefaults(defineProps<{
   hostName: string
   verifiedWebUrls?: Record<string, string>
   allowOperations?: boolean
+  projectMutationsBlocked?: boolean
+  mutationsBlocked?: boolean
+  blockedContainerIds?: string[]
   actionPending?: string | null
   projectActionPending?: ContainerAction | null
   projectActionErrors?: ProjectActionError[]
@@ -72,8 +75,9 @@ const currentStateLabel = computed(() => {
   return props.project ? stateLabel(props.project.state) : ''
 })
 const currentStateTone = computed(() => props.projectActionPending ? 'pending' : props.project ? projectStateTone(props.project.state) : 'neutral')
-const projectActionErrorTitle = computed(() => props.projectActionErrors.some((failure) => failure.scope === 'project') ? '项目操作失败' : '部分容器操作失败')
 function projectActionDisabled(action: ContainerAction) {
+  if (props.projectMutationsBlocked) return true
+  if (props.containers.some(container => props.blockedContainerIds?.includes(container.id))) return true
   if (!props.project || props.projectActionPending || props.actionPending || !props.containers.length) return true
   const runningCount = props.containers.filter((container) => container.state === 'running').length
   if (action === 'start') return runningCount === props.containers.length
@@ -111,10 +115,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
     modal-class="project-drawer-modal"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <template #header>
+    <template #header="{ titleId }">
       <div v-if="project" class="drawer-title">
         <span class="drawer-title__icon"><Boxes :size="21" /></span>
-        <div><strong>{{ project.name }}</strong><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
+        <div><h2 :id="titleId">{{ project.name }}</h2><span>{{ project.kind === 'compose' ? 'Compose 项目' : '独立容器组' }}</span></div>
         <StatusPill :label="currentStateLabel" :tone="currentStateTone" />
       </div>
     </template>
@@ -131,7 +135,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 
       <section v-if="allowOperations" class="project-lifecycle" aria-label="Docker 项目操作">
         <header>
-          <div><h3>项目操作</h3><p>按容器逐项执行，失败项会保留在这里。</p></div>
+          <div><h3>项目操作</h3><p>{{ project.kind === 'compose' ? '通过 Compose 执行，需核对的结果会保留在这里。' : '按容器逐项执行，失败项会保留在这里。' }}</p></div>
           <span>{{ containers.length }} 个容器</span>
         </header>
         <div class="project-lifecycle__actions">
@@ -140,7 +144,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
           <ActionButton variant="secondary" size="sm" :icon="RotateCw" :loading="projectActionPending === 'restart'" :disabled="projectActionDisabled('restart')" @click="emit('project-action', 'restart')">重启</ActionButton>
         </div>
         <div v-if="projectActionErrors.length" class="project-action-errors" role="alert">
-          <strong>{{ projectActionErrorTitle }}</strong>
+          <strong>项目操作需核对</strong>
           <ul><li v-for="failure in projectActionErrors" :key="failure.containerId">{{ failure.name }}：{{ failure.message }}</li></ul>
         </div>
       </section>
@@ -161,7 +165,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
       <section class="detail-section">
         <header><div><h3>容器</h3><p>镜像、状态、端口和运行操作</p></div><span>{{ containers.length }} 个</span></header>
         <div v-if="containerActionError" class="project-action-errors" role="alert">
-          <strong>容器操作失败</strong>
+          <strong>容器操作需核对</strong>
           <p>{{ containerActionError }}</p>
         </div>
         <div class="container-cards">
@@ -181,12 +185,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
               <div><dt><ArrowUpRight :size="14" />端口</dt><dd>{{ presentDockerPorts(container.ports).map((port) => port.label).join('、') || '无公开端口' }}</dd></div>
             </dl>
             <div v-if="allowOperations" class="container-card__actions">
-              <ElTooltip :content="container.state === 'running' ? '停止容器' : '启动容器'">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :content="container.state === 'running' ? '停止容器' : '启动容器'">
                 <button
                   :class="{ 'operation-button--danger': container.state === 'running' }"
                   class="operation-button"
                   type="button"
-                  :disabled="Boolean(actionPending)"
+                  :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))"
                   :aria-label="container.state === 'running' ? `停止 ${container.name}` : `启动 ${container.name}`"
                   @click="emit('action', container.id, container.state === 'running' ? 'stop' : 'start')"
                 >
@@ -195,12 +199,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
                   <Play v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip content="重启容器">
-                <button class="operation-button" type="button" :disabled="Boolean(actionPending)" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
+              <ElTooltip :trigger-keys="[]" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" content="重启容器">
+                <button class="operation-button" type="button" :disabled="Boolean(mutationsBlocked) || Boolean(actionPending) || Boolean(blockedContainerIds?.includes(container.id))" :aria-label="`重启 ${container.name}`" @click="emit('action', container.id, 'restart')">
                   <LoaderCircle v-if="pendingFor(container.id, 'restart')" class="spin" :size="17" /><RotateCw v-else :size="17" />
                 </button>
               </ElTooltip>
-              <ElTooltip content="查看容器详情与日志">
+              <ElTooltip :trigger-keys="[]" content="查看容器详情与日志">
                 <button class="operation-button" type="button" :aria-label="`查看 ${container.name} 详情与日志`" @click="emit('details', container)">
                   <Info :size="17" />
                 </button>
@@ -218,8 +222,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 .drawer-title { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 11px; min-width: 0; padding-right: 10px; }
 .drawer-title__icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 11px; background: var(--ncp-primary-soft); color: var(--ncp-primary-strong); }
 .drawer-title>div { display: grid; min-width: 0; }
-.drawer-title strong { overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
-.drawer-title span:not(.drawer-title__icon) { color: var(--ncp-text-subtle); font-size: .72rem; }
+.drawer-title h2 { margin: 0; overflow: hidden; color: var(--ncp-text); font-size: .94rem; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-title>div>span { color: var(--ncp-text-subtle); font-size: .72rem; }
 .project-detail { display: grid; gap: 18px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
 .detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .detail-overview>div { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 2px 8px; padding: 14px; border: 1px solid var(--ncp-line); border-radius: 12px; background: var(--ncp-surface-quiet); }

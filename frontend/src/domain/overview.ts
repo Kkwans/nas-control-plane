@@ -1,4 +1,6 @@
 import type { DockerInventory, SystemSummary } from '@/api/system'
+import type { SystemConnectionState } from '@/stores/system'
+import { summaryHasUnavailableSources } from './systemHealth'
 
 export type OverviewStatus = 'healthy' | 'degraded' | 'attention' | 'pending'
 
@@ -8,7 +10,14 @@ export interface OverviewState {
   detail: string
 }
 
-export function deriveOverviewState(summary: SystemSummary | null, inventory: DockerInventory | null): OverviewState {
+export function deriveOverviewState(
+  summary: SystemSummary | null,
+  inventory: DockerInventory | null,
+  health?: { state: SystemConnectionState; label: string; detail: string },
+): OverviewState {
+  if (health && health.state !== 'connected') {
+    return { status: health.state === 'loading' ? 'pending' : 'degraded', label: health.label, detail: health.detail }
+  }
   if (!summary) {
     return {
       status: 'pending',
@@ -22,6 +31,9 @@ export function deriveOverviewState(summary: SystemSummary | null, inventory: Do
       label: 'Docker 数据待恢复',
       detail: '系统快照可用，Docker Engine 清单将在 Root Agent 恢复后自动刷新。',
     }
+  }
+  if (summaryHasUnavailableSources(summary)) {
+    return { status: 'degraded', label: '部分指标不可用', detail: '部分采集源暂不可用，仅显示其余有效指标。' }
   }
   if (summary.cpu.usagePercent >= 85 || usagePercent(summary.memory.usedBytes, summary.memory.totalBytes) >= 90) {
     return {

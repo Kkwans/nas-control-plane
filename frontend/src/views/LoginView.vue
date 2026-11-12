@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowRight, KeyRound, LoaderCircle, RotateCw, ShieldCheck } from '@lucide/vue'
 
 import { NcpApiError } from '@/api/system'
@@ -17,32 +17,48 @@ const confirmation = ref('')
 const formError = ref<string | null>(null)
 const isSubmitting = ref(false)
 
+let mounted = true
+onBeforeUnmount(() => { mounted = false })
+
+function clearSecrets() {
+  password.value = ''
+  confirmation.value = ''
+}
+
+watch(() => authStore.state, () => {
+  clearSecrets()
+  formError.value = null
+}, { flush: 'sync' })
+
 const isSetup = computed(() => authStore.state === 'setup')
 const title = computed(() => (isSetup.value ? '初始化 Root 控制台' : '进入 NAS Control Plane'))
 const description = computed(() =>
   isSetup.value
-    ? '创建唯一的 Root 管理账号。账号创建后，控制面功能将通过该会话进入。'
+    ? '创建首个 Root 管理账号。账号创建后，控制面功能将通过该会话进入。'
     : '使用 Root 管理账号进入实时系统与服务控制台。',
 )
 
 async function submit() {
+  if (isSubmitting.value || !['setup', 'anonymous'].includes(authStore.state)) return
   formError.value = null
   if (isSetup.value && password.value !== confirmation.value) {
     formError.value = '两次输入的密码不一致。'
     return
   }
   isSubmitting.value = true
+  let operationRevision = authStore.operationRevision
   try {
     const credentials = { username: username.value, password: password.value }
-    if (isSetup.value) {
-      await authStore.bootstrap(credentials)
-    } else {
-      await authStore.login(credentials)
-    }
-    password.value = ''
-    confirmation.value = ''
-    emit('authenticated')
+    const pending = isSetup.value
+      ? authStore.bootstrap(credentials)
+      : authStore.login(credentials)
+    operationRevision = authStore.operationRevision
+    const result = await pending
+    if (operationRevision !== authStore.operationRevision || !mounted || result === 'superseded') return
+    clearSecrets()
+    if (result === 'authenticated' && authStore.isAuthenticated) emit('authenticated')
   } catch (error) {
+    if (!mounted || operationRevision !== authStore.operationRevision) return
     formError.value = error instanceof NcpApiError ? error.message : '登录服务暂不可用，请稍后重试。'
   } finally {
     isSubmitting.value = false
@@ -67,11 +83,11 @@ async function submit() {
         <p class="access-kicker">CONTROL PLANE OFFLINE</p>
         <h1 id="access-title">正式控制面尚未连接</h1>
         <p class="access-description">
-          当前页面没有使用演示数据。请启动 ncp-server 与 Root Agent 后重新连接。
+          {{ authStore.errorMessage ?? '当前页面没有使用演示数据。请启动 ncp-server 与 Root Agent 后重新连接。' }}
         </p>
         <p v-if="authStore.errorCode" class="access-error-code">{{ authStore.errorCode }}</p>
         <button class="primary-action" type="button" @click="authStore.refresh">
-          重新连接
+          重新检查
           <RotateCw :size="16" aria-hidden="true" />
         </button>
       </template>
@@ -85,14 +101,15 @@ async function submit() {
         <form class="access-form" @submit.prevent="submit">
           <label>
             <span>账号</span>
-            <input v-model.trim="username" autocomplete="username" maxlength="64" required placeholder="例如 root-admin" />
+            <input v-model.trim="username" :disabled="isSubmitting" autocomplete="username" maxlength="64" required placeholder="例如 root-admin" />
           </label>
           <label>
             <span>密码</span>
             <input
               v-model="password"
+              :disabled="isSubmitting"
               type="password"
-              autocomplete="current-password"
+              :autocomplete="isSetup ? 'new-password' : 'current-password'"
               :minlength="isSetup ? 6 : 1"
               maxlength="256"
               required
@@ -103,6 +120,7 @@ async function submit() {
             <span>确认密码</span>
             <input
               v-model="confirmation"
+              :disabled="isSubmitting"
               type="password"
               autocomplete="new-password"
               minlength="6"
@@ -112,8 +130,13 @@ async function submit() {
             />
           </label>
 
+          <p
+            v-if="authStore.errorMessage"
+            :class="authStore.errorCode === 'BOOTSTRAP_RECONCILED' ? 'access-form__notice' : 'access-form__error'"
+            role="status"
+          >{{ authStore.errorMessage }}</p>
           <p v-if="formError" class="access-form__error" role="alert">{{ formError }}</p>
-          <button class="primary-action" type="submit" :disabled="isSubmitting">
+          <button class="primary-action" type="submit" :disabled="isSubmitting || authStore.state === 'checking'">
             <LoaderCircle v-if="isSubmitting" class="spin" :size="16" aria-hidden="true" />
             <KeyRound v-else :size="16" aria-hidden="true" />
             {{ isSetup ? '创建 Root 账号' : '进入控制台' }}
@@ -249,6 +272,8 @@ async function submit() {
 }
 
 .access-error-code {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 18px 0 0;
   color: var(--ncp-warning-strong);
 }
@@ -289,10 +314,18 @@ async function submit() {
   box-shadow: 0 0 0 4px rgba(38, 102, 220, 0.11);
 }
 
-.access-form__error {
+.access-form__error,
+.access-form__notice {
   margin: -2px 0 0;
-  color: var(--ncp-danger-strong);
   font-size: 0.76rem;
+}
+
+.access-form__error {
+  color: var(--ncp-danger-strong);
+}
+
+.access-form__notice {
+  color: var(--ncp-text-muted);
 }
 
 .primary-action {

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-import { installMockApi } from './mockApi'
+import { installMockApi, summary } from './mockApi'
 
 const viewports = [
   { name: 'desktop-wide', width: 1440, height: 900 },
@@ -21,7 +21,10 @@ test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page
   page.on('console', (message) => {
     if (message.type() === 'error') browserErrors.push(`console.error: ${message.text()}`)
   })
-  await installMockApi(page)
+  await installMockApi(page, { manualRealtime: true })
+  // 视觉基线保留单个样本；暂停完整时钟，防止截图重试期间数据过期或图表增长。
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
+  await page.clock.setSystemTime(new Date(summary.collectedAt))
 
   for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
@@ -31,6 +34,9 @@ test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page
     await expect(page.getByText('Jellyfin')).toBeVisible()
     await expect(page.getByText('收藏站点')).toBeVisible()
     await expect(page.getByText('CPU 使用率')).toBeVisible()
+    await expect(page.locator('.topbar .connection-state')).toBeVisible()
+    await page.clock.runFor(1)
+    await expect(page.locator('.topbar .connection-state')).toHaveClass(/connection-state--connected/)
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
@@ -40,14 +46,21 @@ test('总览在四档目标 viewport 可用并保留视觉基线', async ({ page
     expect(layout.bodyWidth, `${viewport.name} body 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
     expect(layout.mainWidth, `${viewport.name} main 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
 
-    if (viewport.name === 'desktop-wide') {
-      const accessibility = await new AxeBuilder({ page }).analyze()
-      const blockingViolations = accessibility.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
-      expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
-    }
-
     await expect(page).toHaveScreenshot(`overview-${viewport.name}.png`, { fullPage: false, animations: 'disabled', timeout: 30_000 })
   }
 
   expect(browserErrors).toEqual([])
+})
+
+// axe 的异步规则依赖页面计时器；与暂停时钟的截图用例分开，保留全部原有检查。
+test('总览无严重或关键可访问性问题', async ({ page }) => {
+  await installMockApi(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: routeNavigationTimeout })
+  await expect(page.getByRole('heading', { name: '系统总览' })).toBeVisible()
+  await expect(page.getByText('Jellyfin')).toBeVisible()
+  await expect(page.locator('.topbar .connection-state')).toHaveClass(/connection-state--connected/)
+  const accessibility = await new AxeBuilder({ page }).analyze()
+  const blockingViolations = accessibility.violations.filter((violation) => violation.impact === 'critical' || violation.impact === 'serious')
+  expect(blockingViolations, JSON.stringify(blockingViolations, null, 2)).toEqual([])
 })

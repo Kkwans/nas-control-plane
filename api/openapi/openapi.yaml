@@ -58,12 +58,21 @@ paths:
       summary: Create the first Root account and start a session
       tags: [auth]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '429':
+          $ref: '#/components/responses/AuthRateLimited'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: Root account created and session cookie set
           headers:
@@ -85,18 +94,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）。账号可能已经创建，但会话未建立且不设置 Cookie；客户端应先只读查询 /api/v1/auth/status 确认初始化与认证状态，不得自动重放 bootstrap 或 login。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/auth/login:
     post:
       operationId: loginRootAccount
       summary: Start a Root session
       tags: [auth]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '429':
+          $ref: '#/components/responses/AuthRateLimited'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Session cookie set
           headers:
@@ -118,14 +142,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）；未建立新会话，不设置 Cookie。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/auth/logout:
     post:
       operationId: logoutRootAccount
       summary: End the current Root session
       tags: [auth]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: Session cleared
+        '503':
+          description: 认证服务暂不可用（AUTH_UNAVAILABLE，含 requestId）；会话撤销未获确认，不清除 Cookie，客户端不得当作已退出。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/users:
     get:
       operationId: listUsers
@@ -147,12 +185,19 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CredentialsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 账号已创建
           content:
@@ -174,6 +219,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
@@ -183,6 +229,12 @@ paths:
               properties:
                 disabled: { type: boolean }
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 更新后的账号
           content:
@@ -214,12 +266,19 @@ paths:
       tags: [users]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/PasswordPolicy'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 已保存的密码规则
           content:
@@ -235,6 +294,7 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 8192 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
@@ -245,6 +305,12 @@ paths:
                 currentPassword: { type: string, format: password }
                 newPassword: { type: string, format: password, minLength: 1, maxLength: 256 }
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 密码已更新且目标账号全部会话已撤销
         '401':
@@ -262,6 +328,8 @@ paths:
       parameters:
         - { name: userID, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 账号及其全部会话已删除
         '409':
@@ -289,12 +357,19 @@ paths:
       tags: [settings]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/UserPreferences'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated user preferences
           content:
@@ -330,43 +405,130 @@ paths:
       parameters:
         - { name: listKey, in: path, required: true, schema: { type: string } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ListPreference'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 已保存的列表偏好
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListPreference'
+  /api/v1/monitoring/alerts:
+    get:
+      operationId: getResourceAlerts
+      summary: 读取当前运行期 CPU 与内存资源提示
+      description: >-
+        默认关闭，只有 Server --resource-alerts 启用。只读既有采集器的内存状态，
+        不触发采样、历史查询或持久化；GET 与 observedAt 不推进触发或恢复计时。
+        规则按约 5 秒采样判断，采样间变化不可知，不代表 NAS 整体健康。
+        condition 与 availability 独立；unknown/stale 不能视为正常，已触发事件失联不会自动恢复。
+        样本数据时间或接收时间年龄超过 15 秒为 stale；明确失败优先 unknown。
+        仅本次 Server 运行期有效，重启丢失；最近恢复时间保留不足 24 小时。
+        完整 JSON（含末尾换行）最多 8192 字节，超限显式错误，不截断成功响应。
+      tags: [monitoring]
+      security: [{RootSession: []}]
+      responses:
+        '200':
+          description: 完整当前状态；包括 enabled=false、无样本 unknown 和数据 stale。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResourceAlertsSnapshot'}
+        '401':
+          description: AUTH_UNAUTHORIZED；需要 Root 会话。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '500':
+          description: MONITORING_ALERTS_RESPONSE_INVALID 或 MONITORING_ALERTS_LIMIT_EXCEEDED；没有部分成功响应。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '503':
+          description: MONITORING_ALERTS_UNAVAILABLE 表示 provider 缺失或已停止；AUTH_UNAVAILABLE 表示认证后端暂不可用。配置关闭正常返回 200。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
   /api/v1/monitoring/samples:
     get:
       operationId: listMetricSamples
       summary: Read persisted host metric samples
+      description: >-
+        历史由服务端后台独立采集，无需浏览器保持连接，HTTP 概览和实时流请求不写入历史。
+        每个 UTC 分钟仅保存首个合格且成功持久化的完整样本及其温度子样本，保留 7 天。
+        必需指标源不可用、样本无效或持久化失败可能形成间断，不补零或插值；缺失温度不生成子样本。
+        查询为精确闭区间（含小数秒），父样本及其温度来自同一数据库快照，按时间升序。
+        单次完整响应最多 10,081 个父样本、65,536 个温度子样本及 8 MiB JSON（含末尾换行）。
+        七天每分钟六个普通短名称传感器通常在预算内；更多传感器、较长名称或较大数字可能需缩短查询范围。
+        超限返回 MONITORING_HISTORY_LIMIT_EXCEEDED，请缩短范围重试；绝不返回截断的成功数组，
+        也不因响应预算删除仍在保留期内的旧版数据。单个旧样本本身超限时，需排除该时间点。
+        SQL 查询与编码共享 5 秒协作式超时，超时返回 MONITORING_READ_TIMEOUT；客户端取消会取消查询。
+        此预算约束应用层结果与编码体积，不保证 SQLite 驱动、查询工作区峰值内存或数据库文件大小。
       tags: [monitoring]
       security: [{RootSession: []}]
       parameters:
-        - { name: range, in: query, schema: { type: string, enum: [1h, 6h, 24h, 7d], default: 6h } }
+        - name: range
+          in: query
+          description: 预设 1h、6h、24h 或 7d；缺省及未知值均回退 6h。成对 from/to 优先。
+          schema: { type: string, default: 6h }
         - name: from
           in: query
-          description: 精确范围起点；必须与 to 成对提供，优先于 range。
+          description: 精确范围起点（包含边界、支持小数秒）；必须与 to 成对提供，优先于 range。
           schema: { type: string, format: date-time }
         - name: to
           in: query
-          description: 精确范围终点；不得晚于当前时间，最长跨度 7 天。
+          description: 精确范围终点（包含边界、支持小数秒）；最多晚于服务当前时间 1 分钟，必须晚于 from，最长跨度 7 天。
           schema: { type: string, format: date-time }
       responses:
         '200':
-          description: Metric samples ordered by collection time
+          description: 完整范围内的历史样本，按采集时间升序；空结果返回 []。
           content:
             application/json:
               schema:
                 type: array
+                maxItems: 10081
                 items:
                   $ref: '#/components/schemas/MetricSample'
+        '400':
+          description: MONITORING_RANGE_INVALID；起止未成对、时间无效、跨度超过 7 天或终点超过允许的 1 分钟未来容差。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: MONITORING_HISTORY_LIMIT_EXCEEDED；完整响应超过父样本、温度行数或编码字节预算，请缩短范围。没有部分成功结果。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: MONITORING_HISTORY_INVALID 表示保留的旧历史包含无法完整编码的无效数据；MONITORING_READ_FAILED 表示其他存储读取失败。原始数据不被修改，不返回存储错误细节。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: MONITORING_STORE_UNAVAILABLE；未提供有上下界的历史存储接口，不回退到无界查询。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '504':
+          description: MONITORING_READ_TIMEOUT；查询或编码超过 5 秒协作式预算，请缩短范围重试。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/databases/project-preferences:
     get:
       operationId: listDatabaseProjectPreferences
@@ -388,12 +550,19 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseProjectPreference'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated database project preference
           content:
@@ -418,6 +587,8 @@ paths:
           required: false
           schema: { type: boolean, default: false }
       responses:
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
         '200':
           description: 数据库来源列表
           content:
@@ -434,15 +605,31 @@ paths:
     post:
       operationId: connectDatabase
       summary: 使用已保存或手动提供的凭据连接数据库
+      description: 手动凭据先测试，再以读取时的版本条件保存；冲突不会自动覆盖或重试。credential_conflict 仅保证本次尝试未写入凭据，不表示连接测试成功，也不表示其他请求没有保存凭据；用户需重新确认后手动重试。其他错误不提供本次凭据未写入的保证。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnectRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 连接诊断结果；不会返回密码、Token 或 DSN
           content:
@@ -461,8 +648,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: credential_conflict 表示凭据版本冲突，本次尝试没有写入凭据；可发生在连接测试阶段，或测试成功后的条件保存阶段，不能据此判断测试成功。重新确认后手动重试，不自动重发。constraint_failed 仍表示数据库约束失败，不适用该凭据保证。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                credentialConflict:
+                  summary: 本次凭据未保存，其他请求可能已保存新凭据
+                  value:
+                    code: credential_conflict
+                    message: 凭据已被其他请求更改，本次凭据未保存，请重新确认后手动重试。
+                    requestId: req-example
         '503':
-          description: 数据库或凭据服务不可用
+          description: 数据库或凭据服务不可用；credential_store_unavailable 表示凭据服务未能完成请求，不保证本次凭据未保存。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -471,21 +671,43 @@ paths:
     post:
       operationId: testDatabaseConnection
       summary: 测试数据库连接并返回稳定诊断码
+      description: 已配置凭据服务时先发现来源并准备受保护策略；测试可继承已保存的 TLS 策略，但不保存或替换凭据。缺少测试能力时拒绝请求，不绕过凭据服务直接测试。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 连接诊断结果
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseConnectionDiagnostic'
+        '404':
+          description: 未找到目标数据库来源
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: 认证失败
           content:
@@ -499,7 +721,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或 Root Agent 不可用
+          description: 数据库不可达或 Root Agent 不可用；已配置但缺少受保护的测试能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -508,15 +730,29 @@ paths:
     post:
       operationId: getDatabaseCatalog
       summary: 读取数据库表和视图目录
+      description: >-
+        Agent 在累计目录表、列与补充元数据时应用共享的 1 MiB 保守结果保留预算，包含来源、字段名、容器、转义文本及规范化默认值。
+        超预算返回 HTTP 422 result_too_large，不返回部分目录、不截断字段，也不自动重试；客户端保留上次有效目录。
+        SQLite 列写入模式可采用最大长度预留，因此可能早于最终编码大小达到上限时拒绝。普通可选统计读取失败仍允许缺失，取消和预算错误不能当作成功。
+        该预算不限制驱动读取单个值的峰值内存、数据库扫描或 COUNT 查询工作量、执行时长，也不是 NAS 实测容量。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseConnection'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 数据库目录
           content:
@@ -524,13 +760,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/DatabaseCatalog'
         '400':
-          description: 数据库请求、SQL 或凭据无效
+          description: 数据库请求、SQL 或凭据无效 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可达或凭据服务不可用
+          description: 数据库不可达或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -538,30 +774,53 @@ paths:
   /api/v1/databases/query:
     post:
       operationId: queryDatabase
-      summary: 执行受控数据库 SQL
+      summary: 执行 Root 数据库 SQL
+      description: >-
+        结果模式只决定读取返回行还是驱动影响行数，不限制 SQL 写入权限。
+        NCP 对单次请求仅选择一次 Query 或 Exec 调用，不因错误、不支持模式或未知影响行数自动切换路径或重放；不承诺数据库驱动或网络层的 exactly-once。
+        行结果最多展示 500 行，并采用 1 MiB（1048576 字节）的保守结果保留预算；预算包含转义字符串、base64、列名及容器等结构开销，可能在实际编码大小达到上限前截断。
+        只保留预算内的完整行前缀，不裁剪单元文本；首行超预算时可返回 columns 和空 rows，并标记 truncated=true、truncationReason=byte_limit，不能解读为零匹配或零写入。
+        行数与字节预算都不限制数据库写入范围；返回行也不代表只读。元数据本身过大或最终 JSON/protobuf 响应超过 1 MiB 时返回 HTTP 422 result_too_large。
+        SQL 失败、超时、截断或结果超预算不保证未执行或已回滚，应先核对实际状态再决定是否重试。
+        当前响应仅表示驱动暴露的一个结果集，多语句的执行、结果与原子性取决于驱动和数据库。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseQueryRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: SQL 查询结果
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseQueryResult'
+        '400':
+          description: 请求格式无效（DATABASE_INPUT_INVALID）、SQL 或模式无效（sql_invalid），或 Agent 不支持显式模式（result_mode_unsupported）；不支持时 SQL 不会执行，应先升级 Agent。 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: SQL 无效或约束失败
+          description: SQL 约束失败
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 数据库不可用
+          description: 数据库不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -570,15 +829,28 @@ paths:
     post:
       operationId: listDatabaseRows
       summary: 分页读取数据表行
+      description: >-
+        每页最多 200 行，整页数据与表元数据受 1 MiB（1048576 字节）的保守结果保留预算保护；计入转义、base64、对象键与结构开销。
+        超预算返回 HTTP 422 result_too_large，不按字节预算缩短成功页，也不裁剪单元内容；调用方应保留失败页的 offset，避免跳过未展示的行。
+        最终 JSON/protobuf 响应同样不得超过 1 MiB。应用层预算限制累计保留结果及响应，不能保证数据库驱动分配大单元时的峰值内存。
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseRowsRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 数据表行
           content:
@@ -586,7 +858,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/DatabaseRowsResult'
         '400':
-          description: 表名、排序或分页参数无效
+          description: 表名、排序或分页参数无效 TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -598,20 +876,47 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseInsertRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 插入完成
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -623,20 +928,47 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseUpdateRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 更新完成
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -648,20 +980,47 @@ paths:
       tags: [databases]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 1048576 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DatabaseDeleteRequest'
       responses:
+        '400':
+          description: 请求格式或凭据无效（DATABASE_INPUT_INVALID）。TLS 配置无效（tls_configuration_invalid）、所需策略不受支持（tls_policy_unsupported）或证书/身份验证失败（tls_verification_failed）均返回 400；这些诊断不保证 SQL 未执行或本次凭据未保存。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/DatabaseResultTooLarge'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 删除完成
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DatabaseMutationResult'
+        '502':
+          description: mutation_receipt_invalid 表示执行后的影响行数回执不可用、为负数或超出 JSON 安全整数范围。行修改可能已生效；不保证未执行或回滚，不自动重试，请先只读核对。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: 数据约束失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 数据库或凭据服务不可用；已配置但缺少受保护的解析能力时返回 credential_store_unavailable，不降级到直接连接。 operation_busy 表示 Agent 的单个数据库 Manager 已达到固定 4 个池操作的并发上限；不排队，不自动重试。预算覆盖将创建 SQL 池的 Manager 操作，从准入开始计数，直到池关闭才释放；独立来源发现、Server 端连接解析及凭据服务不在预算内，不保证整条请求没有副作用，也不保证凭据未保存。
           content:
             application/json:
               schema:
@@ -707,18 +1066,22 @@ paths:
   /api/v1/system/summary:
     get:
       operationId: getSystemSummary
-      summary: Get a live NAS host summary
+      summary: 读取共享的 NAS 主机实时快照
+      description: >-
+        只读服务后台 Collector 的最新快照，不触发 Agent RPC 或历史写入。
+        保留原始 collectedAt 与 warnings；有效快照中的源 warnings 不会使整个响应变成 503，
+        客户端须将受影响源显示为不可用。历史候选或写入失败不影响有效实时快照。
       tags: [system]
       security: [{RootSession: []}]
       responses:
         '200':
-          description: Live host metrics collected by Root Agent
+          description: 后台 Root Agent 快照；接收年龄与 collectedAt 年龄均不超过 15 秒，数据未来偏差最多 5 秒
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemSummary'
         '503':
-          description: Root Agent or a required metric source is unavailable
+          description: SYSTEM_SUMMARY_UNAVAILABLE；冷启动、未配置或已停止的 Collector、最新源错误、无效时间或接收/数据年龄超过 15 秒
           content:
             application/json:
               schema:
@@ -769,12 +1132,19 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 修改预览
           content:
@@ -794,12 +1164,19 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSChangeConfirmation'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 修改结果
           content:
@@ -819,12 +1196,19 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DNSRollbackRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: DNS 回滚结果
           content:
@@ -858,6 +1242,8 @@ paths:
       tags: [system]
       security: [{RootSession: []}]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 公网出口地址及可选地区信息
           content:
@@ -890,12 +1276,19 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInvokeRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Mihomo 控制器响应
           content:
@@ -922,12 +1315,19 @@ paths:
       tags: [proxy]
       security: [{RootSession: []}]
       requestBody:
+        description: 实际空请求体可省略；非空请求体必须使用单一 application/json Content-Type，允许有效 MIME 参数，不接受重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: false
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MihomoInspectionRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Mihomo 路由与出口检查结果
           content:
@@ -947,22 +1347,61 @@ paths:
         - name: interval
           in: query
           required: false
-          description: Snapshot interval in seconds
+          description: 读取缓存并发送 snapshot 的秒数，不控制主机采集；缺省或非法值回退 5 秒，同一 collectedAt 可以重复发送
           schema:
             type: integer
             minimum: 2
             maximum: 300
             default: 5
+        - name: scope
+          in: query
+          required: false
+          style: form
+          explode: true
+          description: 可重复指定 summary 和 docker；未提供或全部不识别时回退 summary。docker-only 不读取主机快照，也不携带主机历史错误
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [summary, docker]
       summary: 订阅控制台实时刷新事件
+      description: >-
+        保留 retry 行和 snapshot 事件，事件 data 为 RealtimeSnapshot JSON；新连接立即发送当前状态。
+        summary 与 Docker 只读各自共享缓存，不触发每连接主机/Docker RPC或历史写入。
+        Docker仅在有docker scope订阅时由单worker按5秒节拍采集，源RPC预算5秒；冷启动、失败或双年龄过期时省略docker并返回源不可用状态。
+        最后一个Docker订阅释放会取消在途采集与周期工作；GET inventory/services/sites通过同一采集器的强刷新屏障读取，要求采集开始不早于该刷新请求；最多64个unary等待者，HTTP等待预算12秒，源RPC预算5秒。
+        Docker事件订阅首次建立和每次重连均要求全量对账；恢复中不以旧清单或回退轮询冒充健康，返回既有DOCKER_INVENTORY_UNAVAILABLE。
+        Server与Agent须同时支持事件RPC，旧Agent缺失能力时明确不可用，不静默降级宣称事件恢复。
+        外层 collectedAt 是发送事件的服务时间，内层 collectedAt 才是资源采集时间。
+        每 15 秒发送 comment heartbeat，不产生 snapshot，也不证明数据新鲜；正在写入可延迟该节拍，Docker采集不阻塞summary或heartbeat。
+        每次写入/flush 有 5 秒 deadline，完成后清除；请求取消或所订阅快照 provider 停止会关闭相应流。
+        长连接建立前重新验证数据库会话并申请服务内租约（默认总上限 256，四类流共享）；
+        注销仅撤销当前会话，改密、禁用或删除账号撤销该用户全部会话；到期无需等待下个 interval 即触发取消。
+        取消不会停止其他订阅或主机采集器；Docker最后订阅释放例外；正在进行的写入最多等待当前 5 秒预算。
+        不保证每个采样均送达，无重放；客户端必须按内层时间去重并独立判断 15 秒新鲜度。
+        每个服务 Handler 的全部 scope 共享最多 64 条连接，不宣称共享编码或整个服务的硬内存上限。
       tags: [system]
       security: [{RootSession: []}]
       responses:
         '200':
-          description: 每 5 秒发送一次 snapshot 事件
+          description: 按 interval 发送最新 snapshot，默认 5 秒；源不可用时省略 summary，warnings 与历史错误分别保留
           content:
             text/event-stream:
               schema:
                 type: string
+                description: SSE data 使用 components/schemas/RealtimeSnapshot 定义的 JSON
+        '503':
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED；实时认证能力不可用或服务租约额度已满。REALTIME_SUBSCRIBER_LIMIT 表示此 Handler 超过 64 条连接。均在提交流响应前拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: REALTIME_STREAM_UNSUPPORTED；响应 writer 不支持有界实时流
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Root 会话无效
           content:
@@ -973,6 +1412,7 @@ paths:
     get:
       operationId: getDockerInventory
       summary: Get Docker Engine, container, and Compose project inventory
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [docker]
       security: [{RootSession: []}]
       responses:
@@ -1019,7 +1459,7 @@ paths:
         - name: path
           in: query
           required: true
-          description: 要读取的绝对 NAS 路径
+          description: 要读取的绝对 NAS 路径；不去除首尾空白，名称中的空白会原样保留，仍按既有规则清理路径分隔符和点段。
           schema: { type: string, minLength: 1, maxLength: 4096 }
         - name: cursor
           in: query
@@ -1089,12 +1529,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerContainerCreateRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 容器已创建
           content:
@@ -1113,6 +1560,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/containers/create-jobs:
+    post:
+      operationId: submitDockerContainerCreateJob
+      summary: 持久接收单容器创建任务
+      description: >-
+        接受与同步创建相同的 DockerContainerCreateRequest，支持仅创建或创建并启动；旧同步 POST /api/v1/docker/containers 仍返回201。
+        独立单 worker、容量1；queued、running 与结果待持久化任务均占容量，并共享全局容量32。排队期限10分钟，与执行预算分开；Server执行预算10分钟，Agent创建预算2分钟，失败清理独立预算15秒。
+        不支持取消、retry 或重启自动重放；HTTP断开不取消已接收任务，每个任务最多派发一次，保存失败仅重存结果。
+        请求配置只保存在内存，不写入数据库、日志、reference 或任务快照；reference 省略或为空。
+        completed 仅证明创建及所请求的启动调用得到确认，不保证容器继续运行或健康；createResult 只包含 containerId、created 和 started。
+        可能已派发的 RPC 错误（包括 START_FAILED、CLEANUP_FAILED）为 interrupted / artifactState=unknown，不自动重试。
+        重启后仍可读取持久化任务详情与成功回执；历史列表摘要不包含 createResult。
+      tags: [docker]
+      security: [{RootSession: []}]
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerContainerCreateRequest'
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照；type=docker-container-create，reference省略或为空，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes均为0，layers为空对象；无 createResult、completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。queued 接收回执不是执行成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: 容器配置无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Root 登录会话缺失或无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE 或 AGENT_DOCKER_CONTROL_UNAVAILABLE（缺少容器创建能力）；未返回持久接收成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images/remove-batch:
     post:
       operationId: removeDockerImages
@@ -1121,12 +1620,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveBatchRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 每个镜像的删除结果；被引用镜像会以 item errorCode 拒绝
           content:
@@ -1155,12 +1661,19 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
-        required: false
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/StandaloneProjectActionRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 逐容器生命周期结果
           content:
@@ -1190,12 +1703,19 @@ paths:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
         - { name: action, in: path, required: true, schema: { type: string, enum: [start, stop, restart] } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeLifecycleRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Compose 服务状态与命令输出
           content:
@@ -1224,12 +1744,19 @@ paths:
       parameters:
         - { name: projectID, in: path, required: true, schema: { type: string, minLength: 1 } }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerProjectDeleteRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 项目容器和精确注册记录已删除
           content:
@@ -1296,12 +1823,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImagePullRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: Image pull job accepted
           content:
@@ -1309,7 +1843,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
         '400':
-          description: Invalid image reference or pull failed
+          description: Invalid image reference; execution failures are reported by the accepted job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
           content:
             application/json:
               schema:
@@ -1321,12 +1861,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeReadRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Compose project configuration
           content:
@@ -1340,12 +1887,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeValidateRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Valid normalized Compose configuration
           content:
@@ -1378,12 +1932,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDraftInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Saved Compose draft
           content:
@@ -1393,22 +1954,53 @@ paths:
   /api/v1/docker/compose/deploy:
     post:
       operationId: deployComposeConfig
-      summary: Validate, back up, atomically save and deploy a Compose project
+      summary: Check the disk baseline, back up, save and deploy a Compose project
+      description: |
+        baseContentHash 必须是本次编辑会话读取的目标磁盘原始字节 SHA-256；缺少或格式无效时，在创建 Job 前返回 HTTP 400 COMPOSE_BASELINE_INVALID。
+        Agent 在目标锁内、校验前和最终写入 rename 前核对同一个磁盘基线；COMPOSE_CONFIG_CONFLICT 表示内容、存在性或普通文件类型变化，COMPOSE_CONFIG_UNVERIFIED 表示无法核实目标，两者均不写入目标或执行部署。
+        新 Server 仅调用 DeployConfigChecked；旧 Agent 不支持时，Job failed COMPOSE_BASELINE_UNSUPPORTED，绝不降级调用旧部署入口。
+        命令成功后再次核对目标字节；COMPOSE_DEPLOY_POSTCHECK_CONFLICT 表示目标已变化，COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED 表示无法核实。两者都为 Job failed，不自动恢复，不保存成功版本，但命令可能已改变运行态。
+        上述异步业务失败发生于已接收的 Job，不是 POST 的 HTTP 409。只有命令成功且随后一次核对通过才记录成功版本，不证明容器健康或此后文件不再变化。
+        这些检查是 best-effort TOCTOU 防护，不是跨进程原子 CAS；检查与 rename 之间仍有竞态，不保护 ABA 历史、多文件配置或父目录别名。
+        部署命令失败时，仅当最终恢复 rename 前读取到的当前普通文件原始字节仍与本次写入相同，才尝试写回旧配置并重新应用。
+        已确认业务失败以 Job failed 和稳定 errorCode 返回：COMPOSE_DEPLOY_ROLLBACK_CONFLICT 表示发现内容、存在性或文件类型变化，跳过恢复；COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED 表示无法核实当前文件，跳过恢复。
+        COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED 表示旧配置写回失败且未重新应用；COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED 表示旧配置已写回但重新应用命令失败；COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED 仅表示旧配置已写回且重新应用命令成功，部署仍失败，运行健康未验证。
+        COMPOSE_CONFIG_INVALID、COMPOSE_REQUEST_INVALID 分别表示配置校验或请求失败；通用 COMPOSE_DEPLOY_FAILED 不确认任何恢复结果。
+        取消、超时或传输断开时，相关 Job 仍以 interrupted 和远端结果未确认终结；即使 Agent 的独立恢复随后继续，也不会推断成功。
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ComposeDeployInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '400':
+          description: 请求无效或缺少有效的磁盘编辑基线（COMPOSE_BASELINE_INVALID）；未创建 Job，未调用 Agent。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: Compose deployment job accepted
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/compose/revisions:
     get:
       operationId: listComposeRevisions
@@ -1426,6 +2018,51 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ComposeRevision'
+  /api/v1/docker/images/remove-job:
+    post:
+      operationId: submitDockerImageRemoval
+      summary: 将单个本地镜像的非强制删除提交为持久任务
+      description: 仅接受清单中的完整 sha256 内容身份。202 只表示任务已持久接收，不表示镜像已删除；关闭页面不会取消任务。任务不支持取消或重试，仍调用既有单元素批量删除以保留容器引用预检及非强制删除。返回结果必须完整匹配唯一目标；未知响应、传输错误和一般删除错误归档 interrupted，只有匹配成功回执才 completed，明确预检拒绝可 failed。响应丢失时先只读核对最近任务与清单，禁止自动重新提交。当前接口不提供跨请求幂等键。
+      tags: [docker, jobs]
+      security: [{RootSession: []}]
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DockerImageRemoveJobRequest'
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照，即使后台已推进也不替换该接收回执。type=docker-image-remove、reference=请求 imageId、cancellable=false、status=queued、artifactState=unknown；progress、downloadedBytes、totalBytes、speedBytes 均为0，layers为空对象；不包含 cancellationStatus、persistenceStatus、completedAt、errorCode 或 error 元数据。实际执行与结果持久化独立于 HTTP 生命周期；成功不是镜像未来持续不存在的保证。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: CONTROL_INPUT_INVALID 或 DOCKER_IMAGE_REMOVE_INVALID；未提交任务。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 必须登录 Root 会话。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: AGENT_DOCKER_IMAGES_UNAVAILABLE、JOB_ENGINE_UNAVAILABLE、JOB_QUEUE_FULL 或 JOB_PERSIST_FAILED。本次未派发删除 RPC；持久化确认失败仍可能留下待恢复任务记录，不保证记录不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/docker/images/remove:
     post:
       operationId: removeDockerImage
@@ -1433,12 +2070,19 @@ paths:
       tags: [docker]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DockerImageRemoveRequest'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Image removed
           content:
@@ -1466,6 +2110,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: deleteJob
       summary: 删除已结束的后台任务记录
@@ -1474,21 +2124,116 @@ paths:
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 任务记录已删除
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: 排队中或运行中的任务不能删除
+          description: JOB_DELETE_UNAVAILABLE：活动任务、取消请求中或结果待保存的任务不能删除。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: JOB_PERSIST_FAILED：删除记录失败，任务记录保留。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/jobs/{jobID}/events:
     get:
       operationId: followJob
       summary: Follow background job progress over SSE
+      description: >-
+        流建立前重新验证数据库会话并登记实时租约；注销、改密、账号禁用、删除及会话到期取消相应观察流。
+        每帧 Write 与 Flush 共用 5 秒 deadline；不支持有界写入时在响应提交前拒绝。
+        关闭观察流不会取消、删除或改变已接受 Job 的状态，重新登录后可继续观察。
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
         '200':
-          description: text/event-stream progress snapshots
+          description: text/event-stream progress snapshots；取消请求中及结果待保存时继续发送，持久化终态后结束。
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '501':
+          description: JOB_STREAM_UNSUPPORTED：当前连接不支持有界 SSE 写入。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED；实时认证能力不可用或四类流共享的服务租约额度已满
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/job-history:
+    get:
+      operationId: listJobHistory
+      summary: 分页读取最后保存的任务历史
+      description: |
+        只读持久摘要，可能落后于当前执行，不代表当前资源状态。不查询 Agent，不提供任务动作。
+        按创建时间秒及 ID 倒序 keyset 遍历，无跨页快照保证或总数。并发创建须回到最新页查看，并发删除可使后续页变短。
+        RawQuery 最多 8192 字节；未知或重复参数、坏转义、分号字段均拒绝。完整 JSON 最多 1 MiB，超限不返回部分页面。
+      tags: [jobs]
+      security: [{RootSession: []}]
+      parameters:
+        - name: type
+          in: query
+          description: 省略或空串为全部；非空按原值精确匹配，不 trim。最多 128 UTF-8 字节，不接受控制字符，允许未来类型。
+          schema: { type: string, maxLength: 128 }
+        - name: limit
+          in: query
+          description: 省略取 50；显式值仅接受十进制整数 1–100。
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: 服务端返回的版本化、不透明游标，与 type 逐字绑定；最多 2048 字节。不得重新编码，空串无效。不是权限票据。
+          schema: { type: string, minLength: 1, maxLength: 2048 }
+      responses:
+        '200':
+          description: 最后保存的有界摘要页；Cache-Control 为 no-store
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobHistoryPage' }
+        '400':
+          description: JOB_HISTORY_INVALID_QUERY；参数或游标无效，不回退到默认查询
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: AUTH_UNAUTHORIZED；需要有效 Root 会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '501':
+          description: JOB_HISTORY_UNSUPPORTED；实际 JobEngine 没有支持历史读取的持久层
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: JOB_HISTORY_UNAVAILABLE、JOB_HISTORY_CORRUPT 或 JOB_HISTORY_TOO_LARGE；读取失败、无法表示的数据或编码超限。不是空历史，不自动重试执行任务。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /api/v1/jobs:
     get:
       operationId: listJobs
@@ -1513,37 +2258,78 @@ paths:
   /api/v1/jobs/{jobID}/retry:
     post:
       operationId: retryJob
-      summary: 重试失败或中断的后台任务
+      summary: 为已结束的镜像拉取任务创建一个新的重试任务
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
           description: 新任务已进入队列
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '503':
+          description: 任务未被接收。JOB_QUEUE_FULL（容量已满）、JOB_PERSIST_FAILED（创建记录失败）或 JOB_ENGINE_UNAVAILABLE（引擎关闭或存储降级）。不会启动新的执行。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: JOB_NOT_FOUND：原任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: JOB_RETRY_UNAVAILABLE：当前任务不允许重试。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/jobs/{jobID}/cancel:
     post:
       operationId: cancelJob
-      summary: 停止排队或正在执行的镜像拉取任务
+      summary: 请求取消排队或正在执行的镜像拉取任务
       tags: [jobs]
       security: [{RootSession: []}]
       parameters:
         - { name: jobID, in: path, required: true, schema: { type: string } }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '202':
-          description: 任务已停止
+          description: 取消请求已接收，可能仍在执行。返回当前快照；requested 不是远端停止证明。已取消任务重复请求返回相同快照。
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobSnapshot'
+        '404':
+          description: JOB_NOT_FOUND：任务不存在。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: JOB_CANCEL_UNAVAILABLE：任务已经结束或执行器不支持取消（例如 Compose）。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: JOB_PERSIST_FAILED：取消请求未能持久化，未触发新的用户取消信号。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/services:
     get:
       operationId: listServices
       summary: List discovered Compose projects and standalone containers
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [services]
       security: [{RootSession: []}]
       responses:
@@ -1563,6 +2349,7 @@ paths:
     get:
       operationId: listSites
       summary: List automatically discovered NAS websites with editable profiles
+      description: 使用共享采集器强刷新，成功结果来自不早于本请求开始的采集；等待最多12秒，源调用预算5秒，最多64个unary等待者。失败不以旧缓存冒充成功；饱和或不可用返回503。独立readiness探测不在此共享范围。
       tags: [sites]
       security: [{RootSession: []}]
       responses:
@@ -1584,18 +2371,25 @@ paths:
       tags: [sites]
       security: [{RootSession: []}]
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '201':
           description: 手工站点已创建
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SiteProfileInput'
+                $ref: '#/components/schemas/SiteProfileResponse'
         '400':
           description: 站点资料参数无效
           content:
@@ -1639,18 +2433,25 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。 完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SiteProfileInput'
       responses:
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Updated site profile
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SiteProfileInput'
+                $ref: '#/components/schemas/SiteProfileResponse'
         '400':
           description: Invalid site profile
           content:
@@ -1668,6 +2469,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 站点已删除或隐藏
         '400':
@@ -1721,6 +2524,8 @@ paths:
               properties:
                 icon: { type: string, format: binary }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 图标已保存
           content:
@@ -1737,6 +2542,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 站点不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 读取后站点已删除或图标已变更（SITE_ICON_CONFLICT），请刷新后重试
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       operationId: deleteSiteIcon
       summary: 删除站点图标
@@ -1748,10 +2565,18 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '204':
           description: 图标已删除
         '404':
           description: 站点不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 读取后站点已删除或图标已变更（SITE_ICON_CONFLICT），请刷新后重试
           content:
             application/json:
               schema:
@@ -1770,7 +2595,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/SiteProfileInput'
+                  $ref: '#/components/schemas/SiteProfileResponse'
   /api/v1/sites/{siteID}/restore:
     post:
       operationId: restoreSite
@@ -1783,6 +2608,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: 站点已恢复
           content:
@@ -1811,6 +2638,8 @@ paths:
           required: true
           schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Recorded site visit
           content:
@@ -1819,6 +2648,185 @@ paths:
                 $ref: '#/components/schemas/SiteVisitResponse'
         '400':
           description: Invalid site entry identifier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/docker/compose/projects/{projectID}/action-jobs/{action}:
+    post:
+      operationId: submitComposeActionJob
+      summary: 持久接收 Compose 项目启动、停止或重启任务
+      description: >-
+        正文仅接受 workingDirectory/configFiles，严格拒绝未知、重复字段、null、尾随数据及无效 UTF-8。
+        原始和规范化 projectID 最多256字节，目录及每个路径最多4096字节，不接受控制字符；1至32个配置文件。
+        沿用既有 LifecycleRequest.Normalize 的卷目录、项目内 YAML 路径及规范化去重规则，冻结顺序和路径。
+        compose-start/stop/restart 与 compose-deploy 共用单 worker，总容量32，排队TTL10分钟。
+        running 持久确认后仅一次既有 ControlComposeProject，预算90秒；HTTP断开不取消任务。
+        不支持 cancel/retry，不重启重放，不回退同步入口；旧同步入口保持，不承诺全局互斥。
+        start 执行 compose start 而非 up；项目ID仅为关联元数据，实际目标由目录和文件确定。
+        完整回执通过身份、动作、Completed、1至1024项身份和状态一致性验证后，仅 completed 保存 composeActionResult。
+        执行失败、验证失败、能力不可用、超时、传输失败及坏回执均 interrupted，无部分结果；仅明确派发前拒绝可 failed。
+        成功只证明命令返回和一次状态读回，不保证健康、持续状态、完整配置服务集合或重启次数。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+          description: 原始及规范化值最多256 UTF-8字节，非空，无控制字符；不是CLI项目名参数。
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [start, stop, restart] }
+      requestBody:
+        required: true
+        description: 单一 application/json Content-Type；完整请求体最多 65536 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。路径上限按UTF-8字节计算。
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [workingDirectory, configFiles]
+              properties:
+                workingDirectory: { type: string, minLength: 1, maxLength: 4096 }
+                configFiles:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  uniqueItems: true
+                  items: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        '202':
+          description: 原始已持久queued快照；type=compose-start/stop/restart，reference为规范化projectId，cancellable=false；无composeActionResult、completedAt或pending。仅代表接收。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobSnapshot' }
+        '400':
+          description: COMPOSE_LIFECYCLE_INVALID
+        '401':
+          description: Root登录会话缺失或无效
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE或AGENT_DOCKER_CONTROL_UNAVAILABLE
+  /api/v1/docker/projects/standalone/action-jobs/{action}:
+    post:
+      operationId: submitDockerProjectActionJob
+      summary: 持久接收独立容器项目生命周期任务
+      description: >-
+        正文仅接受 containerIds，1 至 128 个不重复的完整小写容器 ID，拒绝未知和重复 JSON 字段，正文上限16KiB。
+        冻结所选子集，running 持久确认后以独立5秒预算读取 inventory，确认每个目标唯一属于 standalone；
+        预检失败以 DOCKER_PROJECT_ACTION_PREFLIGHT_FAILED 结束且零派发。不按状态重选或补目标，预检不保证原子归属。
+        此后三种类型 docker-project-start/stop/restart 只调用一次既有 ControlStandaloneProject，沿用45秒预算；
+        不保证大型批次完成，不更改 Agent worker。与镜像删除、单容器操作共享单 worker 队列，总容量32、排队期限10分钟，
+        不提供跨旧同步入口互斥。HTTP断开不取消任务，不支持 cancel/retry 或重启自动重放；保存失败仅重存结果。
+        全回执身份、完整集合、每项动作和汇总一致才可保存最小 projectActionResult。
+        全部成功为 completed；明确反态为 failed/DOCKER_PROJECT_STATE_MISMATCH，操作已发生；
+        任一执行结果未知则 interrupted，可信完整回执可保留其他安全确认项。超时、传输失败或无效回执 interrupted 且无结果项。
+        结果仅证明本次调用及读回，不保证持续状态或健康。旧同步和 Compose 入口保持。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema: { type: string, enum: [start, stop, restart] }
+      requestBody:
+        description: 必须使用单一 application/json Content-Type，允许有效 MIME 参数；不接受缺失、重复或其他媒体类型。完整请求体最多 16384 字节（bytes），包含 JSON 前后空白、所有 JSON 值及其他尾部字节；按字节而非字符计数，恰好等于上限允许，超过上限返回 413。
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [containerIds]
+              properties:
+                containerIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 128
+                  uniqueItems: true
+                  items: { type: string, minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }
+      responses:
+        '202':
+          description: 已持久接收的原始 queued 快照；type=docker-project-start/stop/restart，reference=standalone，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes均为0，layers为空；无 projectActionResult、completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobSnapshot' }
+        '400':
+          description: DOCKER_PROJECT_ACTION_INVALID，参数不符合严格合同
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: Root 登录会话缺失或无效
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '413':
+          $ref: '#/components/responses/RequestBodyTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL、JOB_ENGINE_UNAVAILABLE 或 AGENT_DOCKER_CONTROL_UNAVAILABLE
+  /api/v1/docker/containers/{containerID}/action-jobs/{action}:
+    post:
+      operationId: submitDockerContainerActionJob
+      summary: 持久接收单容器启动、停止或重启任务
+      description: >-
+        仅接受完整小写容器 ID 和精确小写动作，不接受请求体；旧同步 actions 路由保留。
+        三种类型 docker-container-start、docker-container-stop、docker-container-restart 与镜像删除共享单 worker 队列，
+        并非全局互斥；总容量32，排队期限10分钟。任务不支持取消、retry 或重启自动重放。
+        运行预算45秒，HTTP断开不取消已接收任务。每个任务最多派发一次，保存失败仅重存结果。
+        completed 仅证明本次调用返回且读回 running（start/restart）或 stopped（stop），不保证持续状态或健康。
+        合法归属但明确反态为 failed / DOCKER_CONTAINER_STATE_MISMATCH，表示命令已返回但读回未达目标，不表示未执行。
+        回执缺失、归属不符或状态未知为 interrupted / DOCKER_CONTAINER_ACTION_RECEIPT_INVALID。
+        超时为 interrupted / JOB_EXECUTION_TIMEOUT；可能已派发的错误（包括 NOT_FOUND、ACTION_FAILED、INSPECT_FAILED）保守视为未知，
+        不自动重试。只有固定白名单确证派发前拒绝可 failed。
+      tags: [docker]
+      security: [{RootSession: []}]
+      parameters:
+        - name: containerID
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 64
+            maxLength: 64
+            pattern: '^[a-f0-9]{64}$'
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [start, stop, restart]
+      responses:
+        '202':
+          description: 已持久接收，返回原始 queued 快照；type 为 docker-container-start/stop/restart，reference 为完整容器 ID，cancellable=false，artifactState=unknown，progress/downloadedBytes/totalBytes/speedBytes 均为0，layers为空对象；无 completedAt、error、errorCode、cancellationStatus 或 persistenceStatus。queued 接收回执不是执行成功。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobSnapshot'
+        '400':
+          description: DOCKER_CONTAINER_ACTION_INVALID，容器 ID、动作或非空正文不符合严格合同
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Root 登录会话缺失或无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
+        '503':
+          description: JOB_PERSIST_FAILED、JOB_QUEUE_FULL 或 JOB_ENGINE_UNAVAILABLE；未返回持久接收成功
           content:
             application/json:
               schema:
@@ -1841,6 +2849,8 @@ paths:
             type: string
             enum: [start, stop, restart]
       responses:
+        '403':
+          $ref: '#/components/responses/CrossOriginRejected'
         '200':
           description: Container lifecycle action completed and current state inspected
           content:
@@ -1938,7 +2948,9 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 150 } }
       responses:
         '200':
-          description: Normalized and redacted log entries
+          description: >-
+            规范化的日志条目。系统与Agent日志仅对已识别的敏感模式进行脱敏；容器日志不保证脱敏。
+            所有来源仍可能包含敏感信息，导出或分享前应检查内容。
           content:
             application/json:
               schema:
@@ -1953,6 +2965,9 @@ paths:
     get:
       operationId: streamLogEvents
       summary: 订阅日志实时事件
+      description: >-
+        流建立前重新验证数据库会话并登记实时租约；注销、改密、账号禁用、删除及会话到期取消相应观察流。
+        初始帧、日志事件及 heartbeat 的 Write 与 Flush 均共用 5 秒 deadline；不支持有界写入时在响应提交前拒绝。
       tags: [logs]
       security: [{RootSession: []}]
       parameters:
@@ -1968,7 +2983,19 @@ paths:
             text/event-stream:
               schema: { type: string }
         '503':
-          description: 日志实时流不可用
+          description: 日志实时流不可用；AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED 表示实时认证能力不可用或服务租约额度已满
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: LOG_STREAM_UNSUPPORTED；响应 writer 不支持有界实时流
           content:
             application/json:
               schema:
@@ -1977,7 +3004,11 @@ paths:
     get:
       operationId: openTerminalWebSocket
       summary: 打开 NAS 主机或 Docker 容器终端 WebSocket
-      description: 通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
+      description: >-
+        通过 Root Agent 创建独立 PTY 会话；二进制帧传输输入输出，文本帧传输 resize、close 与 started 状态消息。
+        升级前重新验证数据库会话并登记实时租约。注销仅撤销当前会话；改密、禁用或删除账号撤销该用户全部会话。
+        会话撤销或到期立即取消 Server 输入输出并关闭浏览器与 Agent RPC 传输，既有终端超时仍生效。
+        关闭传输不等于确认所有容器 exec、PTY 子孙进程或已提交 Root 命令均已终止。
       tags: [terminal]
       security: [{RootSession: []}]
       parameters:
@@ -2017,12 +3048,68 @@ paths:
         '404':
           description: 终端通道未启用
         '503':
-          description: Root Agent 终端能力不可用或终端会话初始化失败；WebSocket 错误帧使用稳定 code 与用户可读 message。
+          description: AUTH_STREAM_UNAVAILABLE 或 AUTH_STREAM_LIMIT_REACHED 表示实时认证能力不可用或服务租约额度已满；也可能是 Root Agent 终端能力不可用。升级后错误使用 WebSocket 稳定 code，不追加 HTTP JSON 错误。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: AUTH_UNAUTHORIZED；Root 会话不存在、已撤销、已到期或账号已禁用；在流建立前拒绝
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
+  responses:
+    AuthRateLimited:
+      description: AUTH_RATE_LIMITED（含 requestId）。同一 handler 的 login/bootstrap 共用突发 10 次、每 5 秒补充 1 次、最多 2 个在途凭据请求的预算；bootstrap 创建与随后登录共占一次。拒绝发生在认证调用前，不设置或清除 Cookie。预算按 handler 隔离并在重启时重置，不按账号或转发头分组；持续攻击仍可能影响正常登录。不自动重放凭据，请稍后手动重试。
+      headers:
+        Retry-After:
+          description: 建议等待的整数秒，向上取整且至少 1 秒；不保证届时准入。
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    RequestBodyTooLarge:
+      description: 完整 JSON 请求体超过该操作的字节上限；稳定错误码 HTTP_REQUEST_BODY_TOO_LARGE，包含 requestId。仅在通过原有来源、认证、依赖、参数及 MIME 前置校验后检查实际请求体，不依赖 Content-Length；不会执行后续业务操作。不返回请求体或底层读取错误。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: HTTP_REQUEST_BODY_TOO_LARGE
+            message: 请求体超过大小限制。
+            requestId: req-body-limit
+    UnsupportedMediaType:
+      description: JSON 请求必须使用单一 application/json Content-Type（允许有效 MIME 参数）；错误码 HTTP_UNSUPPORTED_MEDIA_TYPE，包含 requestId。可选请求体仅在实际非空时要求该类型。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    DatabaseResultTooLarge:
+      description: >-
+        数据库结果超过 1 MiB（1048576 字节）的保守结果保留预算，或最终 JSON/protobuf 编码响应超过该上限；稳定错误码 result_too_large。
+        数据库目录、元数据或完整表页过大时返回此错误，不将其误报为 Agent 断连，也不返回被静默缩短的表页。
+        SQL 可能已经执行或写入；此错误不保证未执行或回滚，不得自动重试 SQL，应先核对实际数据库状态。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    CrossOriginRejected:
+      description: 浏览器写请求的来源校验失败；命令行可省略 Origin，仍需原有会话认证。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: HTTP_CROSS_ORIGIN_REJECTED
+            message: 请求来源校验失败，请从当前控制台页面重试。
+            requestId: req-origin
   schemas:
     UserPreferences:
       type: object
@@ -2042,7 +3129,9 @@ components:
           maximum: 18
         pageSize:
           type: integer
-          enum: [20, 25, 50, 100]
+          minimum: 1
+          maximum: 200
+          default: 10
         sidebarDefault:
           type: string
           enum: [collapsed, expanded]
@@ -2078,14 +3167,33 @@ components:
     DatabaseDriver:
       type: string
       enum: [sqlite, mysql, postgresql]
+    DatabaseTLSPolicy:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      description: 仅支持 MySQL/PostgreSQL 的证书链及服务器身份校验；SQLite 不支持 TLS 策略。每次连接必须严格执行，不提供跳过校验、明文或旧 Agent 回退。输入或连接诊断不构成已应用 TLS 的证明。
+      properties:
+        mode:
+          type: string
+          enum: [verify-full]
+        caPEM:
+          type: string
+          description: 可省略或为空字符串，表示使用 Root Agent 系统根证书；非空时仅信任这些 PEM CA，不合并系统根。必须为非 null 字符串，UTF-8 编码最多 65536 字节（64 KiB），最多 32 张 CERTIFICATE；包括所有空白，不按字符数计算。证书 DER、CA 与签发用途由服务端权威校验；不得包含私钥、未知块或非 PEM 内容。
+        serverName:
+          type: string
+          maxLength: 253
+          description: 可省略或为空字符串，默认验证实际连接目标的主机身份；非空值仅改变证书验证身份与 SNI，不改变连接目标。必须为非 null 字符串；原始输入最多 253 个 ASCII 字节，每个 DNS 标签最多 63 字节，支持 ASCII DNS（允许单个尾点）或无方括号/zone 的原始 IP。不 trim、补全或修复非法身份。
     DatabaseCredentials:
       type: object
+      additionalProperties: false
       properties:
         username: { type: string, maxLength: 256 }
         password: { type: string, format: password, maxLength: 512 }
         token: { type: string, format: password, maxLength: 2048 }
         database: { type: string, maxLength: 256 }
-      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password 或 token。
+        tls:
+          $ref: '#/components/schemas/DatabaseTLSPolicy'
+      description: 凭据仅在请求中短暂传递；服务端只保存加密密文，不返回 password、token 或 caPEM。仅设置 TLS 也属于手动请求，不自动取回已保存密码，仍按原有规则要求本次用户名和有效数据库，允许空密码。 credentials.tls 仅接受显式 verify-full 策略；出现 TLS 键时，sourceId、credentials 和凭据/策略字段必须使用唯一、规范拼写。null、空策略、未知字段、重复对象或键、大小写及 Unicode 折叠别名、非字符串策略值均在发现来源或调用凭据服务/Agent 前以 400 DATABASE_INPUT_INVALID 拒绝。省略 tls 会继承已保存的严格策略，不表示关闭；没有已保存策略时保留既有连接行为。严格策略失败或旧 Agent 不支持时不移除 TLS，也不回退重试。
     DatabaseConnection:
       type: object
       required: [sourceId]
@@ -2156,7 +3264,10 @@ components:
         columns:
           type: array
           items: { $ref: '#/components/schemas/DatabaseColumn' }
-        rowCount: { type: integer, format: int64, minimum: 0 }
+        rowCount:
+          type: integer
+          format: int64
+          description: 数据库引擎提供的行数或估计值；PostgreSQL 未统计时可能为 -1，不能将其解释为 0。
         sizeBytes: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string }
         definition: { type: string }
@@ -2174,17 +3285,52 @@ components:
         - type: object
           required: [sql]
           properties:
-            sql: { type: string, minLength: 1, maxLength: 1048576 }
+            sql:
+              type: string
+              minLength: 1
+              maxLength: 1048576
+              description: SQL 原文；不拆分、删除注释或重组后执行。
+            resultMode:
+              type: string
+              enum: [auto, rows, exec]
+              default: auto
+              description: >-
+                可选结果模式。省略字段沿用旧 Query 协议；空字符串或 null 也宽容地视为省略。
+                规范客户端应仅省略或发送 auto、rows、exec。显式 auto、rows、exec 使用新 QueryWithOptions 协议，旧 Agent 在执行 SQL 前返回 result_mode_unsupported，不自动降级或重放。
+                auto 跳过可识别的前导普通注释后按首关键字选择路径；新版 Agent 对 SQLite/PostgreSQL 完整识别的普通 WITH 主 INSERT/UPDATE/DELETE，且没有顶层裸 RETURNING 时选择执行路径。
+                SQLite 直接 INSERT/UPDATE/DELETE 在完整有界扫描确认顶层 RETURNING 时选择返回行路径；PostgreSQL/MySQL 的直接 DML 与 REPLACE 不扩展。
+                未覆盖词法、复杂 WITH、多语句或扫描超限保留原有路径，不拒绝 SQL；其他 RETURNING 应显式选择 rows。原 SQL 只执行一次，失败不换路重放。
+                rows 调用返回行路径，适用于写语句 RETURNING，但仍会执行写入；exec 调用执行路径，获取驱动影响行数并丢弃可能的返回行，适用于无返回行的 CTE 写语句。
+                其他非空值（含大小写变体或前后空格）在准备数据库连接前返回 sql_invalid。
     DatabaseQueryResult:
       type: object
+      description: >-
+        返回预算内的完整行前缀，保留大整数与高精度小数字符串原文。
+        行数或字节截断只影响结果展示，不能推断匹配总数、写入行数或回滚状态。
       required: [columns, rows, rowsAffected, truncated, durationMs]
       properties:
         columns: { type: array, items: { type: string } }
         rows:
           type: array
           items: { type: array, items: {} }
-        rowsAffected: { type: integer, format: int64 }
-        truncated: { type: boolean }
+        rowsAffected:
+          type: integer
+          format: int64
+          description: 仅 rowsAffectedKnown 为 true 时是可信的驱动报告计数；新 Agent 在未知时保留 0 占位。未知值不可解读为实际影响行数，驱动计数也不保证涵盖触发器等全部变化。
+        rowsAffectedKnown:
+          type: boolean
+          description: >-
+            新 Agent 始终返回此字段。仅 true 允许显示影响行数；false 或旧 Agent 缺失此字段均表示未知，不得根据 rowsAffected 非零推断可信。
+            返回行路径始终未知；执行路径在计数不支持、出错、为负或超过 JavaScript 安全整数范围时也未知，但 SQL 本身仍可执行成功。
+        truncated:
+          type: boolean
+          description: 表示结果因 500 行上限或 1 MiB 保守字节预算只保留完整行前缀；不限制或推断数据库写入行数。旧 Agent 可省略 truncationReason，调用方应保留通用截断提示。
+        truncationReason:
+          type: string
+          enum: [row_limit, byte_limit]
+          description: >-
+            可选截断原因，仅 truncated=true 时提供。row_limit 表示达到 500 行展示上限，byte_limit 表示下一完整行无法放入 1 MiB 保守结果预算。
+            byte_limit 可以伴随空 rows，但不代表查询无匹配或写入未生效；返回行路径的 rowsAffectedKnown 仍为 false。
         durationMs: { type: integer, minimum: 0 }
     DatabaseRowsRequest:
       allOf:
@@ -2200,6 +3346,7 @@ components:
             sortDirection: { type: string, enum: [asc, desc] }
     DatabaseRowsResult:
       type: object
+      description: 成功页不会按字节预算缩短或裁剪值；整页或元数据超预算返回 HTTP 422 result_too_large，客户端不得当作空页或推进 offset。
       required: [table, rows, limit, offset, hasMore, ordering]
       properties:
         table: { $ref: '#/components/schemas/DatabaseTable' }
@@ -2223,14 +3370,20 @@ components:
           properties:
             schema: { type: string }
             table: { type: string, minLength: 1 }
-            values: { type: object, additionalProperties: {} }
+            values:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseUpdateRequest:
       allOf:
         - $ref: '#/components/schemas/DatabaseInsertRequest'
         - type: object
           required: [keys]
           properties:
-            keys: { type: object, additionalProperties: {} }
+            keys:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseDeleteRequest:
       allOf:
         - $ref: '#/components/schemas/DatabaseConnection'
@@ -2239,12 +3392,63 @@ components:
           properties:
             schema: { type: string }
             table: { type: string, minLength: 1 }
-            keys: { type: object, additionalProperties: {} }
+            keys:
+              type: object
+              additionalProperties: {}
+              description: 整数与高精度小数建议使用字符串；values/keys 中直接作为字段值的原始 JSON 数字会按数字文本精确保留并传给数据库。嵌套对象或数组不在此保证内，JSON 列内容应预先序列化为字符串。无法恢复客户端在生成 JSON 前已发生的浮点舍入；最终存储精度由数据库字段类型决定。
     DatabaseMutationResult:
       type: object
+      description: 有效驱动回执；零为合法计数，不证明目标行发生变化。回执无效时不返回成功，且不能据此重放写入。
       required: [rowsAffected]
       properties:
-        rowsAffected: { type: integer, format: int64, minimum: 0 }
+        rowsAffected: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+    ResourceAlertsSnapshot:
+      type: object
+      required: [enabled, observedAt, startedAt, rules]
+      properties:
+        enabled: {type: boolean}
+        observedAt: {type: string, format: date-time, description: 响应投影时间，不刷新样本年龄。}
+        startedAt: {type: string, format: date-time, description: 本次进程 evaluator 创建时间。}
+        rules:
+          type: object
+          required: [cpu, memory]
+          properties:
+            cpu:
+              allOf:
+                - {$ref: '#/components/schemas/ResourceAlertRule'}
+                - type: object
+                  properties:
+                    id: {type: string, enum: [host.cpu.high]}
+                    recoveryPercent: {type: number, enum: [80]}
+            memory:
+              allOf:
+                - {$ref: '#/components/schemas/ResourceAlertRule'}
+                - type: object
+                  properties:
+                    id: {type: string, enum: [host.memory.high]}
+                    recoveryPercent: {type: number, enum: [85]}
+    ResourceAlertRule:
+      type: object
+      required: [id, severity, triggerPercent, recoveryPercent, triggerSeconds, recoverySeconds, condition, availability, reasonCode, sampleAt, receivedAt, value, pendingSince, firingSince, recoveringSince, lastRecoveredAt]
+      properties:
+        id: {type: string, enum: [host.cpu.high, host.memory.high]}
+        severity: {type: string, enum: [warning]}
+        triggerPercent: {type: number, enum: [90]}
+        recoveryPercent: {type: number, enum: [80, 85], description: CPU 为 80，内存为 85。}
+        triggerSeconds: {type: integer, enum: [120]}
+        recoverySeconds: {type: integer, enum: [60]}
+        condition: {type: string, enum: [normal, pending, firing, recovering]}
+        availability: {type: string, enum: [fresh, unknown, stale]}
+        reasonCode:
+          type: string
+          enum: ['', MONITORING_ALERTS_NO_SAMPLE, MONITORING_ALERTS_CLOCK_INVALID, SYSTEM_SUMMARY_UNAVAILABLE, MONITORING_INVALID_TIMESTAMP, MONITORING_SAMPLE_INVALID, MONITORING_SAMPLE_LIMIT_EXCEEDED, MONITORING_ALERTS_CPU_UNAVAILABLE, MONITORING_ALERTS_MEMORY_UNAVAILABLE, MONITORING_ALERTS_CPU_INVALID, MONITORING_ALERTS_MEMORY_INVALID, MONITORING_ALERTS_STALE]
+        sampleAt: {type: [string, 'null'], format: date-time}
+        receivedAt: {type: [string, 'null'], format: date-time}
+        value: {type: [number, 'null'], minimum: 0, maximum: 100, description: 最近合格百分比，数据不可用时仅代表上次有效值。}
+        pendingSince: {type: [string, 'null'], format: date-time}
+        firingSince: {type: [string, 'null'], format: date-time}
+        recoveringSince: {type: [string, 'null'], format: date-time}
+        lastRecoveredAt: {type: [string, 'null'], format: date-time}
     MetricSample:
       type: object
       required: [collectedAt, cpuPercent, memoryPercent, load1, diskPercent, networkReceiveBytes, networkTransmitBytes, diskReadBytes, diskWriteBytes]
@@ -2298,6 +3502,38 @@ components:
           maximum: 100000
         hidden:
           type: boolean
+    SiteProfileResponse:
+      type: object
+      description: >-
+        保存的站点资料，与写入输入分离。projectId 是服务端返回的真实身份；
+        手工创建时为 manual: 前缀的 ID，更新时为目标 ID。
+        ignored 列表可以包含尚未编辑的占位资料，此时 name 合法地为空字符串。
+        source、ignored、lastVisitedAt 与探测及图标元数据在当前服务端返回，
+        为兼容旧响应保持可选；允许未知附加字段。此响应不继承输入的长度或排序范围限制。
+      required: [projectId, name, description, iconUrl, category, launchUrl, primaryPort, favorite, sortOrder, hidden]
+      properties:
+        projectId: { type: string, minLength: 1 }
+        name: { type: string }
+        description: { type: string }
+        iconUrl: { type: string }
+        category: { type: string }
+        launchUrl: { type: string }
+        primaryPort: { type: integer, minimum: 0, maximum: 65535 }
+        favorite: { type: boolean }
+        sortOrder: { type: integer }
+        hidden: { type: boolean }
+        source:
+          type: string
+          enum: [auto, labels, built-in, edited, manual]
+        ignored: { type: boolean }
+        detectedTitle: { type: string }
+        autoIconUrl: { type: string }
+        localIconName: { type: string, readOnly: true, description: 由图标上传与删除接口维护的服务端文件名 }
+        lastVisitedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
     Site:
       allOf:
         - $ref: '#/components/schemas/SiteProfileInput'
@@ -2446,9 +3682,14 @@ components:
         checks:
           type: object
           required: [agent, docker]
+          properties:
+            jobs:
+              type: string
+              enum: [ready, degraded, unavailable]
+              description: Job 引擎状态。结果等待持久化时为 degraded；初始化失败或已关闭时为 unavailable。非 ready 会使 /readyz 返回 503。
           additionalProperties:
             type: string
-            enum: [ready, unavailable, not_checked]
+            enum: [ready, degraded, unavailable, not_checked]
     HealthResponse:
       type: object
       required: [status, service]
@@ -2475,6 +3716,35 @@ components:
         transport:
           type: string
           examples: [unix]
+    RealtimeSnapshot:
+      type: object
+      required: [collectedAt]
+      properties:
+        collectedAt:
+          type: string
+          format: date-time
+          description: 本次事件发送时间，不可用于为内层资源保鲜
+        summary:
+          $ref: '#/components/schemas/SystemSummary'
+        docker:
+          $ref: '#/components/schemas/DockerInventory'
+        errors:
+          type: array
+          description: >-
+            各资源独立状态，客户端须检查全部错误。SYSTEM_SUMMARY_UNAVAILABLE 表示没有当前可用主机快照；
+            MONITORING_WRITE_FAILED 表示历史写入失败，MONITORING_SAMPLE_INCOMPLETE 表示核心源 warning 导致历史候选不完整，
+            MONITORING_SAMPLE_INVALID 表示历史值无效，MONITORING_SAMPLE_LIMIT_EXCEEDED 表示历史候选超限。
+            四种历史错误均不等同于 Agent 不可用，也不取消有效 summary。
+            源 warnings 保留在 summary.warnings 中；Docker 错误独立为 DOCKER_INVENTORY_UNAVAILABLE。
+          items:
+            type: string
+            enum:
+              - SYSTEM_SUMMARY_UNAVAILABLE
+              - DOCKER_INVENTORY_UNAVAILABLE
+              - MONITORING_WRITE_FAILED
+              - MONITORING_SAMPLE_INCOMPLETE
+              - MONITORING_SAMPLE_INVALID
+              - MONITORING_SAMPLE_LIMIT_EXCEEDED
     SystemSummary:
       type: object
       required: [collectedAt, host, cpu, memory, storage, network, warnings]
@@ -2567,12 +3837,13 @@ components:
         network: { $ref: '#/components/schemas/SystemNetworkDetails' }
         storage: { $ref: '#/components/schemas/SystemStorageDetails' }
         proxy: { $ref: '#/components/schemas/SystemProxyDetails' }
-        tailscale: { $ref: '#/components/schemas/TailscaleCapability' }
-        dns: { $ref: '#/components/schemas/DNSCapability' }
+        tailscale: { $ref: '#/components/schemas/SystemDetailsTailscaleCapability' }
+        dns: { $ref: '#/components/schemas/SystemDetailsDNSCapability' }
         publicEgress: { $ref: '#/components/schemas/PublicEgressCapability' }
         control: { $ref: '#/components/schemas/SystemControlDetails' }
     SystemDeviceDetails:
       type: object
+      required: [hostname, model, operatingSystem, kernelVersion, architecture, uptimeSeconds, processCount, cgroupVersion]
       properties:
         hostname: { type: string }
         model: { type: string }
@@ -2584,9 +3855,11 @@ components:
         cgroupVersion: { type: string }
     SystemHardwareDetails:
       type: object
+      required: [cpu, memory, sensors]
       properties:
         cpu:
           type: object
+          required: [model, physicalCores, logicalCores, frequencyMHz, temperatureCelsius]
           properties:
             model: { type: string }
             physicalCores: { type: integer, minimum: 0 }
@@ -2595,6 +3868,7 @@ components:
             temperatureCelsius: { type: number }
         memory:
           type: object
+          required: [totalBytes, availableBytes]
           properties:
             totalBytes: { type: integer, minimum: 0 }
             availableBytes: { type: integer, minimum: 0 }
@@ -2602,16 +3876,19 @@ components:
           type: array
           items:
             type: object
+            required: [name, temperatureCelsius]
             properties:
               name: { type: string }
               temperatureCelsius: { type: number }
     SystemNetworkDetails:
       type: object
+      required: [interfaces, gateway, routes, dnsServers, listeningPorts]
       properties:
         interfaces:
           type: array
           items:
             type: object
+            required: [name, hardwareAddress, mtu, state, lowerUp, lowerUpKnown, speedMbps, duplex, addresses]
             properties:
               name: { type: string }
               hardwareAddress: { type: string }
@@ -2619,12 +3896,13 @@ components:
               state: { type: string }
               lowerUp: { type: boolean }
               lowerUpKnown: { type: boolean }
-              speedMbps: { type: integer, minimum: 0 }
+              speedMbps: { type: integer, minimum: -1 }
               duplex: { type: string }
               addresses:
-                type: array
+                type: [array, 'null']
                 items:
                   type: object
+                  required: [address, prefixLength, family]
                   properties:
                     address: { type: string }
                     prefixLength: { type: integer, minimum: 0 }
@@ -2634,6 +3912,7 @@ components:
           type: array
           items:
             type: object
+            required: [destination, gateway, interface, metric]
             properties:
               destination: { type: string }
               gateway: { type: string }
@@ -2644,6 +3923,7 @@ components:
           type: array
           items:
             type: object
+            required: [protocol, address, port, pid]
             properties:
               protocol: { type: string }
               address: { type: string }
@@ -2656,16 +3936,18 @@ components:
               containerName: { type: string }
               service: { type: string }
               detectionSource: { type: string }
-              detectionSources: { type: array, items: { type: string } }
+              detectionSources: { type: [array, 'null'], items: { type: string } }
               detectionStatus: { type: string }
               detectionErrorCode: { type: string }
     SystemStorageDetails:
       type: object
+      required: [mounts, disks, raid]
       properties:
         mounts:
           type: array
           items:
             type: object
+            required: [path, device, filesystem, totalBytes, usedBytes, availableBytes, usedPercent]
             properties:
               path: { type: string }
               device: { type: string }
@@ -2678,13 +3960,14 @@ components:
           type: array
           items:
             type: object
+            required: [name, model, sizeBytes, rotational, kind, role, transport, description, health, temperatureCelsius]
             properties:
               name: { type: string }
               model: { type: string }
               sizeBytes: { type: integer, minimum: 0 }
               rotational: { type: boolean }
-              kind: { type: string, enum: [physical, emmc, emmc-boot, compressed-memory, virtual] }
-              role: { type: string, enum: [data, system, boot, swap, virtual] }
+              kind: { type: string, enum: ['', physical, emmc, emmc-boot, compressed-memory, virtual] }
+              role: { type: string, enum: ['', data, system, boot, swap, virtual] }
               transport: { type: string }
               description: { type: string }
               health: { type: string }
@@ -2693,31 +3976,35 @@ components:
           type: array
           items:
             type: object
+            required: [name, level, state, devices]
             properties:
               name: { type: string }
               level: { type: string }
               state: { type: string }
-              devices: { type: array, items: { type: string } }
+              devices: { type: [array, 'null'], items: { type: string } }
     SystemProxyDetails:
       type: object
+      required: [mihomo, system, associations]
       properties:
         mihomo:
           type: object
+          required: [detected, state, detail]
           properties:
             detected: { type: boolean }
             state: { type: string }
             detail: { type: string }
             controllerEndpoint: { type: string }
             authRequired: { type: boolean }
-            operations: { type: array, items: { type: string } }
-        mihomoCapability: { $ref: '#/components/schemas/MihomoCapability' }
+            operations: { type: [array, 'null'], items: { type: string } }
+        mihomoCapability: { $ref: '#/components/schemas/SystemDetailsMihomoCapability' }
         system:
           type: array
-          items: { $ref: '#/components/schemas/ProxyEvidence' }
+          items: { $ref: '#/components/schemas/SystemDetailsProxyEvidence' }
         associations:
           type: array
           items:
             type: object
+            required: [subject, kind, method, evidence, endpoint, detail]
             properties:
               subject: { type: string }
               kind: { type: string }
@@ -2735,11 +4022,13 @@ components:
         detail: { type: string }
     SystemControlDetails:
       type: object
+      required: [nodes]
       properties:
         nodes:
           type: array
           items:
             type: object
+            required: [id, name, detail, status, version, lastSeen]
             properties:
               id: { type: string }
               name: { type: string }
@@ -2747,9 +4036,225 @@ components:
               status: { type: string }
               version: { type: string }
               lastSeen: { type: string, format: date-time }
+    SystemDetailsTailscaleCapability:
+      type: object
+      required:
+      - detected
+      - state
+      - backendState
+      - version
+      - interface
+      - overlayIps
+      - online
+      - linkState
+      - heartbeatState
+      - reachable
+      - evidence
+      - warnings
+      properties:
+        detected:
+          type: boolean
+        state:
+          type: string
+        backendState:
+          type: string
+        version:
+          type: string
+        interface:
+          type: string
+        overlayIps:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        online:
+          type: boolean
+        linkState:
+          type: string
+        heartbeatState:
+          type: string
+        reachable:
+          type: boolean
+        evidence:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/CapabilityEvidence'
+        warnings:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/SystemDetailsProbeWarning'
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsMihomoCapability:
+      type: object
+      required:
+      - detected
+      - state
+      - processName
+      - executable
+      - version
+      - controller
+      - evidence
+      - warnings
+      properties:
+        detected:
+          type: boolean
+        state:
+          type: string
+        processName:
+          type: string
+        executable:
+          type: string
+        version:
+          type: string
+        controller:
+          $ref: '#/components/schemas/SystemDetailsMihomoControllerCapability'
+        evidence:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/CapabilityEvidence'
+        warnings:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/SystemDetailsProbeWarning'
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsMihomoControllerCapability:
+      type: object
+      required:
+      - detected
+      - endpoint
+      - reachable
+      - authRequired
+      - tokenConfigured
+      - operations
+      - detectionSource
+      properties:
+        detected:
+          type: boolean
+        endpoint:
+          type: string
+          description: 已脱敏的控制器地址
+        reachable:
+          type: boolean
+        authRequired:
+          type: boolean
+        tokenConfigured:
+          type: boolean
+        operations:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        detectionSource:
+          type: string
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsDNSCapability:
+      type: object
+      required:
+      - backend
+      - detected
+      - state
+      - readOnly
+      - canRead
+      - canPreview
+      - canConfirm
+      - canRollback
+      - nameservers
+      - detectionSource
+      - errorCode
+      properties:
+        backend:
+          type: string
+          enum:
+          - ''
+          - systemd-resolved
+          - networkmanager
+          - static-resolv-conf
+          - ugos-network-service
+          - unknown
+        detected:
+          type: boolean
+        state:
+          type: string
+        readOnly:
+          type: boolean
+        canRead:
+          type: boolean
+        canPreview:
+          type: boolean
+        canConfirm:
+          type: boolean
+        canRollback:
+          type: boolean
+        nameservers:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        configuredNameservers:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: DNS servers managed by the detected writable backend; may differ from effective resolvers.
+        detectionSource:
+          type: string
+        errorCode:
+          type: string
+      description: 系统详情专用契约；嵌套 Go nil 切片在浏览器中规范化为空数组。
+    SystemDetailsProxyEvidence:
+      type: object
+      properties:
+        source:
+          type: string
+        method:
+          type: string
+          enum:
+          - ''
+          - http
+          - socks
+          - tun
+          - transparent
+          - unknown
+        evidence:
+          type: string
+          enum:
+          - ''
+          - confirmed
+          - inferred
+          - unknown
+        address:
+          type: string
+        detail:
+          type: string
+      required:
+      - source
+      - method
+      - evidence
+      - address
+      - detail
+      description: 系统详情中的完整代理证据。
+    SystemDetailsProbeWarning:
+      type: object
+      required: [code, source]
+      properties:
+        code: { type: string }
+        source: { type: string }
     DockerInventory:
       type: object
       required: [collectedAt, engine, containers, projects]
+      description: 浏览器逐项校验完整清单；必需字段缺失或元素无效时拒绝整个 Docker 清单。集合显式为 null 时按各字段说明归一化为空数组。
       properties:
         collectedAt:
           type: string
@@ -2757,11 +4262,13 @@ components:
         engine:
           $ref: '#/components/schemas/DockerEngineInfo'
         containers:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/InventoryContainer'
         projects:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/DockerProject'
     DockerResources:
@@ -2815,7 +4322,9 @@ components:
         name: { type: string }
         path: { type: string }
         type: { type: string, enum: [directory, file, symlink, other] }
-        readable: { type: boolean }
+        readable:
+          type: boolean
+          description: 当前 Agent 身份的瞬时读取权限提示，供路径选择使用，不保证后续打开、读取或挂载成功。Linux 检查有效身份权限并跟随符号链接，不打开目录条目；特殊文件可能为 true，但不表示已经打开或可以立即读取。非 Linux 保留原有打开探测行为。
     DockerImageInventory:
       type: object
       required: [collectedAt, images]
@@ -2858,26 +4367,186 @@ components:
       properties:
         reference: { type: string }
         completed: { type: boolean }
+    JobHistoryPage:
+      type: object
+      additionalProperties: false
+      required: [source, items]
+      properties:
+        source: { type: string, enum: [persisted] }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/JobHistoryEntry' }
+        nextCursor:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: 只有读取到额外记录时存在，锚点是最后一条已返回记录；不保证下一页仍有记录。
+    JobHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, type, status, message, createdAt, updatedAt]
+      description: |
+        最后一次成功保存的摘要，不提供取消、重试、删除或产物证据。
+        字符串上限按 UTF-8 字节另行校验；超限或非法 UTF-8 使整页明确失败，不截断。
+        status/type 为开放字符串，保留未来类型与状态；queued/running 不证明任务仍在执行。
+      properties:
+        id: { type: string, minLength: 1, maxLength: 256 }
+        type: { type: string, minLength: 1, maxLength: 128 }
+        status: { type: string, minLength: 1, maxLength: 64 }
+        reference: { type: string, maxLength: 4096 }
+        message: { type: string, maxLength: 8192 }
+        error: { type: string, maxLength: 8192 }
+        errorCode: { type: string, maxLength: 128 }
+        cancellationStatus: { type: string, maxLength: 64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt:
+          type: string
+          format: date-time
+          description: 已保存记录的更新时间，不是当前采样或响应时间。
+        completedAt: { type: string, format: date-time }
+    ComposeActionJobResult:
+      type: object
+      additionalProperties: false
+      required: [projectId, action, state, serviceCount]
+      description: 仅completed的Compose生命周期Job；关联reference与type。start/restart要求running，stop要求stopped。不含服务身份、路径、配置或输出；历史摘要不加载或包含此结果。
+      properties:
+        projectId: { type: string, minLength: 1, maxLength: 256 }
+        action: { type: string, enum: [start, stop, restart] }
+        state: { type: string, enum: [running, stopped] }
+        serviceCount: { type: integer, minimum: 1, maximum: 1024 }
+    DockerProjectActionJobResult:
+      type: object
+      additionalProperties: false
+      required: [projectId, kind, action, items]
+      description: 仅持久终态的安全回执；不含名称、原始错误或配置。items 按冻结请求顺序排列，ID不重复。completed要求全部succeeded；failed结果要求至少一个state-mismatch且无unknown；interrupted结果要求至少一个unknown。无可信回执时省略整个字段。
+      properties:
+        projectId: { type: string, enum: [standalone] }
+        kind: { type: string, enum: [standalone] }
+        action: { type: string, enum: [start, stop, restart] }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items:
+            type: object
+            additionalProperties: false
+            required: [containerId, outcome, state]
+            description: succeeded 的 state 为动作目标且无errorCode；state-mismatch为明确反态和DOCKER_CONTAINER_STATE_MISMATCH；unknown固定unknown状态和JOB_EXECUTION_INTERRUPTED，不将读回状态误报为执行成功。
+            properties:
+              containerId: { type: string, minLength: 64, maxLength: 64, pattern: '^[a-f0-9]{64}$' }
+              outcome: { type: string, enum: [succeeded, state-mismatch, unknown] }
+              state: { type: string, enum: [running, stopped, unknown] }
+              errorCode: { type: string, enum: [DOCKER_CONTAINER_STATE_MISMATCH, JOB_EXECUTION_INTERRUPTED] }
+    DockerContainerCreateJobResult:
+      type: object
+      additionalProperties: false
+      required: [containerId, created, started]
+      description: 最小化创建回执，不包含请求配置或实时运行状态；started 仅表示本次启动调用已确认，不保证持续运行。
+      properties:
+        containerId:
+          type: string
+          minLength: 64
+          maxLength: 64
+          pattern: '^[a-f0-9]{64}$'
+        created: { type: boolean, enum: [true] }
+        started: { type: boolean }
     JobSnapshot:
       type: object
+      allOf:
+        - oneOf:
+            - not: { required: [composeActionResult] }
+            - required: [composeActionResult]
+              properties:
+                type: { type: string, enum: [compose-start, compose-stop, compose-restart] }
+                status: { type: string, enum: [completed] }
+        - oneOf:
+            - not: { required: [projectActionResult] }
+            - required: [projectActionResult]
+              properties:
+                type: { type: string, enum: [docker-project-start, docker-project-stop, docker-project-restart] }
+                reference: { type: string, enum: [standalone] }
+                status: { type: string, enum: [completed, failed, interrupted] }
+      oneOf:
+        - not:
+            required: [createResult]
+        - required: [createResult]
+          properties:
+            type: { type: string, enum: [docker-container-create] }
+            status: { type: string, enum: [completed] }
       required: [id, type, status, artifactState, message, progress, createdAt, updatedAt]
       properties:
+        composeActionResult:
+          description: 已持久completed的Compose生命周期详情/SSE最小聚合结果；pending不外露。
+          allOf:
+            - $ref: '#/components/schemas/ComposeActionJobResult'
+        projectActionResult:
+          description: 仅三个独立容器项目生命周期类型的已持久终态详情或 SSE 中出现；历史摘要不包含结果。结果待保存时不外露。
+          allOf:
+            - $ref: '#/components/schemas/DockerProjectActionJobResult'
+        createResult:
+          description: 可选的最小化创建回执，仅在 completed 的 docker-container-create 任务详情或 SSE 快照中出现；历史列表摘要不包含此字段。
+          allOf:
+            - $ref: '#/components/schemas/DockerContainerCreateJobResult'
         id: { type: string }
         type: { type: string }
         status: { type: string, enum: [queued, running, completed, failed, interrupted, cancelled] }
+        cancellationStatus:
+          type: string
+          enum: [requested, confirmed, unknown]
+          description: 可选取消证据。requested 仅表示已接收；confirmed 表示执行器确认停止或排队时未执行；unknown 表示远端结果未确认。取消不能撤销已有副作用。
+        persistenceStatus:
+          type: string
+          enum: [pending]
+          description: 任务结果待持久化，包括未开始任务的排队超时结果。status 保持最后已提交的活动状态，继续订阅 SSE；禁止删除或重新执行，尚未确认最终结果。
+        cancellable:
+          type: boolean
+          description: 执行器是否支持取消；Compose、docker-image-remove、docker-container-create 、docker-project-start/stop/restart 与 docker-container-start/stop/restart 为 false。实际操作仍由服务端状态校验决定。
+        errorCode:
+          type: string
+          description: 稳定错误码。JOB_QUEUE_TIMEOUT 表示从容量预留起排队达到 10 分钟且尚未获得执行资格，持久化后为 failed，消息为“排队等待超时，任务未开始执行”；适用于镜像拉取、Compose 部署、镜像删除、容器创建与单容器生命周期任务（docker-container-start/stop/restart），包含创建记录耗时。running 写入后仍会复查期限，获得执行资格者不受排队 TTL 影响。另有 JOB_EXECUTION_TIMEOUT 或 JOB_HISTORY_CORRUPT（历史进度损坏）；调用方不应解析错误文本。
+        completedAt:
+          type: string
+          format: date-time
+          description: 持久化终态的完成时间；活动任务及结果待保存时省略。
         artifactState: { type: string, enum: [present, deleted, unknown] }
         reference: { type: string }
         message: { type: string }
-        progress: { type: integer, minimum: 0, maximum: 100 }
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 进度观测值，不是执行完成证据。progressLimited 为 true 时可能只覆盖部分层，不应展示为完整任务百分比；执行完成仅由可信最终回执确认。
+        progressLimited:
+          type: boolean
+          description: |
+            可选的单调受限标记；一旦为 true，同一任务的后续快照、取消、待保存和终态继续保留 true。
+            true 表示层或状态进度遥测曾触及资源限制，字节数、总量和速度均可能只覆盖部分层；不改变执行生命周期或产物结论。
+            省略或 false 仅表示没有记录到资源限制，不保证进度完整；不能根据此标记或层进度推断任务已完成。
         downloadedBytes: { type: integer, minimum: 0 }
         totalBytes: { type: integer, minimum: 0 }
         speedBytes: { type: integer, minimum: 0 }
         layers:
           type: object
+          description: |
+            新接纳的镜像拉取进度最多保留 128 层，按每层 2 × ID 的 UTF-8 字节数 + 256 字节预留字符串容量，总预算 32 KiB。
+            ID 超过 128 UTF-8 字节时拒绝该层，不截断身份；状态超过 256 UTF-8 字节时在字符边界安全截断。
+            因层数、字符串预算或 ID 限制拒绝新层，或状态被截断时设置 progressLimited；已接纳层仍可更新，裁剪进度不会结束执行。
+            限制适用于新接纳的进度；旧持久化快照保持可读，不对此字段追加全局数量或字符串 schema 限制。
           additionalProperties: true
         error: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    DockerImageRemoveJobRequest:
+      type: object
+      required: [imageId]
+      properties:
+        imageId:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          minLength: 71
+          maxLength: 71
+          description: 清单中的完整内容身份，不接受标签、短 ID 或空白。
     DockerImageRemoveRequest:
       type: object
       required: [imageId]
@@ -2918,8 +4587,13 @@ components:
       required: [type, target]
       properties:
         type: { type: string, enum: [bind, volume, tmpfs] }
-        source: { type: string }
-        target: { type: string, minLength: 1 }
+        source:
+          type: string
+          description: bind 使用绝对宿主机路径并原样保留名称中的空白；volume 使用卷名并去除首尾空白；tmpfs 不需要来源。
+        target:
+          type: string
+          minLength: 1
+          description: 容器内绝对目标路径，原样保留名称中的空白；前导空白不能替代绝对路径开头的斜线。
         readOnly: { type: boolean, default: false }
         volumeDriver: { type: string }
         tmpfsSizeBytes: { type: integer, minimum: 0 }
@@ -2928,9 +4602,15 @@ components:
       required: [name]
       properties:
         name: { type: string, minLength: 1 }
-        driver: { type: string }
-        subnet: { type: string }
-        gateway: { type: string }
+        driver:
+          type: string
+          description: 提供 subnet 时用于创建或校验同名网络，省略时按 bridge 校验；不提供 subnet 时仅连接现有网络，不应用此字段。
+        subnet:
+          type: string
+          description: 提供时仅在同名网络不存在时创建；已有网络必须具有相同驱动和此子网，否则创建容器失败，不修改现有网络。省略时仅按名称连接现有网络。
+        gateway:
+          type: string
+          description: 必须同时提供 subnet；显式提供时，已有网络的匹配子网条目必须具有此网关。省略时允许复用已有网关，创建新网络时由 Docker 分配。
         ip: { type: string }
     DockerContainerPortInput:
       type: object
@@ -2944,16 +4624,29 @@ components:
       type: object
       required: [hostPath, containerPath]
       properties:
-        hostPath: { type: string }
-        containerPath: { type: string }
+        hostPath:
+          type: string
+          description: 主机设备的规范绝对路径；保留尾部空白，不做 trim。拒绝前导空白、点路径段、重复斜杠、NUL、CR、LF 和冒号。
+        containerPath:
+          type: string
+          description: 容器设备的规范绝对路径；保留尾部空白，不做 trim。拒绝前导空白、点路径段、重复斜杠、NUL、CR、LF 和冒号；不允许重复的相同目标路径。
         cgroupPermissions: { type: string, default: rwm }
     DockerContainerGPUInput:
       type: object
       properties:
-        driver: { type: string }
-        count: { type: integer, minimum: -1, maximum: 128 }
+        driver:
+          type: string
+          description: 去除首尾空白；留空由 Docker 自动选择，否则须匹配 ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$。
+        count:
+          type: integer
+          minimum: -1
+          maximum: 128
+          description: -1 请求全部设备；1–128 请求指定数量；0 或省略仅在提供非空 deviceIds 时有效。
         deviceIds: { type: array, items: { type: string } }
-        capabilities: { type: array, items: { type: string } }
+        capabilities:
+          type: array
+          items: { type: string }
+          description: 每项去除首尾空白并转为小写，仅允许字母、数字和下划线，不允许重复（不区分大小写）；省略或空数组由 Docker 映射默认使用 gpu。
     DockerContainerCreateRequest:
       type: object
       required: [image, runContainer]
@@ -2981,15 +4674,20 @@ components:
         runContainer: { type: boolean }
     DockerContainerCreateResult:
       type: object
+      description: 完整创建确认；客户端还须核对 runContainer 与本次提交意图一致，且 started 与该意图一致。无法核实的成功响应不得作为可重复提交的失败。
       required: [containerId, name, image, state, created, started, runContainer]
       properties:
-        containerId: { type: string }
+        containerId: { type: string, minLength: 1, pattern: '\S' }
         name: { type: string }
-        image: { type: string }
+        image: { type: string, minLength: 1, pattern: '\S' }
         state: { type: string, enum: [running, stopped] }
-        created: { type: boolean }
-        started: { type: boolean }
-        runContainer: { type: boolean }
+        created: { type: boolean, const: true }
+        started:
+          type: boolean
+          description: 是否成功调用启动；启动后的进程仍可能退出，因此不等同于当前 state 为 running。
+        runContainer:
+          type: boolean
+          description: 回显本次创建请求的启动意图；成功时与 started 相同。
     DockerProjectDeleteRequest:
       type: object
       required: [projectId, kind, registryName]
@@ -3040,8 +4738,12 @@ components:
         name: { type: string }
         action: { type: string, enum: [start, stop, restart] }
         state: { type: string }
-        success: { type: boolean }
-        errorCode: { type: string }
+        success:
+          type: boolean
+          description: 动作与读回均成功，且本次观察状态符合目标（start/restart 为 running，stop 为 stopped）；不保证之后持续健康。
+        errorCode:
+          type: string
+          description: DOCKER_CONTAINER_STATE_MISMATCH 表示命令已返回但读回状态不符，state 保留实际观察；不表示没有副作用，也不授权自动重试。
     DockerProjectActionResult:
       type: object
       required: [projectId, kind, action, state, completed, containers]
@@ -3050,7 +4752,9 @@ components:
         kind: { type: string, enum: [standalone] }
         action: { type: string, enum: [start, stop, restart] }
         state: { type: string }
-        completed: { type: boolean }
+        completed:
+          type: boolean
+          description: 全部请求容器都有结果且 success 为 true；状态不符或单项失败时为 false，不触发重试、额外轮询或回滚。
         containers:
           type: array
           items: { $ref: '#/components/schemas/DockerProjectContainerActionResult' }
@@ -3108,11 +4812,17 @@ components:
         collectedAt: { type: string, format: date-time }
     ComposeFileSnapshot:
       type: object
-      required: [path, name, content, size]
+      required: [path, name, content, contentHash, size]
       properties:
         path: { type: string }
         name: { type: string }
         content: { type: string }
+        contentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+          description: 目标磁盘文件原始 UTF-8 字节的 SHA-256，小写十六进制；与同一响应的 content 字节一致，不做换行或 YAML 归一化。
         size: { type: integer, minimum: 0 }
     ComposeValidateRequest:
       type: object
@@ -3146,7 +4856,7 @@ components:
             updatedAt: { type: string, format: date-time }
     ComposeDeployInput:
       type: object
-      required: [projectId, workingDirectory, configFiles, targetPath, content]
+      required: [projectId, workingDirectory, configFiles, targetPath, content, baseContentHash]
       properties:
         projectId: { type: string }
         workingDirectory: { type: string }
@@ -3156,6 +4866,12 @@ components:
           items: { type: string }
         targetPath: { type: string }
         content: { type: string, maxLength: 2097152 }
+        baseContentHash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+          description: 本次编辑会话读取的目标磁盘原始字节 hash；不可用草稿、历史版本或本次提交内容的 hash 替代。
     ComposeRevision:
       type: object
       required: [id, projectId, configPath, content, contentHash, backupPath, createdAt]
@@ -3227,6 +4943,7 @@ components:
           items: { type: string }
     DockerEngineInfo:
       type: object
+      required: [serverVersion, operatingSystem, architecture, containers, containersRunning, containersStopped, images]
       properties:
         serverVersion: { type: string }
         operatingSystem: { type: string }
@@ -3237,6 +4954,8 @@ components:
         images: { type: integer, minimum: 0 }
     InventoryContainer:
       type: object
+      required: [id, name, image, state, status, createdAt, ports, projectId, projectName, serviceName]
+      description: 非时间字符串可为空，容器状态保留未知字符串，时间允许 Go 零值；startedAt、finishedAt、exitCode、restartCount、health 为兼容旧响应的可选补充字段。浏览器只校验时间字段的字符串类型，采集时间的新鲜度由状态层判断。
       properties:
         id: { type: string }
         name: { type: string }
@@ -3252,7 +4971,8 @@ components:
         restartCount: { type: integer, minimum: 0 }
         health: { type: string, enum: [none, starting, healthy, unhealthy] }
         ports:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items:
             $ref: '#/components/schemas/PortMapping'
         projectId: { type: string }
@@ -3260,13 +4980,15 @@ components:
         serviceName: { type: string }
     PortMapping:
       type: object
+      required: [hostIp, privatePort, publicPort, protocol]
       properties:
         hostIp: { type: string }
-        privatePort: { type: integer, minimum: 0 }
-        publicPort: { type: integer, minimum: 0 }
+        privatePort: { type: integer, minimum: 0, maximum: 65535 }
+        publicPort: { type: integer, minimum: 0, maximum: 65535 }
         protocol: { type: string }
     DockerProject:
       type: object
+      required: [id, name, kind, state, workingDirectory, configFiles, containerCount, runningCount]
       properties:
         id: { type: string }
         name: { type: string }
@@ -3278,7 +5000,8 @@ components:
           enum: [running, stopped, degraded]
         workingDirectory: { type: string }
         configFiles:
-          type: array
+          type: [array, 'null']
+          description: 必须提供；兼容 Go nil slice 的显式 null，浏览器归一化为 []，缺失字段不接受。
           items: { type: string }
         containerCount: { type: integer, minimum: 0 }
         runningCount: { type: integer, minimum: 0 }
@@ -3718,6 +5441,7 @@ components:
         level: { type: string, enum: [error, warning, info, debug] }
         message: { type: string }
         rawMessage: { type: string, description: 未清理级别和时间前缀的原始日志 }
+        stream: { type: string, enum: [stdout, stderr], description: 容器日志输出流；系统和 Agent 日志可省略 }
   securitySchemes:
     RootSession:
       type: apiKey

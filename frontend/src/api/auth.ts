@@ -65,7 +65,8 @@ function isAuthStatus(value: unknown): value is AuthStatus {
     isRecord(value) &&
     typeof value.initialized === 'boolean' &&
     typeof value.authenticated === 'boolean' &&
-    (value.user === undefined || isRootUser(value.user))
+    (value.user === undefined || isRootUser(value.user)) &&
+    (!value.authenticated || (value.initialized && isRootUser(value.user)))
   )
 }
 

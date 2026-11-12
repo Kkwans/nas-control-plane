@@ -1,0 +1,153 @@
+# M08-C1 容器终端的有界中断与关闭
+
+日期：2026-10-13。基线：7dc9d2159b098ebf0197207d4d643b31a13d48ac。状态：容器片6cb1688已推送并通过完整CI；主机H1追加片见文末，独立记录验证状态。
+
+## 目标与范围
+
+活动流撤销已经到达Server与Agent流；本片继续解决已取得Docker exec attachment之后，容器输入、调整尺寸和关闭同步阻塞的问题。保留Root终端能力、Shell选择、Session与RPC对外契约。
+
+不包含ExecAttach返回前的SDK握手、Manager.Open全局持锁重构、宿主机PTY与任意子孙进程终止。不得为了结束一个终端而停止整个容器、杀PID 1、遍历杀进程，或限制Root用户的既有管理能力。
+
+## 已确认问题
+
+- 既有取消和关闭回调会同步写Ctrl-C/exit；关闭计时器在写入之后才开始，写卡住时预算无效。
+- 输入及Resize可占住Agent消息主循环，不能依靠主循环再次观察取消来解除它们。
+- Moby attachment提供缓冲Reader和net.Conn，必须保留Reader中已读入数据，同时直接控制同一连接。SDK没有ExecKill接口；关闭传输并不证明exec退出。
+- Close时提前释放Manager配额，会允许关闭资源仍在占用时不断建立新会话。
+
+## 设计契约
+
+1. Attachment保留由同一net.Conn驱动的缓冲Reader。收紧任意Writer/回调契约，不保留不可中断的隐式兼容路径。失败出口关闭已取得资源。
+2. 生命周期取消只执行幂等context取消与Conn.Close，不写控制字节、不执行远端请求。Read前后检查取消；使用AfterFunc时停止或等待已启动的回调，避免将stop=false误认为已结束。
+3. 输入操作串行化且等待可取消，取得操作权后重验active状态。正常Write使用独立两秒绝对write deadline；部分成功不可重放，设置或清除deadline失败时终止传输。
+4. Resize继承session生命周期并有两秒预算；Close/abort取消其context。依赖gateway遵守HTTP context契约，不用遗留阻塞goroutine伪装超时成功。
+5. Close从第一步创建唯一两秒清理预算，标记closing后拒绝新输入。已有I/O占用或已取消时直接abort；活跃且可立即取得操作权时才尽力写Ctrl-C/exit，各阶段共用同一截止时间。
+6. 无条件关闭连接后，在剩余预算内Inspect等待exec主进程退出。超时、404或Docker不可达均是退出未确认；仅Running=false可确认主进程退出。错误保存并支持重复Close，不将传输结束解释为进程树全部结束。
+7. Agent统一一次cleanup；显式关闭后的最后通知额外最多等待100ms，然后返回RPC。初始started帧也由唯一输出sender负责，主循环不会被首帧发送挡住取消。RPC返回才释放的Send/Recv不在返回前强制join；本地Reader及输入操作在剩余关闭预算内等待完成，预算耗尽返回独立的本地清理未确认错误，不伪称全部owner已结束。取消回调须停止或等待完成。
+8. Manager从可访问map摘除session后保留closing reservation，直到本地Close返回才释放。未确认远端退出须保留准确警告，不永久占住配额或掩盖残留风险。
+
+## 验收矩阵
+
+- 父取消打断Read、堵塞Write和Resize；取消后不再发送缓冲输出或新控制字节。
+- Write/Close竞争、已占用操作锁、反复Close返回同一结果；deadline设置/清除失败、部分写失败无重放。
+- 整个Close共享预算；Inspect超时/404/网络错误不判已退出；transport失败不能被覆盖。
+- 关闭中配额不提前释放；关闭后本地配额恢复。
+- Agent初始/最后输出阻塞时仍能响应取消或预算并返回；测试在返回后释放模拟transport并验证泵退出，不能用假context契约证明不存在泄漏。已中断但本地Read/Resize收尾仍延迟时，明确返回本地清理未确认，与exec退出未确认分开。
+- 纯fake/barrier测试及race在隔离环境执行；完整Go与构建由分支CI补充。真实Docker/NAS、真实PTY行为不在本次验证范围。
+
+## 保留缺口
+
+本片不承诺总开启时间有界，不修复ExecAttach前同步握手及Manager.Open持锁，不承诺宿主机PTY的非阻塞状态、直接child的等待或所有后代回收。容器shell可忽略控制字节或留下脱离任务，后续须先定义所有权和观测策略。两秒关闭加100ms最后通知还存在调度开销，不宣称RPC精确在2.000秒内结束。
+
+## M08-H1：主机 PTY 的可取消 I/O 与直属进程回收
+
+基线：208bc58262445180cbea87ea2ae91b2b70e08575。状态：96070cd已推送且完整CI通过；纯fake竞态、跨平台编译及隔离Linux真实PTY/直属child用例通过，不宣称NAS实机验收。
+
+### 已确认问题与范围
+
+已有 Resize 经 pty.Setsize 调用 File.Fd，可能把 master 切回阻塞模式；File.Read/Write 也可能在 Go poller 内等待，外层 EAGAIN 检查不足以保证取消。旧 Close 不等待有效 Wait 结果，重复调用还可能丢失首次错误。
+
+本片只处理已成功启动的主机 PTY、启动成功后的失败出口、直属 child 的唯一回收责任。保留 Root、Shell/rc/环境、增强能力、初始窗口大小与 RPC 契约。不终止任意后代、进程组或其他终端，不调整系统权限。
+
+### 实现契约
+
+1. master 通过 SyscallConn.Control 设置非阻塞；Read/Write 的 RawConn 回调只做一次系统调用并返回 true，让应用层控制 EAGAIN/EINTR 等待。Resize 通过受保护 fd 执行 TIOCSWINSZ，禁止运行路径再调用 File.Fd 或 pty.Setsize。
+2. 读操作与写入/调整尺寸分别使用可取消 gate。写入两秒总预算覆盖排队、部分写入与重试，只推进已写后缀，不重放输入。Resize 的排队同样有预算。
+3. 父取消、显式关闭拒绝新输入并中断本地等待；自然退出须保留可立即读取的尾部输出，直到 EOF/EAGAIN，不等待仍持有 slave 的后代。
+4. 每个直接 child 只有一个 Cmd.Wait owner。非零退出和信号终止的有效 ProcessState 也属于已回收，不能只以 WaitErr==nil 判定。
+5. Close 从入口共享两秒清理预算，保存唯一结果；区分本地 I/O/关闭未确认与直属进程退出未确认。迟到 Wait 继续由原 owner 接收，不把既已返回的超时改成成功。
+6. 已取得 PTY 后的初始化失败和取消走同一清理路径；Agent 日志只记录安全的分类标志，不记录终端输入或底层敏感错误文本。
+
+### 验收与真实边界
+
+- 本地只执行纯 fake/barrier 的生命周期、取消、并发 Close、部分写入、预算和错误分类测试及 race；真实 PTY/直属进程用例仅在既有隔离 Linux CI 执行。
+- 内核用例检查 Resize 前后 O_NONBLOCK、空读取消、写背压、直属 child 的零/非零/信号退出回收；保留既有交互 PTY 回归。
+- 两秒预算约束应用层等待，依赖正常 Linux 非阻塞 syscall/ioctl 返回；不宣称可抢占任意内核 D-state、驱动卡死或精确墙钟硬截止。
+- nil Close 仅证明所拥有资源与直接 child 的回收结果，不代表所有后代已消失或 Root 命令副作用撤销。
+- Manager.Open 全局锁、PTY 创建之前的 locale/能力探测、容器 attach 之前的握手仍是独立缺口；NAS 实机未验证。
+
+## M08-H2：开启预留与短锁发布
+
+基线：96070cd00476e26bbd9ac8b69f236033b67f7e7e。状态：037f91f已推送且完整CI通过，纯fake竞态与独立审查完成。
+
+### 问题与设计
+
+Manager.Open原先在全局锁内调用Starter.Start及Metadata。一个慢启动会阻塞已有会话的查询/输入/关闭，甚至使达到上限的新请求不能及时拒绝。
+
+- 短锁内保留opening名额，配额始终计入opening + live + closing，保留默认上限1及全部配置。
+- 同步调用Start及Metadata，但移出全局锁；不增加超时后遗弃的启动goroutine，不以context取消作为已释放资源的证据。
+- 发布时短锁复核取消并原子将opening转为live；取消或错误但返回了session时，原子转为closing，在锁外Close，结束后才释放名额。
+- 非nil session与错误同时返回也须有唯一清理者。保留主错误码及errors.Is清理因果；Agent初始Open失败出口安全记录未确认清理，不让取消映射nil吞掉诊断。
+- 成功发布是归属转移点；紧随发布发生的取消由既有session/Agent清理路径处理，不重复关闭。
+
+### 验收与保留范围
+
+使用纯fake/barrier证明慢Start/Metadata不挡其他manager操作、容量无间隙、晚到成功只关闭一次、错误出口名额恢复、并发唯一ID、发布前后取消以及安全日志。真实Starter在配置容量大于1时须支持并发并返回独立session；不使用原有非并发安全fake重复同一对象。
+
+不新增不存在的CloseAll或每用户配额，不修改host/container传输、协议或依赖。卡住的Starter仍占其名额，H2不保证单次Open总时长有界；locale、PTY创建和SDK attach握手保留为独立问题。
+
+H2审查补充：裸主错误与带码的清理错误组合时，显式固定原主错误码（含空码），防止次级取消/目标错误改变原RPC失败分类，同时保留errors.Is因果。生产starter的每次会话资源独立；Moby首协商失败后重试存在静态观察到的潜在内部version并发边界，尚未动态复现，不将此片描述为SDK所有路径并发保证，默认容量1保持不变。
+
+## M08-H3：主机 locale 探测预算
+
+基线：ff92b16ec422d9008312dd4cfac35ca39899e5ed。状态：四文件实现与独立审查完成，精确fake/race、全包编译、vet及本机/ARM64构建通过；真实helper进程行为待隔离CI。
+
+现有locale -a通过无context的Output执行，位于PTY创建前，可无限等待并捕获无界stdout。H3只修改这一探测，不扩展到Bash能力探测或SDK attach。
+
+- 继承调用context，使用750ms专属预算及100ms WaitDelay；固定命令/参数，不通过Shell或改变权限/进程组。
+- stdout使用最多32KiB的专用writer，单次超限仅复制剩余预算并返回错误；stderr丢弃。仅完整成功、未取消且未超限的精确c.utf8/c.utf-8 token选C.UTF-8，其余回退C。
+- 不缓存，避免一次取消永久降级或系统locale变更后读取过时结果；LANG/LC_ALL保持同一选择。
+- 同步Run保留唯一直属child等待责任。WaitDelay约束继承管道收尾，不抢占PATH查找、StartProcess或任意内核Process.Wait，不承诺850ms硬截止或回收全部后代。
+- 本地仅fake预算/取消/容量/解析/race与编译；实际helper进程退出、取消、超限和继承管道行为交由既有隔离Linux CI，fixture须显式拥有并清理其资源，不在用户NAS运行。
+
+Bash能力探测虽有750ms context，但CombinedOutput与继承管道仍需另片处理；H3完成不能被描述为整个HostStarter.Start全程有界。
+
+## M08-H4：主机 Bash 能力探测有界捕获
+
+基线：41689c0bdafe634af96d6b2a7e44db635f934f92。状态：三文件实现与独立审查完成，精确fake/race及全包编译/vet/构建通过；实际helper行为待隔离CI。
+
+主机预探测原CombinedOutput没有内存限额，750ms context也未限制退出后继承管道等待；原实现先解析再设置Err，会从失败或不完整输出继续报告支持readline/paste。
+
+- 保留原Shell/rc参数、脚本、/root工作目录及固定环境，仍使用750ms context；同步Run新增100ms WaitDelay。
+- stdout与stderr直接赋同一可比较指针的32KiB固定writer，遵循Go对同一writer的串行调用契约，保留合并语义和统一容量，不改为分别无界缓冲。
+- 仅Run成功、context有效、没有overflow时调用既有parser；任一失败时三个能力标志全部false，以errors.Join保留运行/取消/超限原因而不含捕获内容。成功的已有能力映射保持不变。
+- 不改共享parser或容器路径。容器LimitReader的截断歧义、非零退出后部分成功以及SDK attach握手是独立缺口，不宣称H4覆盖它们。
+- 本地仅明确前缀的fake/config/parser/race及编译；实际双流flood、退出/取消和fd1/fd2管道遗留由隔离CI的显式直属child fixture验证。保持每个child唯一Wait owner，不杀进程组或遗弃超时goroutine。
+
+WaitDelay约束管道收尾，不保证StartProcess/Process.Wait内核异常可抢占或850ms硬截止；主机ready握手及实际PTY启动仍保留自身边界。
+
+
+## M08-C2：容器能力探测完整性与有界捕获
+
+基线：cadd8b8192bb57951b7c009f26bda8c02d53b7da。状态：三文件实现与独立审查完成，30项纯fake测试、race、全包编译/vet/构建通过，e1230e7完整CI通过。
+
+- 保留 Root、固定两秒 context、非 TTY 及现有 Shell 顺序/参数/环境。只处理预探测，不改变交互终端。
+- 捕获的原始 Docker 多路帧限制 32KiB，额外一字节辨别超限与精确上限后的 EOF；读取错误、取消或不完整输出全部失败关闭。
+- 两遍校验八字节帧头、流标识、保留位及声明长度；在分配前验证剩余长度，拒绝截断帧，不使用可能依据不可信长度分配的 StdCopy，也不回退为原始文本。
+- 同步读取原 attachment.Reader，连接只关闭一次；context 回调停止并等待结束，保留关闭错误。原始缓冲最多 32KiB+1，另有最多 32KiB 解码缓冲，不宣称合计只有 32KiB；SDK bufio.Reader 自身可能预读更多，限制不等于整个 SDK 或网络内存上限。
+- 仅完整读取、有效 context、Inspect 确认非 Running 且零退出时解析能力；任何失败三个能力标志全部 false。
+- 纯 fake/barrier/race 验证容量、帧、取消、读取与 Inspect 错误及唯一关闭；本地不调用 Docker 或用户 NAS。
+- SDK attach 返回前握手、Inspect JSON 缺失字段判定、远程进程终止以及 Close 自身不返回均未由此解决，不制造超时后遗弃的读取 goroutine。
+
+H4 后续验收：cadd8b8 的 [CI 38413659465](https://github.com/Kkwans/nas-control-plane/actions/runs/38413659465)于14:32 UTC整体通过，Go/Compose通过，前端610项单元及173项浏览器测试通过。H3与H4实际helper行为均已由隔离CI覆盖，NAS实机未验证。
+
+
+## M08-C3：容器升级握手取消与前发布归属（实现与独立审查完成）
+
+固定Moby SDK v0.5.0在dial后同步写HTTP升级请求、读取响应头，未把后续context取消连接到raw Conn。已用实际SDK加内存fake Conn复现：阻塞Write/Read不随取消返回，关闭所持连接后才退出；race通过，无真实socket或Docker。原探测两秒context不能覆盖这个间隙，opening名额会被持续占用。
+
+- 采用每次Attach独立的连接owner，将取消绑定到准确Conn并幂等Close；停止并等待已启动回调，同步SDK退出后再交接。保留SDK原Reader及预读数据，不复制协议，不遗弃go ExecAttach。
+- attach-only客户端使用固定本地Docker端点与已成功协商的版本，避免共享HTTP池/懒协商连接被错绑。版本选择需在可取消的协商边界明确同步，不能无锁读取并发变更的ClientVersion；失败不得假装已经协商。
+- 探测保留共享两秒预算和C2捕获/校验；最终交互Create+Attach增加独立两秒启动预算，成功后解绑启动取消而保留会话父生命周期。不是整个Open两秒保证。
+- 握手写请求后发生本次取消/截止时，关闭连接不证明远端进程退出；保留退出未确认类别并停止该次shell后备尝试，不杀容器/PID1/Root后代。未取消的SDK升级错误缺少结构化拒绝来源，保留原后备行为，不宣称解决所有不确定启动。成功Attach后读取/Inspect阶段的子探测截止也保持原行为。
+- 有效session晚取消交给既有Manager唯一Close owner，不丢掉退出诊断，不提前释放容量；取消主码及errors.Is因果保持。
+- 验收覆盖真实SDK+纯fake阻塞Write/Read、升级失败、预读、幂等Close/回调join、成功交接后预算取消、并发隔离/协商、共享预算与晚取消容量。真实Docker行为仍未验证；不守约Conn.Close/内核等待不可凭空抢占。
+
+
+C3兼容性复核：Engine v28.5.1在执行程序前先发101升级；找不到bash通常通过升级后的帧输出失败并由Inspect给出非零退出，随后尝试sh。已使用真实SDK加内存响应覆盖此路径及完整非101拒绝，未以错误文本匹配猜测类型。参考[Engine升级入口](https://github.com/moby/moby/blob/v28.5.1/api/server/router/container/exec.go)及[执行失败状态](https://github.com/moby/moby/blob/v28.5.1/daemon/exec.go)。这些源码与fixture不等同用户当前Docker版本实测。
+
+独立审查覆盖精确连接/CloseWrite/预读/回调join、协商失败重试及取消等待、启动预算与晚取消Manager名额；发现测试在截止瞬间sleep可能早于取消回调，改为等待context完成，未放宽结果断言。相关race重复25轮、cleanup重复10轮和全包仅编译通过，Go构建/vet通过；真实隔离CI仍待提交后验收。
+
+最终预算补充：探测的协商及版本gate等待也置于原两秒截止之内，不从握手阶段重新开始计时。新增两项纯fake预算测试，合并相关race×20、全包仅编译/vet/build通过；未设置生产网络或安全配置。
+
+C3完整CI闭环：d146b110e6f21c738ad03764830a9944d53e7cf1的[CI 38426843759](https://github.com/Kkwans/nas-control-plane/actions/runs/38426843759)于16:05:24 UTC通过。实际日志19个Go包通过（terminal 5.848s）、vet、原生/ARM64构建与Compose成功，前端696项单元/206项浏览器成功，发布跳过。Go CI包括现有隔离helper测试；新握手仍为实际SDK加内存Conn，未连接真实Docker或NAS。

@@ -19,6 +19,9 @@ func (api *handler) readyz(response http.ResponseWriter, request *http.Request) 
 	ctx, cancel := context.WithTimeout(request.Context(), min(api.agentTimeout, 3*time.Second))
 	defer cancel()
 	checks := map[string]string{"agent": "unavailable", "docker": "not_checked"}
+	if api.jobs != nil {
+		checks["jobs"] = api.jobs.readiness()
+	}
 	if _, err := api.agent.Probe(ctx, api.agentSocketPath); err == nil {
 		checks["agent"] = "ready"
 		checks["docker"] = "unavailable"

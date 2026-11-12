@@ -27,14 +27,21 @@ type ContainerActionRequest struct {
 	Action      ContainerAction `json:"action"`
 }
 
-func (r ContainerActionRequest) Validate() error {
+func (r ContainerActionRequest) Normalize() (ContainerActionRequest, error) {
 	if strings.TrimSpace(r.ContainerID) == "" {
-		return coded("DOCKER_CONTAINER_ACTION_INVALID", errors.New("container id is required"))
+		return ContainerActionRequest{}, coded("DOCKER_CONTAINER_ACTION_INVALID", errors.New("container id is required"))
 	}
-	if _, err := ParseContainerAction(string(r.Action)); err != nil {
-		return err
+	action, err := ParseContainerAction(string(r.Action))
+	if err != nil {
+		return ContainerActionRequest{}, err
 	}
-	return nil
+	r.Action = action
+	return r, nil
+}
+
+func (r ContainerActionRequest) Validate() error {
+	_, err := r.Normalize()
+	return err
 }
 
 func ParseContainerAction(value string) (ContainerAction, error) {
@@ -92,7 +99,8 @@ func NewLiveContainerController() (*ContainerController, error) {
 }
 
 func (c *ContainerController) Control(ctx context.Context, request ContainerActionRequest) (ContainerActionResult, error) {
-	if err := request.Validate(); err != nil {
+	request, err := request.Normalize()
+	if err != nil {
 		return ContainerActionResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -101,7 +109,6 @@ func (c *ContainerController) Control(ctx context.Context, request ContainerActi
 
 	operationContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	var err error
 	switch request.Action {
 	case ContainerActionStart:
 		err = c.gateway.StartContainer(operationContext, request.ContainerID)

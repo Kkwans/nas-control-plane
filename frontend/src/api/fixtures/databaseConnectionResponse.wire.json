@@ -1,0 +1,18 @@
+{
+  "initialAndCurrent": {
+    "wire": {"connected": true, "code": "connected", "driver": "mysql", "endpoint": "fixture:3306/catalog", "database": "catalog", "operation": "test_connection", "durationMs": 0},
+    "http": {"connected": true, "code": "connected", "driver": "mysql", "endpoint": "fixture:3306/catalog", "database": "catalog", "operation": "test_connection", "durationMs": 0}
+  },
+  "omittedOptionals": {
+    "wire": {"connected": true, "driver": "sqlite", "endpoint": "/fixture.sqlite", "operation": "test_connection", "durationMs": 0},
+    "http": {"connected": true, "driver": "sqlite", "endpoint": "/fixture.sqlite", "operation": "test_connection", "durationMs": 0}
+  },
+  "nullOptionals": {
+    "wire": {"connected": true, "code": null, "database": null, "driver": "postgresql", "endpoint": "fixture:5432", "operation": "auto_connect", "durationMs": 1},
+    "http": {"connected": true, "driver": "postgresql", "endpoint": "fixture:5432", "operation": "auto_connect", "durationMs": 1}
+  },
+  "negativeDiagnostic": {
+    "wire": {"connected": false, "code": "auth_failed", "driver": "mysql", "endpoint": "fixture:3306", "operation": "test_connection", "durationMs": 0},
+    "http": {"connected": false, "code": "auth_failed", "driver": "mysql", "endpoint": "fixture:3306", "operation": "test_connection", "durationMs": 0}
+  }
+}

@@ -3,6 +3,7 @@ package agentsocket
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
 	"google.golang.org/grpc"
@@ -12,6 +13,8 @@ import (
 type TerminalStream interface {
 	Send(terminal.Message) error
 	Recv() (terminal.Message, error)
+	// Close 幂等地中止专用传输，可与 Send、Recv 并发调用；必须解除两向
+	// 阻塞 I/O 并有界返回，不等待对端确认，也不要求先等待收发协程退出。
 	Close() error
 }
 
@@ -37,6 +40,8 @@ func OpenTerminal(ctx context.Context, socketPath string) (TerminalStream, error
 type terminalClientStream struct {
 	stream     AgentTerminalPOCService_OpenClient
 	connection *grpc.ClientConn
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (s *terminalClientStream) Send(message terminal.Message) error {
@@ -63,10 +68,8 @@ func (s *terminalClientStream) Recv() (terminal.Message, error) {
 }
 
 func (s *terminalClientStream) Close() error {
-	closeErr := s.stream.CloseSend()
-	connectionErr := s.connection.Close()
-	if closeErr != nil {
-		return closeErr
-	}
-	return connectionErr
+	// CloseSend 不允许与 SendMsg 并发；直接关闭本流独占的 ClientConn，
+	// 同时解除阻塞的 Send/Recv，避免清理顺序依赖对端或收发协程。
+	s.closeOnce.Do(func() { s.closeErr = s.connection.Close() })
+	return s.closeErr
 }

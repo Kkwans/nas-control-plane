@@ -16,7 +16,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8750',
-        changeOrigin: true,
+        // 保留浏览器外部 Host（含端口），供 API 来源校验使用。
+        changeOrigin: false,
       },
     },
   },

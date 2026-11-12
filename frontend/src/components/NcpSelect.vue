@@ -44,7 +44,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
     :popper-class="['ncp-select-popper', popperClass].filter(Boolean).join(' ')"
     :aria-label="accessibleLabel"
     :aria-busy="loading || undefined"
-    @update:model-value="emit('update:modelValue', String($event))"
+    @update:model-value="emit('update:modelValue', String($event ?? ''))"
   >
     <ElOption
       v-for="option in options"
@@ -60,9 +60,13 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 .ncp-select {
   min-width: 140px;
   max-width: 100%;
+  /* 将控件层级限制在自身，内层正层级不会抬高整个选择器或弹出菜单。 */
+  isolation: isolate;
 }
 
 .ncp-select :deep(.el-select__wrapper) {
+  /* 显式保留背景与负层级选中值的局部绘制顺序，不改变输入和清除按钮的命中。 */
+  z-index: 1;
   min-height: var(--ncp-control-height);
   border-radius: var(--ncp-radius-control);
   background: var(--ncp-control-surface);

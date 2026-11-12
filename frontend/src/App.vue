@@ -86,9 +86,11 @@ function startAuthenticatedSession() {
 }
 
 async function handleRefresh() {
-  if (manualRefreshInFlight.value) return
+  if (manualRefreshInFlight.value || !authStore.isAuthenticated) return
   manualRefreshInFlight.value = true
   try {
+    // 在首个 await 前重建已关闭的流，避免旧刷新完成后跨路由或会话重连。
+    systemStore.retryClosedRealtime()
     const systemResult = await systemStore.refresh()
     const manualResult = await manualRefreshRegistry.refresh()
     const failureCount = systemResult.failed.length + manualResult.failed.length
@@ -145,6 +147,8 @@ async function syncRouteData(session = captureSession()) {
       v-else
       :device-name="systemStore.deviceName"
       :connection-state="systemStore.connectionState"
+      :connection-label="systemStore.connectionLabel"
+      :connection-detail="systemStore.connectionDetail"
       :realtime-state="systemStore.realtimeState"
       :refresh-interval-seconds="systemStore.refreshIntervalSeconds"
       :sidebar-default="systemStore.preferences.sidebarDefault"

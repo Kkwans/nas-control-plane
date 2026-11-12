@@ -525,8 +525,10 @@ func normalizeMounts(values []ContainerMount) ([]ContainerMount, error) {
 	seenTargets := make(map[string]struct{}, len(values))
 	for _, value := range values {
 		value.Type = strings.ToLower(strings.TrimSpace(value.Type))
-		value.Source = strings.TrimSpace(value.Source)
-		value.Target = strings.TrimSpace(value.Target)
+		// bind 来源与所有挂载目标都是路径，首尾空白可能属于真实名称。
+		if value.Type != string(mount.TypeBind) {
+			value.Source = strings.TrimSpace(value.Source)
+		}
 		value.VolumeDriver = strings.TrimSpace(value.VolumeDriver)
 		if value.Type != string(mount.TypeBind) && value.Type != string(mount.TypeVolume) && value.Type != string(mount.TypeTmpfs) {
 			return nil, coded("DOCKER_CONTAINER_CREATE_INVALID", errors.New("mount type is invalid"))
@@ -706,8 +708,6 @@ func normalizeDevices(values []ContainerDevice) ([]ContainerDevice, error) {
 	result := make([]ContainerDevice, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		value.HostPath = strings.TrimSpace(value.HostPath)
-		value.ContainerPath = strings.TrimSpace(value.ContainerPath)
 		value.CgroupPermissions = strings.ToLower(strings.TrimSpace(value.CgroupPermissions))
 		if !validMountSource(value.HostPath) || !validMountSource(value.ContainerPath) {
 			return nil, coded("DOCKER_CONTAINER_CREATE_INVALID", errors.New("device path is invalid"))

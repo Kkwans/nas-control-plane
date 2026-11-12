@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	DefaultMonitoringRange = 6 * time.Hour
-	MonitoringRetention    = 7 * 24 * time.Hour
+	DefaultMonitoringRange   = 6 * time.Hour
+	MonitoringRetention      = 7 * 24 * time.Hour
+	MonitoringHistoryTimeout = 5 * time.Second
 )
 
 var (
@@ -26,9 +27,9 @@ type MonitoringRange struct {
 }
 
 // MonitoringHistoryStore 是 controlstore 历史查询所需的最小接口。
-// 扩展 MetricSample 的字段不会改变该查询接口。
+// 生产查询只接受有 SQL 上下界的接口，不回退到旧的单下界读取。
 type MonitoringHistoryStore interface {
-	MetricSamples(context.Context, time.Time) ([]controlstore.MetricSample, error)
+	MetricSamplesInRange(context.Context, time.Time, time.Time) ([]controlstore.MetricSample, error)
 }
 
 // ParseMonitoringRange 保持现有 monitoring/samples 的范围语义：默认查询 6 小时，
@@ -67,8 +68,7 @@ var monitoringRanges = map[string]time.Duration{
 	"7d":  MonitoringRetention,
 }
 
-// QueryMonitoringSamples reads and bounds persisted samples without changing their
-// one-minute bucket semantics. The store remains responsible for retention cleanup.
+// QueryMonitoringSamples 将精确闭区间传给存储；保留清理由后台负责。
 func QueryMonitoringSamples(ctx context.Context, store MonitoringHistoryStore, historyRange MonitoringRange) ([]controlstore.MetricSample, error) {
 	if ctx == nil {
 		return nil, ErrMonitoringRangeInvalid
@@ -83,7 +83,7 @@ func QueryMonitoringSamples(ctx context.Context, store MonitoringHistoryStore, h
 		return nil, ErrMonitoringRangeInvalid
 	}
 
-	samples, err := store.MetricSamples(ctx, historyRange.From)
+	samples, err := store.MetricSamplesInRange(ctx, historyRange.From, historyRange.To)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
@@ -94,6 +94,9 @@ func QueryMonitoringSamples(ctx context.Context, store MonitoringHistoryStore, h
 		return nil, err
 	}
 
+	if len(samples) > controlstore.MaxMetricSamples {
+		return nil, controlstore.ErrMetricHistoryLimitExceeded
+	}
 	result := make([]controlstore.MetricSample, 0, len(samples))
 	for _, sample := range samples {
 		collectedAt := sample.CollectedAt.UTC()

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/Kkwans/nas-control-plane/internal/sqliteconn"
 )
 
 const (
@@ -178,20 +178,27 @@ type ComposeRevision struct {
 }
 
 type JobRecord struct {
-	ID              string    `json:"id"`
-	Type            string    `json:"type"`
-	Status          string    `json:"status"`
-	Reference       string    `json:"reference"`
-	Message         string    `json:"message"`
-	Progress        int       `json:"progress"`
-	Error           string    `json:"error"`
-	DownloadedBytes int64     `json:"downloadedBytes"`
-	TotalBytes      int64     `json:"totalBytes"`
-	SpeedBytes      int64     `json:"speedBytes"`
-	LayersJSON      string    `json:"layersJson"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	CompletedAt     time.Time `json:"completedAt"`
+	CreateResultJSON        string    `json:"-"`
+	ProjectActionResultJSON string    `json:"-"`
+	ComposeActionResultJSON string    `json:"-"`
+	Revision                int64     `json:"-"`
+	CancellationStatus      string    `json:"cancellationStatus,omitempty"`
+	ErrorCode               string    `json:"errorCode,omitempty"`
+	ID                      string    `json:"id"`
+	Type                    string    `json:"type"`
+	Status                  string    `json:"status"`
+	Reference               string    `json:"reference"`
+	Message                 string    `json:"message"`
+	Progress                int       `json:"progress"`
+	ProgressLimited         bool      `json:"progressLimited"`
+	Error                   string    `json:"error"`
+	DownloadedBytes         int64     `json:"downloadedBytes"`
+	TotalBytes              int64     `json:"totalBytes"`
+	SpeedBytes              int64     `json:"speedBytes"`
+	LayersJSON              string    `json:"layersJson"`
+	CreatedAt               time.Time `json:"createdAt"`
+	UpdatedAt               time.Time `json:"updatedAt"`
+	CompletedAt             time.Time `json:"completedAt"`
 }
 
 type MetricSample struct {
@@ -219,7 +226,7 @@ func Open(databasePath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o750); err != nil {
 		return nil, err
 	}
-	database, err := sql.Open("sqlite", databasePath)
+	database, err := sqliteconn.Open(databasePath, "PRAGMA busy_timeout = 5000")
 	if err != nil {
 		return nil, err
 	}
@@ -292,95 +299,6 @@ func (s *Store) UpdatePreferences(ctx context.Context, userID int64, preferences
 		return Preferences{}, err
 	}
 	return preferences, nil
-}
-
-func (s *Store) RecordMetricSample(ctx context.Context, sample MetricSample) error {
-	bucket := sample.CollectedAt.UTC().Unix() / 60 * 60
-	_, err := s.database.ExecContext(ctx, `
-		INSERT OR IGNORE INTO metric_samples (
-			collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
-			network_receive_bytes, network_transmit_bytes, disk_read_bytes, disk_write_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, bucket, sample.CPUPercent, sample.MemoryPercent, sample.Load1, sample.DiskPercent,
-		sample.NetworkReceive, sample.NetworkTransmit, sample.DiskReadBytes, sample.DiskWriteBytes)
-	if err != nil {
-		return err
-	}
-	for _, temperature := range sample.Temperatures {
-		if strings.TrimSpace(temperature.Name) == "" {
-			continue
-		}
-		if _, err := s.database.ExecContext(ctx, `
-			INSERT OR REPLACE INTO metric_temperature_samples (
-				collected_at_unix, sensor_name, temperature_celsius
-			) VALUES (?, ?, ?)
-		`, bucket, temperature.Name, temperature.TemperatureCelsius); err != nil {
-			return err
-		}
-	}
-	_, err = s.database.ExecContext(ctx, `DELETE FROM metric_samples WHERE collected_at_unix < ?`, s.now().UTC().Add(-7*24*time.Hour).Unix())
-	if err != nil {
-		return err
-	}
-	_, err = s.database.ExecContext(ctx, `DELETE FROM metric_temperature_samples WHERE collected_at_unix < ?`, s.now().UTC().Add(-7*24*time.Hour).Unix())
-	return err
-}
-
-func (s *Store) MetricSamples(ctx context.Context, since time.Time) ([]MetricSample, error) {
-	rows, err := s.database.QueryContext(ctx, `
-		SELECT collected_at_unix, cpu_percent, memory_percent, load1, disk_percent,
-			network_receive_bytes, network_transmit_bytes, disk_read_bytes, disk_write_bytes
-		FROM metric_samples
-		WHERE collected_at_unix >= ?
-		ORDER BY collected_at_unix
-	`, since.UTC().Unix())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	samples := make([]MetricSample, 0)
-	for rows.Next() {
-		var sample MetricSample
-		var collectedAtUnix int64
-		if err := rows.Scan(&collectedAtUnix, &sample.CPUPercent, &sample.MemoryPercent, &sample.Load1, &sample.DiskPercent,
-			&sample.NetworkReceive, &sample.NetworkTransmit, &sample.DiskReadBytes, &sample.DiskWriteBytes); err != nil {
-			return nil, err
-		}
-		sample.CollectedAt = time.Unix(collectedAtUnix, 0).UTC()
-		samples = append(samples, sample)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(samples) == 0 {
-		return samples, nil
-	}
-	temperatureRows, err := s.database.QueryContext(ctx, `
-		SELECT collected_at_unix, sensor_name, temperature_celsius
-		FROM metric_temperature_samples
-		WHERE collected_at_unix >= ?
-		ORDER BY collected_at_unix, sensor_name
-	`, since.UTC().Unix())
-	if err != nil {
-		return nil, err
-	}
-	defer temperatureRows.Close()
-	byBucket := make(map[int64][]MetricTemperature)
-	for temperatureRows.Next() {
-		var collectedAtUnix int64
-		var temperature MetricTemperature
-		if err := temperatureRows.Scan(&collectedAtUnix, &temperature.Name, &temperature.TemperatureCelsius); err != nil {
-			return nil, err
-		}
-		byBucket[collectedAtUnix] = append(byBucket[collectedAtUnix], temperature)
-	}
-	if err := temperatureRows.Err(); err != nil {
-		return nil, err
-	}
-	for index := range samples {
-		samples[index].Temperatures = byBucket[samples[index].CollectedAt.Unix()]
-	}
-	return samples, nil
 }
 
 func validatePreferences(preferences Preferences) error {
@@ -579,11 +497,12 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	profile.Source = strings.ToLower(strings.TrimSpace(profile.Source))
 	profile.DetectedTitle = strings.TrimSpace(profile.DetectedTitle)
 	profile.AutoIconURL = strings.TrimSpace(profile.AutoIconURL)
-	profile.LocalIconName = strings.TrimSpace(profile.LocalIconName)
+	// 本地图标只能通过独立的条件写入取得归属，资料输入不能指定文件。
+	profile.LocalIconName = ""
 	if profile.ProjectID == "" || len(profile.ProjectID) > 256 || profile.Name == "" || len(profile.Name) > 120 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
-	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || len(profile.DetectedTitle) > 200 || len(profile.AutoIconURL) > 2048 || len(profile.LocalIconName) > 160 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
+	if len(profile.Description) > 500 || len(profile.IconURL) > 2048 || len(profile.Category) > 64 || len(profile.LaunchURL) > 2048 || len(profile.DetectedTitle) > 200 || len(profile.AutoIconURL) > 2048 || profile.PrimaryPort < 0 || profile.PrimaryPort > 65535 || profile.SortOrder < -100000 || profile.SortOrder > 100000 {
 		return SiteProfile{}, errors.New("site profile is invalid")
 	}
 	if profile.Source == "" {
@@ -608,7 +527,7 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 	if profile.LastVisitedAt != nil {
 		lastVisitedAtUnix = profile.LastVisitedAt.UTC().Unix()
 	}
-	_, err := s.database.ExecContext(ctx, `
+	err := s.database.QueryRowContext(ctx, `
 		INSERT INTO site_profiles (
 			project_id, name, description, icon_url, category, primary_port,
 			launch_url, favorite, sort_order, last_visited_at_unix, hidden,
@@ -629,15 +548,38 @@ func (s *Store) UpsertSiteProfile(ctx context.Context, profile SiteProfile) (Sit
 			ignored = excluded.ignored,
 			detected_title = excluded.detected_title,
 			auto_icon_url = excluded.auto_icon_url,
-			local_icon_name = excluded.local_icon_name,
 			updated_at_unix = excluded.updated_at_unix
+		RETURNING local_icon_name
 	`, profile.ProjectID, profile.Name, profile.Description, profile.IconURL, profile.Category, profile.PrimaryPort,
 		profile.LaunchURL, profile.Favorite, profile.SortOrder, lastVisitedAtUnix, profile.Hidden,
-		profile.Source, profile.Ignored, profile.DetectedTitle, profile.AutoIconURL, profile.LocalIconName, s.now().UTC().Unix())
+		profile.Source, profile.Ignored, profile.DetectedTitle, profile.AutoIconURL, profile.LocalIconName, s.now().UTC().Unix()).Scan(&profile.LocalIconName)
 	if err != nil {
 		return SiteProfile{}, err
 	}
 	return profile, nil
+}
+
+// CompareAndSwapSiteIcon 只更新仍持有预期图标的现有资料，不补建已删除的站点。
+// 返回 false 表示资料消失或图标已变化；调用方不能据此删除预期的旧文件。
+func (s *Store) CompareAndSwapSiteIcon(ctx context.Context, siteID, expectedName, replacementName string) (bool, error) {
+	siteID = strings.TrimSpace(siteID)
+	if siteID == "" || len(siteID) > 256 {
+		return false, errors.New("site id is invalid")
+	}
+	for _, name := range []string{expectedName, replacementName} {
+		if len(name) > 160 || (name != "" && filepath.Base(name) != name) || name == "." || name == ".." || strings.ContainsRune(name, '\x00') {
+			return false, errors.New("site icon filename is invalid")
+		}
+	}
+	result, err := s.database.ExecContext(ctx, `
+		UPDATE site_profiles SET local_icon_name = ?, updated_at_unix = ?
+		WHERE project_id = ? AND local_icon_name = ?
+	`, replacementName, s.now().UTC().Unix(), siteID, expectedName)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	return changed == 1, err
 }
 
 func (s *Store) DeleteSiteProfile(ctx context.Context, siteID string) error {
@@ -678,91 +620,6 @@ func (s *Store) RecordSiteVisit(ctx context.Context, projectID string) (time.Tim
 			updated_at_unix = excluded.updated_at_unix
 	`, projectID, visitedAt.Unix(), visitedAt.Unix())
 	return visitedAt, err
-}
-
-func (s *Store) UpsertJob(ctx context.Context, job JobRecord) error {
-	completedAt := int64(0)
-	if !job.CompletedAt.IsZero() {
-		completedAt = job.CompletedAt.UTC().Unix()
-	}
-	_, err := s.database.ExecContext(ctx, `
-		INSERT INTO jobs (
-			id, type, status, reference, message, error, progress,
-			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			status = excluded.status,
-			message = excluded.message,
-			error = excluded.error,
-			progress = excluded.progress,
-			downloaded_bytes = excluded.downloaded_bytes,
-			total_bytes = excluded.total_bytes,
-			speed_bytes = excluded.speed_bytes,
-			layers_json = excluded.layers_json,
-			updated_at_unix = excluded.updated_at_unix,
-			completed_at_unix = excluded.completed_at_unix
-	`, job.ID, job.Type, job.Status, job.Reference, job.Message, job.Error, job.Progress,
-		job.DownloadedBytes, job.TotalBytes, job.SpeedBytes, job.LayersJSON,
-		job.CreatedAt.UTC().Unix(), job.UpdatedAt.UTC().Unix(), completedAt)
-	return err
-}
-
-func (s *Store) Jobs(ctx context.Context, kind string, limit int) ([]JobRecord, error) {
-	if limit < 1 || limit > 500 {
-		limit = 100
-	}
-	rows, err := s.database.QueryContext(ctx, `
-		SELECT id, type, status, reference, message, error, progress,
-			downloaded_bytes, total_bytes, speed_bytes, layers_json,
-			created_at_unix, updated_at_unix, completed_at_unix
-		FROM jobs
-		WHERE (? = '' OR type = ?)
-		ORDER BY created_at_unix DESC
-		LIMIT ?
-	`, kind, kind, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make([]JobRecord, 0)
-	for rows.Next() {
-		var job JobRecord
-		var createdAt, updatedAt, completedAt int64
-		if err := rows.Scan(
-			&job.ID, &job.Type, &job.Status, &job.Reference, &job.Message, &job.Error, &job.Progress,
-			&job.DownloadedBytes, &job.TotalBytes, &job.SpeedBytes, &job.LayersJSON,
-			&createdAt, &updatedAt, &completedAt,
-		); err != nil {
-			return nil, err
-		}
-		job.CreatedAt = time.Unix(createdAt, 0).UTC()
-		job.UpdatedAt = time.Unix(updatedAt, 0).UTC()
-		if completedAt > 0 {
-			job.CompletedAt = time.Unix(completedAt, 0).UTC()
-		}
-		result = append(result, job)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) DeleteJob(ctx context.Context, id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return errors.New("job id is required")
-	}
-	_, err := s.database.ExecContext(ctx, `DELETE FROM jobs WHERE id = ?`, id)
-	return err
-}
-
-func (s *Store) MarkRunningJobsInterrupted(ctx context.Context) error {
-	now := s.now().UTC().Unix()
-	_, err := s.database.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'interrupted', message = '服务重启，任务已中断', updated_at_unix = ?, completed_at_unix = ?
-		WHERE status IN ('queued', 'running')
-	`, now, now)
-	return err
 }
 
 func (s *Store) ComposeDraft(ctx context.Context, projectID, configPath string) (ComposeDraft, error) {
@@ -940,6 +797,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			completed_at_unix INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX IF NOT EXISTS jobs_type_created ON jobs(type, created_at_unix DESC)`,
+		`CREATE INDEX IF NOT EXISTS jobs_created_id ON jobs(created_at_unix DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS jobs_type_created_id ON jobs(type, created_at_unix DESC, id DESC)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.database.ExecContext(ctx, statement); err != nil {
@@ -995,6 +854,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, column := range []struct{ name, definition string }{
+		{"revision", "INTEGER NOT NULL DEFAULT 1"},
+		{"cancellation_status", "TEXT NOT NULL DEFAULT ''"},
+		{"error_code", "TEXT NOT NULL DEFAULT ''"},
+		{"progress_limited", "INTEGER NOT NULL DEFAULT 0"},
+		{"create_result_json", "TEXT NOT NULL DEFAULT ''"},
+		{"project_action_result_json", "TEXT NOT NULL DEFAULT ''"},
+		{"compose_action_result_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "jobs", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

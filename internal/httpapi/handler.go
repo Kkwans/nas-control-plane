@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
@@ -15,6 +14,7 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 	ncpdatabase "github.com/Kkwans/nas-control-plane/internal/database"
 	"github.com/Kkwans/nas-control-plane/internal/docker"
+	"github.com/Kkwans/nas-control-plane/internal/dockerrealtime"
 	"github.com/Kkwans/nas-control-plane/internal/filesystem"
 	"github.com/Kkwans/nas-control-plane/internal/journal"
 	"github.com/Kkwans/nas-control-plane/internal/system"
@@ -110,16 +110,17 @@ type ControlStore interface {
 	SetDatabaseProjectPreference(context.Context, controlstore.DatabaseProjectPreference) (controlstore.DatabaseProjectPreference, error)
 	SiteProfiles(context.Context) ([]controlstore.SiteProfile, error)
 	UpsertSiteProfile(context.Context, controlstore.SiteProfile) (controlstore.SiteProfile, error)
+	CompareAndSwapSiteIcon(context.Context, string, string, string) (bool, error)
 	RecordSiteVisit(context.Context, string) (time.Time, error)
 	ComposeDraft(context.Context, string, string) (controlstore.ComposeDraft, error)
 	SaveComposeDraft(context.Context, controlstore.ComposeDraft) (controlstore.ComposeDraft, error)
 	RecordComposeRevision(context.Context, controlstore.ComposeRevision) (controlstore.ComposeRevision, error)
 	ComposeRevisions(context.Context, string, int) ([]controlstore.ComposeRevision, error)
-	RecordMetricSample(context.Context, controlstore.MetricSample) error
 	MetricSamples(context.Context, time.Time) ([]controlstore.MetricSample, error)
 }
 
 type Config struct {
+	JobEngine           *JobEngine
 	Agent               AgentClient
 	DatabaseAgent       DatabaseAgentClient
 	DatabaseConnections DatabaseConnectionCoordinator
@@ -131,6 +132,10 @@ type Config struct {
 	AgentTimeout        time.Duration
 	Auth                Authenticator
 	ControlStore        ControlStore
+	MonitoringHistory   MonitoringHistoryStore
+	SummarySnapshots    SummarySnapshots
+	ResourceAlerts      ResourceAlertSnapshots
+	DockerSnapshots     DockerSnapshots
 	SessionCookieSecure bool
 	SiteAssetsDirectory string
 	Terminal            TerminalClient
@@ -179,7 +184,15 @@ type handler struct {
 	agentSocketPath     string
 	agentTimeout        time.Duration
 	auth                Authenticator
+	authAdmission       *authAdmission
 	controlStore        ControlStore
+	monitoringHistory   MonitoringHistoryStore
+	summarySnapshots    SummarySnapshots
+	resourceAlerts      ResourceAlertSnapshots
+	dockerSnapshots     DockerSnapshots
+	realtimeSubscribers atomic.Int32
+	now                 func() time.Time
+	newRealtimeTicker   func(time.Duration) realtimeTicker
 	sessionCookieSecure bool
 	siteAssetsDirectory string
 	siteIconClient      siteIconHTTPClient
@@ -192,6 +205,10 @@ type handler struct {
 }
 
 func NewHandler(config Config) http.Handler {
+	return newHandlerWithAuthAdmission(config, newAuthAdmission(time.Now))
+}
+
+func newHandlerWithAuthAdmission(config Config, admission *authAdmission) http.Handler {
 	if config.Agent == nil {
 		config.Agent = socketAgentClient{}
 	}
@@ -230,6 +247,11 @@ func NewHandler(config Config) http.Handler {
 		config.Logger = slog.Default()
 	}
 
+	if config.MonitoringHistory == nil {
+		// 兼容现有组合存储注入，但绝不回退到 MetricSamples 单下界接口。
+		config.MonitoringHistory, _ = config.ControlStore.(MonitoringHistoryStore)
+	}
+
 	api := &handler{
 		agent:               config.Agent,
 		databaseAgent:       config.DatabaseAgent,
@@ -241,7 +263,12 @@ func NewHandler(config Config) http.Handler {
 		agentSocketPath:     config.AgentSocketPath,
 		agentTimeout:        config.AgentTimeout,
 		auth:                config.Auth,
+		authAdmission:       admission,
 		controlStore:        config.ControlStore,
+		monitoringHistory:   config.MonitoringHistory,
+		summarySnapshots:    config.SummarySnapshots,
+		resourceAlerts:      config.ResourceAlerts,
+		dockerSnapshots:     config.DockerSnapshots,
 		sessionCookieSecure: config.SessionCookieSecure,
 		siteAssetsDirectory: config.SiteAssetsDirectory,
 		terminal:            config.Terminal,
@@ -249,13 +276,17 @@ func NewHandler(config Config) http.Handler {
 		terminalTimeout:     config.TerminalTimeout,
 		newRequestID:        config.RequestID,
 		logger:              config.Logger,
-		jobs:                newJobRegistry(config.ControlStore),
+		jobs:                config.JobEngine,
+	}
+	if api.jobs == nil {
+		api.jobs = newJobRegistry(config.ControlStore)
 	}
 	router := chi.NewRouter()
 	router.Use(api.withRequestID)
 	router.Get("/healthz", api.healthz)
 	router.Get("/readyz", api.readyz)
 	router.Route("/api/v1", func(routes chi.Router) {
+		routes.Use(api.protectBrowserWrites)
 		routes.Get("/auth/status", api.authStatus)
 		routes.Post("/auth/bootstrap", api.bootstrap)
 		routes.Post("/auth/login", api.login)
@@ -275,10 +306,11 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/proxy/mihomo/capability", api.mihomoCapability)
 			protected.Post("/proxy/mihomo/invoke", api.invokeMihomo)
 			protected.Post("/proxy/mihomo/inspect", api.inspectMihomo)
-			protected.Get("/system/events", api.systemEvents)
+			protected.With(api.requireLiveSession).Get("/system/events", api.systemEvents)
 			protected.Get("/monitoring/samples", api.monitoringSamples)
+			protected.Get("/monitoring/alerts", api.monitoringAlerts)
 			protected.Get("/logs", api.logs)
-			protected.Get("/logs/events", api.logEvents)
+			protected.With(api.requireLiveSession).Get("/logs/events", api.logEvents)
 			protected.Get("/preferences", api.preferences)
 			protected.Put("/preferences", api.updatePreferences)
 			protected.Get("/preferences/lists/{listKey}", api.listPreference)
@@ -298,10 +330,15 @@ func NewHandler(config Config) http.Handler {
 			protected.Get("/docker/hub/tags", api.dockerHubTags)
 			protected.Post("/docker/images/pull", api.pullDockerImage)
 			protected.Post("/docker/images/remove", api.removeDockerImage)
+			protected.Post("/docker/images/remove-job", api.removeDockerImageJob)
 			protected.Post("/docker/images/remove-batch", api.removeDockerImages)
 			protected.Post("/docker/containers", api.createDockerContainer)
+			protected.Post("/docker/containers/create-jobs", api.createContainerJob)
+			protected.Post("/docker/containers/{containerID}/action-jobs/{action}", api.containerActionJob)
+			protected.Post("/docker/projects/standalone/action-jobs/{action}", api.projectActionJob)
 			protected.Post("/docker/projects/{projectID}/actions/{action}", api.controlStandaloneProject)
 			protected.Post("/docker/compose/projects/{projectID}/actions/{action}", api.controlComposeProject)
+			protected.Post("/docker/compose/projects/{projectID}/action-jobs/{action}", api.composeActionJob)
 			protected.Delete("/docker/compose/projects/{projectID}", api.deleteDockerProject)
 			protected.Post("/docker/compose/config/read", api.readComposeConfig)
 			protected.Post("/docker/compose/config/validate", api.validateComposeConfig)
@@ -310,8 +347,9 @@ func NewHandler(config Config) http.Handler {
 			protected.Post("/docker/compose/deploy", api.deployComposeConfig)
 			protected.Get("/docker/compose/revisions", api.composeRevisions)
 			protected.Get("/jobs/{jobID}", api.jobStatus)
-			protected.Get("/jobs/{jobID}/events", api.jobEvents)
+			protected.With(api.requireLiveSession).Get("/jobs/{jobID}/events", api.jobEvents)
 			protected.Get("/jobs", api.listJobs)
+			protected.Get("/job-history", api.listJobHistory)
 			protected.Post("/jobs/{jobID}/retry", api.retryJob)
 			protected.Post("/jobs/{jobID}/cancel", api.cancelJob)
 			protected.Delete("/jobs/{jobID}", api.deleteJob)
@@ -344,7 +382,7 @@ func NewHandler(config Config) http.Handler {
 		})
 	})
 	if api.terminalEnabled {
-		router.With(api.requireAuthentication).Get("/ws/terminal", api.terminalWebSocket)
+		router.With(api.requireAuthentication, api.requireLiveSession).Get("/ws/terminal", api.terminalWebSocket)
 	}
 	router.NotFound(func(response http.ResponseWriter, request *http.Request) {
 		api.writeError(response, request, http.StatusNotFound, "ROUTE_NOT_FOUND", "请求的资源不存在。")
@@ -384,12 +422,11 @@ func (api *handler) agentStatus(response http.ResponseWriter, request *http.Requ
 }
 
 func (api *handler) systemSummary(response http.ResponseWriter, request *http.Request) {
-	summary, err := api.collectSystemSummary(request.Context())
-	if err != nil {
-		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，请确认 Root Agent 已启动。")
+	summary, _ := api.latestSystemSummary(api.currentTime())
+	if summary == nil {
+		api.writeError(response, request, http.StatusServiceUnavailable, "SYSTEM_SUMMARY_UNAVAILABLE", "系统实时概览暂不可用，采集尚未就绪、失败或数据已过期。")
 		return
 	}
-	api.recordMetricSample(request.Context(), summary)
 	writeJSON(response, http.StatusOK, summary)
 }
 
@@ -432,128 +469,40 @@ func (api *handler) systemDetails(response http.ResponseWriter, request *http.Re
 }
 
 func (api *handler) monitoringSamples(response http.ResponseWriter, request *http.Request) {
-	if api.controlStore == nil {
+	if api.monitoringHistory == nil {
 		api.writeError(response, request, http.StatusServiceUnavailable, "MONITORING_STORE_UNAVAILABLE", "监控历史暂不可用。")
 		return
 	}
 	historyRange, err := ParseMonitoringRange(request.URL.Query(), time.Now().UTC())
 	if err != nil {
-		api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间不能晚于当前时间。")
+		api.writeError(response, request, http.StatusBadRequest, "MONITORING_RANGE_INVALID", "时间范围无效，最长只能查询 7 天且结束时间最多晚于当前时间 1 分钟。")
 		return
 	}
-	samples, err := QueryMonitoringSamples(request.Context(), api.controlStore, historyRange)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return
-		}
-		api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
-		return
-	}
-	writeJSON(response, http.StatusOK, samples)
-}
-
-func (api *handler) systemEvents(response http.ResponseWriter, request *http.Request) {
-	flusher, ok := response.(http.Flusher)
-	if !ok {
-		api.writeError(response, request, http.StatusInternalServerError, "REALTIME_STREAM_UNSUPPORTED", "当前服务不支持实时数据流。")
-		return
-	}
-
-	response.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	response.Header().Set("Cache-Control", "no-cache, no-transform")
-	response.Header().Set("Connection", "keep-alive")
-	response.Header().Set("X-Accel-Buffering", "no")
-	response.WriteHeader(http.StatusOK)
-	interval := realtimeInterval(request)
-	scope := realtimeScope(request)
-	_, _ = fmt.Fprintf(response, "retry: %d\n\n", interval.Milliseconds())
-	flusher.Flush()
-
-	sendSnapshot := func() bool {
-		snapshot := RealtimeSnapshot{CollectedAt: time.Now().UTC()}
-		if scope.summary {
-			summary, err := api.collectSystemSummary(request.Context())
-			if err != nil {
-				snapshot.Errors = append(snapshot.Errors, "SYSTEM_SUMMARY_UNAVAILABLE")
-			} else {
-				snapshot.Summary = &summary
-				api.recordMetricSample(request.Context(), summary)
-			}
-		}
-		if scope.docker {
-			inventory, err := api.collectDockerInventoryContext(request.Context())
-			if err != nil {
-				snapshot.Errors = append(snapshot.Errors, "DOCKER_INVENTORY_UNAVAILABLE")
-			} else {
-				snapshot.Docker = &inventory
-			}
-		}
-		payload, err := json.Marshal(snapshot)
-		if err != nil {
-			return false
-		}
-		_, err = fmt.Fprintf(response, "event: snapshot\ndata: %s\n\n", payload)
-		if err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
-	}
-
-	if !sendSnapshot() {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-request.Context().Done():
-			return
-		case <-ticker.C:
-			if !sendSnapshot() {
-				return
-			}
-		}
-	}
-}
-
-type realtimeStreamScope struct {
-	summary bool
-	docker  bool
-}
-
-func realtimeScope(request *http.Request) realtimeStreamScope {
-	scope := realtimeStreamScope{}
-	for _, name := range request.URL.Query()["scope"] {
-		switch name {
-		case "summary":
-			scope.summary = true
-		case "docker":
-			scope.docker = true
-		}
-	}
-	if !scope.summary && !scope.docker {
-		scope.summary = true
-	}
-	return scope
-}
-
-func realtimeInterval(request *http.Request) time.Duration {
-	raw := request.URL.Query().Get("interval")
-	if raw == "" {
-		return defaultRealtimeInterval
-	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds < controlstore.MinRefreshIntervalSeconds || seconds > controlstore.MaxRefreshIntervalSeconds {
-		return defaultRealtimeInterval
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-func (api *handler) collectSystemSummary(ctx context.Context) (system.Summary, error) {
-	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
+	queryContext, cancel := context.WithTimeout(request.Context(), MonitoringHistoryTimeout)
 	defer cancel()
-	return api.agent.CollectSystemSummary(requestContext, api.agentSocketPath)
+	samples, err := QueryMonitoringSamples(queryContext, api.monitoringHistory, historyRange)
+	var encoded []byte
+	if err == nil {
+		encoded, err = controlstore.MarshalMetricHistory(queryContext, samples)
+	}
+	if err != nil {
+		switch {
+		case request.Context().Err() != nil, errors.Is(err, context.Canceled):
+			return
+		case errors.Is(err, context.DeadlineExceeded):
+			api.writeError(response, request, http.StatusGatewayTimeout, "MONITORING_READ_TIMEOUT", "监控历史读取超时，请缩小时间范围后重试。")
+		case errors.Is(err, controlstore.ErrMetricHistoryLimitExceeded):
+			api.writeError(response, request, http.StatusUnprocessableEntity, "MONITORING_HISTORY_LIMIT_EXCEEDED", "监控历史超过单次查询上限，请缩小时间范围后重试。")
+		case errors.Is(err, controlstore.ErrInvalidMetricHistory):
+			api.writeError(response, request, http.StatusInternalServerError, "MONITORING_HISTORY_INVALID", "监控历史包含无效数据，无法完整读取。")
+		default:
+			api.writeError(response, request, http.StatusInternalServerError, "MONITORING_READ_FAILED", "监控历史读取失败。")
+		}
+		return
+	}
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(encoded)
 }
 
 func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, error) {
@@ -567,35 +516,12 @@ func (api *handler) collectSystemDetails(ctx context.Context) (system.Details, e
 }
 
 func (api *handler) collectDockerInventoryContext(ctx context.Context) (docker.Inventory, error) {
-	requestContext, cancel := context.WithTimeout(ctx, api.agentTimeout)
+	if api.dockerSnapshots == nil {
+		return docker.Inventory{}, dockerrealtime.ErrUnavailable
+	}
+	requestContext, cancel := context.WithTimeout(ctx, dockerrealtime.RefreshTimeout)
 	defer cancel()
-	return api.agent.CollectDockerInventory(requestContext, api.agentSocketPath)
-}
-
-func (api *handler) recordMetricSample(ctx context.Context, summary system.Summary) {
-	if api.controlStore == nil {
-		return
-	}
-	metric := summary.MetricSample()
-	temperatures := make([]controlstore.MetricTemperature, 0, len(metric.Temperatures))
-	for _, temperature := range metric.Temperatures {
-		temperatures = append(temperatures, controlstore.MetricTemperature{
-			Name:               temperature.Name,
-			TemperatureCelsius: temperature.TemperatureCelsius,
-		})
-	}
-	_ = api.controlStore.RecordMetricSample(ctx, controlstore.MetricSample{
-		CollectedAt:     metric.CollectedAt,
-		CPUPercent:      metric.CPUPercent,
-		MemoryPercent:   metric.MemoryPercent,
-		Load1:           metric.Load1,
-		DiskPercent:     metric.DiskPercent,
-		NetworkReceive:  metric.NetworkReceive,
-		NetworkTransmit: metric.NetworkTransmit,
-		DiskReadBytes:   metric.DiskReadBytes,
-		DiskWriteBytes:  metric.DiskWriteBytes,
-		Temperatures:    temperatures,
-	})
+	return api.dockerSnapshots.Refresh(requestContext)
 }
 
 func (api *handler) writeError(response http.ResponseWriter, request *http.Request, status int, code, message string) {

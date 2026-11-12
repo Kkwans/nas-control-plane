@@ -55,6 +55,19 @@ describe('docker lifecycle decisions', () => {
     expect(dockerProjectDeleteDisabledReason({ ...project, name: 'NAS-Control-Plane', state: 'stopped', runningCount: 0 })).toContain('受保护')
   })
 
+  it.each(['stop', 'restart'] as const)('describes Compose %s scope as execution-time configuration, not an observed target guarantee', (action) => {
+    const label = action === 'stop' ? '停止' : '重启'
+    const interruption = action === 'stop' ? '服务会中断' : '期间服务会短暂中断'
+    expect(dockerProjectActionConfirmation(project, action, 3)).toBe(`将通过 Compose ${label}项目“媒体服务”。确认前最近一次清单观察到该项目 3 个容器；实际操作范围由执行时的 Compose 配置决定。${interruption}，镜像、卷、Compose 文件和工作目录不会删除。`)
+    expect(dockerProjectActionConfirmation(project, action, 3)).not.toContain('逐项重启')
+  })
+
+  it('preserves standalone confirmation copy exactly', () => {
+    const standalone = { ...project, kind: 'standalone' as const }
+    expect(dockerProjectActionConfirmation(standalone, 'stop', 2)).toBe('将停止项目“媒体服务”的 2 个容器。容器会停止，但镜像、卷、Compose 文件和工作目录不会删除。')
+    expect(dockerProjectActionConfirmation(standalone, 'restart', 1)).toBe('将重启项目“媒体服务”的 1 个容器。容器会逐项重启，镜像、卷、Compose 文件和工作目录不会删除。')
+  })
+
   it('explains interruption and preserved resources before confirmation', () => {
     expect(dockerProjectActionConfirmation(project, 'stop', 1)).toContain('镜像、卷、Compose 文件和工作目录不会删除')
     expect(dockerContainerActionConfirmation({ name: 'media-api', image: 'media-api:latest' }, 'restart')).toContain('短暂中断')

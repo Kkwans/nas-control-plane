@@ -15,7 +15,7 @@ const preferences = {
   navigationOrder: ['overview', 'sites', 'docker', 'databases', 'logs', 'monitoring', 'system', 'users', 'terminal', 'settings'],
 }
 
-const summary = {
+export const summary = {
   collectedAt,
   host: {
     hostname: 'ncp-fixture',
@@ -83,7 +83,7 @@ const docker = {
   }],
 }
 
-const overviewDocker = {
+export const overviewDocker = {
   ...docker,
   engine: { ...docker.engine, containers: 2, containersRunning: 2, containersStopped: 0 },
   containers: docker.containers.slice(0, 2).map((container) => ({ ...container, state: 'running', status: 'Up 2 hours' })),
@@ -355,8 +355,25 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
-export async function installMockApi(page: Page) {
-  await page.addInitScript((snapshot) => {
+// 创建 fixture 仅模拟持久接纳和精确详情，绝不使用旧同步创建接口。
+export const fixtureCreatedContainerId = 'a'.repeat(64)
+export function creationJobFixture(id: string, status: 'queued' | 'running' | 'completed' = 'queued', started = true) {
+  return {
+    id, type: 'docker-container-create', status, artifactState: 'unknown', cancellable: false,
+    message: status === 'completed' ? '容器创建任务已完成' : '容器创建任务已接纳',
+    progress: status === 'completed' ? 100 : 0, createdAt: collectedAt, updatedAt: collectedAt,
+    downloadedBytes: 0, totalBytes: 0, speedBytes: 0, layers: {},
+    ...(status === 'completed' ? { completedAt: collectedAt, createResult: { containerId: fixtureCreatedContainerId, created: true, started } } : {}),
+  }
+}
+
+export async function installMockApi(page: Page, options: { clock?: boolean; manualRealtime?: boolean } = {}) {
+  let createStarted: boolean | undefined
+  // 普通 fixture 的日期与单调时钟一起前进，定期发出真实的新采集时间。
+  // 过期测试自行安装时钟并选择静默流，生产过期逻辑不作任何例外。
+  if (options.clock !== false) await page.clock.install({ time: new Date(collectedAt) })
+  await page.addInitScript(({ snapshot, autoUpdate }) => {
+    const sources = new Set<MockEventSource>()
     class MockEventSource extends EventTarget {
       static readonly CONNECTING = 0
       static readonly OPEN = 1
@@ -367,28 +384,49 @@ export async function installMockApi(page: Page) {
       onopen: ((event: Event) => void) | null = null
       onmessage: ((event: MessageEvent<string>) => void) | null = null
       onerror: ((event: Event) => void) | null = null
+      private snapshotTimer: number | undefined
 
       constructor(url: string) {
         super()
         this.url = url
+        sources.add(this)
         setTimeout(() => {
           if (this.readyState === MockEventSource.CLOSED) return
           this.readyState = MockEventSource.OPEN
           const openEvent = new Event('open')
           this.onopen?.(openEvent)
           this.dispatchEvent(openEvent)
-          const currentDocker = location.pathname === '/docker' ? snapshot.docker : snapshot.overviewDocker
-          this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify({ ...snapshot, docker: currentDocker }) }))
+          this.sendSnapshot()
+          const requestedInterval = Number(new URL(this.url, location.href).searchParams.get('interval'))
+          const interval = Number.isInteger(requestedInterval) && requestedInterval >= 2 && requestedInterval <= 300 ? requestedInterval : 5
+          if (autoUpdate) this.snapshotTimer = window.setInterval(() => this.sendSnapshot(), interval * 1000)
         }, 0)
       }
 
+      sendSnapshot() {
+        if (this.readyState !== MockEventSource.OPEN) return
+        const collectedAt = new Date().toISOString()
+        const currentDocker = location.pathname === '/docker' ? snapshot.docker : snapshot.overviewDocker
+        this.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify({ collectedAt, summary: { ...snapshot.summary, collectedAt }, docker: { ...currentDocker, collectedAt } }) }))
+      }
+
       close() {
+        if (this.snapshotTimer !== undefined) clearInterval(this.snapshotTimer)
+        sources.delete(this)
         this.readyState = MockEventSource.CLOSED
       }
     }
 
+    window.addEventListener('ncp:realtime-fixture', (event) => {
+      const detail = (event as CustomEvent<{ action?: 'open' | 'error'; snapshot?: unknown }>).detail
+      for (const source of sources) {
+        if (detail.action === 'open') source.onopen?.(new Event('open'))
+        else if (detail.action === 'error') source.onerror?.(new Event('error'))
+        else source.dispatchEvent(new MessageEvent('snapshot', { data: JSON.stringify(detail.snapshot) }))
+      }
+    })
     window.EventSource = MockEventSource as unknown as typeof EventSource
-  }, { collectedAt, summary, docker, overviewDocker })
+  }, { snapshot: { collectedAt, summary, docker, overviewDocker }, autoUpdate: options.manualRealtime !== true })
 
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
@@ -401,8 +439,8 @@ export async function installMockApi(page: Page) {
     }
     if (path === '/api/v1/sites') return json(route, sites)
     if (path === '/api/v1/sites/ignored') return json(route, [])
-    if (path === '/api/v1/system/summary') return json(route, summary)
-    if (path === '/api/v1/docker/inventory') return json(route, page.url().includes('/docker') ? docker : overviewDocker)
+    if (path === '/api/v1/system/summary') return json(route, { ...summary, collectedAt: await page.evaluate(() => new Date().toISOString()) })
+    if (path === '/api/v1/docker/inventory') return json(route, { ...(page.url().includes('/docker') ? docker : overviewDocker), collectedAt: await page.evaluate(() => new Date().toISOString()) })
     if (path === '/api/v1/docker/resources') return json(route, dockerResources)
     if (path === '/api/v1/docker/images') return json(route, dockerImages)
     if (path === '/api/v1/files/entries') {
@@ -424,13 +462,17 @@ export async function installMockApi(page: Page) {
         downloadedBytes: 0, totalBytes: body.expectedBytes || 0, speedBytes: 0, layers: {},
       })
     }
-    if (path === '/api/v1/docker/containers' && route.request().method() === 'POST') {
-      const body = route.request().postDataJSON() as { image?: string; name?: string; runContainer?: boolean }
-      return json(route, {
-        containerId: 'created-fixture', name: body.name || 'created-fixture', image: body.image || 'unknown',
-        state: body.runContainer ? 'running' : 'stopped', created: true, started: Boolean(body.runContainer), runContainer: Boolean(body.runContainer),
-      }, 201)
+    if (path === '/api/v1/docker/containers/create-jobs' && route.request().method() === 'POST' && !new URL(route.request().url()).search) {
+      if (createStarted !== undefined) return json(route, { code: 'FIXTURE_DUPLICATE_CREATE', message: '禁止重放创建' }, 503)
+      const body = route.request().postDataJSON() as { runContainer: boolean }
+      createStarted = body.runContainer
+      return json(route, creationJobFixture('job-create-fixture'), 202)
     }
+    if (path === '/api/v1/docker/containers/create-jobs') return json(route, { code: 'FIXTURE_CREATE_ROUTE_DENIED', message: '创建路径只接受精确 POST' }, 503)
+    if (path === '/api/v1/docker/containers' && route.request().method() === 'POST') return json(route, { code: 'FIXTURE_LEGACY_CREATE_DENIED', message: '禁止回退同步创建' }, 503)
+    if (path === '/api/v1/jobs/job-create-fixture' && route.request().method() === 'GET' && createStarted !== undefined) return json(route, creationJobFixture('job-create-fixture', 'completed', createStarted))
+    if (path.startsWith('/api/v1/jobs/')) return json(route, { code: 'FIXTURE_UNKNOWN_JOB', message: '未授权的任务详情' }, 404)
+    if (path === '/api/v1/jobs' && new URL(route.request().url()).searchParams.get('type') === 'docker-container-create') return json(route, { jobs: [] })
     if (path === '/api/v1/jobs') return json(route, dockerImageJobs)
     if (path.startsWith('/api/v1/docker/compose/projects/') && path.includes('/actions/')) {
       const segments = path.split('/')
@@ -475,6 +517,15 @@ export async function installMockApi(page: Page) {
     if (path === '/api/v1/system/details') return json(route, systemDetails)
     if (path === '/api/v1/system/dns/capability') return json(route, systemDetails.dns)
     if (path === '/api/v1/proxy/mihomo/inspect') return json(route, mihomoInspection)
+    if (path === '/api/v1/monitoring/alerts') {
+      // 默认关闭；启用与故障语义由 resource-alerts.spec.ts 的独立内存 fixture 覆盖。
+      const alertRule = (kind: 'cpu' | 'memory') => ({
+        id: `host.${kind}.high`, severity: 'warning', triggerPercent: 90, recoveryPercent: kind === 'cpu' ? 80 : 85,
+        triggerSeconds: 120, recoverySeconds: 60, condition: 'normal', availability: 'unknown', reasonCode: 'MONITORING_ALERTS_NO_SAMPLE',
+        sampleAt: null, receivedAt: null, value: null, pendingSince: null, firingSince: null, recoveringSince: null, lastRecoveredAt: null,
+      })
+      return json(route, { enabled: false, observedAt: collectedAt, startedAt: collectedAt, rules: { cpu: alertRule('cpu'), memory: alertRule('memory') } })
+    }
     if (path === '/api/v1/monitoring/samples') return json(route, [])
     if (path === '/api/v1/logs') return json(route, { collectedAt, entries: [], nextCursor: '' })
     if (path === '/api/v1/users') return json(route, [])

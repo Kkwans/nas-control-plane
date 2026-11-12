@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,6 @@ func TestContainerStarterRejectsStoppedTargetBeforeOpeningExec(t *testing.T) {
 
 func TestContainerStarterUsesSelectedTargetAndClosesAttachment(t *testing.T) {
 	closed := false
-	closeWrite := false
 	var input bytes.Buffer
 	gateway := &fakeContainerGateway{
 		info: ContainerInfo{
@@ -39,11 +38,9 @@ func TestContainerStarterUsesSelectedTargetAndClosesAttachment(t *testing.T) {
 			Running: true,
 		},
 		attachment: ContainerAttachment{
-			ExecID:     "exec-123",
-			Reader:     bytes.NewBuffer(nil),
-			Writer:     &input,
-			Close:      func() error { closed = true; return nil },
-			CloseWrite: func() error { closeWrite = true; return nil },
+			ExecID: "exec-123",
+			Reader: bytes.NewBuffer(nil),
+			Conn:   &cleanupConn{writeFn: input.Write, deadlineFn: func(time.Time) error { return nil }, closeFn: func() error { closed = true; return nil }},
 		},
 	}
 	starter := newContainerStarter(gateway)
@@ -61,7 +58,7 @@ func TestContainerStarterUsesSelectedTargetAndClosesAttachment(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("close container terminal: %v", err)
 	}
-	if !closed || !closeWrite || gateway.waitID != "exec-123" || gateway.resizeID != "exec-123" || gateway.resizeRows != 34 || gateway.resizeCols != 120 {
+	if !closed || gateway.waitID != "exec-123" || gateway.resizeID != "exec-123" || gateway.resizeRows != 34 || gateway.resizeCols != 120 {
 		t.Fatalf("close/resize state = %#v", gateway)
 	}
 	if got := input.String(); got != "\x03exit\n" {
@@ -146,19 +143,12 @@ func TestContainerShellMetadataReportsBusyBoxNativeFallback(t *testing.T) {
 }
 
 func TestContainerSessionReadHonorsContextCancellation(t *testing.T) {
-	reader, writer := io.Pipe()
-	t.Cleanup(func() {
-		_ = reader.Close()
-		_ = writer.Close()
-	})
+	reader, writer := net.Pipe()
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
 	readCanceled := make(chan struct{})
-	session := &containerSession{attachment: ContainerAttachment{
-		Reader: reader,
-		CancelRead: func() error {
-			close(readCanceled)
-			return reader.Close()
-		},
-	}}
+	conn := &cleanupConn{Conn: reader, closeFn: func() error { close(readCanceled); return reader.Close() }}
+	session := newContainerSession(context.Background(), &fakeContainerGateway{}, ContainerAttachment{Reader: conn, Conn: conn})
+	t.Cleanup(func() { _ = session.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {

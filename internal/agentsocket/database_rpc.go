@@ -12,14 +12,15 @@ import (
 const agentDatabaseServiceName = "ncp.agent.v1.AgentDatabaseService"
 
 const (
-	AgentDatabaseDiscoverMethod       = "/ncp.agent.v1.AgentDatabaseService/Discover"
-	AgentDatabaseTestConnectionMethod = "/ncp.agent.v1.AgentDatabaseService/TestConnection"
-	AgentDatabaseCatalogMethod        = "/ncp.agent.v1.AgentDatabaseService/Catalog"
-	AgentDatabaseQueryMethod          = "/ncp.agent.v1.AgentDatabaseService/Query"
-	AgentDatabaseRowsMethod           = "/ncp.agent.v1.AgentDatabaseService/Rows"
-	AgentDatabaseInsertMethod         = "/ncp.agent.v1.AgentDatabaseService/Insert"
-	AgentDatabaseUpdateMethod         = "/ncp.agent.v1.AgentDatabaseService/Update"
-	AgentDatabaseDeleteMethod         = "/ncp.agent.v1.AgentDatabaseService/Delete"
+	AgentDatabaseDiscoverMethod         = "/ncp.agent.v1.AgentDatabaseService/Discover"
+	AgentDatabaseTestConnectionMethod   = "/ncp.agent.v1.AgentDatabaseService/TestConnection"
+	AgentDatabaseCatalogMethod          = "/ncp.agent.v1.AgentDatabaseService/Catalog"
+	AgentDatabaseQueryMethod            = "/ncp.agent.v1.AgentDatabaseService/Query"
+	AgentDatabaseQueryWithOptionsMethod = "/ncp.agent.v1.AgentDatabaseService/QueryWithOptions"
+	AgentDatabaseRowsMethod             = "/ncp.agent.v1.AgentDatabaseService/Rows"
+	AgentDatabaseInsertMethod           = "/ncp.agent.v1.AgentDatabaseService/Insert"
+	AgentDatabaseUpdateMethod           = "/ncp.agent.v1.AgentDatabaseService/Update"
+	AgentDatabaseDeleteMethod           = "/ncp.agent.v1.AgentDatabaseService/Delete"
 )
 
 type AgentDatabaseServiceClient interface {
@@ -37,6 +38,12 @@ type AgentDatabaseConnectionServiceClient interface {
 	TestConnection(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
 }
 
+// AgentDatabaseQueryOptionsServiceClient 保持旧客户端必需方法集合不变。
+type AgentDatabaseQueryOptionsServiceClient interface {
+	AgentDatabaseServiceClient
+	QueryWithOptions(context.Context, *structpb.Struct, ...grpc.CallOption) (*structpb.Struct, error)
+}
+
 type agentDatabaseServiceClient struct {
 	connection grpc.ClientConnInterface
 }
@@ -46,6 +53,10 @@ func NewAgentDatabaseServiceClient(connection grpc.ClientConnInterface) AgentDat
 }
 
 func NewAgentDatabaseConnectionServiceClient(connection grpc.ClientConnInterface) AgentDatabaseConnectionServiceClient {
+	return &agentDatabaseServiceClient{connection: connection}
+}
+
+func NewAgentDatabaseQueryOptionsServiceClient(connection grpc.ClientConnInterface) AgentDatabaseQueryOptionsServiceClient {
 	return &agentDatabaseServiceClient{connection: connection}
 }
 
@@ -68,6 +79,9 @@ func (c *agentDatabaseServiceClient) Catalog(ctx context.Context, in *structpb.S
 }
 func (c *agentDatabaseServiceClient) Query(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
 	return c.invoke(ctx, AgentDatabaseQueryMethod, in, options...)
+}
+func (c *agentDatabaseServiceClient) QueryWithOptions(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
+	return c.invoke(ctx, AgentDatabaseQueryWithOptionsMethod, in, options...)
 }
 func (c *agentDatabaseServiceClient) Rows(ctx context.Context, in *structpb.Struct, options ...grpc.CallOption) (*structpb.Struct, error) {
 	return c.invoke(ctx, AgentDatabaseRowsMethod, in, options...)
@@ -95,6 +109,12 @@ type AgentDatabaseServiceServer interface {
 type AgentDatabaseConnectionServiceServer interface {
 	AgentDatabaseServiceServer
 	TestConnection(context.Context, *structpb.Struct) (*structpb.Struct, error)
+}
+
+// AgentDatabaseQueryOptionsServiceServer 是可选扩展，旧服务仍可注册。
+type AgentDatabaseQueryOptionsServiceServer interface {
+	AgentDatabaseServiceServer
+	QueryWithOptions(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func RegisterAgentDatabaseServiceServer(server grpc.ServiceRegistrar, implementation AgentDatabaseServiceServer) {
@@ -137,6 +157,13 @@ var agentDatabaseServiceDescription = grpc.ServiceDesc{
 		})},
 		{MethodName: "Query", Handler: databaseUnaryHandler(AgentDatabaseQueryMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
 			return s.Query(ctx, r)
+		})},
+		{MethodName: "QueryWithOptions", Handler: databaseUnaryHandler(AgentDatabaseQueryWithOptionsMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
+			implementation, ok := s.(AgentDatabaseQueryOptionsServiceServer)
+			if !ok {
+				return nil, grpcstatus.Error(codes.Unimplemented, "database result modes are unavailable")
+			}
+			return implementation.QueryWithOptions(ctx, r)
 		})},
 		{MethodName: "Rows", Handler: databaseUnaryHandler(AgentDatabaseRowsMethod, func(s AgentDatabaseServiceServer, ctx context.Context, r *structpb.Struct) (*structpb.Struct, error) {
 			return s.Rows(ctx, r)

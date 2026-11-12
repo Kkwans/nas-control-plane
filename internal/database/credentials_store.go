@@ -3,21 +3,25 @@ package database
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Kkwans/nas-control-plane/internal/sqliteconn"
 )
 
 var errCredentialNotFound = errors.New("credential record not found")
+
+// errCredentialConflict 保留可判定的内部标识，对外只返回稳定错误码。
+var errCredentialConflict = errors.New("credential snapshot conflict")
 
 // StoredCredential contains persistence metadata and authenticated ciphertext
 // only. Passwords and tokens are never columns in this record.
 type StoredCredential struct {
 	SourceID         string
+	Revision         int64
 	Driver           Driver
 	Endpoint         string
 	Username         string
@@ -30,8 +34,22 @@ type StoredCredential struct {
 	UpdatedAt        time.Time
 }
 
+// CredentialBaseline 是同一次查询取得的版本和存在状态。删除后版本仍保留，
+// 因而不存在的记录也有可用于 CAS 的基线；只有从未出现的 source 版本为零。
+type CredentialBaseline struct {
+	SourceID string
+	Revision int64
+	Exists   bool
+}
+
+type CredentialSnapshot struct {
+	Baseline CredentialBaseline
+	Record   StoredCredential
+}
+
 type CredentialRotationUpdate struct {
 	SourceID         string
+	Expected         CredentialBaseline
 	Ciphertext       []byte
 	KeyVersion       int
 	AutomaticEnabled bool
@@ -40,6 +58,7 @@ type CredentialRotationUpdate struct {
 
 type CredentialRotationDisable struct {
 	SourceID string
+	Expected CredentialBaseline
 	Code     ErrorCode
 }
 
@@ -48,9 +67,10 @@ type CredentialRotationDisable struct {
 type CredentialStore interface {
 	Migrate(context.Context) error
 	GetCredential(context.Context, string) (StoredCredential, error)
-	PutCredential(context.Context, StoredCredential) error
+	ReadCredentialSnapshot(context.Context, string) (CredentialSnapshot, error)
+	CompareAndSwapCredential(context.Context, CredentialBaseline, StoredCredential) error
 	ListCredentials(context.Context) ([]StoredCredential, error)
-	DisableAutomatic(context.Context, string, ErrorCode) error
+	DisableAutomaticIfUnchanged(context.Context, CredentialBaseline, ErrorCode) error
 	ApplyRotation(context.Context, []CredentialRotationUpdate, []CredentialRotationDisable) error
 	DeleteCredential(context.Context, string) error
 }
@@ -79,7 +99,7 @@ func OpenSQLiteCredentialStore(path string) (*SQLiteCredentialStore, error) {
 	if err := os.MkdirAll(filepath.Dir(filepath.Clean(path)), 0o750); err != nil {
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_store_open", Cause: err}
 	}
-	database, err := sql.Open("sqlite", path)
+	database, err := sqliteconn.Open(path, "PRAGMA busy_timeout = 5000")
 	if err != nil {
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_store_open", Cause: err}
 	}
@@ -141,6 +161,41 @@ CREATE TABLE IF NOT EXISTS ncp_database_credentials (
 			`ALTER TABLE ncp_database_credentials ADD COLUMN last_error_code TEXT NOT NULL DEFAULT ''`,
 			`CREATE INDEX IF NOT EXISTS ncp_database_credentials_auto_idx
 				ON ncp_database_credentials(automatic_enabled, updated_at_unix DESC)`,
+		},
+	},
+	{
+		Version: 3,
+		Statements: []string{
+			`CREATE TABLE ncp_database_credential_revisions (
+				source_id TEXT PRIMARY KEY,
+				revision INTEGER NOT NULL CHECK (typeof(revision) = 'integer' AND revision > 0)
+			)`,
+			`INSERT INTO ncp_database_credential_revisions (source_id, revision)
+				SELECT source_id, 1 FROM ncp_database_credentials`,
+			`CREATE TRIGGER ncp_database_credentials_revision_insert
+				AFTER INSERT ON ncp_database_credentials BEGIN
+				INSERT INTO ncp_database_credential_revisions (source_id, revision) VALUES (NEW.source_id, 1)
+				ON CONFLICT(source_id) DO UPDATE SET revision = ncp_database_credential_revisions.revision + 1;
+			END`,
+			`CREATE TRIGGER ncp_database_credentials_revision_delete
+				AFTER DELETE ON ncp_database_credentials BEGIN
+				INSERT INTO ncp_database_credential_revisions (source_id, revision) VALUES (OLD.source_id, 1)
+				ON CONFLICT(source_id) DO UPDATE SET revision = ncp_database_credential_revisions.revision + 1;
+			END`,
+			`CREATE TRIGGER ncp_database_credentials_revision_update
+				AFTER UPDATE OF driver, endpoint, username, database_name, ciphertext, key_version,
+					automatic_enabled, last_error_code ON ncp_database_credentials
+				WHEN OLD.driver IS NOT NEW.driver OR OLD.endpoint IS NOT NEW.endpoint
+					OR OLD.username IS NOT NEW.username OR OLD.database_name IS NOT NEW.database_name
+					OR OLD.ciphertext IS NOT NEW.ciphertext OR OLD.key_version IS NOT NEW.key_version
+					OR OLD.automatic_enabled IS NOT NEW.automatic_enabled OR OLD.last_error_code IS NOT NEW.last_error_code
+				BEGIN
+				INSERT INTO ncp_database_credential_revisions (source_id, revision) VALUES (NEW.source_id, 1)
+				ON CONFLICT(source_id) DO UPDATE SET revision = ncp_database_credential_revisions.revision + 1;
+			END`,
+			`CREATE TRIGGER ncp_database_credentials_source_immutable
+				BEFORE UPDATE OF source_id ON ncp_database_credentials WHEN OLD.source_id IS NOT NEW.source_id
+				BEGIN SELECT RAISE(ABORT, 'credential source cannot change'); END`,
 		},
 	},
 }
@@ -220,37 +275,76 @@ func (s *SQLiteCredentialStore) applyMigration(ctx context.Context, migration cr
 }
 
 func (s *SQLiteCredentialStore) GetCredential(ctx context.Context, sourceID string) (StoredCredential, error) {
-	if s == nil || s.database == nil {
-		return StoredCredential{}, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_read"}
+	snapshot, err := s.readCredentialSnapshot(ctx, sourceID, "credential_read")
+	if err != nil {
+		return StoredCredential{}, err
 	}
-	var record StoredCredential
-	var driver string
-	var automatic int
-	var lastError string
-	var createdAt, updatedAt int64
-	err := s.database.QueryRowContext(ctx, `
-		SELECT source_id, driver, endpoint, username, database_name, ciphertext, key_version,
-			automatic_enabled, last_error_code, created_at_unix, updated_at_unix
-		FROM ncp_database_credentials WHERE source_id = ?`, strings.TrimSpace(sourceID)).Scan(
-		&record.SourceID, &driver, &record.Endpoint, &record.Username, &record.Database,
-		&record.Ciphertext, &record.KeyVersion, &automatic, &lastError, &createdAt, &updatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+	if !snapshot.Baseline.Exists {
 		return StoredCredential{}, errCredentialNotFound
 	}
-	if err != nil {
-		return StoredCredential{}, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_read", Cause: err}
-	}
-	record.Driver = Driver(driver)
-	record.AutomaticEnabled = automatic != 0
-	record.LastErrorCode = ErrorCode(lastError)
-	record.CreatedAt = time.Unix(createdAt, 0).UTC()
-	record.UpdatedAt = time.Unix(updatedAt, 0).UTC()
-	return record, nil
+	return snapshot.Record, nil
 }
 
-func (s *SQLiteCredentialStore) PutCredential(ctx context.Context, record StoredCredential) error {
+// ReadCredentialSnapshot 只用一条 SELECT 同时读取记录与保留版本，包括不存在的 source。
+func (s *SQLiteCredentialStore) ReadCredentialSnapshot(ctx context.Context, sourceID string) (CredentialSnapshot, error) {
+	if strings.TrimSpace(sourceID) == "" {
+		return CredentialSnapshot{}, credentialPersistenceError("credential_snapshot", errors.New("credential source is empty"))
+	}
+	return s.readCredentialSnapshot(ctx, sourceID, "credential_snapshot")
+}
+
+func (s *SQLiteCredentialStore) readCredentialSnapshot(ctx context.Context, sourceID, operation string) (CredentialSnapshot, error) {
+	failure := func(cause error) (CredentialSnapshot, error) {
+		return CredentialSnapshot{}, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: operation, Cause: cause}
+	}
 	if s == nil || s.database == nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_write"}
+		return failure(nil)
+	}
+	sourceID = strings.TrimSpace(sourceID)
+	var revision sql.NullInt64
+	var id, driver, endpoint, username, databaseName, lastError sql.NullString
+	var keyVersion, automatic sql.Null[int]
+	var createdAt, updatedAt sql.NullInt64
+	var ciphertext []byte
+	err := s.database.QueryRowContext(ctx, `
+		SELECT r.revision, c.source_id, c.driver, c.endpoint, c.username, c.database_name,
+			c.ciphertext, c.key_version, c.automatic_enabled, c.last_error_code, c.created_at_unix, c.updated_at_unix
+		FROM (SELECT ? AS source_id) AS requested
+		LEFT JOIN ncp_database_credential_revisions AS r ON r.source_id = requested.source_id
+		LEFT JOIN ncp_database_credentials AS c ON c.source_id = requested.source_id`, sourceID).Scan(
+		&revision, &id, &driver, &endpoint, &username, &databaseName, &ciphertext,
+		&keyVersion, &automatic, &lastError, &createdAt, &updatedAt)
+	if err != nil {
+		return failure(err)
+	}
+	if (revision.Valid && revision.Int64 <= 0) || (id.Valid && !revision.Valid) {
+		return failure(errors.New("credential revision is invalid"))
+	}
+	snapshot := CredentialSnapshot{Baseline: CredentialBaseline{SourceID: sourceID, Revision: revision.Int64, Exists: id.Valid}}
+	if !id.Valid {
+		return snapshot, nil
+	}
+	if !driver.Valid || !endpoint.Valid || !username.Valid || !databaseName.Valid || ciphertext == nil ||
+		!keyVersion.Valid || !automatic.Valid || !lastError.Valid || !createdAt.Valid || !updatedAt.Valid {
+		return failure(errors.New("credential snapshot is incomplete"))
+	}
+	snapshot.Record = StoredCredential{
+		SourceID: id.String, Revision: revision.Int64, Driver: Driver(driver.String), Endpoint: endpoint.String,
+		Username: username.String, Database: databaseName.String, Ciphertext: append([]byte(nil), ciphertext...),
+		KeyVersion: keyVersion.V, AutomaticEnabled: automatic.V != 0, LastErrorCode: ErrorCode(lastError.String),
+		CreatedAt: time.Unix(createdAt.Int64, 0).UTC(), UpdatedAt: time.Unix(updatedAt.Int64, 0).UTC(),
+	}
+	return snapshot, nil
+}
+
+// CompareAndSwapCredential 只允许替换调用者读取的基线；不会追读后重试。
+func (s *SQLiteCredentialStore) CompareAndSwapCredential(ctx context.Context, expected CredentialBaseline, record StoredCredential) error {
+	const operation = "credential_compare_and_swap"
+	if s == nil || s.database == nil {
+		return credentialPersistenceError(operation, nil)
+	}
+	if err := validateCredentialBaseline(expected, record.SourceID); err != nil {
+		return credentialPersistenceError(operation, err)
 	}
 	if err := validateStoredCredential(record); err != nil {
 		return err
@@ -262,26 +356,159 @@ func (s *SQLiteCredentialStore) PutCredential(ctx context.Context, record Stored
 	if record.UpdatedAt.IsZero() {
 		record.UpdatedAt = now
 	}
-	_, err := s.database.ExecContext(ctx, `
-		INSERT INTO ncp_database_credentials (
-			source_id, driver, endpoint, username, database_name, ciphertext, key_version,
-			automatic_enabled, last_error_code, created_at_unix, updated_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(source_id) DO UPDATE SET
-			driver = excluded.driver,
-			endpoint = excluded.endpoint,
-			username = excluded.username,
-			database_name = excluded.database_name,
-			ciphertext = excluded.ciphertext,
-			key_version = excluded.key_version,
-			automatic_enabled = excluded.automatic_enabled,
-			last_error_code = excluded.last_error_code,
-			updated_at_unix = excluded.updated_at_unix
-	`, record.SourceID, string(record.Driver), record.Endpoint, record.Username, record.Database,
-		record.Ciphertext, record.KeyVersion, boolInt(record.AutomaticEnabled), string(record.LastErrorCode),
-		record.CreatedAt.Unix(), record.UpdatedAt.Unix())
+	var result sql.Result
+	var err error
+	if expected.Exists {
+		result, err = s.database.ExecContext(ctx, `
+			UPDATE ncp_database_credentials SET driver = ?, endpoint = ?, username = ?, database_name = ?,
+				ciphertext = ?, key_version = ?, automatic_enabled = ?, last_error_code = ?, updated_at_unix = ?
+			WHERE source_id = ? AND EXISTS (
+				SELECT 1 FROM ncp_database_credential_revisions AS r
+				WHERE r.source_id = ncp_database_credentials.source_id AND r.revision = ?)`,
+			string(record.Driver), record.Endpoint, record.Username, record.Database, record.Ciphertext,
+			record.KeyVersion, boolInt(record.AutomaticEnabled), string(record.LastErrorCode), record.UpdatedAt.Unix(),
+			record.SourceID, expected.Revision)
+	} else {
+		result, err = s.database.ExecContext(ctx, `
+			INSERT INTO ncp_database_credentials (
+				source_id, driver, endpoint, username, database_name, ciphertext, key_version,
+				automatic_enabled, last_error_code, created_at_unix, updated_at_unix
+			) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM ncp_database_credentials WHERE source_id = ?)
+				AND COALESCE((SELECT revision FROM ncp_database_credential_revisions WHERE source_id = ?), 0) = ?
+			ON CONFLICT(source_id) DO NOTHING`,
+			record.SourceID, string(record.Driver), record.Endpoint, record.Username, record.Database, record.Ciphertext,
+			record.KeyVersion, boolInt(record.AutomaticEnabled), string(record.LastErrorCode),
+			record.CreatedAt.Unix(), record.UpdatedAt.Unix(), record.SourceID, record.SourceID, expected.Revision)
+	}
+	return credentialCASResult(result, err, operation)
+}
+
+// DisableAutomaticIfUnchanged 不追读或重试新基线，防止失败处理禁用刚修复的记录。
+func (s *SQLiteCredentialStore) DisableAutomaticIfUnchanged(ctx context.Context, expected CredentialBaseline, code ErrorCode) error {
+	const operation = "credential_disable_if_unchanged"
+	if s == nil || s.database == nil {
+		return credentialPersistenceError(operation, nil)
+	}
+	if err := validateCredentialBaseline(expected, expected.SourceID); err != nil {
+		return credentialPersistenceError(operation, err)
+	}
+	if !expected.Exists {
+		return &DatabaseError{Code: CodeCredentialConflict, Operation: operation, Cause: errCredentialConflict}
+	}
+	return disableCredentialIfUnchanged(ctx, s.database, expected, code, s.now().UTC().Unix(), operation)
+}
+
+type credentialExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func disableCredentialIfUnchanged(ctx context.Context, executor credentialExecer, expected CredentialBaseline, code ErrorCode, now int64, operation string) error {
+	if CodeFromString(string(code)) == "" {
+		code = CodeKeyRotationFailed
+	}
+	result, err := executor.ExecContext(ctx, `
+		UPDATE ncp_database_credentials SET automatic_enabled = 0, last_error_code = ?, updated_at_unix = ?
+		WHERE source_id = ? AND EXISTS (
+			SELECT 1 FROM ncp_database_credential_revisions AS r
+			WHERE r.source_id = ncp_database_credentials.source_id AND r.revision = ?)`,
+		string(code), now, expected.SourceID, expected.Revision)
+	return credentialCASResult(result, err, operation)
+}
+
+// ApplyRotation 将全部更新和禁用放入同一个短事务；任何冲突或存储失败
+// 均回滚整个批次。它不会调用旧 rotation 的失败处理，也不会禁用并发替换后的记录。
+func (s *SQLiteCredentialStore) ApplyRotation(ctx context.Context, updates []CredentialRotationUpdate, disables []CredentialRotationDisable) error {
+	const operation = "credential_rotate_if_unchanged"
+	if s == nil || s.database == nil {
+		return credentialPersistenceError(operation, nil)
+	}
+	seen := make(map[string]bool, len(updates)+len(disables))
+	validate := func(sourceID string, expected CredentialBaseline) error {
+		if err := validateCredentialBaseline(expected, sourceID); err != nil {
+			return credentialPersistenceError(operation, err)
+		}
+		if !expected.Exists {
+			return &DatabaseError{Code: CodeCredentialConflict, Operation: operation, Cause: errCredentialConflict}
+		}
+		if seen[sourceID] {
+			return credentialPersistenceError(operation, errors.New("duplicate credential rotation source"))
+		}
+		seen[sourceID] = true
+		return nil
+	}
+	for _, update := range updates {
+		if err := validate(update.SourceID, update.Expected); err != nil {
+			return err
+		}
+		if update.KeyVersion <= 0 || len(update.Ciphertext) == 0 ||
+			(update.LastErrorCode != "" && CodeFromString(string(update.LastErrorCode)) == "") {
+			return credentialPersistenceError(operation, errors.New("invalid credential rotation update"))
+		}
+	}
+	for _, disable := range disables {
+		if err := validate(disable.SourceID, disable.Expected); err != nil {
+			return err
+		}
+	}
+	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_write", Cause: err}
+		return credentialPersistenceError(operation, err)
+	}
+	defer transaction.Rollback()
+	now := s.now().UTC().Unix()
+	for _, update := range updates {
+		result, err := transaction.ExecContext(ctx, `
+			UPDATE ncp_database_credentials SET ciphertext = ?, key_version = ?, automatic_enabled = ?,
+				last_error_code = ?, updated_at_unix = ?
+			WHERE source_id = ? AND EXISTS (
+				SELECT 1 FROM ncp_database_credential_revisions AS r
+				WHERE r.source_id = ncp_database_credentials.source_id AND r.revision = ?)`,
+			update.Ciphertext, update.KeyVersion, boolInt(update.AutomaticEnabled), string(update.LastErrorCode),
+			now, update.SourceID, update.Expected.Revision)
+		if err := credentialCASResult(result, err, operation); err != nil {
+			return err
+		}
+	}
+	for _, disable := range disables {
+		if err := disableCredentialIfUnchanged(ctx, transaction, disable.Expected, disable.Code, now, operation); err != nil {
+			return err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return credentialPersistenceError(operation, err)
+	}
+	return nil
+}
+
+func validateCredentialBaseline(expected CredentialBaseline, sourceID string) error {
+	if strings.TrimSpace(expected.SourceID) == "" || expected.SourceID != sourceID ||
+		expected.Revision < 0 || (expected.Exists && expected.Revision == 0) {
+		return errors.New("credential baseline is invalid")
+	}
+	return nil
+}
+
+func credentialPersistenceError(operation string, cause error) error {
+	return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: operation, Cause: cause}
+}
+
+func credentialCASResult(result sql.Result, err error, operation string) error {
+	if err != nil {
+		return credentialPersistenceError(operation, err)
+	}
+	if result == nil {
+		return credentialPersistenceError(operation, errors.New("credential write result is missing"))
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return credentialPersistenceError(operation, err)
+	}
+	if affected == 0 {
+		return &DatabaseError{Code: CodeCredentialConflict, Operation: operation, Cause: errCredentialConflict}
+	}
+	if affected != 1 {
+		return credentialPersistenceError(operation, errors.New("credential write row count is invalid"))
 	}
 	return nil
 }
@@ -291,9 +518,11 @@ func (s *SQLiteCredentialStore) ListCredentials(ctx context.Context) ([]StoredCr
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_list"}
 	}
 	rows, err := s.database.QueryContext(ctx, `
-		SELECT source_id, driver, endpoint, username, database_name, ciphertext, key_version,
-			automatic_enabled, last_error_code, created_at_unix, updated_at_unix
-		FROM ncp_database_credentials ORDER BY updated_at_unix DESC, source_id`)
+		SELECT c.source_id, c.driver, c.endpoint, c.username, c.database_name, c.ciphertext, c.key_version,
+			c.automatic_enabled, c.last_error_code, c.created_at_unix, c.updated_at_unix, COALESCE(r.revision, 0)
+		FROM ncp_database_credentials AS c
+		LEFT JOIN ncp_database_credential_revisions AS r ON r.source_id = c.source_id
+		ORDER BY c.updated_at_unix DESC, c.source_id`)
 	if err != nil {
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_list", Cause: err}
 	}
@@ -305,9 +534,13 @@ func (s *SQLiteCredentialStore) ListCredentials(ctx context.Context) ([]StoredCr
 		var automatic int
 		var createdAt, updatedAt int64
 		if err := rows.Scan(&record.SourceID, &driver, &record.Endpoint, &record.Username, &record.Database,
-			&record.Ciphertext, &record.KeyVersion, &automatic, &lastError, &createdAt, &updatedAt); err != nil {
+			&record.Ciphertext, &record.KeyVersion, &automatic, &lastError, &createdAt, &updatedAt, &record.Revision); err != nil {
 			return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_list", Cause: err}
 		}
+		if record.Revision <= 0 {
+			return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_list", Cause: errors.New("credential revision is invalid")}
+		}
+		record.Ciphertext = append([]byte(nil), record.Ciphertext...)
 		record.Driver = Driver(driver)
 		record.AutomaticEnabled = automatic != 0
 		record.LastErrorCode = ErrorCode(lastError)
@@ -319,70 +552,6 @@ func (s *SQLiteCredentialStore) ListCredentials(ctx context.Context) ([]StoredCr
 		return nil, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_list", Cause: err}
 	}
 	return result, nil
-}
-
-func (s *SQLiteCredentialStore) DisableAutomatic(ctx context.Context, sourceID string, code ErrorCode) error {
-	if s == nil || s.database == nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_disable"}
-	}
-	if CodeFromString(string(code)) == "" {
-		code = CodeKeyRotationFailed
-	}
-	result, err := s.database.ExecContext(ctx, `
-		UPDATE ncp_database_credentials SET automatic_enabled = 0, last_error_code = ?, updated_at_unix = ?
-		WHERE source_id = ?`, string(code), s.now().UTC().Unix(), strings.TrimSpace(sourceID))
-	if err != nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_disable", Cause: err}
-	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		return errCredentialNotFound
-	}
-	return nil
-}
-
-func (s *SQLiteCredentialStore) ApplyRotation(ctx context.Context, updates []CredentialRotationUpdate, disables []CredentialRotationDisable) error {
-	if s == nil || s.database == nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_rotate"}
-	}
-	transaction, err := s.database.BeginTx(ctx, nil)
-	if err != nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_rotate", Cause: err}
-	}
-	rollback := func(cause error) error {
-		_ = transaction.Rollback()
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_rotate", Cause: cause}
-	}
-	now := s.now().UTC().Unix()
-	for _, update := range updates {
-		if update.SourceID == "" || update.KeyVersion <= 0 || len(update.Ciphertext) == 0 {
-			return rollback(errors.New("invalid credential rotation update"))
-		}
-		result, err := transaction.ExecContext(ctx, `
-			UPDATE ncp_database_credentials SET ciphertext = ?, key_version = ?, automatic_enabled = ?,
-				last_error_code = ?, updated_at_unix = ? WHERE source_id = ?`,
-			update.Ciphertext, update.KeyVersion, boolInt(update.AutomaticEnabled), string(update.LastErrorCode), now, update.SourceID)
-		if err != nil {
-			return rollback(err)
-		}
-		if affected, _ := result.RowsAffected(); affected == 0 {
-			return rollback(errCredentialNotFound)
-		}
-	}
-	for _, disable := range disables {
-		code := disable.Code
-		if CodeFromString(string(code)) == "" {
-			code = CodeKeyRotationFailed
-		}
-		if _, err := transaction.ExecContext(ctx, `
-			UPDATE ncp_database_credentials SET automatic_enabled = 0, last_error_code = ?, updated_at_unix = ?
-			WHERE source_id = ?`, string(code), now, disable.SourceID); err != nil {
-			return rollback(err)
-		}
-	}
-	if err := transaction.Commit(); err != nil {
-		return &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_rotate", Cause: err}
-	}
-	return nil
 }
 
 func (s *SQLiteCredentialStore) DeleteCredential(ctx context.Context, sourceID string) error {
@@ -437,11 +606,82 @@ func (v *CredentialVault) Migrate(ctx context.Context) error {
 	return v.store.Migrate(ctx)
 }
 
-// Save is deliberately a low-level encrypted write. ConnectionCoordinator is
-// the public workflow that calls it only after a successful manual test.
-func (v *CredentialVault) Save(ctx context.Context, source Source, credentials Credentials) (SavedCredential, error) {
+// preparedCredentialWrite 在测试前固定 source、凭据与基线；保存阶段禁止重新读取基线。
+type preparedCredentialWrite struct {
+	source      Source
+	credentials Credentials
+	baseline    CredentialBaseline
+}
+
+// 包内兼容入口与公开边界使用同一深复制合同。
+func cloneCredentials(credentials Credentials) Credentials {
+	return CloneCredentials(credentials)
+}
+
+func (v *CredentialVault) prepareManual(ctx context.Context, source Source, credentials Credentials) (preparedCredentialWrite, error) {
 	if v == nil || v.store == nil || v.keys == nil {
-		return SavedCredential{}, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_save"}
+		return preparedCredentialWrite{}, credentialPersistenceError("credential_prepare", nil)
+	}
+	if err := contextError(ctx); err != nil {
+		return preparedCredentialWrite{}, err
+	}
+	source.Tags = append([]string(nil), source.Tags...)
+	credentials = cloneCredentials(credentials)
+	if err := validateCredentialTarget(source, credentials); err != nil {
+		return preparedCredentialWrite{}, err
+	}
+	snapshot, err := v.store.ReadCredentialSnapshot(ctx, source.ID)
+	if err != nil {
+		return preparedCredentialWrite{}, err
+	}
+	if credentials.TLS == nil && snapshot.Baseline.Exists {
+		// 省略策略不表示撤销。包括 disabled 记录在内，先认证原始绑定，
+		// 再继承策略；永不借用原用户名、密码或 token。
+		saved, err := v.authenticatedRecord(ctx, source, snapshot, false)
+		if err != nil {
+			return preparedCredentialWrite{}, err
+		}
+		credentials.TLS = saved.TLS
+		if err := validateCredentialTarget(source, credentials); err != nil {
+			return preparedCredentialWrite{}, err
+		}
+	}
+	return preparedCredentialWrite{source: source, credentials: credentials, baseline: snapshot.Baseline}, nil
+}
+
+// authenticatedRecord 只使用同一快照，失败仅条件禁用该版本。新凭据带有
+// 显式有效严格策略时可跳过旧记录的认证来修复它，但仍须遵守原 CAS 基线。
+func (v *CredentialVault) authenticatedRecord(ctx context.Context, source Source, snapshot CredentialSnapshot, requireBinding bool) (Credentials, error) {
+	record := snapshot.Record
+	bindingMatches := record.Driver == source.Driver && record.Endpoint == sourceEndpoint(source, record.Database)
+	if requireBinding && !bindingMatches {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, CodeCredentialsRequired)
+		return Credentials{}, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
+	}
+	credentials, err := DecryptCredentials(ctx, v.keys, credentialAAD(record.SourceID, record.Driver, record.Endpoint), record.Ciphertext)
+	if err == nil && credentials.TLS != nil && !bindingMatches {
+		err = newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
+	}
+	if err == nil && credentials.TLS != nil {
+		if policyErr := validateCredentialTLSTarget(source, credentials.TLS); policyErr != nil {
+			err = newDatabaseError(CodeCredentialCorrupt, source, "credential_resolve", nil)
+		}
+	}
+	if err != nil {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, ErrorCodeOf(err))
+		return Credentials{}, err
+	}
+	return CloneCredentials(credentials), nil
+}
+
+// savePrepared 只供成功测试分支使用，不能创建无 expected 的兼容写入口。
+func (v *CredentialVault) savePrepared(ctx context.Context, prepared preparedCredentialWrite) (SavedCredential, error) {
+	if v == nil || v.store == nil || v.keys == nil {
+		return SavedCredential{}, credentialPersistenceError("credential_save", nil)
+	}
+	source, credentials := prepared.source, prepared.credentials
+	if err := validateCredentialBaseline(prepared.baseline, source.ID); err != nil {
+		return SavedCredential{}, credentialPersistenceError("credential_save", err)
 	}
 	if err := validateCredentialTarget(source, credentials); err != nil {
 		return SavedCredential{}, err
@@ -458,7 +698,7 @@ func (v *CredentialVault) Save(ctx context.Context, source Source, credentials C
 		Username: credentials.Username, Database: databaseName, Ciphertext: ciphertext,
 		KeyVersion: keyVersion, AutomaticEnabled: true, UpdatedAt: now, CreatedAt: now,
 	}
-	if err := v.store.PutCredential(ctx, record); err != nil {
+	if err := v.store.CompareAndSwapCredential(ctx, prepared.baseline, record); err != nil {
 		return SavedCredential{}, err
 	}
 	return toSavedCredential(record), nil
@@ -468,24 +708,25 @@ func (v *CredentialVault) Resolve(ctx context.Context, source Source) (Credentia
 	if v == nil || v.store == nil || v.keys == nil {
 		return Credentials{}, false, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_resolve"}
 	}
-	if source.Driver == DriverSQLite {
-		return Credentials{}, true, nil
+	if err := contextError(ctx); err != nil {
+		return Credentials{}, false, err
 	}
-	record, err := v.store.GetCredential(ctx, source.ID)
-	if errors.Is(err, errCredentialNotFound) {
-		return Credentials{}, false, nil
-	}
+	source.Tags = append([]string(nil), source.Tags...)
+	snapshot, err := v.store.ReadCredentialSnapshot(ctx, source.ID)
 	if err != nil {
 		return Credentials{}, false, err
 	}
-	if !record.AutomaticEnabled || record.Driver != source.Driver || record.Endpoint != sourceEndpoint(source, record.Database) {
-		_ = v.store.DisableAutomatic(ctx, source.ID, CodeCredentialsRequired)
-		return Credentials{}, false, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", errors.New("automatic credentials are disabled"))
+	if !snapshot.Baseline.Exists {
+		// 仅真正没有旧记录的 SQLite 可以走无凭据路径。
+		return Credentials{}, source.Driver == DriverSQLite, nil
 	}
-	credentials, err := DecryptCredentials(ctx, v.keys, credentialAAD(record.SourceID, record.Driver, record.Endpoint), record.Ciphertext)
+	credentials, err := v.authenticatedRecord(ctx, source, snapshot, true)
 	if err != nil {
-		_ = v.store.DisableAutomatic(ctx, source.ID, ErrorCodeOf(err))
 		return Credentials{}, false, err
+	}
+	if !snapshot.Record.AutomaticEnabled {
+		_ = v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, CodeCredentialsRequired)
+		return Credentials{}, false, newDatabaseError(CodeCredentialsRequired, source, "credential_resolve", nil)
 	}
 	return credentials, true, nil
 }
@@ -517,66 +758,80 @@ func (v *CredentialVault) DisableAutomatic(ctx context.Context, sourceID string,
 	if code == "" {
 		code = CodeKeyRotationFailed
 	}
-	return v.store.DisableAutomatic(ctx, sourceID, code)
+	snapshot, err := v.store.ReadCredentialSnapshot(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	if !snapshot.Baseline.Exists {
+		return errCredentialNotFound
+	}
+	return v.store.DisableAutomaticIfUnchanged(ctx, snapshot.Baseline, code)
 }
 
 func (v *CredentialVault) Delete(ctx context.Context, sourceID string) error {
 	return v.store.DeleteCredential(ctx, sourceID)
 }
 
-// Rotate creates a new deployment key first. If key creation or any
-// re-encryption fails, the old ciphertext is retained and all automatic
-// connections remain disabled; there is no plaintext fallback.
+// Rotate 先固定受影响快照，再发布保留旧版本的新 key，最后原子 CAS 全部密文。
+// CAS 冲突不禁用记录，也不回滚已发布 key：并发保存可能已经使用新版本。
 func (v *CredentialVault) Rotate(ctx context.Context) error {
-	rotator, ok := v.keys.(RotatingKeyProvider)
-	if !ok {
-		return &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: errors.New("key provider cannot rotate")}
+	if v == nil || v.store == nil || v.keys == nil {
+		return &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate"}
 	}
-	if _, err := rotator.Rotate(ctx); err != nil {
-		return v.disableAllAfterRotationFailure(ctx, err)
-	}
-	return v.reencryptCurrent(ctx)
-}
-
-func (v *CredentialVault) reencryptCurrent(ctx context.Context) error {
 	records, err := v.store.ListCredentials(ctx)
 	if err != nil {
-		return err
+		return &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
 	}
-	current, err := v.keys.Current(ctx)
+	rotator, ok := v.keys.(RotatingKeyProvider)
+	if !ok {
+		return v.disableAfterRotationFailure(ctx, records, errors.New("key provider cannot rotate"))
+	}
+	current, err := rotator.Rotate(ctx)
 	if err != nil {
-		return v.disableAllAfterRotationFailure(ctx, err)
+		return v.disableAfterRotationFailure(ctx, records, err)
+	}
+	return v.reencryptWithKey(ctx, records, current)
+}
+
+func (v *CredentialVault) reencryptWithKey(ctx context.Context, records []StoredCredential, current KeyMaterial) error {
+	if err := validateKeyMaterial(current); err != nil {
+		return v.disableAfterRotationFailure(ctx, records, err)
 	}
 	updates := make([]CredentialRotationUpdate, 0, len(records))
 	for _, record := range records {
 		credentials, decryptErr := DecryptCredentials(ctx, v.keys, credentialAAD(record.SourceID, record.Driver, record.Endpoint), record.Ciphertext)
 		if decryptErr != nil {
-			return v.disableAllAfterRotationFailure(ctx, decryptErr)
+			return v.disableAfterRotationFailure(ctx, records, decryptErr)
 		}
 		ciphertext, keyVersion, encryptErr := encryptWithKey(ctx, current, credentialAAD(record.SourceID, record.Driver, record.Endpoint), credentials)
 		if encryptErr != nil {
-			return v.disableAllAfterRotationFailure(ctx, encryptErr)
+			return v.disableAfterRotationFailure(ctx, records, encryptErr)
 		}
 		updates = append(updates, CredentialRotationUpdate{
-			SourceID: record.SourceID, Ciphertext: ciphertext, KeyVersion: keyVersion,
+			SourceID: record.SourceID, Expected: baselineForRecord(record), Ciphertext: ciphertext, KeyVersion: keyVersion,
 			AutomaticEnabled: record.AutomaticEnabled, LastErrorCode: record.LastErrorCode,
 		})
 	}
 	if err := v.store.ApplyRotation(ctx, updates, nil); err != nil {
-		return v.disableAllAfterRotationFailure(ctx, err)
+		if ErrorCodeOf(err) == CodeCredentialConflict {
+			return &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
+		}
+		return v.disableAfterRotationFailure(ctx, records, err)
 	}
 	return nil
 }
 
-func (v *CredentialVault) disableAllAfterRotationFailure(ctx context.Context, cause error) error {
-	records, listErr := v.store.ListCredentials(ctx)
-	if listErr == nil {
-		disables := make([]CredentialRotationDisable, 0, len(records))
-		for _, record := range records {
-			disables = append(disables, CredentialRotationDisable{SourceID: record.SourceID, Code: CodeKeyRotationFailed})
-		}
-		if len(disables) > 0 {
-			_ = v.store.ApplyRotation(ctx, nil, disables)
+func baselineForRecord(record StoredCredential) CredentialBaseline {
+	return CredentialBaseline{SourceID: record.SourceID, Revision: record.Revision, Exists: true}
+}
+
+// 独立尝试禁用各个原始快照；一个冲突不能阻止其余受影响记录 fail closed。
+// 不重新 list、读取基线或重试。存储失败保留在安全错误链中，避免假称全部禁用成功。
+func (v *CredentialVault) disableAfterRotationFailure(ctx context.Context, records []StoredCredential, cause error) error {
+	for _, record := range records {
+		err := v.store.DisableAutomaticIfUnchanged(ctx, baselineForRecord(record), CodeKeyRotationFailed)
+		if err != nil && ErrorCodeOf(err) != CodeCredentialConflict {
+			cause = errors.Join(cause, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "credential_rotation_disable"})
 		}
 	}
 	return &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: cause}
@@ -587,35 +842,19 @@ func encryptWithKey(ctx context.Context, material KeyMaterial, aad string, crede
 		return nil, 0, err
 	}
 	if err := validateKeyMaterial(material); err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
+		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate"}
 	}
-	ciphertext, nonce, err := sealCredential(material.Key, []byte(aad), credentials)
-	if err != nil {
-		return nil, 0, err
-	}
-	envelope := encryptedCredentialEnvelope{
-		Version: credentialCiphertextVersion, Algorithm: credentialCiphertextAlgorithm,
-		KeyVersion: material.Version,
-		Nonce:      base64Raw(nonce), Ciphertext: base64Raw(ciphertext),
-	}
-	encoded, err := jsonMarshal(envelope)
-	if err != nil {
-		return nil, 0, &DatabaseError{Code: CodeKeyRotationFailed, Operation: "credential_rotate", Cause: err}
-	}
-	return encoded, material.Version, nil
-}
-
-func base64Raw(value []byte) string {
-	return base64.RawStdEncoding.EncodeToString(value)
-}
-
-func jsonMarshal(value any) ([]byte, error) {
-	return json.Marshal(value)
+	return encryptCredentialValueWithKey(ctx, material, aad, credentialValueFromCredentials(credentials))
 }
 
 func validateCredentialTarget(source Source, credentials Credentials) error {
 	if strings.TrimSpace(source.ID) == "" {
 		return newDatabaseError(CodeDatabaseNotFound, source, "credential_save", errors.New("source is required"))
+	}
+	if credentials.TLS != nil {
+		if err := validateCredentialTLSTarget(source, credentials.TLS); err != nil {
+			return err
+		}
 	}
 	if source.Driver == DriverSQLite {
 		if strings.TrimSpace(source.Path) == "" {
@@ -631,6 +870,21 @@ func validateCredentialTarget(source Source, credentials Credentials) error {
 	}
 	if source.Driver != DriverMySQL && source.Driver != DriverPostgreSQL {
 		return newDatabaseError(CodeSQLInvalid, source, "credential_save", errors.New("unsupported driver"))
+	}
+	return nil
+}
+
+// 使用实际 source 的 driver/host；显式 serverName 不得替代拨号目标校验。
+func validateCredentialTLSTarget(source Source, policy *TLSPolicy) error {
+	host, port, _ := endpointParts(source.Location, source.Port, source.DefaultDatabase)
+	if strings.TrimSpace(source.Host) != "" {
+		host = source.Host
+	}
+	if port <= 0 || port > 65535 {
+		return newDatabaseError(CodeTLSConfigurationInvalid, source, "credential_validate", nil)
+	}
+	if _, err := compileDatabaseTLS(source.Driver, host, policy); err != nil {
+		return newDatabaseError(CodeTLSConfigurationInvalid, source, "credential_validate", nil)
 	}
 	return nil
 }

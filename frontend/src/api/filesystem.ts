@@ -6,13 +6,14 @@ export async function requestPathEntries(
   cursor = '',
   limit = 200,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<FileEntriesPage> {
   const parameters = new URLSearchParams({ path })
   if (cursor) parameters.set('cursor', cursor)
   parameters.set('limit', String(limit))
   return requestJson(
     `/api/v1/files/entries?${parameters}`,
-    {},
+    signal ? { signal } : {},
     isFileEntriesPage,
     fetcher,
     'FILES_RESPONSE_INVALID',

@@ -1,7 +1,15 @@
-import { NcpApiError } from './system'
+import { isApiErrorResponse, NcpApiError } from './systemTransport'
+import { requestDatabaseInsert } from './databaseInsertOutcome'
+import { requestDatabaseRowWrite } from './databaseRowWriteOutcome'
+import { requestDatabaseQuery } from './databaseQueryOutcome'
+import { decodeDatabaseCatalog, decodeDatabaseDiscovery, decodeDatabaseRows } from './databaseReadResponse'
+import { assertDatabaseCatalogIdentity, assertDatabaseRowsIdentity } from './databaseReadIdentity'
+import { decodeDatabaseConnectionDiagnostic, requestDatabaseConnect } from './databaseConnectionResponse'
 
 export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
 export type DatabaseValue = string | number | boolean | null
+export type DatabaseQueryResultMode = 'auto' | 'rows' | 'exec'
+export type DatabaseQueryTruncationReason = 'row_limit' | 'byte_limit'
 
 export interface DatabaseSource {
   id: string
@@ -22,11 +30,18 @@ export interface DatabaseSource {
   tags: string[]
 }
 
+export interface DatabaseTLSPolicy {
+  mode: 'verify-full'
+  caPEM?: string
+  serverName?: string
+}
+
 export interface DatabaseCredentials {
   username?: string
   password?: string
   token?: string
   database?: string
+  tls?: DatabaseTLSPolicy
 }
 
 export interface DatabaseConnection {
@@ -102,24 +117,30 @@ export interface QueryResult {
   columns: string[]
   rows: DatabaseValue[][]
   rowsAffected: number
+  rowsAffectedKnown?: boolean
   truncated: boolean
+  truncationReason?: DatabaseQueryTruncationReason
   durationMs: number
 }
 
 export async function discoverDatabases(force = false, signal?: AbortSignal): Promise<DatabaseDiscovery> {
-  return request<DatabaseDiscovery>(force ? '/api/v1/databases/discovery?refresh=true' : '/api/v1/databases/discovery', undefined, signal)
+  return decodeDatabaseDiscovery(await request<unknown>(force ? '/api/v1/databases/discovery?refresh=true' : '/api/v1/databases/discovery', undefined, signal))
 }
 
 export async function testDatabaseConnection(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/test-connection', connection, signal)
+  return decodeDatabaseConnectionDiagnostic(await request<unknown>('/api/v1/databases/test-connection', connection, signal))
 }
 
 export async function connectDatabase(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseConnectionDiagnostic> {
-  return request<DatabaseConnectionDiagnostic>('/api/v1/databases/connect', connection, signal)
+  // 序列化失败发生在派发前，不属于保存结果未知。
+  return requestDatabaseConnect(JSON.stringify(connection), signal)
 }
 
 export async function loadDatabaseCatalog(connection: DatabaseConnection, signal?: AbortSignal): Promise<DatabaseCatalog> {
-  return request<DatabaseCatalog>('/api/v1/databases/catalog', connection, signal)
+  const sourceId = connection.sourceId
+  const catalog = decodeDatabaseCatalog(await request<unknown>('/api/v1/databases/catalog', connection, signal))
+  assertDatabaseCatalogIdentity(catalog, sourceId)
+  return catalog
 }
 
 export async function loadDatabaseRows(input: DatabaseConnection & {
@@ -130,11 +151,17 @@ export async function loadDatabaseRows(input: DatabaseConnection & {
   sortColumn?: string
   sortDirection?: string
 }, signal?: AbortSignal): Promise<DatabaseRows> {
-  return request<DatabaseRows>('/api/v1/databases/rows', input, signal)
+  // PostgreSQL/MySQL 会补全缺省或空 schema；表名与非空 schema 必须精确对应。
+  const target = { table: input.table, schema: input.schema || undefined }
+  const rows = decodeDatabaseRows(await request<unknown>('/api/v1/databases/rows', input, signal))
+  assertDatabaseRowsIdentity(rows, target)
+  return rows
 }
 
-export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string }, signal?: AbortSignal): Promise<QueryResult> {
-  return request<QueryResult>('/api/v1/databases/query', input, signal)
+export async function executeDatabaseSQL(input: DatabaseConnection & { sql: string; resultMode?: DatabaseQueryResultMode }, signal?: AbortSignal): Promise<QueryResult> {
+  // 序列化在发送边界之前完成，本地失败仍然是零派发。
+  const body = JSON.stringify(input)
+  return requestDatabaseQuery(body, signal)
 }
 
 export async function insertDatabaseRow(input: DatabaseConnection & {
@@ -142,7 +169,9 @@ export async function insertDatabaseRow(input: DatabaseConnection & {
   table: string
   values: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/insert', input, signal)
+  // 序列化失败发生在发送边界之前，保持本地错误，不能误判为结果未知。
+  const body = JSON.stringify(input)
+  return requestDatabaseInsert(body, signal)
 }
 
 export async function updateDatabaseRow(input: DatabaseConnection & {
@@ -151,7 +180,9 @@ export async function updateDatabaseRow(input: DatabaseConnection & {
   values: Record<string, DatabaseValue>
   keys: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/update', input, signal)
+  // 序列化在发送边界之外完成，本地失败仍然是零派发。
+  const body = JSON.stringify(input)
+  return requestDatabaseRowWrite('update', body, signal)
 }
 
 export async function deleteDatabaseRow(input: DatabaseConnection & {
@@ -159,7 +190,8 @@ export async function deleteDatabaseRow(input: DatabaseConnection & {
   table: string
   keys: Record<string, DatabaseValue>
 }, signal?: AbortSignal): Promise<{ rowsAffected: number }> {
-  return request('/api/v1/databases/rows/delete', input, signal)
+  const body = JSON.stringify(input)
+  return requestDatabaseRowWrite('delete', body, signal)
 }
 
 async function request<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -174,13 +206,18 @@ async function request<T>(path: string, body?: unknown, signal?: AbortSignal): P
     ...(signal ? { signal } : {}),
   })
   if (!response.ok) {
+    let payload: unknown
     try {
-      const error = await response.json() as { code?: string; message?: string; requestId?: string }
-      throw new NcpApiError(error.code || 'DATABASE_OPERATION_FAILED', error.message || '数据库操作失败。', error.requestId)
-    } catch (error) {
-      if (error instanceof NcpApiError) throw error
-      throw new NcpApiError('DATABASE_OPERATION_FAILED', '数据库操作失败。')
+      payload = await response.json()
+    } catch {
+      // 畸形正文和底层读取异常不进入诊断对象。
     }
+    // Go ErrorResponse 一直包含三个自有字符串字段，缺失或类型错误不是旧版本兼容值。
+    if (!Array.isArray(payload) && isApiErrorResponse(payload)
+      && ['code', 'message', 'requestId'].every((key) => Object.hasOwn(payload, key))) {
+      throw new NcpApiError(payload.code || 'DATABASE_OPERATION_FAILED', payload.message || '数据库操作失败。', payload.requestId)
+    }
+    throw new NcpApiError('DATABASE_OPERATION_FAILED', '数据库操作失败。')
   }
   try {
     return await response.json() as T

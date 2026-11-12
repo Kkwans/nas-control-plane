@@ -1,3 +1,5 @@
+import { parseSystemDetailsResponse } from './systemDetailsResponse'
+import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
   isApiErrorResponse,
   jsonRequest,
@@ -8,7 +10,6 @@ import {
 import type {
   CapabilityEvidence,
   DNSCapability,
-  DockerInventory,
   MihomoCapability,
   MihomoInspection,
   PublicEgressCapability,
@@ -67,11 +68,12 @@ export async function requestSystemSummary(fetcher: typeof fetch = fetch, signal
 }
 
 export async function requestSystemDetails(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<SystemDetails> {
-  return requestJson('/api/v1/system/details', signal ? { signal } : {}, isSystemDetails, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+  const payload = await requestJson('/api/v1/system/details', signal ? { signal } : {}, isRecord, fetcher, 'SYSTEM_DETAILS_RESPONSE_INVALID')
+  return parseSystemDetailsResponse(payload)
 }
 
-export async function requestDNSCapability(fetcher: typeof fetch = fetch): Promise<DNSCapability> {
-  return requestJson('/api/v1/system/dns/capability', {}, isDNSCapability, fetcher, 'SYSTEM_DNS_RESPONSE_INVALID')
+export async function requestDNSCapability(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DNSCapability> {
+  return requestJson('/api/v1/system/dns/capability', signal ? { signal } : {}, isDNSCapability, fetcher, 'SYSTEM_DNS_RESPONSE_INVALID')
 }
 
 export async function previewDNSChange(input: DNSChangeRequest, fetcher: typeof fetch = fetch): Promise<DNSChangePreview> {
@@ -121,10 +123,10 @@ export async function invokeMihomo(
   )
 }
 
-export async function inspectMihomo(force = false, fetcher: typeof fetch = fetch): Promise<MihomoInspection> {
+export async function inspectMihomo(force = false, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<MihomoInspection> {
   return requestJson(
     '/api/v1/proxy/mihomo/inspect',
-    jsonRequest({ force }),
+    { ...jsonRequest({ force }), ...(signal ? { signal } : {}) },
     isMihomoInspection,
     fetcher,
     'PROXY_MIHOMO_INSPECTION_RESPONSE_INVALID',
@@ -175,8 +177,18 @@ export function subscribeSystemEvents(
   source.addEventListener('snapshot', (event) => {
     try {
       const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
-      if (!isRealtimeSnapshot(payload)) throw new Error('实时快照格式无效')
-      handlers.snapshot(payload)
+      if (!isRealtimeSnapshotEnvelope(payload)) throw new Error('实时快照格式无效')
+      const { docker, ...envelope } = payload
+      const snapshot: RealtimeSnapshot = envelope
+      if ('docker' in payload) {
+        try {
+          snapshot.docker = parseDockerInventoryResponse(docker)
+        } catch {
+          // Docker 坏切片只影响该模块，保留同帧摘要并等待下一帧恢复。
+          snapshot.errors = [...(snapshot.errors ?? []), DOCKER_INVENTORY_RESPONSE_INVALID]
+        }
+      }
+      handlers.snapshot(snapshot)
     } catch {
       handlers.error()
       source.close()
@@ -380,47 +392,11 @@ function isSystemSummary(value: unknown): value is SystemSummary {
   )
 }
 
-function isSystemDetails(value: unknown): value is SystemDetails {
-  if (
-    !isRecord(value) ||
-    typeof value.collectedAt !== 'string' ||
-    !Array.isArray(value.warnings) ||
-    !isRecord(value.device) ||
-    !isRecord(value.hardware) ||
-    !isRecord(value.network) ||
-    !isRecord(value.storage) ||
-    !isRecord(value.proxy) ||
-    !isRecord(value.control)
-  ) return false
-
-  return (
-    isRecord(value.hardware.cpu) &&
-    isRecord(value.hardware.memory) &&
-    Array.isArray(value.hardware.sensors) &&
-    Array.isArray(value.network.interfaces) &&
-    Array.isArray(value.network.routes) &&
-    Array.isArray(value.network.dnsServers) &&
-    Array.isArray(value.network.listeningPorts) &&
-    Array.isArray(value.storage.mounts) &&
-    Array.isArray(value.storage.disks) &&
-    Array.isArray(value.storage.raid) &&
-    isRecord(value.proxy.mihomo) &&
-    Array.isArray(value.proxy.system) &&
-    Array.isArray(value.proxy.associations) &&
-    Array.isArray(value.control.nodes)
-  )
-}
-
-function isDockerInventory(value: unknown): value is DockerInventory {
-  return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
-}
-
-function isRealtimeSnapshot(value: unknown): value is RealtimeSnapshot {
+function isRealtimeSnapshotEnvelope(value: unknown): value is Omit<RealtimeSnapshot, 'docker'> & { docker?: unknown } {
   return (
     isRecord(value) &&
     typeof value.collectedAt === 'string' &&
     (value.summary === undefined || isSystemSummary(value.summary)) &&
-    (value.docker === undefined || isDockerInventory(value.docker)) &&
     (value.errors === undefined || (Array.isArray(value.errors) && value.errors.every((item) => typeof item === 'string')))
   )
 }

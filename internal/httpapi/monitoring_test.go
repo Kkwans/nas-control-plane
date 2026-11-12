@@ -65,7 +65,7 @@ func TestQueryMonitoringSamplesBoundsResultsAndPassesContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryMonitoringSamples() error = %v", err)
 	}
-	if !store.since.Equal(historyRange.From) {
+	if !store.since.Equal(historyRange.From) || !store.to.Equal(historyRange.To) {
 		t.Fatalf("since = %s, want %s", store.since, historyRange.From)
 	}
 	if len(result) != 2 || result[0].CPUPercent != 2 || result[1].CPUPercent != 3 {
@@ -89,10 +89,14 @@ func TestQueryMonitoringSamplesHonorsCanceledContext(t *testing.T) {
 type fakeMonitoringHistoryStore struct {
 	samples []controlstore.MetricSample
 	since   time.Time
+	to      time.Time
+	ctx     context.Context
 	err     error
 }
 
-func (f *fakeMonitoringHistoryStore) MetricSamples(_ context.Context, since time.Time) ([]controlstore.MetricSample, error) {
+func (f *fakeMonitoringHistoryStore) MetricSamplesInRange(ctx context.Context, since, to time.Time) ([]controlstore.MetricSample, error) {
 	f.since = since
+	f.to = to
+	f.ctx = ctx
 	return f.samples, f.err
 }

@@ -1,0 +1,9 @@
+{
+  "headers": {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, max-age=3600"
+  },
+  "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\" onload=\"document.documentElement.setAttribute('data-onload', 'executed')\"><style>rect { fill: rgb(0, 128, 0); }</style><script>document.documentElement.setAttribute('data-script', 'executed')</script><rect width=\"32\" height=\"32\"/></svg>",
+  "pngBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgaGD4DwAChAGA+gVWHQAAAABJRU5ErkJggg=="
+}

@@ -2,26 +2,66 @@ package terminal
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/client"
 )
 
 type mobyContainerGateway struct {
-	client *client.Client
+	client      *client.Client
+	versionGate chan struct{}
+	api         *containerSDK
 }
 
 const containerShellProbeTimeout = 2 * time.Second
+const containerExecStartTimeout = 2 * time.Second
+
+var errContainerProbeOutputLimit = errors.New("container probe output exceeds wire limit")
+
+// 仅探测使用此窄接口；交互 gateway 仍持有真实 SDK client。
+type containerProbeClient interface {
+	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
+}
 
 func newMobyContainerGateway(apiClient *client.Client) *mobyContainerGateway {
-	return &mobyContainerGateway{client: apiClient}
+	return &mobyContainerGateway{client: apiClient, versionGate: make(chan struct{}, 1)}
+}
+
+// 在任意普通请求之前明确完成协商。失败可重试，但不会让 SDK 在失败
+// 协商后继续请求并与下一次协商并发读写 version。client 不得在 gateway 外使用。
+func (g *mobyContainerGateway) sdk(ctx context.Context) (*containerSDK, error) {
+	select {
+	case g.versionGate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-g.versionGate }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if g.api == nil {
+		if _, err := g.client.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+			return nil, errors.Join(err, ctx.Err())
+		}
+		g.api = &containerSDK{Client: g.client, version: g.client.ClientVersion()}
+	}
+	return g.api, nil
 }
 
 func (g *mobyContainerGateway) Inspect(ctx context.Context, containerID string) (ContainerInfo, error) {
-	response, err := g.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return ContainerInfo{}, err
+	}
+	response, err := api.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return ContainerInfo{}, err
 	}
@@ -46,65 +86,53 @@ func (g *mobyContainerGateway) Open(ctx context.Context, containerID string, row
 	}
 	var metadata SessionMetadata
 	if filepath.Base(shell) == "bash" {
-		metadata = containerShellMetadataWithProbe(shell, g.probeContainerBashCapabilities(ctx, containerID, shell))
+		probe := g.probeContainerBashCapabilities(ctx, containerID, shell)
+		if errors.Is(probe.Err, ErrContainerExitUnconfirmed) {
+			return ContainerAttachment{}, probe.Err
+		}
+		metadata = containerShellMetadataWithProbe(shell, probe)
 	} else {
 		metadata = containerShellMetadata(shell)
 	}
-	exec, err := g.client.ExecCreate(ctx, containerID, protectedContainerExecOptionsForShell(rows, cols, shell))
+	api, err := g.sdk(ctx)
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
-	attachment, err := g.client.ExecAttach(ctx, exec.ID, client.ExecAttachOptions{
-		TTY:         true,
-		ConsoleSize: client.ConsoleSize{Height: uint(rows), Width: uint(cols)},
+	execID, attachment, err := startContainerExec(ctx, api, containerID, protectedContainerExecOptionsForShell(rows, cols, shell), client.ExecAttachOptions{
+		TTY: true, ConsoleSize: client.ConsoleSize{Height: uint(rows), Width: uint(cols)},
 	})
 	if err != nil {
 		return ContainerAttachment{}, err
 	}
 	return ContainerAttachment{
-		ExecID:       exec.ID,
+		ExecID:       execID,
 		Reader:       attachment.Reader,
-		Writer:       attachment.Conn,
+		Conn:         attachment.Conn,
 		Shell:        metadata.Shell,
 		Enhancement:  metadata.Enhancement,
 		Reason:       metadata.Reason,
 		Capabilities: metadata.Capabilities,
-		Close: func() error {
-			attachment.Close()
-			return nil
-		},
-		CloseWrite: attachment.CloseWrite,
-		CancelRead: func() error {
-			var cancelErr error
-			if err := writeAll(attachment.Conn, []byte{3}); err != nil {
-				cancelErr = err
-			}
-			if err := writeAll(attachment.Conn, []byte("exit\n")); err != nil && cancelErr == nil {
-				cancelErr = err
-			}
-			if err := attachment.CloseWrite(); err != nil && cancelErr == nil {
-				cancelErr = err
-			}
-			attachment.Close()
-			return cancelErr
-		},
 	}, nil
 }
 
 func (g *mobyContainerGateway) detectContainerShell(ctx context.Context, containerID string) (string, error) {
+	return detectContainerShell(ctx, g.probeContainerCommand, containerID)
+}
+
+func detectContainerShell(ctx context.Context, probe func(context.Context, string, ...string) (bool, error), containerID string) (string, error) {
 	for _, shell := range []string{"/bin/bash", "/usr/bin/bash", "bash"} {
-		available, err := g.probeContainerCommand(ctx, containerID, shell, "--version")
-		if err != nil && ctx.Err() != nil {
-			return "", ctx.Err()
+		available, err := probe(ctx, containerID, shell, "--version")
+		if err != nil && (ctx.Err() != nil || errors.Is(err, ErrContainerExitUnconfirmed)) {
+			return "", errors.Join(err, ctx.Err())
 		}
 		if available {
 			return shell, nil
 		}
 	}
 	for _, shell := range []string{"/bin/sh", "/usr/bin/sh", "sh"} {
-		available, err := g.probeContainerCommand(ctx, containerID, shell, "-n")
-		if err != nil && ctx.Err() != nil {
-			return "", ctx.Err()
+		available, err := probe(ctx, containerID, shell, "-n")
+		if err != nil && (ctx.Err() != nil || errors.Is(err, ErrContainerExitUnconfirmed)) {
+			return "", errors.Join(err, ctx.Err())
 		}
 		if available {
 			return shell, nil
@@ -122,41 +150,168 @@ func (g *mobyContainerGateway) probeContainerCommand(ctx context.Context, contai
 }
 
 func (g *mobyContainerGateway) probeContainerCommandOutput(ctx context.Context, containerID string, command ...string) (bool, []byte, error) {
+	// 协商及等待版本 gate 也计入探测原有总预算。内层截止不会延长它。
 	probeContext, cancel := context.WithTimeout(ctx, containerShellProbeTimeout)
 	defer cancel()
-	exec, err := g.client.ExecCreate(probeContext, containerID, client.ExecCreateOptions{
+	api, err := g.sdk(probeContext)
+	if err != nil {
+		return false, nil, err
+	}
+	return probeContainerCommandOutput(probeContext, api, containerID, command...)
+}
+
+func probeContainerCommandOutput(ctx context.Context, api containerProbeClient, containerID string, command ...string) (bool, []byte, error) {
+	probeContext, cancel := context.WithTimeout(ctx, containerShellProbeTimeout)
+	defer cancel()
+	if err := probeContext.Err(); err != nil {
+		return false, nil, err
+	}
+	exec, err := api.ExecCreate(probeContext, containerID, client.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          command,
 	})
+	if err = errors.Join(err, probeContext.Err()); err != nil {
+		return false, nil, err
+	}
+	if exec.ID == "" {
+		return false, nil, errors.New("container exec create returned no ID")
+	}
+	attachment, err := api.ExecAttach(probeContext, exec.ID, client.ExecAttachOptions{})
+	if err != nil {
+		// SDK 错误通常返回空 attachment；seam 的部分资源也必须收尾。
+		if attachment.Conn != nil {
+			err = errors.Join(err, attachment.Conn.Close())
+		}
+		return false, nil, errors.Join(err, probeContext.Err())
+	}
+	// 即使 Attach 返回时已取消，也先进入唯一同步读取/关闭 owner。
+	var reader io.Reader
+	if attachment.Reader != nil {
+		reader = attachment.Reader
+	}
+	wire, err := readContainerProbe(probeContext, reader, attachment.Conn)
 	if err != nil {
 		return false, nil, err
 	}
-	attachment, err := g.client.ExecAttach(probeContext, exec.ID, client.ExecAttachOptions{})
-	if err != nil {
+	output, err := decodeContainerProbeOutput(wire)
+	if err = errors.Join(err, probeContext.Err()); err != nil {
 		return false, nil, err
 	}
-	defer attachment.Close()
-	output, err := io.ReadAll(io.LimitReader(attachment.Reader, maxCapabilityProbeOutput))
-	if err != nil {
+	inspection, err := api.ExecInspect(probeContext, exec.ID, client.ExecInspectOptions{})
+	if err = errors.Join(err, probeContext.Err()); err != nil {
 		return false, nil, err
 	}
-	inspection, err := g.client.ExecInspect(probeContext, exec.ID, client.ExecInspectOptions{})
-	if err != nil {
-		return false, nil, err
+	// SDK 缺失字段会归零；依赖官方 Engine 响应契约，不能验证原始字段存在。
+	if inspection.Running || inspection.ExitCode != 0 {
+		return false, nil, nil
 	}
-	return inspection.ExitCode == 0, output, nil
+	return true, output, nil
+}
+
+// 探测 attachment 与交互会话采用同一纯 transport 中断契约。
+func readContainerProbe(ctx context.Context, reader io.Reader, conn net.Conn) (output []byte, err error) {
+	if conn == nil {
+		return nil, errors.Join(errors.New("container probe attachment has no connection"), ctx.Err())
+	}
+	var once sync.Once
+	var closeErr error
+	abort := func() { once.Do(func() { closeErr = conn.Close() }) }
+	stop := onContextAbort(ctx, abort)
+	defer func() {
+		// 先停止或等待取消回调，再补齐关闭；closeErr 此后不会再被并发写入。
+		stop()
+		abort()
+		err = errors.Join(err, ctx.Err(), closeErr)
+		if err != nil {
+			output = nil
+		}
+	}()
+	if reader == nil {
+		return nil, errors.New("container probe attachment has no reader")
+	}
+	// 捕获上限包含帧头；额外一字节只用于确认超限，不返回失败前缀。
+	var wire [maxCapabilityProbeOutput + 1]byte
+	used, emptyReads := 0, 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, readErr := reader.Read(wire[used:])
+		used += n
+		if readErr == io.EOF {
+			readErr = nil
+			if used <= maxCapabilityProbeOutput {
+				return wire[:used], nil
+			}
+		}
+		if used > maxCapabilityProbeOutput {
+			return nil, errors.Join(errContainerProbeOutputLimit, readErr)
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		if n == 0 {
+			emptyReads++
+			if emptyReads >= 100 {
+				return nil, io.ErrNoProgress
+			}
+		} else {
+			emptyReads = 0
+		}
+	}
+}
+
+// 固定非 TTY 的 multiplex 契约；不猜测 raw 输出，不按宣告长度分配。
+func decodeContainerProbeOutput(wire []byte) ([]byte, error) {
+	if len(wire) > maxCapabilityProbeOutput {
+		return nil, errContainerProbeOutputLimit
+	}
+	remaining := wire
+	payloadBytes := 0
+	for len(remaining) > 0 {
+		if len(remaining) < 8 {
+			return nil, errors.New("container probe has incomplete frame header")
+		}
+		// 接受 SDK legacy stdin(0)，与 stdout(1)、stderr(2) 按到达顺序合并。
+		if remaining[0] > 2 || remaining[1] != 0 || remaining[2] != 0 || remaining[3] != 0 {
+			return nil, errors.New("container probe has invalid frame header")
+		}
+		size := binary.BigEndian.Uint32(remaining[4:8])
+		remaining = remaining[8:]
+		if uint64(size) > uint64(len(remaining)) {
+			return nil, errors.New("container probe has incomplete frame payload")
+		}
+		payloadBytes += int(size)
+		remaining = remaining[int(size):]
+	}
+	// 全部帧验证完才分配；容量不超过已经取得的有界 wire bytes。
+	output := make([]byte, 0, payloadBytes)
+	for len(wire) > 0 {
+		size := int(binary.BigEndian.Uint32(wire[4:8]))
+		wire = wire[8:]
+		output = append(output, wire[:size]...)
+		wire = wire[size:]
+	}
+	return output, nil
 }
 
 func (g *mobyContainerGateway) probeContainerBashCapabilities(ctx context.Context, containerID, shell string) shellCapabilityProbe {
-	available, output, err := g.probeContainerCommandOutput(ctx, containerID, shell, "--noprofile", "--norc", "-i", "-c", bashCapabilityProbeScript)
-	probe := parseBashCapabilityProbe(output)
-	if err != nil {
-		probe.Err = err
-	} else if !available && !probe.Readline {
-		probe.Err = errors.New("container Bash capability probe failed")
+	return containerBashCapabilityProbe(ctx, g.probeContainerCommandOutput, containerID, shell)
+}
+
+func containerBashCapabilityProbe(ctx context.Context, run func(context.Context, string, ...string) (bool, []byte, error), containerID, shell string) shellCapabilityProbe {
+	if err := ctx.Err(); err != nil {
+		return shellCapabilityProbe{Err: err}
 	}
-	return probe
+	available, output, err := run(ctx, containerID, shell, "--noprofile", "--norc", "-i", "-c", bashCapabilityProbeScript)
+	if err = errors.Join(err, ctx.Err()); err != nil {
+		return shellCapabilityProbe{Err: err}
+	}
+	if !available {
+		return shellCapabilityProbe{Err: errors.New("container Bash capability probe failed")}
+	}
+	return parseBashCapabilityProbe(output)
 }
 
 func containerShellMetadata(shellPath string) SessionMetadata {
@@ -176,6 +331,9 @@ func containerShellMetadata(shellPath string) SessionMetadata {
 }
 
 func containerShellMetadataWithProbe(shellPath string, probe shellCapabilityProbe) SessionMetadata {
+	if probe.Err != nil {
+		probe = shellCapabilityProbe{Err: probe.Err}
+	}
 	shell := filepath.Base(shellPath)
 	if shell == "" || shell == "." {
 		shell = "sh"
@@ -206,15 +364,23 @@ func containerShellMetadataWithProbe(shellPath string, probe shellCapabilityProb
 }
 
 func (g *mobyContainerGateway) Resize(ctx context.Context, execID string, rows, cols uint16) error {
-	_, err := g.client.ExecResize(ctx, execID, client.ExecResizeOptions{Height: uint(rows), Width: uint(cols)})
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = api.ExecResize(ctx, execID, client.ExecResizeOptions{Height: uint(rows), Width: uint(cols)})
 	return err
 }
 
 func (g *mobyContainerGateway) WaitForExit(ctx context.Context, execID string) error {
+	api, err := g.sdk(ctx)
+	if err != nil {
+		return err
+	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		inspection, err := g.client.ExecInspect(ctx, execID, client.ExecInspectOptions{})
+		inspection, err := api.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 		if err != nil {
 			return err
 		}
@@ -265,4 +431,28 @@ func protectedContainerExecOptionsForShell(rows, cols uint16, shell string) clie
 		},
 		Cmd: arguments,
 	}
+}
+
+// 最终交互 Create 与 Attach 共用启动预算，交还后不再绑定该预算。
+func startContainerExec(ctx context.Context, api containerProbeClient, containerID string, createOptions client.ExecCreateOptions, attachOptions client.ExecAttachOptions) (string, client.ExecAttachResult, error) {
+	startup, cancel := context.WithTimeout(ctx, containerExecStartTimeout)
+	defer cancel()
+	if err := startup.Err(); err != nil {
+		return "", client.ExecAttachResult{}, err
+	}
+	exec, err := api.ExecCreate(startup, containerID, createOptions)
+	if err = errors.Join(err, startup.Err()); err != nil {
+		return "", client.ExecAttachResult{}, err
+	}
+	if exec.ID == "" {
+		return "", client.ExecAttachResult{}, errors.New("container exec create returned no ID")
+	}
+	attachment, err := api.ExecAttach(startup, exec.ID, attachOptions)
+	if err = errors.Join(err, startup.Err()); err != nil {
+		if attachment.Conn != nil {
+			err = errors.Join(err, attachment.Conn.Close(), ErrContainerExitUnconfirmed)
+		}
+		return "", client.ExecAttachResult{}, err
+	}
+	return exec.ID, attachment, nil
 }

@@ -51,17 +51,12 @@ func (c *ConnectionCoordinator) ResolveConnection(ctx context.Context, source So
 	if c == nil || c.vault == nil {
 		return Connection{}, &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "connection_resolve"}
 	}
-	if source.Driver == DriverSQLite {
-		// SQLite is opened by path and has no username/password credential
-		// exchange. Keep the resolver compatible with an enabled credential
-		// vault without forcing local databases through the credential flow.
-		return Connection{SourceID: source.ID}, nil
-	}
 	if manual != nil {
-		if err := validateCredentialTarget(source, *manual); err != nil {
+		prepared, err := c.vault.prepareManual(ctx, source, *manual)
+		if err != nil {
 			return Connection{}, err
 		}
-		return Connection{SourceID: source.ID, Credentials: *manual}, nil
+		return Connection{SourceID: prepared.source.ID, Credentials: cloneCredentials(prepared.credentials)}, nil
 	}
 	credentials, found, err := c.vault.Resolve(ctx, source)
 	if err != nil {
@@ -74,9 +69,13 @@ func (c *ConnectionCoordinator) ResolveConnection(ctx context.Context, source So
 }
 
 func (c *ConnectionCoordinator) AutoConnect(ctx context.Context, source Source) (ConnectionDiagnostic, error) {
-	started := c.now()
-	if source.Driver == DriverSQLite {
-		return c.test(ctx, source, Credentials{}, "auto_connect", started)
+	started := time.Now()
+	if c == nil || c.vault == nil || c.tester == nil {
+		err := &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "auto_connect"}
+		return diagnosticForError(source, "auto_connect", started, err), err
+	}
+	if c.now != nil {
+		started = c.now()
 	}
 	credentials, found, err := c.vault.Resolve(ctx, source)
 	if err != nil {
@@ -89,18 +88,44 @@ func (c *ConnectionCoordinator) AutoConnect(ctx context.Context, source Source) 
 	return c.test(ctx, source, credentials, "auto_connect", started)
 }
 
+// TestConnection 仅诊断，不保存新凭据；沿用手动连接的认证继承与目标守卫。
+func (c *ConnectionCoordinator) TestConnection(ctx context.Context, source Source, credentials Credentials) (ConnectionDiagnostic, error) {
+	started := time.Now()
+	if c == nil || c.vault == nil || c.tester == nil {
+		err := &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "test_connection"}
+		return diagnosticForError(source, "test_connection", started, err), err
+	}
+	prepared, err := c.vault.prepareManual(ctx, source, credentials)
+	if err != nil {
+		return diagnosticForError(source, "test_connection", started, err), err
+	}
+	return c.test(ctx, prepared.source, cloneCredentials(prepared.credentials), "test_connection", started)
+}
+
 func (c *ConnectionCoordinator) ManualConnect(ctx context.Context, source Source, credentials Credentials) (ConnectionDiagnostic, error) {
-	started := c.now()
-	if err := validateCredentialTarget(source, credentials); err != nil {
+	started := time.Now()
+	if c == nil || c.vault == nil || c.tester == nil {
+		err := &DatabaseError{Code: CodeCredentialStoreUnavailable, Operation: "manual_connect"}
 		return diagnosticForError(source, "manual_connect", started, err), err
 	}
-	diagnostic, err := c.test(ctx, source, credentials, "manual_connect", started)
+	if c.now != nil {
+		started = c.now()
+	}
+	prepared, err := c.vault.prepareManual(ctx, source, credentials)
+	if err != nil {
+		return diagnosticForError(source, "manual_connect", started, err), err
+	}
+	diagnostic, err := c.test(ctx, prepared.source, cloneCredentials(prepared.credentials), "manual_connect", started)
 	if err != nil {
 		// A failed manual attempt is intentionally not written to the vault.
 		return diagnostic, err
 	}
-	if _, err := c.vault.Save(ctx, source, credentials); err != nil {
-		return diagnosticForError(source, "manual_persist", started, err), err
+	if _, err := c.vault.savePrepared(ctx, prepared); err != nil {
+		// 远端诊断已经完成，但持久化失败。不能把这个结果当作重新测试或保存成功。
+		err = newDatabaseError(ErrorCodeOf(err), prepared.source, "manual_persist", err)
+		diagnostic.Code = string(ErrorCodeOf(err))
+		diagnostic.Operation = "manual_persist"
+		return diagnostic, err
 	}
 	return diagnostic, nil
 }
@@ -109,7 +134,7 @@ func (c *ConnectionCoordinator) test(ctx context.Context, source Source, credent
 	if err := contextError(ctx); err != nil {
 		return diagnosticForError(source, operation, started, err), err
 	}
-	diagnostic, err := c.tester.TestConnection(ctx, Connection{SourceID: source.ID, Credentials: credentials})
+	diagnostic, err := c.tester.TestConnection(ctx, Connection{SourceID: source.ID, Credentials: cloneCredentials(credentials)})
 	if err != nil {
 		err = MapError(ctx, source, operation, err)
 		return mergeDiagnostic(diagnostic, diagnosticForError(source, operation, started, err)), err
@@ -198,10 +223,11 @@ func sourceEndpoint(source Source, databaseName string) string {
 		return strings.TrimSpace(source.Path)
 	}
 	databaseName = effectiveDatabase(source, databaseName)
-	host := strings.TrimSpace(source.Host)
-	port := source.Port
-	if host == "" {
-		host, port, databaseName = endpointParts(source.Location, port, databaseName)
+	// 与两种网络连接器一致：Location 可覆盖端口，Host 只覆盖主机。
+	// 数据库名由 Credentials/DefaultDatabase 选择，不采用 Location 路径。
+	host, port, _ := endpointParts(source.Location, source.Port, databaseName)
+	if strings.TrimSpace(source.Host) != "" {
+		host = strings.TrimSpace(source.Host)
 	}
 	if host == "" {
 		return sanitizeEndpoint(source.Location)

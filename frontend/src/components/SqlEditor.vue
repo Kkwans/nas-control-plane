@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { EditorView, basicSetup } from 'codemirror'
 import { sql } from '@codemirror/lang-sql'
+import { Compartment, EditorState } from '@codemirror/state'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 
 const editorHost = ref<HTMLElement | null>(null)
 let editor: EditorView | null = null
+const disabledState = new Compartment()
 
 onMounted(() => {
   if (!editorHost.value) return
@@ -25,22 +27,27 @@ onMounted(() => {
     parent: editorHost.value,
     doc: props.modelValue,
     extensions: [
-      basicSetup,
-      sql(),
-      EditorView.lineWrapping,
-      EditorView.editable.of(!props.disabled),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
-      }),
+      // 先于 basicSetup 的 Mod-Enter 换行快捷键处理 SQL 执行。
       EditorView.domEventHandlers({
         keydown(event) {
           if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
             event.preventDefault()
-            emit('execute')
+            if (!props.disabled) emit('execute')
             return true
           }
           return false
         },
+      }),
+      basicSetup,
+      sql(),
+      EditorView.lineWrapping,
+      EditorView.contentAttributes.of({ 'aria-label': 'SQL 编辑器' }),
+      disabledState.of([
+        EditorView.editable.of(!props.disabled),
+        EditorState.readOnly.of(props.disabled),
+      ]),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) emit('update:modelValue', update.state.doc.toString())
       }),
       EditorView.theme({
         '&': {
@@ -81,8 +88,12 @@ watch(() => props.modelValue, (value) => {
 watch(() => props.disabled, (disabled) => syncDisabledState(disabled))
 
 function syncDisabledState(disabled: boolean) {
-  const content = editorHost.value?.querySelector<HTMLElement>('.cm-content')
-  content?.setAttribute('contenteditable', String(!disabled))
+  editor?.dispatch({
+    effects: disabledState.reconfigure([
+      EditorView.editable.of(!disabled),
+      EditorState.readOnly.of(disabled),
+    ]),
+  })
   editorHost.value?.setAttribute('aria-disabled', String(disabled))
 }
 

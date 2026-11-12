@@ -14,15 +14,20 @@ const props = withDefaults(defineProps<{
   modelValue: string
   tabs: SegmentedTab[]
   accessibleLabel?: string
+  mode?: 'tabs' | 'filter'
   panelId?: string
   disabled?: boolean
 }>(), {
   accessibleLabel: '选项卡',
   panelId: undefined,
+  mode: 'tabs',
   disabled: false,
 })
 
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
+
+const groupRole = computed(() => props.mode === 'filter' ? 'radiogroup' : 'tablist')
+const optionRole = computed(() => props.mode === 'filter' ? 'radio' : 'tab')
 
 const activeValue = computed(() => {
   if (props.tabs.some((tab) => tab.value === props.modelValue)) return props.modelValue
@@ -59,24 +64,40 @@ function onKeydown(event: KeyboardEvent, index: number) {
 
   event.preventDefault()
   const buttons = Array.from(
-    (event.currentTarget as HTMLButtonElement).closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [],
+    (event.currentTarget as HTMLButtonElement).closest(`[role="${groupRole.value}"]`)?.querySelectorAll<HTMLButtonElement>(`[role="${optionRole.value}"]`) ?? [],
   )
-  buttons[nextIndex]?.focus()
+  const nextButton = buttons[nextIndex]
+  nextButton?.focus()
+  if (nextButton) {
+    const group = nextButton.parentElement
+    if (group && group.scrollWidth > group.clientWidth) {
+      // focus() 可能保留部分可见的按钮；键盘切换还需露出完整文字及焦点环。
+      const bounds = nextButton.getBoundingClientRect()
+      const viewport = group.getBoundingClientRect()
+      const style = getComputedStyle(nextButton)
+      const ring = Math.max(0, (Number.parseFloat(style.outlineWidth) || 0) + (Number.parseFloat(style.outlineOffset) || 0))
+      const overflow = bounds.right + ring > viewport.right
+        ? bounds.right + ring - viewport.right
+        : bounds.left - ring < viewport.left ? bounds.left - ring - viewport.left : 0
+      group.scrollLeft += overflow
+    }
+  }
   selectTab(nextTab)
 }
 </script>
 
 <template>
-  <div class="segmented-tabs" role="tablist" :aria-label="accessibleLabel">
+  <div class="segmented-tabs" :role="groupRole" :aria-label="accessibleLabel">
     <button
       v-for="(tab, index) in tabs"
       :key="tab.value"
       class="segmented-tabs__tab"
       :class="{ 'is-active': tab.value === activeValue }"
       type="button"
-      role="tab"
-      :aria-selected="tab.value === activeValue"
-      :aria-controls="panelId || undefined"
+      :role="optionRole"
+      :aria-selected="mode === 'tabs' ? tab.value === activeValue : undefined"
+      :aria-checked="mode === 'filter' ? tab.value === activeValue : undefined"
+      :aria-controls="mode === 'tabs' ? panelId || undefined : undefined"
       :tabindex="tab.value === activeValue ? 0 : -1"
       :disabled="isDisabled(tab)"
       @click="selectTab(tab)"

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,10 @@ func (api *handler) databaseCatalog(response http.ResponseWriter, request *http.
 func (api *handler) databaseQuery(response http.ResponseWriter, request *http.Request) {
 	var input ncpdatabase.QueryRequest
 	if !api.decodeDatabaseBody(response, request, &input) {
+		return
+	}
+	if err := ncpdatabase.ValidateQueryResultMode(input.ResultMode); err != nil {
+		api.writeDatabaseError(response, request, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), defaultDatabaseTimeout)
@@ -161,7 +166,26 @@ func (api *handler) databaseDelete(response http.ResponseWriter, request *http.R
 }
 
 func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *http.Request, destination any) bool {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxDatabaseBodySize))
+	if err := validateJSONContentType(request); err != nil {
+		api.writeUnsupportedMediaType(response, request)
+		return false
+	}
+	data, err := readBoundedJSONBody(request, maxDatabaseBodySize)
+	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			api.writeRequestBodyTooLarge(response, request)
+		} else {
+			api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
+		}
+		return false
+	}
+	// 在强类型解码丢失重复键或 null 信息前校验公开 TLS 合同。
+	if err := validateDatabaseTLSInput(data); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
@@ -171,19 +195,34 @@ func (api *handler) decodeDatabaseBody(response http.ResponseWriter, request *ht
 		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求只能包含一个 JSON 对象。")
 		return false
 	}
+	if err := request.Context().Err(); err != nil {
+		api.writeError(response, request, http.StatusBadRequest, "DATABASE_INPUT_INVALID", "数据库请求参数无效。")
+		return false
+	}
 	return true
 }
 
-func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, err error) {
+func databaseErrorCode(err error) ncpdatabase.ErrorCode {
 	code := ncpdatabase.ErrorCodeOf(err)
 	if code == "" {
 		code = ncpdatabase.CodeFromString(agentsocket.ErrorCode(err))
 	}
+	return code
+}
+
+func (api *handler) writeDatabaseError(response http.ResponseWriter, request *http.Request, err error) {
+	code := databaseErrorCode(err)
 	status := http.StatusBadRequest
 	message := "数据库操作失败，请检查连接信息、SQL 或数据约束。"
 	switch code {
 	case ncpdatabase.CodeCredentialsRequired:
 		message = "数据库连接需要凭据。"
+	case ncpdatabase.CodeTLSConfigurationInvalid:
+		message = "数据库 TLS 配置无效。"
+	case ncpdatabase.CodeTLSPolicyUnsupported:
+		message = "当前 Agent 不支持所需的数据库 TLS 策略，请先升级 Agent。"
+	case ncpdatabase.CodeTLSVerificationFailed:
+		message = "数据库 TLS 身份验证失败，请检查证书和服务器身份。"
 	case ncpdatabase.CodeAuthFailed:
 		status, message = http.StatusUnauthorized, "数据库认证失败。"
 	case ncpdatabase.CodeUnreachable:
@@ -194,8 +233,18 @@ func (api *handler) writeDatabaseError(response http.ResponseWriter, request *ht
 		status, message = http.StatusForbidden, "数据库权限不足。"
 	case ncpdatabase.CodeSQLInvalid:
 		message = "SQL 或数据库请求无效。"
+	case ncpdatabase.CodeResultModeUnsupported:
+		message = "当前 Agent 不支持结果模式，请先升级 Agent。"
+	case ncpdatabase.CodeOperationBusy:
+		status, message = http.StatusServiceUnavailable, "数据库操作繁忙，请稍后核对状态再操作。"
+	case ncpdatabase.CodeResultTooLarge:
+		status, message = http.StatusUnprocessableEntity, "数据库结果超过大小限制，SQL 可能已经执行。请先核对写入状态，不要直接重试；可减少返回列或读取范围。"
+	case ncpdatabase.CodeMutationReceiptInvalid:
+		status, message = http.StatusBadGateway, "行修改请求可能已生效，但影响行数回执无法确认。请先只读核对，勿直接重试。"
 	case ncpdatabase.CodeConstraintFailed:
 		status, message = http.StatusConflict, "数据库约束未满足。"
+	case ncpdatabase.CodeCredentialConflict:
+		status, message = http.StatusConflict, "数据库凭据已变更，请重新确认后再连接。"
 	case ncpdatabase.CodeAgentUnavailable:
 		status, message = http.StatusServiceUnavailable, "Root Agent 暂不可用。"
 	case ncpdatabase.CodeTimeout:

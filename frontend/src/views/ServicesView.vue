@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import SectionDrawer from '@/components/SectionDrawer.vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   CircleAlert,
   CircleCheck,
@@ -20,7 +21,6 @@ import {
 } from '@lucide/vue'
 import {
   ElButton,
-  ElDrawer,
   ElForm,
   ElFormItem,
   ElInput,
@@ -36,6 +36,8 @@ import {
 } from 'element-plus'
 
 import type { Site, SiteProfileInput } from '@/api/control'
+import { SiteCreatedIconError, SiteIconUploadError } from '@/api/siteCreatedIconOutcome'
+import { SiteWriteUnknownError } from '@/api/siteWriteOutcome'
 import ActionButton from '@/components/ActionButton.vue'
 import GroupedDirectory, { type GroupedDirectoryGroup } from '@/components/GroupedDirectory.vue'
 import ListIconButton from '@/components/ListIconButton.vue'
@@ -43,6 +45,7 @@ import NcpSelect from '@/components/NcpSelect.vue'
 import SegmentedTabs, { type SegmentedTab } from '@/components/SegmentedTabs.vue'
 import StatusPill from '@/components/StatusPill.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
+import { captureSession, isAbortError, isCurrentSession } from '@/session/sessionLifecycle'
 import { SiteSyncError, useSitesStore } from '@/stores/sites'
 import { useSystemStore } from '@/stores/system'
 
@@ -57,8 +60,20 @@ const selectedCategory = ref('全部分类')
 const editOpen = ref(false)
 const selectedSite = ref<Site | null>(null)
 const saving = ref(false)
+const savedSiteId = ref<string | null>(null)
+const syncPending = ref(false)
+const unknownWrite = ref<SiteWriteUnknownError | SiteCreatedIconError | SiteIconUploadError | null>(null)
+const iconPending = ref(new Set<string>())
+const unknownIcons = ref(new Map<string, SiteIconUploadError>())
+const iconBusy = computed(() => Boolean(savedSiteId.value && iconPending.value.has(savedSiteId.value)))
+const unknownObservation = ref('')
+const unknownFavorites = ref(new Set<string>())
+let editorGeneration = 0
+let active = true
+watch(editOpen, () => { editorGeneration += 1; saving.value = false }, { flush: 'sync' })
+function currentView(generation: number) { return active && isCurrentSession(generation) }
 const failedIcons = ref(new Set<string>())
-const favoritePending = ref<string | null>(null)
+const favoritePending = ref(new Set<string>())
 const draft = ref<SiteProfileInput>(emptyProfile())
 const iconInput = ref<HTMLInputElement | null>(null)
 const siteForm = ref<FormInstance>()
@@ -143,12 +158,14 @@ function formatCollectedAt(value: string) {
 }
 
 async function refreshSites(announce = true) {
-  await sitesStore.refresh()
+  const session = captureSession()
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation)) return
   if (sitesStore.error) {
     if (announce) ElMessage.error(sitesStore.error)
     return
   }
-  if (!announce) return
+  if (!synced || !announce) return
   if (sitesStore.discovery.status === 'complete') ElMessage.success(`识别完成，已确认 ${sitesStore.discovery.verifiedCount} 个站点入口`)
   else if (sitesStore.discovery.status === 'partial') ElMessage.warning(`识别完成，${sitesStore.discovery.failedCount} 个候选入口待核验`)
   else ElMessage.warning('网页入口探测暂不可用，已显示可确认的站点')
@@ -232,6 +249,12 @@ function visitedLabel(value: string | null) {
 }
 
 function openEditor(site: Site) {
+  editorGeneration += 1
+  saving.value = false
+  savedSiteId.value = site.id
+  syncPending.value = false
+  unknownWrite.value = unknownIcons.value.get(site.id) ?? null
+  unknownObservation.value = ''
   resetPendingIcon()
   selectedSite.value = site
   draft.value = profileFor(site)
@@ -239,6 +262,12 @@ function openEditor(site: Site) {
 }
 
 function openCreator() {
+  editorGeneration += 1
+  saving.value = false
+  savedSiteId.value = null
+  syncPending.value = false
+  unknownWrite.value = null
+  unknownObservation.value = ''
   resetPendingIcon()
   selectedSite.value = null
   draft.value = emptyProfile()
@@ -246,27 +275,102 @@ function openCreator() {
 }
 
 async function saveSite() {
+  if (saving.value || iconBusy.value || syncPending.value || unknownWrite.value) return
+  const session = captureSession()
+  const generation = editorGeneration
+  const current = () => currentView(session.generation) && generation === editorGeneration
+  saving.value = true
+  const input = { ...draft.value }
+  const icon = pendingIcon.value
+  const siteId = savedSiteId.value
   const valid = await siteForm.value?.validate().catch(() => false)
-  if (valid === false) return
+  if (!current()) return
+  if (valid === false) { saving.value = false; return }
+  if (JSON.stringify(draft.value) !== JSON.stringify(input) || pendingIcon.value !== icon) {
+    saving.value = false
+    ElMessage.warning('资料已变更，请确认后重新保存')
+    return
+  }
   if (!draft.value.launchUrl.trim() && draft.value.primaryPort <= 0) {
+    saving.value = false
     ElMessage.warning('请填写完整入口 URL，或设置主入口端口')
     return
   }
-  saving.value = true
   try {
-    if (selectedSite.value) await sitesStore.save(selectedSite.value.id, draft.value)
-    else await sitesStore.create(draft.value, pendingIcon.value)
-    editOpen.value = false
-    resetPendingIcon()
-    ElMessage.success(selectedSite.value ? '站点资料已保存' : '站点已添加')
-  } catch {
-    ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
+    if (siteId) await sitesStore.save(siteId, input)
+    else {
+      const created = await sitesStore.create(input, icon)
+      if (current()) savedSiteId.value = created.projectId
+    }
+    if (!current()) return
+    if (pendingIcon.value === icon) resetPendingIcon()
+    if (JSON.stringify(draft.value) === JSON.stringify(input)) editOpen.value = false
+    ElMessage.success(siteId ? '站点资料已保存' : '站点已添加')
+  } catch (error) {
+    if (!current() || isAbortError(error)) return
+    if (error instanceof SiteWriteUnknownError || error instanceof SiteCreatedIconError) {
+      savedSiteId.value = error.siteId ?? siteId
+      unknownWrite.value = error
+      unknownObservation.value = ''
+    } else if (error instanceof SiteSyncError) {
+      savedSiteId.value = error.siteId ?? siteId
+      syncPending.value = true
+      if (pendingIcon.value === icon) resetPendingIcon()
+      // 抽屉内持久状态已播报，避免重复 toast 遮住移动端标题和关闭入口。
+    } else ElMessage.error('站点资料保存失败，请检查 URL 和输入内容')
   } finally {
-    saving.value = false
+    if (current()) saving.value = false
   }
 }
 
+async function retryEditorSync() {
+  if (saving.value || unknownWrite.value) return
+  const session = captureSession()
+  const generation = editorGeneration
+  saving.value = true
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation) || generation !== editorGeneration) return
+  saving.value = false
+  if (synced) {
+    syncPending.value = false
+    ElMessage.success('站点列表已同步，当前草稿已保留')
+  } else ElMessage.warning('站点资料已保存，列表仍未同步，请稍后重试。')
+}
+
+async function recheckUnknownWrite() {
+  const operation = unknownWrite.value
+  if (saving.value || !operation) return
+  const session = captureSession()
+  const generation = editorGeneration
+  saving.value = true
+  unknownObservation.value = ''
+  const synced = await sitesStore.refresh()
+  if (!currentView(session.generation) || generation !== editorGeneration || unknownWrite.value !== operation) return
+  saving.value = false
+  if (!synced) {
+    unknownObservation.value = '本次核对未完成，结果仍未确认，可再次只读核对。'
+    return
+  }
+  const id = operation.siteId
+  if (!id) {
+    unknownObservation.value = '目录已读取，但没有可用于核对的站点 ID。创建结果仍未确认，请勿重复添加。'
+    return
+  }
+  const present = sitesStore.sites.some((site) => site.id === id)
+  const ignored = sitesStore.ignoredSites.some((site) => site.projectId === id)
+  unknownObservation.value = present && ignored
+    ? '本次两份列表均发现该 ID，状态可能正在变化。请关闭并查看目录。'
+    : present
+      ? '本次在站点目录中发现该 ID。请关闭并从目录打开已有站点。'
+      : ignored
+        ? '本次在已忽略列表中发现该 ID，记录仍可见。请关闭并查看已忽略站点。'
+        : '本次未找到该记录，仍不能确认请求是否完成。请勿重复添加或上传。'
+  // 核对仅陈述本次观察；两次 GET 非原子，也不能阻止服务端迟到写入。
+  // 即使观察到存在，也不把当前未知操作自动恢复为可提交的新建/更新。
+}
+
 async function removeSite(site: Site) {
+  const session = captureSession()
   try {
     await ElMessageBox.confirm(
       site.source === 'manual'
@@ -275,9 +379,12 @@ async function removeSite(site: Site) {
       site.source === 'manual' ? '删除站点' : '忽略站点',
       { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
     )
+    if (!currentView(session.generation)) return
     await sitesStore.remove(site.id)
+    if (!currentView(session.generation)) return
     ElMessage.success(site.source === 'manual' ? '站点已删除' : '站点已忽略')
   } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
     if (error !== 'cancel' && error !== 'close') {
       if (error instanceof SiteSyncError) ElMessage.warning('站点操作已完成，但列表同步失败，请重新识别。')
       else ElMessage.error('站点删除失败')
@@ -286,15 +393,23 @@ async function removeSite(site: Site) {
 }
 
 async function restoreIgnoredSite(siteId: string) {
+  const session = captureSession()
   try {
     await sitesStore.restore(siteId)
+    if (!currentView(session.generation)) return
     ElMessage.success('站点已恢复，将在下次识别时重新出现')
-  } catch {
-    ElMessage.error('站点恢复失败')
+  } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
+    if (error instanceof SiteSyncError) ElMessage.warning('站点已恢复，但列表尚未同步，请重新识别。')
+    else ElMessage.error('站点恢复失败')
   }
 }
 
 async function uploadIcon(event: Event) {
+  if (saving.value || iconBusy.value || unknownWrite.value) {
+    if (iconInput.value) iconInput.value.value = ''
+    return
+  }
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   if (!supportedSiteIconTypes.has(file.type) || file.size > maxSiteIconBytes) {
@@ -302,21 +417,47 @@ async function uploadIcon(event: Event) {
     if (iconInput.value) iconInput.value.value = ''
     return
   }
-  if (!selectedSite.value) {
+  if (!savedSiteId.value) {
     pendingIcon.value = file
     if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
     pendingIconPreview.value = URL.createObjectURL(file)
     if (iconInput.value) iconInput.value.value = ''
     return
   }
+  const session = captureSession()
+  const generation = editorGeneration
+  const siteId = savedSiteId.value
+  if (unknownIcons.value.has(siteId)) return
+  const current = () => currentView(session.generation) && generation === editorGeneration
+  iconPending.value.add(siteId)
+  pendingIcon.value = file
+  if (pendingIconPreview.value) URL.revokeObjectURL(pendingIconPreview.value)
+  pendingIconPreview.value = URL.createObjectURL(file)
   try {
-    await sitesStore.uploadIcon(selectedSite.value.id, file)
-    failedIcons.value.delete(selectedSite.value.id)
+    await sitesStore.uploadIcon(siteId, file)
+    if (!current()) return
+    failedIcons.value.delete(siteId)
+    if (pendingIcon.value === file) resetPendingIcon()
     ElMessage.success('站点图标已上传')
-  } catch {
-    ElMessage.error('图标上传失败，请使用 2 MB 以内的 PNG、JPEG、WebP 或 SVG 文件')
+  } catch (error) {
+    if (!currentView(session.generation)) return
+    if (error instanceof SiteIconUploadError && error.iconOutcome === 'unknown') {
+      unknownIcons.value.set(siteId, error)
+      // 同一站点重开的编辑器也必须受保护，但不覆盖其中的新草稿/预览。
+      if (editOpen.value && savedSiteId.value === siteId) {
+        unknownWrite.value = error
+        unknownObservation.value = ''
+      }
+      return
+    }
+    if (!current() || isAbortError(error)) return
+    if (pendingIcon.value === file) resetPendingIcon()
+    if (error instanceof SiteSyncError) ElMessage.warning('站点图标已上传，但列表尚未同步，请重新识别。')
+    else if (error instanceof SiteIconUploadError) ElMessage.error(error.message)
+    else ElMessage.error('图标上传未完成，请核对目录后再处理。')
   } finally {
-    if (iconInput.value) iconInput.value.value = ''
+    if (currentView(session.generation)) iconPending.value.delete(siteId)
+    if (current() && iconInput.value) iconInput.value.value = ''
   }
 }
 
@@ -327,17 +468,21 @@ function resetPendingIcon() {
   if (iconInput.value) iconInput.value.value = ''
 }
 
-onBeforeUnmount(resetPendingIcon)
+onBeforeUnmount(() => { active = false; editorGeneration += 1; resetPendingIcon() })
 
 async function toggleFavorite(site: Site) {
-  if (favoritePending.value) return
-  favoritePending.value = site.id
+  if (favoritePending.value.has(site.id) || unknownFavorites.value.has(site.id)) return
+  favoritePending.value.add(site.id)
+  const session = captureSession()
   try {
     await sitesStore.save(site.id, profileFor(site, { favorite: !site.favorite }))
-  } catch {
-    ElMessage.error('收藏状态保存失败')
+  } catch (error) {
+    if (!currentView(session.generation) || isAbortError(error)) return
+    if (error instanceof SiteWriteUnknownError) unknownFavorites.value.add(site.id)
+    else if (error instanceof SiteSyncError) ElMessage.warning('收藏状态已保存，但列表尚未同步，请重新识别。')
+    else ElMessage.error('收藏状态保存失败')
   } finally {
-    favoritePending.value = null
+    if (currentView(session.generation)) favoritePending.value.delete(site.id)
   }
 }
 
@@ -354,7 +499,7 @@ function sitesForCategory(category: string) {
   <div class="page workspace-page sites-page">
     <WorkspaceHeader title="站点管理" description="快速启动 NAS 上的 Web 应用，并维护入口资料" :icon="Globe2" :stats="stats">
       <template #filters>
-        <SegmentedTabs v-model="siteFilter" :tabs="siteFilterTabs" accessible-label="站点状态筛选" />
+        <SegmentedTabs mode="filter" v-model="siteFilter" :tabs="siteFilterTabs" accessible-label="站点状态筛选" />
         <NcpSelect v-model="selectedCategory" class="category-filter" :options="categorySelectOptions" accessible-label="按分类筛选站点" />
       </template>
       <template #tools>
@@ -367,6 +512,16 @@ function sitesForCategory(category: string) {
     <div v-if="sitesStore.error" class="site-error" role="alert">
       <span>{{ sitesStore.error }}</span>
       <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites">重新加载</ActionButton>
+    </div>
+
+    <div v-if="unknownFavorites.size" class="site-error" role="status">
+      <span>部分收藏保存请求可能已经执行，结果未确认。本页已暂停这些站点的重复收藏提交，请只读核对目录。</span>
+      <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
+    </div>
+
+    <div v-if="unknownIcons.size" class="site-error" role="status">
+      <span>部分图标上传结果未确认，本页已暂停这些站点的重复上传。只读核对不会解除保护。</span>
+      <ActionButton size="sm" :icon="RefreshCw" @click="refreshSites(false)">只读核对目录</ActionButton>
     </div>
 
     <section v-if="!sitesStore.loading || sites.length" class="discovery-status panel" :class="`discovery-status--${discoveryTone}`" aria-labelledby="discovery-status-title">
@@ -445,7 +600,7 @@ function sitesForCategory(category: string) {
             <span class="site-source">{{ sourceLabel(site) }}</span>
             <span class="site-visited">{{ visitedLabel(site.lastVisitedAt) }}</span>
             <div class="row-actions">
-              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending === site.id" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
+              <ListIconButton :icon="Star" :active="site.favorite" :loading="favoritePending.has(site.id)" :disabled="unknownFavorites.has(site.id)" :label="site.favorite ? `取消收藏 ${site.name}` : `收藏 ${site.name}`" @click="toggleFavorite(site)" />
               <ListIconButton :icon="Pencil" :label="`编辑 ${site.name}`" @click="openEditor(site)" />
               <ListIconButton :icon="Trash2" tone="danger" :label="site.source === 'manual' ? `删除 ${site.name}` : `忽略 ${site.name}`" @click="removeSite(site)" />
               <a class="row-open" :class="{ disabled: site.state !== 'running' || !siteLaunchable(site) }" :href="site.state === 'running' && siteLaunchable(site) ? siteURL(site) : undefined" :target="linkTarget" rel="noreferrer" :aria-disabled="site.state !== 'running' || !siteLaunchable(site)" @click="site.state === 'running' && siteLaunchable(site) && trackVisit(site)">打开<ArrowUpRight :size="16" /></a>
@@ -458,8 +613,8 @@ function sitesForCategory(category: string) {
     <section v-if="siteFilter === 'ignored' && sitesStore.ignoredSites.length" class="directory-panel panel ignored-sites">
       <article v-for="site in sitesStore.ignoredSites" :key="site.projectId" class="site-row">
         <div class="site-identity"><div class="site-logo"><EyeOff :size="19" /></div><div><strong>{{ site.name || site.projectId }}</strong><p>{{ site.description || '自动识别站点已被忽略' }}</p></div></div>
-        <span class="site-source">已忽略</span>
-        <div class="row-actions"><ElButton @click="restoreIgnoredSite(site.projectId)">恢复识别</ElButton></div>
+        <span class="ignored-site-status">已忽略</span>
+        <div class="ignored-site-actions"><ElButton class="ignored-site-restore" @click="restoreIgnoredSite(site.projectId)">恢复识别</ElButton></div>
       </article>
     </section>
 
@@ -471,15 +626,43 @@ function sitesForCategory(category: string) {
       </div>
     </section>
 
-    <ElDrawer v-model="editOpen" class="site-editor" :title="selectedSite ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)" append-to-body>
+    <SectionDrawer v-model="editOpen" class="site-editor" :title="unknownWrite ? '站点结果待核对' : savedSiteId ? '编辑站点资料' : '添加站点'" size="min(540px, 100%)">
       <div v-if="selectedSite" class="editor-context">
         <div class="site-logo" :class="{ 'site-logo--image': draft.iconUrl && !failedIcons.has(selectedSite.id) }" :style="siteHue(selectedSite)">
           <img v-if="draft.iconUrl && !failedIcons.has(selectedSite.id)" :src="draft.iconUrl" alt="" />
           <span v-else>{{ draft.name.slice(0, 1).toUpperCase() }}</span>
         </div>
-        <div><strong>{{ selectedSite.projectId }}</strong><span>继续关联当前 Docker 项目</span></div>
+        <div><strong>{{ selectedSite.projectId }}</strong><span>{{ selectedSite.source === 'manual' ? '编辑手动站点资料' : '继续关联当前 Docker 项目' }}</span></div>
       </div>
+      <div v-if="unknownWrite" class="editor-sync-notice" role="status">
+        <CircleAlert :size="18" aria-hidden="true" />
+        <div>
+          <p>{{ unknownWrite.message }}</p>
+          <p v-if="unknownWrite.siteId">记录 ID：{{ unknownWrite.siteId }}</p>
+          <p>草稿保留在当前编辑窗口，提交和图标上传已暂停。</p>
+          <p>只读核对仅查看当前目录，不能确认最终结果，也不会解除暂停。</p>
+          <p v-if="unknownObservation">{{ unknownObservation }}</p>
+        </div>
+      </div>
+      <p v-if="syncPending" class="editor-sync-notice" role="status"><CircleAlert :size="18" aria-hidden="true" /><span>站点资料已保存，但列表尚未同步。当前草稿已保留，请重新同步，无需重复提交。</span></p>
       <ElForm ref="siteForm" :model="draft" :rules="formRules" label-position="top">
+        <ElFormItem>
+          <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
+          <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
+          <div class="icon-upload">
+            <input ref="iconInput" :disabled="saving || iconBusy || Boolean(unknownWrite)" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
+            <button class="icon-upload__preview" :disabled="saving || iconBusy || Boolean(unknownWrite)" type="button" @click="iconInput?.click()">
+              <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
+              <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
+              <Upload v-else :size="20" />
+            </button>
+            <div>
+              <ElButton :disabled="saving || iconBusy || Boolean(unknownWrite)" @click="iconInput?.click()"><Upload :size="15" />{{ savedSiteId ? '更换本地图标' : '上传站点图标' }}</ElButton>
+              <span v-if="iconBusy" role="status">图标正在上传，请等待确认。</span>
+              <span v-else>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
+            </div>
+          </div>
+        </ElFormItem>
         <div class="editor-grid">
           <ElFormItem label="站点名称" prop="name" required><ElInput v-model="draft.name" maxlength="120" placeholder="例如 NAS 文件浏览器" /></ElFormItem>
           <ElFormItem label="站点分类">
@@ -493,22 +676,6 @@ function sitesForCategory(category: string) {
           <template #label><span class="required-group-label">完整入口 URL <small>与端口二选一</small></span></template>
           <ElInput v-model="draft.launchUrl" placeholder="例如 https://nas.example.com/app/；留空按 NAS 地址和端口生成" />
           <span class="field-help">入口 URL 与主入口端口至少填写一项</span>
-        </ElFormItem>
-        <ElFormItem>
-          <template #label><span class="field-label"><Image :size="15" />Logo 或 favicon 地址</span></template>
-          <ElInput v-model="draft.iconUrl" placeholder="支持 http:// 或 https:// 完整图片地址" />
-          <div class="icon-upload">
-            <input ref="iconInput" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" @change="uploadIcon" />
-            <button class="icon-upload__preview" type="button" @click="iconInput?.click()">
-              <img v-if="pendingIconPreview" :src="pendingIconPreview" alt="待上传图标预览" />
-              <img v-else-if="selectedSite?.iconUrl && !failedIcons.has(selectedSite.id)" :src="selectedSite.iconUrl" alt="当前站点图标" />
-              <Upload v-else :size="20" />
-            </button>
-            <div>
-              <ElButton @click="iconInput?.click()"><Upload :size="15" />{{ selectedSite ? '更换本地图标' : '上传站点图标' }}</ElButton>
-              <span>PNG、JPEG、WebP 或 SVG，最大 2 MB；上传图标优先于 URL</span>
-            </div>
-          </div>
         </ElFormItem>
         <div class="editor-grid">
           <ElFormItem v-if="selectedSite?.ports.length" label="主入口端口">
@@ -530,14 +697,30 @@ function sitesForCategory(category: string) {
         </div>
       </ElForm>
       <template #footer>
-        <ElButton @click="editOpen = false">取消</ElButton>
-        <ElButton type="primary" :loading="saving" @click="saveSite"><Settings2 :size="16" />{{ selectedSite ? '保存站点资料' : '添加站点' }}</ElButton>
+        <ElButton @click="editOpen = false">{{ unknownWrite ? '关闭并查看目录' : '取消' }}</ElButton>
+        <ElButton v-if="unknownWrite" class="editor-sync-action" type="primary" :loading="saving" @click="recheckUnknownWrite">只读核对结果</ElButton>
+        <ElButton v-else-if="syncPending" class="editor-sync-action" type="primary" :loading="saving" @click="retryEditorSync">重新同步列表</ElButton>
+        <ElButton v-else type="primary" :loading="saving" :disabled="iconBusy" @click="saveSite"><Settings2 :size="16" />{{ savedSiteId ? '保存站点资料' : '添加站点' }}</ElButton>
       </template>
-    </ElDrawer>
+    </SectionDrawer>
   </div>
 </template>
 
 <style scoped>
+.editor-sync-action.el-button--primary {
+  --el-button-text-color: var(--ncp-on-primary);
+  --el-button-bg-color: var(--ncp-primary-strong);
+  --el-button-border-color: var(--ncp-primary-strong);
+  --el-button-hover-text-color: var(--ncp-on-primary);
+  --el-button-hover-bg-color: var(--ncp-primary-strong);
+  --el-button-hover-border-color: var(--ncp-primary-strong);
+  --el-button-active-text-color: var(--ncp-on-primary);
+  --el-button-active-bg-color: var(--ncp-primary-strong);
+  --el-button-active-border-color: var(--ncp-primary-strong);
+}
+
+.editor-sync-notice { display: flex; align-items: flex-start; gap: var(--ncp-space-2); margin: 0 0 var(--ncp-space-4); padding: var(--ncp-space-3); border: 1px solid var(--ncp-line); border-radius: var(--ncp-radius-control); background: var(--ncp-warning-soft); color: var(--ncp-warning-strong); font-size: .82rem; line-height: 1.6; overflow-wrap: anywhere; }
+.editor-sync-notice svg { flex: 0 0 auto; margin-top: 3px; }
 .required-group-label::before{margin-right:4px;color:var(--el-color-danger);content:'*'}.required-group-label small{margin-left:5px;color:var(--ncp-text-subtle);font-size:.68rem;font-weight:500}
 .site-search{width:min(360px,36vw)}.category-filter{width:150px}
 .site-error{display:flex;min-height:46px;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid rgba(212,81,93,.2);border-radius:10px;background:var(--ncp-danger-soft);color:var(--ncp-danger-strong);font-size:.82rem}.site-error button{min-height:34px;padding:0 11px;border-radius:8px;background:#fff;color:inherit;font-weight:700}
@@ -545,7 +728,10 @@ function sitesForCategory(category: string) {
 .site-logo{display:grid;width:42px;height:42px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px solid hsl(var(--site-hue) 60% 84%);border-radius:11px;background:hsl(var(--site-hue) 72% 95%);color:hsl(var(--site-hue) 62% 39%);font-family:var(--ncp-font-latin);font-weight:800}.site-logo--image{border-color:transparent;background:transparent}.site-logo--large{width:52px;height:52px;border-radius:14px;font-size:1.08rem}.site-logo img{width:100%;height:100%;object-fit:contain}
 .directory-panel{overflow:hidden}.site-row{display:grid;min-height:78px;grid-template-columns:minmax(250px,1.6fr) 104px 190px 104px 100px 190px;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--ncp-line);transition:background var(--ncp-duration-fast)}.site-row:hover{background:var(--ncp-surface-hover)}.site-identity{display:flex;min-width:0;align-items:center;gap:10px}.site-identity>div:last-child{min-width:0}.site-identity strong{display:block;overflow:hidden;font-size:.9rem;text-overflow:ellipsis;white-space:nowrap}.site-identity p{overflow:hidden;margin:3px 0 0;color:var(--ncp-text-subtle);font-size:.76rem;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}.site-ports,.row-actions{display:flex;align-items:center;gap:5px}.site-ports a{display:grid;min-width:46px;min-height:32px;place-items:center;border:1px solid var(--ncp-line);border-radius:8px;background:#fff;color:var(--ncp-text-muted);font-family:var(--ncp-font-mono);font-size:.72rem}.site-ports a.primary{border-color:rgba(36,104,216,.2);background:var(--ncp-primary-soft);color:var(--ncp-primary-strong)}.site-ports>span,.site-source,.site-visited{color:var(--ncp-text-subtle);font-size:.75rem}.row-actions{justify-content:flex-end}.row-actions button{display:grid;width:36px;height:36px;place-items:center;border-radius:8px;background:transparent;color:var(--ncp-text-muted)}.row-actions button:hover{background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.row-open{display:flex;min-height:36px;flex:0 0 auto;align-items:center;gap:3px;padding:0 11px;border-radius:8px;background:var(--ncp-primary-soft);color:var(--ncp-primary-strong);font-size:.78rem;font-weight:700;white-space:nowrap}.row-open.disabled{pointer-events:none;background:var(--ncp-surface-quiet);color:var(--ncp-text-subtle)}
 .site-row--skeleton i{height:12px}.site-row--skeleton i:first-child{width:62%}.site-row--skeleton i:nth-child(2){width:72%}.site-row--skeleton i:nth-child(3){width:58%}.site-row--skeleton i:last-child{width:76%}.site-row:hover .row-actions{opacity:1}.row-actions{opacity:.72;transition:opacity var(--ncp-duration-fast)}
-.ignored-sites .site-row{grid-template-columns:minmax(280px,1fr) 100px 140px}
+.ignored-sites .site-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+.ignored-site-status { color: var(--ncp-text-subtle); font-size: .75rem; white-space: nowrap; }
+.ignored-site-actions { display: flex; justify-content: flex-end; min-width: 0; }
+.ignored-site-restore { width: auto; min-width: var(--ncp-touch-target); height: auto; min-height: var(--ncp-touch-target); padding: 10px 16px; white-space: nowrap; }
 .row-actions button.danger:hover{background:var(--ncp-danger-soft);color:var(--ncp-danger-strong)}
 .empty-sites{display:flex;min-height:220px;align-items:center;justify-content:center;gap:14px;color:var(--ncp-text-subtle)}.empty-sites h2{margin:0;color:var(--ncp-text);font-size:.95rem}.empty-sites p{margin:4px 0 0;font-size:.8rem}.editor-context{display:flex;align-items:center;gap:11px;margin:-5px 0 18px;padding:12px;border-radius:11px;background:var(--ncp-surface-quiet)}.editor-context>div:last-child{display:grid;min-width:0;gap:2px}.editor-context strong{overflow:hidden;font-size:.8rem;text-overflow:ellipsis;white-space:nowrap}.editor-context span{color:var(--ncp-text-subtle);font-size:.74rem}.editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.editor-grid :deep(.el-select),.editor-grid :deep(.el-input-number){width:100%}.field-label,.switch-grid label,.switch-grid span{display:flex;align-items:center;gap:6px}.switch-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.switch-grid label{min-height:48px;padding:0 12px;border:1px solid var(--ncp-line);border-radius:10px;background:var(--ncp-surface-quiet)}.switch-grid span{color:var(--ncp-text-muted);font-size:.8rem}
 .field-help{display:block;margin-top:5px;color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload{display:flex;align-items:center;gap:11px;margin-top:9px}.icon-upload input{display:none}.icon-upload>div{display:grid;justify-items:start;gap:5px}.icon-upload span{color:var(--ncp-text-subtle);font-size:.72rem}.icon-upload__preview{display:grid;width:58px;height:58px;flex:0 0 auto;place-items:center;overflow:hidden;border:1px dashed var(--ncp-line-strong);border-radius:13px;background:var(--ncp-surface-quiet);color:var(--ncp-primary-strong)}.icon-upload__preview:hover{border-color:rgba(52,116,212,.45);background:var(--ncp-primary-soft)}.icon-upload__preview img{width:100%;height:100%;object-fit:cover}
@@ -737,6 +923,10 @@ function sitesForCategory(category: string) {
   .discovery-issues article { grid-template-columns: 1fr; gap: 4px; padding-block: 11px; }
   .site-row { grid-template-columns: minmax(0, 1fr) auto; }
   .site-source, .site-visited { display: none; }
+  .ignored-sites .site-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ignored-sites .site-identity { grid-column: 1 / -1; }
+  .ignored-site-status { grid-column: 1; grid-row: 2; }
+  .ignored-site-actions { grid-column: 2; grid-row: 2; }
 }
 
 @media (max-width: 520px) {

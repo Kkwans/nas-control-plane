@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -38,9 +39,13 @@ type sqliteCandidate struct {
 }
 
 type Manager struct {
+	operations operationBudget
 	now        func() time.Time
 	registry   sourceRegistry
 	discoverFn func(context.Context) (Discovery, error)
+	// 仅替换单个实例的打开边界，供无网络测试使用；严格配置构造不允许替换。
+	sqlOpen   func(string, string) (*sql.DB, error)
+	sqlOpenDB func(driver.Connector) *sql.DB
 }
 
 const discoveryTTL = 10 * time.Second
@@ -57,13 +62,18 @@ func NewManager() *Manager {
 	return &Manager{now: time.Now}
 }
 
+// SupportsDatabaseTLSPolicy 承诺全部建连入口都经过严格策略分派，且不降级重试。
+func (m *Manager) SupportsDatabaseTLSPolicy() bool {
+	return true
+}
+
 func (m *Manager) TestConnection(ctx context.Context, request Connection) (ConnectionDiagnostic, error) {
 	started := time.Now()
-	source, db, err := m.connect(ctx, request)
+	source, _, cleanup, err := m.connect(ctx, request)
 	if err != nil {
 		return diagnosticForError(Source{ID: request.SourceID}, "test_connection", started, err), err
 	}
-	defer db.Close()
+	defer cleanup()
 	return ConnectionDiagnostic{
 		Connected:  true,
 		Code:       "connected",
@@ -211,80 +221,65 @@ func (m *Manager) discoverFresh(ctx context.Context) (Discovery, error) {
 }
 
 func (m *Manager) Catalog(ctx context.Context, request CatalogRequest) (Catalog, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return Catalog{}, err
 	}
-	defer db.Close()
-	tables, err := listTables(ctx, db, source, request.Credentials)
+	defer cleanup()
+	budget, err := newResultBudget(Catalog{Source: source, Tables: []Table{}})
+	if err != nil {
+		return Catalog{}, MapError(ctx, source, "catalog", err)
+	}
+	tables, err := listTables(ctx, db, source, request.Credentials, budget)
 	if err != nil {
 		return Catalog{}, MapError(ctx, source, "catalog", err)
 	}
 	for index := range tables {
-		columns, columnErr := listColumns(ctx, db, source.Driver, tables[index].Schema, tables[index].Name)
+		columns, columnErr := listCatalogColumns(ctx, db, source.Driver, tables[index].Schema, tables[index].Name, budget)
 		if columnErr != nil {
 			return Catalog{}, MapError(ctx, source, "catalog_columns", columnErr)
 		}
 		tables[index].Columns = columns
-		enrichTable(ctx, db, source.Driver, &tables[index])
+		if err := enrichCatalogTable(ctx, db, source.Driver, &tables[index], budget); err != nil {
+			return Catalog{}, MapError(ctx, source, "catalog_metadata", err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Catalog{}, MapError(ctx, source, "catalog", err)
 	}
 	return Catalog{Source: source, Tables: tables}, nil
 }
 
 func (m *Manager) Query(ctx context.Context, request QueryRequest) (QueryResult, error) {
-	statement := strings.TrimSpace(request.SQL)
-	if statement == "" {
+	if err := ValidateQueryResultMode(request.ResultMode); err != nil {
+		return QueryResult{}, err
+	}
+	if strings.TrimSpace(request.SQL) == "" {
 		return QueryResult{}, newDatabaseError(CodeSQLInvalid, Source{ID: request.SourceID}, "query", errors.New("SQL statement is empty"))
 	}
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return QueryResult{}, err
 	}
-	defer db.Close()
-	started := time.Now()
-	if !returnsRows(statement) {
-		result, execErr := db.ExecContext(ctx, statement)
-		if execErr != nil {
-			return QueryResult{}, MapError(ctx, source, "query", execErr)
-		}
-		affected, _ := result.RowsAffected()
-		return QueryResult{Columns: []string{}, Rows: [][]any{}, RowsAffected: affected, DurationMs: time.Since(started).Milliseconds()}, nil
-	}
-	rows, err := db.QueryContext(ctx, statement)
+	defer cleanup()
+	result, err := executeQuery(ctx, databaseQueryRunner{db}, source.Driver, request)
 	if err != nil {
 		return QueryResult{}, MapError(ctx, source, "query", err)
 	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return QueryResult{}, MapError(ctx, source, "query", err)
-	}
-	result := QueryResult{Columns: columns, Rows: make([][]any, 0), DurationMs: 0}
-	columnTypes, _ := rows.ColumnTypes()
-	for rows.Next() {
-		if len(result.Rows) >= maxQueryRows {
-			result.Truncated = true
-			break
-		}
-		values, scanErr := scanValues(rows, len(columns), columnTypes)
-		if scanErr != nil {
-			return QueryResult{}, MapError(ctx, source, "query", scanErr)
-		}
-		result.Rows = append(result.Rows, values)
-	}
-	if err := rows.Err(); err != nil {
-		return QueryResult{}, MapError(ctx, source, "query", err)
-	}
-	result.DurationMs = time.Since(started).Milliseconds()
 	return result, nil
 }
 
+// QueryWithOptions 显式声明此 Agent 支持结果模式；旧 provider 不会被默默调用。
+func (m *Manager) QueryWithOptions(ctx context.Context, request QueryRequest) (QueryResult, error) {
+	return m.Query(ctx, request)
+}
+
 func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return RowsResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return RowsResult{}, MapError(ctx, source, "rows", err)
@@ -303,43 +298,27 @@ func (m *Manager) Rows(ctx context.Context, request RowsRequest) (RowsResult, er
 	if ordering.Columns == nil {
 		return RowsResult{}, newDatabaseError(CodeSQLInvalid, source, "rows", errors.New("sort column does not exist"))
 	}
+	result := RowsResult{Table: table, Rows: []Row{}, Limit: limit, Offset: request.Offset, Ordering: ordering}
+	budget, err := newResultBudget(result)
+	if err != nil {
+		return RowsResult{}, MapError(ctx, source, "rows", err)
+	}
 	query := "SELECT * FROM " + qualified(source.Driver, table.Schema, table.Name) + order +
 		" LIMIT " + strconv.Itoa(limit+1) + " OFFSET " + strconv.Itoa(request.Offset)
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return RowsResult{}, MapError(ctx, source, "rows", err)
 	}
-	defer rows.Close()
-	names, err := rows.Columns()
-	if err != nil {
-		return RowsResult{}, MapError(ctx, source, "rows", err)
-	}
-	result := RowsResult{Table: table, Rows: make([]Row, 0, limit), Limit: limit, Offset: request.Offset, Ordering: ordering}
-	columnTypes, _ := rows.ColumnTypes()
-	for rows.Next() {
-		values, scanErr := scanValues(rows, len(names), columnTypes)
-		if scanErr != nil {
-			return RowsResult{}, MapError(ctx, source, "rows", scanErr)
-		}
-		if len(result.Rows) == limit {
-			result.HasMore = ordering.Stable
-			break
-		}
-		row := make(Row, len(names))
-		for index, name := range names {
-			row[name] = values[index]
-		}
-		result.Rows = append(result.Rows, row)
-	}
-	return result, MapError(ctx, source, "rows", rows.Err())
+	result, err = readPagedRows(ctx, rows, result, budget)
+	return result, MapError(ctx, source, "rows", err)
 }
 
 func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "insert", err)
@@ -370,11 +349,11 @@ func (m *Manager) Insert(ctx context.Context, request InsertRequest) (MutationRe
 }
 
 func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "update", err)
@@ -402,11 +381,11 @@ func (m *Manager) Update(ctx context.Context, request UpdateRequest) (MutationRe
 }
 
 func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationResult, error) {
-	source, db, err := m.connect(ctx, request.Connection)
+	source, db, cleanup, err := m.connect(ctx, request.Connection)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	defer db.Close()
+	defer cleanup()
 	table, err := loadTable(ctx, db, source.Driver, request.Schema, request.Table)
 	if err != nil {
 		return MutationResult{}, MapError(ctx, source, "delete", err)
@@ -420,10 +399,34 @@ func (m *Manager) Delete(ctx context.Context, request DeleteRequest) (MutationRe
 	return result, MapError(ctx, source, "delete", err)
 }
 
-func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, error) {
+func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *sql.DB, func(), error) {
+	release, err := m.operations.acquire(ctx, connection.SourceID)
+	if err != nil {
+		return Source{}, nil, nil, err
+	}
+	var db *sql.DB
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			// Close 完成前仍占用许可；即使测试驱动 panic，也不能泄漏计数。
+			defer release()
+			if db != nil {
+				_ = db.Close()
+			}
+		})
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			cleanup()
+		}
+	}()
+
+	// 在 discovery 等外部调用之前固定策略，避免调用方持有的指针改变建连语义。
+	connection.Credentials = CloneCredentials(connection.Credentials)
 	discovery, err := m.Discover(ctx)
 	if err != nil {
-		return Source{}, nil, MapError(ctx, Source{}, "discover", err)
+		return Source{}, nil, nil, MapError(ctx, Source{}, "discover", err)
 	}
 	var source Source
 	for _, candidate := range discovery.Sources {
@@ -433,23 +436,42 @@ func (m *Manager) connect(ctx context.Context, connection Connection) (Source, *
 		}
 	}
 	if source.ID == "" {
-		return Source{}, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
+		return Source{}, nil, nil, newDatabaseError(CodeDatabaseNotFound, Source{ID: connection.SourceID}, "connect", errors.New("database source is unavailable"))
 	}
-	driver, dsn, err := connectionString(source, connection.Credentials)
-	if err != nil {
-		return Source{}, nil, MapError(ctx, source, "connect", err)
+	if connection.Credentials.TLS != nil {
+		connector, err := newDatabaseTLSConnector(source, connection.Credentials, connection.Credentials.TLS)
+		if err != nil {
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
+		}
+		openDB := m.sqlOpenDB
+		if openDB == nil {
+			openDB = sql.OpenDB
+		}
+		db = openDB(connector)
+	} else {
+		driverName, dsn, err := connectionString(source, connection.Credentials)
+		if err != nil {
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
+		}
+		open := m.sqlOpen
+		if open == nil {
+			open = sql.Open
+		}
+		db, err = open(driverName, dsn)
+		if err != nil {
+			return Source{}, nil, nil, MapError(ctx, source, "connect", err)
+		}
 	}
-	db, err := sql.Open(driver, dsn)
-	if err != nil {
-		return Source{}, nil, MapError(ctx, source, "connect", err)
+	if db == nil {
+		return Source{}, nil, nil, newDatabaseError(CodeUnreachable, source, "connect", errors.New("database opener returned no pool"))
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return Source{}, nil, MapError(ctx, source, "connect", err)
+		return Source{}, nil, nil, MapError(ctx, source, "connect", err)
 	}
-	return source, db, nil
+	transferred = true
+	return source, db, cleanup, nil
 }
 
 func connectionString(source Source, credentials Credentials) (string, string, error) {
@@ -514,7 +536,7 @@ func credentialSecret(credentials Credentials) string {
 	return credentials.Token
 }
 
-func listTables(ctx context.Context, db *sql.DB, source Source, credentials Credentials) ([]Table, error) {
+func listTables(ctx context.Context, db *sql.DB, source Source, credentials Credentials, budget *resultBudget) ([]Table, error) {
 	var query string
 	var args []any
 	switch source.Driver {
@@ -537,29 +559,60 @@ func listTables(ctx context.Context, db *sql.DB, source Source, credentials Cred
 		if err := rows.Scan(&table.Schema, &table.Name, &table.Type, &table.Definition); err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := chargeCatalogValue(budget, table); err != nil {
+			return nil, err
+		}
+		cloneCatalogTableText(&table)
 		result = append(result, table)
 	}
-	return result, rows.Err()
+	if err := finishResultRows(ctx, rows, nil); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
-func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) {
+func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table, checkpoint func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// 统计和定义允许缺失，但取消不能伪装成成功，也不能继续查询。
+	scan := func(query string, args []any, destinations ...any) error {
+		err := db.QueryRowContext(ctx, query, args...).Scan(destinations...)
+		if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
+		}
+		return err
+	}
 	switch driver {
 	case DriverSQLite:
 		var count int64
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name)).Scan(&count); err == nil {
+		if err := scan("SELECT COUNT(*) FROM "+qualified(driver, table.Schema, table.Name), nil, &count); err == nil {
 			table.RowCount = &count
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		var size sql.NullInt64
-		if err := db.QueryRowContext(ctx, "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", table.Name).Scan(&size); err == nil && size.Valid {
+		if err := scan("SELECT SUM(pgsize) FROM dbstat WHERE name = ?", []any{table.Name}, &size); err == nil && size.Valid {
 			table.SizeBytes = &size.Int64
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 	case DriverMySQL:
 		var rows, size sql.NullInt64
 		var created sql.NullString
-		if err := db.QueryRowContext(ctx, `SELECT table_rows, data_length + index_length,
+		if err := scan(`SELECT table_rows, data_length + index_length,
 			COALESCE(DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s'), '')
 			FROM information_schema.tables WHERE table_schema = ? AND table_name = ?`,
-			table.Schema, table.Name).Scan(&rows, &size, &created); err == nil {
+			[]any{table.Schema, table.Name}, &rows, &size, &created); err == nil {
 			if rows.Valid {
 				table.RowCount = &rows.Int64
 			}
@@ -567,31 +620,60 @@ func enrichTable(ctx context.Context, db *sql.DB, driver Driver, table *Table) {
 				table.SizeBytes = &size.Int64
 			}
 			table.CreatedAt = created.String
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		var ignored, definition string
-		if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name)).Scan(&ignored, &definition); err == nil {
+		if err := scan("SHOW CREATE TABLE "+qualified(driver, table.Schema, table.Name), nil, &ignored, &definition); err == nil {
 			table.Definition = definition
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 	case DriverPostgreSQL:
 		var count, size sql.NullInt64
-		if err := db.QueryRowContext(ctx, `SELECT c.reltuples::bigint, pg_total_relation_size(c.oid)
+		if err := scan(`SELECT c.reltuples::bigint, pg_total_relation_size(c.oid)
 			FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = $1 AND c.relname = $2`, table.Schema, table.Name).Scan(&count, &size); err == nil {
+			WHERE n.nspname = $1 AND c.relname = $2`, []any{table.Schema, table.Name}, &count, &size); err == nil {
 			if count.Valid {
 				table.RowCount = &count.Int64
 			}
 			if size.Valid {
 				table.SizeBytes = &size.Int64
 			}
+			if err := checkpoint(); err != nil {
+				return err
+			}
+		} else if cause := tlsContextCause(ctx, err); cause != nil {
+			return cause
 		}
 		if strings.EqualFold(table.Type, "VIEW") {
-			_ = db.QueryRowContext(ctx, "SELECT pg_get_viewdef($1::regclass, true)",
-				table.Schema+"."+table.Name).Scan(&table.Definition)
+			var definition string
+			err := scan("SELECT pg_get_viewdef($1::regclass, true)", []any{table.Schema + "." + table.Name}, &definition)
+			if err == nil {
+				table.Definition = definition
+				if err := checkpoint(); err != nil {
+					return err
+				}
+			}
+			if cause := tlsContextCause(ctx, err); cause != nil {
+				return cause
+			}
 		}
 	}
+	return ctx.Err()
 }
 
 func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string) ([]Column, error) {
+	return listCatalogColumns(ctx, db, driver, schema, table, nil)
+}
+
+func listCatalogColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table string, budget *resultBudget) ([]Column, error) {
 	if driver == DriverSQLite {
 		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+quote(driver, table)+")")
 		if err != nil {
@@ -603,31 +685,86 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			var position, notNull, primaryKey int
 			var name, dataType string
 			var defaultValue any
-			if err := rows.Scan(&position, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			cell := catalogDefaultCell{budget: budget}
+			var defaultTarget any = &defaultValue
+			if budget != nil {
+				defaultTarget = &cell
+			}
+			if err := rows.Scan(&position, &name, &dataType, &notNull, defaultTarget, &primaryKey); err != nil {
 				return nil, err
 			}
-			primary := primaryKey > 0
-			result = append(result, Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primary, Default: normalizeValue(defaultValue), Position: position + 1})
+			if budget != nil {
+				defaultValue = cell.value
+			} else {
+				defaultValue = normalizeValue(defaultValue)
+			}
+			column := Column{Name: name, DataType: dataType, Nullable: notNull == 0, PrimaryKey: primaryKey > 0, Default: defaultValue, Position: position + 1}
+			if err := retainCatalogColumn(ctx, budget, &column, len(result) == 0, true); err != nil {
+				return nil, err
+			}
+			result = append(result, column)
 		}
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if budget != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		primaryCount := 0
+		integerPrimary := false
 		for _, column := range result {
 			if column.PrimaryKey {
 				primaryCount++
+				integerPrimary = strings.EqualFold(strings.TrimSpace(column.DataType), "INTEGER")
 			}
+		}
+		rowidAlias := false
+		if primaryCount == 1 && integerPrimary {
+			// WITHOUT ROWID 和列级 PRIMARY KEY DESC 都有独立的主键索引；
+			// 真正的 rowid 别名没有。其他 UNIQUE/普通索引不影响生成能力。
+			// 先释放 table_info 的结果，兼容仅有一个连接的数据库。
+			// 直接使用 PRAGMA，避免同名用户表遮蔽 pragma_index_list 函数。
+			indexes, err := db.QueryContext(ctx, "PRAGMA index_list("+quote(driver, table)+")")
+			if err != nil {
+				return nil, err
+			}
+			defer indexes.Close()
+			var hasPrimaryIndex bool
+			for indexes.Next() {
+				var sequence, unique, partial int
+				var name, origin string
+				if err := indexes.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+					return nil, err
+				}
+				if origin == "pk" {
+					hasPrimaryIndex = true
+				}
+			}
+			if err := indexes.Err(); err != nil {
+				return nil, err
+			}
+			if err := indexes.Close(); err != nil {
+				return nil, err
+			}
+			rowidAlias = !hasPrimaryIndex
 		}
 		for index := range result {
 			column := &result[index]
 			identityGeneration := ""
-			// SQLite's exact INTEGER PRIMARY KEY aliases the rowid only for a
-			// single-column key. Composite integer keys are ordinary required
-			// values and must never be inferred as generated.
-			if primaryCount == 1 && column.PrimaryKey && strings.EqualFold(strings.TrimSpace(column.DataType), "INTEGER") {
+			if rowidAlias && column.PrimaryKey {
 				identityGeneration = "sqlite-rowid"
 			}
 			column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, "")
+		}
+		if budget != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 		}
 		return result, nil
 	}
@@ -636,8 +773,11 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		placeholderSchema, placeholderTable = "$1", "$2"
 	}
 	generatedSelect := "'' AS identity_generation, '' AS generated_kind"
+	primaryKeyFilter := ""
 	if driver == DriverMySQL {
 		generatedSelect = "c.extra, '' AS generated_kind"
+		// MySQL 的外键与索引约束可能同名；主键不能借用外键列。
+		primaryKeyFilter = " AND ku.referenced_table_name IS NULL"
 	} else if driver == DriverPostgreSQL {
 		generatedSelect = "c.is_identity, c.is_generated"
 	}
@@ -648,8 +788,12 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 			SELECT ku.table_schema, ku.table_name, ku.column_name
 			FROM information_schema.table_constraints tc
 			JOIN information_schema.key_column_usage ku
-			  ON tc.constraint_name = ku.constraint_name AND tc.table_schema = ku.table_schema
-			WHERE tc.constraint_type = 'PRIMARY KEY'
+			  ON tc.constraint_catalog = ku.constraint_catalog
+			 AND tc.constraint_schema = ku.constraint_schema
+			 AND tc.constraint_name = ku.constraint_name
+			 AND tc.table_schema = ku.table_schema
+			 AND tc.table_name = ku.table_name
+			WHERE tc.constraint_type = 'PRIMARY KEY'` + primaryKeyFilter + `
 		) k ON k.table_schema = c.table_schema AND k.table_name = c.table_name AND k.column_name = c.column_name
 		WHERE c.table_schema = ` + placeholderSchema + ` AND c.table_name = ` + placeholderTable + `
 		ORDER BY c.ordinal_position`
@@ -664,14 +808,31 @@ func listColumns(ctx context.Context, db *sql.DB, driver Driver, schema, table s
 		var nullable string
 		var primaryKey int
 		var identityGeneration, generatedKind string
-		if err := rows.Scan(&column.Name, &column.DataType, &nullable, &column.Default, &column.Position, &primaryKey, &identityGeneration, &generatedKind); err != nil {
+		cell := catalogDefaultCell{budget: budget}
+		var defaultTarget any = &column.Default
+		if budget != nil {
+			defaultTarget = &cell
+		}
+		if err := rows.Scan(&column.Name, &column.DataType, &nullable, defaultTarget, &column.Position, &primaryKey, &identityGeneration, &generatedKind); err != nil {
 			return nil, err
 		}
 		column.Nullable = nullable == "YES"
 		column.PrimaryKey = primaryKey == 1
-		column.Default = normalizeValue(column.Default)
+		if budget != nil {
+			column.Default = cell.value
+		} else {
+			column.Default = normalizeValue(column.Default)
+		}
 		column.WriteMode = writeModeForColumn(column.PrimaryKey, column.DataType, column.Default, identityGeneration, generatedKind)
+		if err := retainCatalogColumn(ctx, budget, &column, len(result) == 0, false); err != nil {
+			return nil, err
+		}
 		result = append(result, column)
+	}
+	if budget != nil {
+		if err := finishResultRows(ctx, rows, nil); err != nil {
+			return nil, err
+		}
 	}
 	return result, rows.Err()
 }
@@ -740,31 +901,26 @@ func execMutation(ctx context.Context, db *sql.DB, statement string, args []any)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	affected, _ := result.RowsAffected()
-	return MutationResult{RowsAffected: affected}, nil
+	return mutationReceipt(result)
 }
 
-func scanValues(rows *sql.Rows, count int, columnTypes ...[]*sql.ColumnType) ([]any, error) {
-	raw := make([]any, count)
-	targets := make([]any, count)
-	for index := range raw {
-		targets[index] = &raw[index]
-	}
-	if err := rows.Scan(targets...); err != nil {
-		return nil, err
-	}
-	var types []*sql.ColumnType
-	if len(columnTypes) > 0 {
-		types = columnTypes[0]
-	}
-	for index := range raw {
-		databaseType := ""
-		if index < len(types) && types[index] != nil {
-			databaseType = types[index].DatabaseTypeName()
+// 只隔离驱动回执读取；ExecContext 已经完成，不恢复或重放执行，也不承诺回滚。
+// database/sql 会把 nil driver.Result 包成非 nil sql.Result，因此还须隔离读取时的 panic。
+func mutationReceipt(result sql.Result) (receipt MutationResult, err error) {
+	invalid := func() error { return &DatabaseError{Code: CodeMutationReceiptInvalid, Operation: "mutation_receipt"} }
+	defer func() {
+		if recover() != nil {
+			receipt, err = MutationResult{}, invalid()
 		}
-		raw[index] = normalizeDatabaseValue(raw[index], databaseType)
+	}()
+	if result == nil {
+		return MutationResult{}, invalid()
 	}
-	return raw, nil
+	affected, countErr := result.RowsAffected()
+	if countErr != nil || affected < 0 || affected > maxSafeRowsAffected {
+		return MutationResult{}, invalid()
+	}
+	return MutationResult{RowsAffected: affected}, nil
 }
 
 func normalizeValue(value any) any {
@@ -943,19 +1099,6 @@ func writeModeForColumn(primaryKey bool, dataType string, defaultValue any, iden
 		return "optional-default"
 	}
 	return "required"
-}
-
-func returnsRows(statement string) bool {
-	fields := strings.Fields(strings.ToUpper(statement))
-	if len(fields) == 0 {
-		return false
-	}
-	switch fields[0] {
-	case "SELECT", "WITH", "PRAGMA", "EXPLAIN", "SHOW", "DESCRIBE", "DESC", "VALUES":
-		return true
-	default:
-		return false
-	}
 }
 
 func sourceID(driver Driver, location string) string {

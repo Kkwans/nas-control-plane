@@ -8,6 +8,7 @@ import (
 	"github.com/Kkwans/nas-control-plane/internal/system"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -100,7 +101,22 @@ func (s *dashboardService) GetDockerInventory(ctx context.Context, _ *emptypb.Em
 	if err != nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_DOCKER_INVENTORY_UNAVAILABLE")
 	}
-	return dashboardStruct(inventory, "AGENT_DOCKER_INVENTORY_RESPONSE_INVALID")
+	// 在默认 4 MiB gRPC 接收上限前拒绝过大的真实响应，不提高全局传输限额。
+	encoded, err := json.Marshal(inventory)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "AGENT_DOCKER_INVENTORY_RESPONSE_INVALID")
+	}
+	if len(encoded) > 1<<20 {
+		return nil, grpcstatus.Error(codes.ResourceExhausted, "AGENT_DOCKER_INVENTORY_RESPONSE_LIMIT_EXCEEDED")
+	}
+	response, err := dashboardStruct(inventory, "AGENT_DOCKER_INVENTORY_RESPONSE_INVALID")
+	if err != nil {
+		return nil, err
+	}
+	if proto.Size(response) > 3<<20 {
+		return nil, grpcstatus.Error(codes.ResourceExhausted, "AGENT_DOCKER_INVENTORY_RESPONSE_LIMIT_EXCEEDED")
+	}
+	return response, nil
 }
 
 func dashboardStruct(value any, errorCode string) (*structpb.Struct, error) {

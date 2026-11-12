@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -38,27 +37,32 @@ const (
 var BuildVersion = "dev"
 
 type SocketConfig struct {
-	SocketPath          string
-	SocketGroup         string
-	SocketMode          os.FileMode
-	EnableTerminalPOC   bool
-	TerminalManager     *terminal.Manager
-	DashboardProvider   DashboardProvider
-	DockerControl       DockerControlProvider
-	DockerLogs          DockerLogsProvider
-	DockerImages        DockerImageProvider
-	DockerResources     DockerResourcesProvider
-	Filesystem          FilesystemProvider
-	OutboundProxy       string
-	ComposeRegistryPath string
-	Compose             ComposeProvider
-	Database            DatabaseProvider
-	Journal             JournalProvider
-	System              SystemProvider
-	Proxy               ProxyProvider
+	SocketPath            string
+	SocketGroup           string
+	SocketMode            os.FileMode
+	EnableTerminalPOC     bool
+	TerminalManager       *terminal.Manager
+	TerminalMaxSessions   int
+	DashboardProvider     DashboardProvider
+	DockerControl         DockerControlProvider
+	DockerLogs            DockerLogsProvider
+	DockerImages          DockerImageProvider
+	DockerResources       DockerResourcesProvider
+	DockerInventoryEvents DockerInventoryEventsProvider
+	Filesystem            FilesystemProvider
+	OutboundProxy         string
+	ComposeRegistryPath   string
+	Compose               ComposeProvider
+	Database              DatabaseProvider
+	Journal               JournalProvider
+	System                SystemProvider
+	Proxy                 ProxyProvider
 }
 
 func Serve(ctx context.Context, config SocketConfig) error {
+	if _, err := validateTerminalCapacity(config); err != nil {
+		return err
+	}
 	listener, cleanup, err := listenUnixSocket(config)
 	if err != nil {
 		return err
@@ -106,6 +110,10 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		if err != nil {
 			return coded("AGENT_DOCKER_RESOURCES_INITIALIZATION_FAILED", err)
 		}
+	}
+	dockerInventoryEvents := config.DockerInventoryEvents
+	if dockerInventoryEvents == nil {
+		dockerInventoryEvents = docker.NewLiveInventoryEventSource()
 	}
 	filesystemProvider := config.Filesystem
 	if filesystemProvider == nil {
@@ -188,21 +196,18 @@ func Serve(ctx context.Context, config SocketConfig) error {
 	RegisterAgentDockerLogsServiceServer(grpcServer, newDockerLogsService(dockerLogs))
 	RegisterAgentDockerImagesServiceServer(grpcServer, newDockerImageService(dockerImages))
 	RegisterAgentDockerResourcesServiceServer(grpcServer, newDockerResourcesService(dockerResources))
+	RegisterAgentDockerInventoryEventsServiceServer(grpcServer, newDockerInventoryEventsService(dockerInventoryEvents))
 	RegisterAgentFilesystemServiceServer(grpcServer, newFilesystemService(filesystemProvider))
 	RegisterAgentComposeServiceServer(grpcServer, newComposeService(composeProvider))
-	RegisterAgentDatabaseServiceServer(grpcServer, newDatabaseService(databaseProvider))
+	registerDatabaseServices(grpcServer, databaseProvider)
 	RegisterAgentJournalServiceServer(grpcServer, newJournalService(journalProvider))
 	RegisterAgentWebProbeServiceServer(grpcServer, newWebProbeService())
 	RegisterAgentSystemServiceServer(grpcServer, NewSystemService(systemProvider))
 	RegisterAgentProxyServiceServer(grpcServer, NewProxyService(proxyProvider))
 	if config.EnableTerminalPOC {
-		manager := config.TerminalManager
-		if manager == nil {
-			manager, err = terminal.NewPOCManager()
-			if err != nil {
-				cleanup()
-				return coded("TERMINAL_INITIALIZATION_FAILED", err)
-			}
+		manager, err := configuredTerminalManager(config, terminal.NewProductionManager)
+		if err != nil {
+			return coded("TERMINAL_INITIALIZATION_FAILED", err)
 		}
 		RegisterAgentTerminalPOCServiceServer(grpcServer, newTerminalPOCService(manager))
 	}
@@ -224,41 +229,6 @@ func Serve(ctx context.Context, config SocketConfig) error {
 		return coded("AGENT_SOCKET_SERVE_FAILED", err)
 	}
 	return nil
-}
-
-func listenUnixSocket(config SocketConfig) (net.Listener, func(), error) {
-	config, err := normalizedSocketConfig(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := os.Lstat(config.SocketPath); err == nil {
-		return nil, nil, coded("AGENT_SOCKET_PATH_OCCUPIED", errors.New("socket path already exists"))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, nil, coded("AGENT_SOCKET_PATH_CHECK_FAILED", err)
-	}
-
-	directory := filepath.Dir(config.SocketPath)
-	if err := os.MkdirAll(directory, defaultSocketDirectoryMode); err != nil {
-		return nil, nil, coded("AGENT_SOCKET_DIRECTORY_FAILED", err)
-	}
-
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: config.SocketPath, Net: "unix"})
-	if err != nil {
-		return nil, nil, coded("AGENT_SOCKET_LISTEN_FAILED", err)
-	}
-	cleanup := func() {
-		_ = listener.Close()
-		info, statErr := os.Lstat(config.SocketPath)
-		if statErr == nil && info.Mode()&os.ModeSocket != 0 {
-			_ = os.Remove(config.SocketPath)
-		}
-	}
-
-	if err := applySocketPermissions(directory, config); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	return listener, cleanup, nil
 }
 
 func normalizedSocketConfig(config SocketConfig) (SocketConfig, error) {

@@ -124,7 +124,7 @@ test('系统详情失败时显示恢复入口并可重试', async ({ page }) => 
   await expect(page.getByText('系统详情暂不可用', { exact: true })).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText('Fixture system details unavailable', { exact: true })).toBeVisible()
   shouldFail = false
-  await page.getByRole('button', { name: '重试', exact: true }).click()
+  await page.getByRole('button', { name: '重试系统详情', exact: true }).click()
   await expect(page.getByRole('heading', { name: '网络与控制链路' })).toBeVisible({ timeout: 30_000 })
 })
 

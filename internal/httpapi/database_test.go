@@ -20,6 +20,7 @@ func TestWriteDatabaseErrorPreservesStableCodeWithoutSensitiveMessage(t *testing
 		{code: ncpdatabase.CodeDatabaseNotFound, status: http.StatusNotFound},
 		{code: ncpdatabase.CodePermissionDenied, status: http.StatusForbidden},
 		{code: ncpdatabase.CodeConstraintFailed, status: http.StatusConflict},
+		{code: ncpdatabase.CodeCredentialConflict, status: http.StatusConflict},
 		{code: ncpdatabase.CodeTimeout, status: http.StatusGatewayTimeout},
 	}
 	for _, testCase := range tests {

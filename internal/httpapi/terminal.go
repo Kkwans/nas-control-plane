@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	"github.com/Kkwans/nas-control-plane/internal/terminal"
@@ -47,75 +46,129 @@ func (api *handler) terminalWebSocket(response http.ResponseWriter, request *htt
 		return
 	}
 
+	if request.Context().Err() != nil {
+		return
+	}
 	connection, err := websocket.Accept(response, request, nil)
 	if err != nil {
 		return
 	}
-	defer connection.CloseNow()
 	connection.SetReadLimit(maxWebSocketInput)
-
 	sessionContext, cancel := context.WithTimeout(request.Context(), api.terminalTimeout)
 	defer cancel()
-	stream, err := api.terminal.Open(sessionContext, api.agentSocketPath)
-	if err != nil {
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_UNAVAILABLE")
-		_ = connection.Close(websocket.StatusInternalError, "终端验证通道不可用")
+	runTerminalProxy(sessionContext, connection, api.terminal, api.agentSocketPath, terminal.Message{
+		Type: terminal.MessageStart, Target: target, ContainerID: containerID, Rows: rows, Cols: cols,
+	})
+}
+
+// CloseNow 必须中止阻塞的 Read/Write；Close 必须可与 Send/Recv 并发且中止二者。
+// 真实实现关闭各自独占的传输，不等待对端 close 握手。
+type terminalConnection interface {
+	terminalInputReader
+	terminalOutputWriter
+	CloseNow() error
+}
+
+type terminalOutputWriter interface {
+	Write(context.Context, websocket.MessageType, []byte) error
+}
+
+func runTerminalProxy(parent context.Context, connection terminalConnection, client TerminalClient, socketPath string, start terminal.Message) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	browserClosed := make(chan struct{})
+	go func() {
+		defer close(browserClosed)
+		<-ctx.Done()
+		_ = connection.CloseNow()
+	}()
+	defer func() {
+		cancel()
+		<-browserClosed
+	}()
+
+	if ctx.Err() != nil {
 		return
 	}
-	defer stream.Close()
+	stream, err := client.Open(ctx, socketPath)
+	if err != nil {
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_UNAVAILABLE")
+		return
+	}
+	agentClosed := make(chan struct{})
+	go func() {
+		defer close(agentClosed)
+		<-ctx.Done()
+		_ = stream.Close()
+	}()
+	defer func() {
+		cancel()
+		<-agentClosed
+	}()
 
-	if err := stream.Send(terminal.Message{
-		Type:        terminal.MessageStart,
-		Target:      target,
-		ContainerID: containerID,
-		Rows:        rows,
-		Cols:        cols,
-	}); err != nil {
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
-		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
+	if ctx.Err() != nil {
+		return
+	}
+	if err := stream.Send(start); err != nil {
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_INITIALIZATION_FAILED")
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	started, err := stream.Recv()
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil || started.Type != terminal.MessageStarted || started.SessionID == "" {
 		if err == nil {
 			err = errors.New("terminal started response is invalid")
 		}
-		_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_INITIALIZATION_FAILED")
-		_ = connection.Close(websocket.StatusInternalError, "终端会话无法创建")
+		_ = writeTerminalError(ctx, connection, err, "TERMINAL_INITIALIZATION_FAILED")
 		return
 	}
-	if err := writeTerminalControl(sessionContext, connection, terminalControl{
-		Type:         "started",
-		SessionID:    started.SessionID,
-		Shell:        started.Shell,
-		Enhancement:  started.Enhancement,
-		Reason:       started.Reason,
-		Capabilities: started.Capabilities,
-		Rows:         int(started.Rows),
-		Cols:         int(started.Cols),
+	if err := writeTerminalControl(ctx, connection, terminalControl{
+		Type: "started", SessionID: started.SessionID, Shell: started.Shell,
+		Enhancement: started.Enhancement, Reason: started.Reason,
+		Capabilities: started.Capabilities, Rows: int(started.Rows), Cols: int(started.Cols),
 	}); err != nil {
 		return
 	}
 
 	outputDone := make(chan error, 1)
-	go proxyTerminalOutput(sessionContext, connection, stream, outputDone)
-
+	outputExited := make(chan struct{})
+	go func() {
+		defer close(outputExited)
+		proxyTerminalOutput(ctx, connection, stream, outputDone)
+	}()
 	input := make(chan terminalInput, 1)
-	go readTerminalInput(sessionContext, connection, input)
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		readTerminalInput(ctx, connection, input)
+	}()
+	defer func() {
+		// 先取消并关闭两侧传输，再等待两个泵；否则 Recv/Write 可能永远无法退出。
+		cancel()
+		<-browserClosed
+		<-agentClosed
+		<-inputDone
+		<-outputExited
+	}()
 
 	for {
 		select {
-		case <-sessionContext.Done():
+		case <-ctx.Done():
 			return
 		case <-outputDone:
 			return
 		case incoming, ok := <-input:
-			if !ok || incoming.err != nil {
+			// Done 与缓冲输入同时就绪时，select 可能先取输入，必须再次检查。
+			if ctx.Err() != nil || !ok || incoming.err != nil {
 				return
 			}
 			if err := stream.Send(incoming.message); err != nil {
-				_ = writeTerminalError(sessionContext, connection, err, "TERMINAL_SESSION_FAILED")
-				_ = connection.Close(websocket.StatusInternalError, "终端输入无法转发")
+				_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
 				return
 			}
 			if incoming.closeRequested {
@@ -170,52 +223,86 @@ type terminalInput struct {
 	err            error
 }
 
-func readTerminalInput(ctx context.Context, connection *websocket.Conn, destination chan<- terminalInput) {
+type terminalInputReader interface {
+	Read(context.Context) (websocket.MessageType, []byte, error)
+}
+
+func sendTerminalInput(ctx context.Context, destination chan<- terminalInput, input terminalInput) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case destination <- input:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func readTerminalInput(ctx context.Context, connection terminalInputReader, destination chan<- terminalInput) {
 	defer close(destination)
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		messageType, data, err := connection.Read(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
-			destination <- terminalInput{err: err}
+			sendTerminalInput(ctx, destination, terminalInput{err: err})
 			return
 		}
 		switch messageType {
 		case websocket.MessageBinary:
 			if len(data) == 0 || len(data) > maxWebSocketInput {
-				destination <- terminalInput{err: errors.New("terminal input size is invalid")}
+				sendTerminalInput(ctx, destination, terminalInput{err: errors.New("terminal input size is invalid")})
 				return
 			}
-			destination <- terminalInput{message: terminal.Message{Type: terminal.MessageInput, Data: data}}
+			if !sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageInput, Data: data}}) {
+				return
+			}
 		case websocket.MessageText:
 			control, err := decodeTerminalControl(data)
 			if err != nil {
-				destination <- terminalInput{err: err}
+				sendTerminalInput(ctx, destination, terminalInput{err: err})
 				return
 			}
 			switch control.Type {
 			case "resize":
 				rows, cols, err := terminalDimensions(control.Rows, control.Cols)
 				if err != nil {
-					destination <- terminalInput{err: err}
+					sendTerminalInput(ctx, destination, terminalInput{err: err})
 					return
 				}
-				destination <- terminalInput{message: terminal.Message{Type: terminal.MessageResize, Rows: rows, Cols: cols}}
+				if !sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageResize, Rows: rows, Cols: cols}}) {
+					return
+				}
 			case "close":
-				destination <- terminalInput{message: terminal.Message{Type: terminal.MessageClose}, closeRequested: true}
+				sendTerminalInput(ctx, destination, terminalInput{message: terminal.Message{Type: terminal.MessageClose}, closeRequested: true})
 				return
 			default:
-				destination <- terminalInput{err: errors.New("terminal control type is invalid")}
+				sendTerminalInput(ctx, destination, terminalInput{err: errors.New("terminal control type is invalid")})
 				return
 			}
 		default:
-			destination <- terminalInput{err: errors.New("websocket message type is invalid")}
+			sendTerminalInput(ctx, destination, terminalInput{err: errors.New("websocket message type is invalid")})
 			return
 		}
 	}
 }
 
-func proxyTerminalOutput(ctx context.Context, connection *websocket.Conn, stream TerminalStream, done chan<- error) {
+func proxyTerminalOutput(ctx context.Context, connection terminalOutputWriter, stream TerminalStream, done chan<- error) {
 	for {
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
 		message, err := stream.Recv()
+		if ctx.Err() != nil {
+			done <- ctx.Err()
+			return
+		}
 		if err != nil {
 			_ = writeTerminalError(ctx, connection, err, "TERMINAL_SESSION_FAILED")
 			done <- err
@@ -264,7 +351,10 @@ func decodeTerminalControl(data []byte) (terminalControl, error) {
 	return control, nil
 }
 
-func writeTerminalControl(ctx context.Context, connection *websocket.Conn, control terminalControl) error {
+func writeTerminalControl(ctx context.Context, connection terminalOutputWriter, control terminalControl) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(control)
 	if err != nil {
 		return err
@@ -272,29 +362,39 @@ func writeTerminalControl(ctx context.Context, connection *websocket.Conn, contr
 	return connection.Write(ctx, websocket.MessageText, encoded)
 }
 
-func writeTerminalError(ctx context.Context, connection *websocket.Conn, err error, fallbackCode string) error {
+func writeTerminalError(ctx context.Context, connection terminalOutputWriter, err error, fallbackCode string) error {
 	code := terminalErrorCode(err, fallbackCode)
 	return writeTerminalControl(ctx, connection, terminalControl{Type: "error", Code: code, Message: terminalErrorMessage(code)})
 }
 
 func terminalErrorCode(err error, fallback string) string {
-	code := grpcstatus.Convert(err).Message()
-	if strings.HasPrefix(code, "TERMINAL_") {
-		return terminal.NormalizeErrorCode(code)
-	}
-	text := err.Error()
-	for _, candidate := range []string{
-		"TERMINAL_UNAVAILABLE", "TERMINAL_INITIALIZATION_FAILED", "TERMINAL_INITIALIZATION_TIMEOUT",
-		"TERMINAL_TARGET_UNAVAILABLE", "TERMINAL_SESSION_FAILED", "TERMINAL_INPUT_INVALID",
-		"TERMINAL_OUTPUT_CLOSED", "TERMINAL_OUTPUT_FAILED", "TERMINAL_STREAM_FAILED",
-		"TERMINAL_POC_UNAVAILABLE", "TERMINAL_POC_INITIALIZATION_FAILED", "TERMINAL_POC_TIMEOUT",
-		"TERMINAL_POC_OUTPUT_CLOSED", "TERMINAL_POC_OUTPUT_FAILED",
-	} {
-		if strings.Contains(text, candidate) {
-			return terminal.NormalizeErrorCode(candidate)
+	// FromError 会把包装层 Error 文本放入 Message；这里只取原始状态的固定码。
+	var carrier interface{ GRPCStatus() *grpcstatus.Status }
+	if errors.As(err, &carrier) {
+		if status := carrier.GRPCStatus(); status != nil {
+			if code, ok := knownTerminalErrorCode(status.Message()); ok {
+				return code
+			}
 		}
 	}
-	return terminal.NormalizeErrorCode(fallback)
+	if code, ok := knownTerminalErrorCode(fallback); ok {
+		return code
+	}
+	return "TERMINAL_SESSION_FAILED"
+}
+
+func knownTerminalErrorCode(code string) (string, bool) {
+	code = terminal.NormalizeErrorCode(code)
+	switch code {
+	case "TERMINAL_UNAVAILABLE", "TERMINAL_INITIALIZATION_FAILED", "TERMINAL_INITIALIZATION_TIMEOUT",
+		"TERMINAL_TARGET_UNAVAILABLE", "TERMINAL_SESSION_FAILED", "TERMINAL_INPUT_INVALID",
+		"TERMINAL_OUTPUT_CLOSED", "TERMINAL_OUTPUT_FAILED", "TERMINAL_STREAM_FAILED",
+		"TERMINAL_SESSION_LIMIT_REACHED", "TERMINAL_START_INVALID", "TERMINAL_MESSAGE_INVALID",
+		"TERMINAL_REQUEST_INVALID", "TERMINAL_STREAM_RECEIVE_FAILED", "TERMINAL_STREAM_SEND_FAILED":
+		return code, true
+	default:
+		return "", false
+	}
 }
 
 func terminalErrorMessage(code string) string {
@@ -307,6 +407,8 @@ func terminalErrorMessage(code string) string {
 		return "终端会话初始化失败，请检查 Agent 终端能力。"
 	case "TERMINAL_TARGET_UNAVAILABLE":
 		return "当前终端目标不可用，请确认主机或容器状态。"
+	case "TERMINAL_SESSION_LIMIT_REACHED":
+		return "终端会话数量已达上限，请等待已有会话关闭后重试。"
 	case "TERMINAL_INPUT_INVALID":
 		return "终端输入无效或超出允许范围。"
 	default:

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { CirclePause, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
+import { computed, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
+import { CirclePause, Download, Eye, FileClock, Info, Play, RefreshCw, Search } from '@lucide/vue'
 import { ElButton, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTooltip } from 'element-plus'
 
-import { followLogs, requestLogs, type LogEntry } from '@/api/control'
+import type { LogEntry } from '@/api/control'
+import { useLogQuerySession, type FollowState } from '@/composables/useLogQuerySession'
+import { logEntryKey } from '@/domain/logEntries'
 import ListPageSizeControl from '@/components/ListPageSizeControl.vue'
 import ResourceState from '@/components/ResourceState.vue'
 import WorkspaceHeader, { type WorkspaceStat } from '@/components/WorkspaceHeader.vue'
@@ -11,10 +13,11 @@ import { useSystemStore } from '@/stores/system'
 import { useListPreference } from '@/composables/useListPreference'
 import { formatLocalTimestamp } from '@/lib/datetime'
 import { logTokens } from '@/utils/logTokens'
-import { isAbortError } from '@/session/sessionLifecycle'
+import { formatLogExport, LOG_EXPORT_TOO_LARGE } from '@/domain/logExport'
+import { createTextDownloader } from '@/lib/downloadText'
+import { captureSession, isCurrentSession } from '@/session/sessionLifecycle'
 
 type LogSource = 'system' | 'agent' | 'container'
-type FollowState = 'paused' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
 const systemStore = useSystemStore()
 const { pageSize } = useListPreference('logs.events')
 const source = ref<LogSource>('system')
@@ -22,24 +25,21 @@ const containerId = ref('')
 const level = ref('all')
 const hours = ref(6)
 const query = ref('')
+const appliedQuery = ref('')
+const appliedFilters = ref('')
+const pageSession = captureSession()
+const exportActive = ref(true)
+const exporting = ref(false)
+const exportFeedback = ref('')
+const exportError = ref('')
+const downloader = createTextDownloader((busy) => { exporting.value = busy })
 const following = ref(false)
-const followState = ref<FollowState>('paused')
-const lastReceivedAt = ref<string | null>(null)
-const loading = ref(false)
-const error = ref('')
-const entries = ref<LogEntry[]>([])
-const nextCursor = ref('')
+const logSession = useLogQuerySession()
+const { entries, nextCursor, loading, loadingMore, error, lastReceivedAt, followState, loadMore } = logSession
 const selectedEntry = ref<LogEntry | null>(null)
 const page = ref(1)
 const showSkeleton = ref(false)
-const loadingMore = ref(false)
-const pendingQueryKey = ref('')
-const loadedQueryKey = ref('')
-let logSource: EventSource | null = null
-let loadController: AbortController | null = null
 let skeletonTimer: ReturnType<typeof setTimeout> | null = null
-let loadSequence = 0
-let followSequence = 0
 
 const containers = computed(() => systemStore.inventory?.containers ?? [])
 const stats = computed<WorkspaceStat[]>(() => [
@@ -53,131 +53,73 @@ const pagedEntries = computed(() => {
   const start = (page.value - 1) * pageSize.value
   return sortedEntries.value.slice(start, start + pageSize.value)
 })
+function filterKey() { return JSON.stringify([source.value, containerId.value, level.value, hours.value]) }
+const exportDisabledReason = computed(() => {
+  if (!exportActive.value || pageSession.signal.aborted) return '当前会话已结束，请重新打开日志页面。'
+  if (query.value.trim() !== appliedQuery.value) return '搜索条件尚未应用，请按回车或刷新后导出'
+  if (loading.value || loadingMore.value || filterKey() !== appliedFilters.value) return '正在读取日志，请稍后导出。'
+  if (error.value) return '日志读取失败，请重试成功后导出。'
+  if (!pagedEntries.value.length) return '当前页没有可导出的日志。'
+  return ''
+})
+function canExport() {
+  return !exportDisabledReason.value && exportActive.value && !pageSession.signal.aborted && isCurrentSession(pageSession.generation)
+}
+function exportCurrentPage() {
+  if (exporting.value || !canExport()) return
+  exportFeedback.value = ''
+  exportError.value = ''
+  try {
+    const count = pagedEntries.value.length
+    const initiated = downloader.download(() => formatLogExport({
+      entries: pagedEntries.value, source: source.value, page: page.value, pageSize: pageSize.value,
+      loadedCount: entries.value.length, exportedAt: new Date(),
+    }), canExport)
+    if (initiated) exportFeedback.value = `已发起 ${count} 条日志下载`
+  } catch (caught) {
+    exportError.value = caught instanceof Error && caught.message === LOG_EXPORT_TOO_LARGE
+      ? LOG_EXPORT_TOO_LARGE : '日志下载未能发起，请重试。'
+  }
+}
+function stopExports() {
+  exportActive.value = false
+  downloader.dispose()
+  exportFeedback.value = ''
+  exportError.value = ''
+}
+pageSession.signal.addEventListener('abort', stopExports, { once: true })
 const logHistoryNote = computed(() => {
   if (source.value === 'container') return `Docker 容器日志当前最多读取 200 条；服务端暂未提供历史游标，缩小时间范围可查看指定窗口。`
   if (nextCursor.value) return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，可继续加载更多结果。`
   return `历史日志按服务端分页加载，当前已载入 ${entries.value.length} 条；单次最多 200 条，当前筛选范围已没有更多结果。`
 })
 
-async function load(silent = false) {
-  const requestSequence = ++loadSequence
-  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
-  loadController?.abort()
-  if (source.value === 'container' && !containerId.value) {
-    entries.value = []
-    nextCursor.value = ''
-    loading.value = false
-    showSkeleton.value = false
-    pendingQueryKey.value = queryKey
-    loadedQueryKey.value = queryKey
-    return
-  }
-  pendingQueryKey.value = queryKey
-  if (loadedQueryKey.value !== queryKey) {
-    entries.value = []
-    nextCursor.value = ''
-    page.value = 1
-  }
-  if (!silent) {
-    loading.value = true
-    if (!entries.value.length) {
-      if (skeletonTimer) clearTimeout(skeletonTimer)
-      skeletonTimer = setTimeout(() => { showSkeleton.value = true }, 180)
-    }
-  }
-  error.value = ''
-  loadController = new AbortController()
-  try {
-    const result = await requestLogs({
-      source: source.value, containerId: containerId.value, level: level.value,
-      query: query.value, hours: hours.value, limit: 200,
-    }, loadController.signal)
-    if (requestSequence !== loadSequence) return
-    entries.value = result.entries
-    nextCursor.value = result.nextCursor
-    lastReceivedAt.value = result.collectedAt
-    page.value = 1
-    loadedQueryKey.value = queryKey
-  } catch (caught) {
-    if (isAbortError(caught)) return
-    if (requestSequence !== loadSequence) return
-    error.value = '日志读取失败，请确认目标服务正在运行。'
-  } finally {
-    if (requestSequence === loadSequence) {
-      if (skeletonTimer) clearTimeout(skeletonTimer)
-      skeletonTimer = null
-      showSkeleton.value = false
-      loading.value = false
-    }
-  }
-}
-
-async function loadMore() {
-  const cursor = nextCursor.value
-  if (!cursor || loading.value || loadingMore.value) return
-  const requestSequence = ++loadSequence
-  loadController?.abort()
-  loadingMore.value = true
-  error.value = ''
-  loadController = new AbortController()
-  try {
-    const result = await requestLogs({
-      source: source.value, containerId: containerId.value, level: level.value,
-      query: query.value, hours: hours.value, limit: 200, cursor,
-    }, loadController.signal)
-    if (requestSequence !== loadSequence) return
-    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
-    for (const entry of result.entries) merged.set(entry.id, entry)
-    entries.value = [...merged.values()]
-    nextCursor.value = result.nextCursor
-  } catch (caught) {
-    if (isAbortError(caught)) return
-    if (requestSequence !== loadSequence) return
-    error.value = '更多日志读取失败，请重试。'
-  } finally {
-    if (requestSequence === loadSequence) loadingMore.value = false
-  }
-}
-
 function syncFollowStream() {
-  const sequence = ++followSequence
-  const queryKey = `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`
-  logSource?.close()
-  logSource = null
-  if (!following.value || (source.value === 'container' && !containerId.value)) {
-    followState.value = 'paused'
-    return
-  }
-  followState.value = 'connecting'
-  error.value = ''
-  logSource = followLogs({
-    source: source.value, containerId: containerId.value, level: level.value,
-    query: query.value, hours: hours.value, limit: pageSize.value,
-  }, systemStore.refreshIntervalSeconds, (result) => {
-    if (sequence !== followSequence || queryKey !== `${source.value}|${containerId.value}|${level.value}|${hours.value}|${query.value.trim()}`) return
-    const merged = new Map(entries.value.map((entry) => [entry.id, entry]))
-    for (const entry of result.entries) merged.set(entry.id, entry)
-    entries.value = [...merged.values()].sort((left, right) => new Date(right.timestamp).valueOf() - new Date(left.timestamp).valueOf()).slice(0, 500)
-    followState.value = 'connected'
-    lastReceivedAt.value = result.collectedAt
-    error.value = ''
-  }, (state = 'reconnecting') => {
-    followState.value = state
-    error.value = state === 'failed'
-      ? '实时日志连接失败，请暂停后重新开启。'
-      : '实时日志正在重新连接，期间不会丢失已加载的历史记录。'
-  })
+  logSession.syncFollow(following.value, systemStore.refreshIntervalSeconds, pageSize.value)
 }
 
 function refreshLogs() {
-  void load()
-  if (following.value) syncFollowStream()
+  appliedQuery.value = query.value.trim()
+  appliedFilters.value = filterKey()
+  exportFeedback.value = ''
+  exportError.value = ''
+  page.value = 1
+  selectedEntry.value = null
+  void logSession.load({
+    source: source.value, containerId: containerId.value, level: level.value,
+    query: query.value, hours: hours.value, limit: 200,
+  })
+  syncFollowStream()
 }
 
-watch([source, containerId, level, hours], () => {
-  void load()
-  if (following.value) syncFollowStream()
-})
+watch(loading, (busy) => {
+  if (skeletonTimer) clearTimeout(skeletonTimer)
+  skeletonTimer = null
+  showSkeleton.value = false
+  if (busy && !entries.value.length) skeletonTimer = setTimeout(() => { showSkeleton.value = true }, 180)
+}, { flush: 'sync' })
+watch([source, containerId, level, hours], refreshLogs)
+watch([query, page, pageSize], () => { exportFeedback.value = ''; exportError.value = '' })
 watch(pageSize, () => { page.value = 1 })
 watch(pageCount, (count) => {
   if (page.value > count) page.value = count
@@ -185,14 +127,15 @@ watch(pageCount, (count) => {
 watch(following, syncFollowStream)
 onMounted(() => {
   void systemStore.refresh({ inventory: true })
-  void load()
+  refreshLogs()
 })
 onBeforeUnmount(() => {
-  followSequence += 1
-  loadController?.abort()
-  logSource?.close()
+  stopExports()
+  pageSession.signal.removeEventListener('abort', stopExports)
+  logSession.dispose()
   if (skeletonTimer) clearTimeout(skeletonTimer)
 })
+onDeactivated(stopExports)
 
 function levelLabel(value: LogEntry['level']) {
   return value === 'error' ? '错误' : value === 'warning' ? '警告' : value === 'debug' ? '调试' : '信息'
@@ -257,6 +200,11 @@ function followStateDescription(value: FollowState) {
         <ElInput v-model="query" clearable aria-label="搜索日志消息或服务" placeholder="搜索消息或服务" @keyup.enter="refreshLogs"><template #prefix><Search :size="16" /></template></ElInput>
         <label class="follow-switch"><component :is="following ? Play : CirclePause" :size="16" /><span>实时跟随</span><ElSwitch v-model="following" /></label>
         <ElButton class="log-refresh-button" :loading="loading" title="刷新当前日志" @click="refreshLogs"><RefreshCw :size="16" />刷新</ElButton>
+        <ElButton class="log-export-button" :disabled="Boolean(exportDisabledReason) || exporting" aria-describedby="log-export-hint log-export-state" @click="exportCurrentPage"><Download :size="16" aria-hidden="true" />导出当前页（{{ pagedEntries.length }} 条）</ElButton>
+      </div>
+      <div class="log-export-notes">
+        <p id="log-export-hint">仅保存点击时当前页已显示的日志，不包含其他页或未加载历史；实时新增记录不会追加到文件。最多 200 条 / 2 MiB。日志可能含敏感信息，分享前请检查。</p>
+        <p id="log-export-state" role="status" aria-live="polite" :class="{ 'log-export-error': exportError }">{{ exportError || exportDisabledReason || exportFeedback || (exporting ? '正在发起下载…' : '') }}</p>
       </div>
     </section>
 
@@ -273,7 +221,7 @@ function followStateDescription(value: FollowState) {
       <template v-if="showSkeleton && !entries.length">
         <div v-for="row in 12" :key="row" class="log-row log-row--skeleton"><i v-for="cell in 4" :key="cell" class="ncp-skeleton"></i></div>
       </template>
-      <div v-for="entry in pagedEntries" v-else :key="entry.id" class="log-row">
+      <div v-for="entry in pagedEntries" v-else :key="logEntryKey(entry)" class="log-row">
         <time>{{ formatLocalTimestamp(entry.timestamp) }}</time>
         <span :class="['level-badge', `level-badge--${entry.level}`]">{{ levelLabel(entry.level) }}</span>
         <div class="log-message" :title="entry.message"><small>{{ entryContext(entry) }}</small><span class="log-message__text"><span v-for="(token, index) in logTokens(entry.message)" :key="index" :class="token.tone ? `log-token--${token.tone}` : undefined">{{ token.text }}</span></span></div>
@@ -315,7 +263,7 @@ function followStateDescription(value: FollowState) {
   justify-content: space-between;
   gap: 14px;
   padding: 13px 14px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 .log-filters,
 .log-tools {
@@ -366,14 +314,39 @@ function followStateDescription(value: FollowState) {
   min-width: 0;
   flex: 0 1 auto;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
+.log-export-button {
+  min-height: 44px;
+  height: auto;
+  max-width: 100%;
+  padding-block: 10px;
+  margin-left: 0;
+  flex: 0 0 auto;
+  white-space: normal;
+}
+.log-export-button :deep(span) { white-space: normal; }
+.log-export-button:focus-visible {
+  outline: 2px solid var(--ncp-primary-strong);
+  outline-offset: 3px;
+}
+.log-export-notes {
+  width: 100%;
+  flex: 1 0 100%;
+  color: var(--ncp-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.log-export-notes p { margin: 0; }
+.log-export-notes .log-export-error { color: var(--ncp-danger-strong); }
 .log-tools :deep(.page-size-control) {
   gap: 5px;
   white-space: nowrap;
 }
 .log-tools :deep(.page-size-control .ncp-select) {
-  width: 78px;
-  min-width: 78px;
+  width: max(78px, calc(2.6rem + 42px));
+  min-width: max(78px, calc(2.6rem + 42px));
 }
 .log-tools :deep(.el-input) {
   width: clamp(150px, 15vw, 220px);
@@ -691,6 +664,7 @@ function followStateDescription(value: FollowState) {
 
 @media (min-width: 1181px) {
   .log-toolbar {
+    flex-wrap: wrap;
     gap: 10px;
     padding: 10px 12px;
   }
@@ -704,9 +678,20 @@ function followStateDescription(value: FollowState) {
   .log-filter-field--container {
     max-width: 136px;
   }
-  .log-filter-field--level,
-  .log-filter-field--hours {
+  .log-filter-field--level {
     max-width: 104px;
+  }
+  .log-filter-field--hours {
+    min-width: 136px;
+    max-width: 136px;
+    flex: 0 0 136px;
+  }
+  .log-tools {
+    flex: 1 1 440px;
+  }
+  .log-tools :deep(.el-input) {
+    min-width: 120px;
+    flex: 1 1 150px;
   }
   .log-toolbar :deep(.el-select__wrapper),
   .log-toolbar :deep(.el-input__wrapper),
@@ -723,7 +708,12 @@ function followStateDescription(value: FollowState) {
   .log-toolbar {
     align-items: stretch;
     flex-direction: column;
+    flex-wrap: nowrap;
     gap: 12px;
+  }
+  .log-export-notes {
+    flex: 0 0 auto;
+    min-width: 0;
   }
   .log-filters {
     display: grid;
@@ -752,6 +742,9 @@ function followStateDescription(value: FollowState) {
     width: auto;
     min-width: 0;
   }
+  .log-tools .log-export-button { grid-column: 1 / -1; }
+  .log-tools .follow-switch,
+  .log-tools :deep(.page-size-control) { flex-wrap: wrap; }
   .log-head {
     grid-template-columns: 155px 68px 150px minmax(280px, 1fr);
   }

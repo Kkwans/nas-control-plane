@@ -34,11 +34,11 @@ function keydown(event: KeyboardEvent, index: number) {
 </script>
 
 <template>
-  <nav class="section-tabs" role="group" :aria-label="accessibleLabel">
+  <div class="section-tabs" role="group" :aria-label="accessibleLabel">
     <button v-for="(tab, index) in tabs" :key="tab.value" type="button" :aria-pressed="modelValue === tab.value" :tabindex="modelValue === tab.value ? 0 : -1" :disabled="tab.disabled" :class="{ active: modelValue === tab.value }" @click="select(tab)" @keydown="keydown($event, index)">
       <component :is="tab.icon" v-if="tab.icon" :size="16" aria-hidden="true" /><span>{{ tab.label }}</span><small v-if="tab.count !== undefined">{{ tab.count }}</small>
     </button>
-  </nav>
+  </div>
 </template>
 
 <style scoped>

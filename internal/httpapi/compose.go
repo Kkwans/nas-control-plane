@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kkwans/nas-control-plane/internal/agentsocket"
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
 	"github.com/Kkwans/nas-control-plane/internal/controlstore"
 )
@@ -88,27 +89,105 @@ func (api *handler) deployComposeConfig(response http.ResponseWriter, request *h
 	if !api.decodeControlBody(response, request, &input) {
 		return
 	}
-	job := api.jobs.create("compose-deploy", input.ProjectID)
-	go func() {
-		api.jobs.update(job.ID, "running", "正在校验、备份并部署 Compose 项目", "", 15)
-		requestContext, cancel := context.WithTimeout(context.Background(), composeDeployTimeout)
+	if !ncpcompose.IsContentHash(input.BaseContentHash) {
+		code, message := composeDeployFailure("COMPOSE_BASELINE_INVALID")
+		api.writeError(response, request, http.StatusBadRequest, code, message)
+		return
+	}
+	job, submitErr := api.jobs.submit("compose-deploy", input.ProjectID, 0, func(ctx context.Context, jobID string) {
+		requestContext, cancel := context.WithTimeout(ctx, composeDeployTimeout)
 		defer cancel()
 		result, err := api.compose.DeployComposeConfig(requestContext, api.agentSocketPath, input)
 		if err != nil {
-			api.jobs.update(job.ID, "failed", "Compose 部署失败，已尝试恢复上一版本", "请查看项目日志并核对 Compose 配置。", 100)
+			if requestContext.Err() != nil {
+				code := "JOB_EXECUTION_INTERRUPTED"
+				if requestContext.Err() == context.DeadlineExceeded {
+					code = "JOB_EXECUTION_TIMEOUT"
+				}
+				api.jobs.interrupt(jobID, code, "本地调用已结束，远端部署结果未确认")
+				return
+			}
+			if jobRPCOutcomeUnknown(err) {
+				api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "连接中断，远端部署结果未确认")
+				return
+			}
+			code, message := composeDeployFailure(agentsocket.ErrorCode(err))
+			api.jobs.fail(jobID, code, message, message)
 			return
 		}
-		message := "Compose 项目部署完成并已保存版本"
+		if requestContext.Err() != nil {
+			code := "JOB_EXECUTION_INTERRUPTED"
+			if requestContext.Err() == context.DeadlineExceeded {
+				code = "JOB_EXECUTION_TIMEOUT"
+			}
+			api.jobs.interrupt(jobID, code, "本地调用已结束，远端部署结果未确认")
+			return
+		}
+		if !result.Completed {
+			api.jobs.interrupt(jobID, "JOB_EXECUTION_INTERRUPTED", "未收到可信完成确认，请核对 Compose 配置和容器状态")
+			return
+		}
+		message := "Compose 应用命令已完成，已核对目标配置"
 		if api.controlStore != nil {
-			if _, err := api.controlStore.RecordComposeRevision(context.Background(), controlstore.ComposeRevision{
+			if _, err := api.controlStore.RecordComposeRevision(requestContext, controlstore.ComposeRevision{
 				ProjectID: input.ProjectID, ConfigPath: input.TargetPath, Content: input.Content, BackupPath: result.BackupPath,
 			}); err != nil {
-				message = "Compose 项目部署完成，但版本记录保存失败"
+				message = "Compose 应用命令已完成，已核对目标配置，但版本记录保存失败"
+			} else {
+				message = "Compose 应用命令已完成，已核对目标配置并保存版本"
 			}
 		}
-		api.jobs.update(job.ID, "completed", message, "", 100)
-	}()
+		// 版本写入可能等待存储；期间结束的本地调用不能被迟到响应改为完成。
+		// 若版本已经落盘，保留这次已确认的历史事实，不声称撤销了部署或版本。
+		if requestContext.Err() != nil {
+			code := "JOB_EXECUTION_INTERRUPTED"
+			if requestContext.Err() == context.DeadlineExceeded {
+				code = "JOB_EXECUTION_TIMEOUT"
+			}
+			api.jobs.interrupt(jobID, code, "Compose 应用命令及目标配置已确认；本地调用在后续处理期间结束，请核对版本记录。")
+			return
+		}
+		api.jobs.update(jobID, "completed", message, "", 100)
+	})
+	if submitErr != nil {
+		api.writeJobError(response, request, submitErr)
+		return
+	}
 	writeJSON(response, http.StatusAccepted, job)
+}
+
+// 只使用稳定代码生成公开文案，避免命令输出泄露配置，也不把命令成功视为运行健康。
+func composeDeployFailure(code string) (string, string) {
+	switch code {
+	case "COMPOSE_BASELINE_INVALID":
+		return code, "缺少有效的 Compose 编辑基线，请重新读取配置后再发布。"
+	case "COMPOSE_BASELINE_UNSUPPORTED":
+		return code, "当前 Agent 不支持安全的编辑基线检查，未执行部署；请更新 Agent 后重新读取。"
+	case "COMPOSE_CONFIG_CONFLICT":
+		return code, "Compose 配置已发生变化，未写入或部署；请保留编辑内容，重新读取并比较。"
+	case "COMPOSE_CONFIG_UNVERIFIED":
+		return code, "无法核实当前 Compose 配置，未写入或部署；请检查文件并重新读取。"
+	case "COMPOSE_DEPLOY_POSTCHECK_CONFLICT":
+		return code, "Compose 应用命令已完成，但目标配置随后发生变化；未自动覆盖或保存成功版本，请核对配置和运行状态。"
+	case "COMPOSE_DEPLOY_POSTCHECK_UNVERIFIED":
+		return code, "Compose 应用命令已完成，但无法核实目标配置；未保存成功版本，请核对配置和运行状态。"
+	case "COMPOSE_DEPLOY_ROLLBACK_CONFLICT":
+		return code, "Compose 部署失败；检测到配置已被外部修改，未覆盖当前配置，已跳过自动恢复；容器状态未确认。"
+	case "COMPOSE_DEPLOY_ROLLBACK_UNVERIFIED":
+		return code, "Compose 部署失败；无法确认当前配置，已跳过自动恢复；容器状态未确认。"
+	case "COMPOSE_DEPLOY_CONFIG_RESTORE_FAILED":
+		return code, "Compose 部署失败；旧配置未能写回，未重新应用；容器状态未确认。"
+	case "COMPOSE_DEPLOY_RUNTIME_REAPPLY_FAILED":
+		return code, "Compose 部署失败；已写回旧配置，但重新应用命令失败；容器状态未确认。"
+	case "COMPOSE_DEPLOY_RUNTIME_REAPPLY_SUCCEEDED":
+		return code, "Compose 部署失败；已写回旧配置，重新应用命令成功；运行健康未验证。"
+	case "COMPOSE_CONFIG_INVALID":
+		return code, "Compose 配置校验失败，请检查 YAML 结构、服务引用和环境变量。"
+	case "COMPOSE_REQUEST_INVALID", "AGENT_RPC_REQUEST_INVALID":
+		return code, "Compose 部署请求无效，请检查项目标识、配置路径和提交内容。"
+	default:
+		return "COMPOSE_DEPLOY_FAILED", "Compose 部署失败，恢复结果未确认；请核对配置和容器状态。"
+	}
 }
 
 func (api *handler) composeRevisions(response http.ResponseWriter, request *http.Request) {

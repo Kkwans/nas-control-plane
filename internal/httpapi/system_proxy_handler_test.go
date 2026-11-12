@@ -23,6 +23,7 @@ func TestDNSHandlerAllowsStaticBackendWithoutNetworkTargetAndRequiresConfirmatio
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Second}
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/preview", bytes.NewBufferString(`{"nameservers":["1.1.1.1"]}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.previewDNSChange(response, request)
 	if response.Code != http.StatusOK || !agent.previewCalled {
@@ -30,6 +31,7 @@ func TestDNSHandlerAllowsStaticBackendWithoutNetworkTargetAndRequiresConfirmatio
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/confirm", bytes.NewBufferString(`{"previewId":"p1","confirmed":false}`))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	api.confirmDNSChange(response, request)
 	if response.Code != http.StatusBadRequest || agent.confirmCalled {
@@ -42,6 +44,7 @@ func TestDNSControlUsesDedicatedLongTimeout(t *testing.T) {
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Millisecond}
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/dns/confirm", bytes.NewBufferString(`{"previewId":"p1","confirmed":true}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.confirmDNSChange(response, request)
 
@@ -74,6 +77,7 @@ func TestMihomoHandlerRejectsRawOrUnsupportedOperation(t *testing.T) {
 	agent := &systemHTTPAgent{fakeAgentClient: &fakeAgentClient{}}
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Second}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/mihomo/invoke", bytes.NewBufferString(`{"operation":"read-config","token":"do-not-accept"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.invokeMihomo(response, request)
 	if response.Code != http.StatusBadRequest || agent.invokeCalled {
@@ -89,6 +93,7 @@ func TestMihomoInspectionHandlerForwardsForceAndReturnsSafeChain(t *testing.T) {
 	}}
 	api := &handler{agent: agent, agentSocketPath: "/run/ncp/test.sock", agentTimeout: time.Second}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/proxy/mihomo/inspect", bytes.NewBufferString(`{"force":true}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	api.inspectMihomo(response, request)
 	if response.Code != http.StatusOK || !agent.inspectionCalled || !agent.inspectionForce {

@@ -80,6 +80,11 @@ svg {
   flex: 0 0 auto;
 }
 
+/* 成功消息的普通字号文字使用深色 token，保留 Element 的背景与布局。 */
+.el-message.el-message--success {
+  --el-message-text-color: var(--ncp-success-strong);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

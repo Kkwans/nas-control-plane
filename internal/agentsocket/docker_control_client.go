@@ -212,8 +212,12 @@ func containerCreatePayload(spec docker.ContainerCreateSpec) (*structpb.Struct, 
 		"image": spec.Image, "name": spec.Name, "cpu_nano_cpus": spec.NanoCPUs, "memory_bytes": spec.MemoryBytes,
 		"cpu_shares": spec.CPUShares, "restart_policy": spec.RestartPolicy, "restart_max_retries": spec.RestartMaxRetries,
 		"environment": environmentMap(spec.Environment), "env": []any{}, "mounts": mounts, "ports": ports,
-		"command": stringSliceAny(spec.Command), "privileged": spec.Privileged, "cap_add": stringSliceAny(spec.CapAdd),
+		"privileged": spec.Privileged, "cap_add": stringSliceAny(spec.CapAdd),
 		"cap_drop": stringSliceAny(spec.CapDrop), "devices": devices, "gpus": gpus, "run_container": spec.RunContainer,
+	}
+	// nil 表示沿用镜像默认命令，不能编码成明确的空 argv。
+	if spec.Command != nil {
+		values["command"] = stringSliceAny(spec.Command)
 	}
 	if spec.Network != nil {
 		values["network"] = map[string]any{"name": spec.Network.Name, "driver": spec.Network.Driver, "subnet": spec.Network.Subnet, "gateway": spec.Network.Gateway, "ip": spec.Network.IP}

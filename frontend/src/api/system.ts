@@ -31,6 +31,7 @@ export type {
 export {
   cancelJob,
   createDockerContainer,
+  CreateContainerOutcomeUnknownError,
   deleteJob,
   deleteDockerProject,
   deployComposeConfig,
@@ -338,8 +339,8 @@ export interface SystemDetails {
       model: string
       sizeBytes: number
       rotational: boolean
-      kind: 'physical' | 'emmc' | 'emmc-boot' | 'compressed-memory' | 'virtual'
-      role: 'data' | 'system' | 'boot' | 'swap' | 'virtual'
+      kind: '' | 'physical' | 'emmc' | 'emmc-boot' | 'compressed-memory' | 'virtual'
+      role: '' | 'data' | 'system' | 'boot' | 'swap' | 'virtual'
       transport: string
       description: string
       health: string
@@ -581,9 +582,15 @@ export interface JobSnapshot {
   type: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
   artifactState: 'present' | 'deleted' | 'unknown'
+  cancellationStatus?: 'requested' | 'confirmed' | 'unknown'
+  persistenceStatus?: 'pending'
+  cancellable?: boolean
+  errorCode?: string
   reference?: string
   message: string
   progress: number
+  /** true 表示进度信息受资源限制；省略或 false 不保证进度完整。 */
+  progressLimited?: boolean
   error?: string
   createdAt: string
   updatedAt: string
@@ -756,6 +763,7 @@ export interface ComposeFileSnapshot {
   path: string
   name: string
   content: string
+  contentHash: string
   size: number
 }
 
@@ -778,6 +786,7 @@ export interface ComposeDeployInput {
   configFiles: string[]
   targetPath: string
   content: string
+  baseContentHash: string
 }
 
 export { NcpApiError } from './systemTransport'

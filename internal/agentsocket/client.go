@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
+	pathpkg "path"
+	"strings"
 	"time"
 
 	ncpcompose "github.com/Kkwans/nas-control-plane/internal/compose"
@@ -369,14 +370,7 @@ func PullDockerImage(ctx context.Context, socketPath string, request docker.Imag
 	if err != nil {
 		return docker.ImagePullResult{}, rpcError(err)
 	}
-	var result docker.ImagePullResult
-	if err := decodeDashboardResponse(response, &result); err != nil {
-		return docker.ImagePullResult{}, err
-	}
-	if result.Reference == "" || !result.Completed {
-		return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull result is incomplete"))
-	}
-	return result, nil
+	return decodeImagePullResponse(response, request)
 }
 
 func PullDockerImageWithProgress(ctx context.Context, socketPath string, request docker.ImagePullRequest, onProgress func(docker.ImagePullProgress)) (docker.ImagePullResult, error) {
@@ -393,31 +387,7 @@ func PullDockerImageWithProgress(ctx context.Context, socketPath string, request
 	if err != nil {
 		return docker.ImagePullResult{}, rpcError(err)
 	}
-	for {
-		message, receiveError := stream.Recv()
-		if errors.Is(receiveError, io.EOF) {
-			break
-		}
-		if receiveError != nil {
-			return docker.ImagePullResult{}, rpcError(receiveError)
-		}
-		fields := message.GetFields()
-		if fields["type"].GetStringValue() == "completed" {
-			return docker.ImagePullResult{
-				Reference: fields["reference"].GetStringValue(),
-				Completed: fields["completed"].GetBoolValue(),
-			}, nil
-		}
-		if onProgress != nil {
-			onProgress(docker.ImagePullProgress{
-				LayerID: fields["layerId"].GetStringValue(),
-				Status:  fields["status"].GetStringValue(),
-				Current: int64(fields["current"].GetNumberValue()),
-				Total:   int64(fields["total"].GetNumberValue()),
-			})
-		}
-	}
-	return docker.ImagePullResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("image pull stream ended without completion"))
+	return receiveImagePullStream(stream, request, onProgress)
 }
 
 func RemoveDockerImage(ctx context.Context, socketPath string, request docker.ImageRemoveRequest) (docker.ImageRemoveResult, error) {
@@ -450,6 +420,11 @@ func ReadComposeConfig(ctx context.Context, socketPath string, request ncpcompos
 		return ncpcompose.ProjectConfig{}, err
 	}
 	defer connection.Close()
+	return ReadComposeConfigWithClient(ctx, NewAgentComposeServiceClient(connection), request)
+}
+
+// ReadComposeConfigWithClient 拒绝缺少或不匹配的磁盘字节基线，不为旧响应补值。
+func ReadComposeConfigWithClient(ctx context.Context, client AgentComposeServiceClient, request ncpcompose.ReadRequest) (ncpcompose.ProjectConfig, error) {
 	files := make([]any, 0, len(request.ConfigFiles))
 	for _, path := range request.ConfigFiles {
 		files = append(files, path)
@@ -460,7 +435,7 @@ func ReadComposeConfig(ctx context.Context, socketPath string, request ncpcompos
 	if err != nil {
 		return ncpcompose.ProjectConfig{}, coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
-	response, err := NewAgentComposeServiceClient(connection).ReadConfig(ctx, payload)
+	response, err := client.ReadConfig(ctx, payload)
 	if err != nil {
 		return ncpcompose.ProjectConfig{}, rpcError(err)
 	}
@@ -468,8 +443,13 @@ func ReadComposeConfig(ctx context.Context, socketPath string, request ncpcompos
 	if err := decodeDashboardResponse(response, &result); err != nil {
 		return ncpcompose.ProjectConfig{}, err
 	}
-	if result.ProjectID == "" || result.Files == nil {
+	if result.ProjectID != request.ProjectID || result.ProjectID == "" || result.Files == nil {
 		return ncpcompose.ProjectConfig{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose config response is incomplete"))
+	}
+	for _, file := range result.Files {
+		if !ncpcompose.IsContentHash(file.ContentHash) || ncpcompose.ContentHash([]byte(file.Content)) != file.ContentHash {
+			return ncpcompose.ProjectConfig{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose config baseline is invalid"))
+		}
 	}
 	return result, nil
 }
@@ -504,6 +484,21 @@ func DeployComposeConfig(ctx context.Context, socketPath string, request ncpcomp
 		return ncpcompose.DeployResult{}, err
 	}
 	defer connection.Close()
+	return DeployComposeConfigWithClient(ctx, NewAgentComposeServiceClient(connection), request)
+}
+
+// DeployComposeConfigWithClient 复用已建立的 RPC 客户端，保留部署请求、响应和错误码校验。
+func DeployComposeConfigWithClient(ctx context.Context, client AgentComposeServiceClient, request ncpcompose.DeployRequest) (ncpcompose.DeployResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ncpcompose.DeployResult{}, contextError(err)
+	}
+	if !ncpcompose.IsContentHash(request.BaseContentHash) {
+		return ncpcompose.DeployResult{}, coded("COMPOSE_BASELINE_INVALID", errors.New("compose baseline is required"))
+	}
+	checked, ok := client.(AgentComposeCheckedServiceClient)
+	if !ok {
+		return ncpcompose.DeployResult{}, coded("COMPOSE_BASELINE_UNSUPPORTED", errors.New("checked compose deployment is unavailable"))
+	}
 	files := make([]any, 0, len(request.ConfigFiles))
 	for _, configPath := range request.ConfigFiles {
 		files = append(files, configPath)
@@ -511,19 +506,30 @@ func DeployComposeConfig(ctx context.Context, socketPath string, request ncpcomp
 	payload, err := structpb.NewStruct(map[string]any{
 		"project_id": request.ProjectID, "working_directory": request.WorkingDirectory,
 		"config_files": files, "target_path": request.TargetPath, "content": request.Content,
+		"base_content_hash": request.BaseContentHash,
 	})
 	if err != nil {
 		return ncpcompose.DeployResult{}, coded("AGENT_RPC_REQUEST_INVALID", err)
 	}
-	response, err := NewAgentComposeServiceClient(connection).DeployConfig(ctx, payload)
+	response, err := checked.DeployConfigChecked(ctx, payload)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ncpcompose.DeployResult{}, contextError(ctxErr)
+	}
 	if err != nil {
+		if grpcstatus.Code(err) == codes.Unimplemented {
+			return ncpcompose.DeployResult{}, coded("COMPOSE_BASELINE_UNSUPPORTED", err)
+		}
 		return ncpcompose.DeployResult{}, rpcError(err)
 	}
 	var result ncpcompose.DeployResult
 	if err := decodeDashboardResponse(response, &result); err != nil {
 		return ncpcompose.DeployResult{}, err
 	}
-	if !result.Completed || result.ProjectID == "" || result.BackupPath == "" {
+	expectedTarget := pathpkg.Clean(strings.TrimSpace(request.TargetPath))
+	if !pathpkg.IsAbs(expectedTarget) {
+		expectedTarget = pathpkg.Join(pathpkg.Clean(strings.TrimSpace(request.WorkingDirectory)), expectedTarget)
+	}
+	if !result.Completed || result.ProjectID == "" || result.ProjectID != request.ProjectID || result.TargetPath != expectedTarget || result.BackupPath == "" {
 		return ncpcompose.DeployResult{}, coded("AGENT_RPC_RESPONSE_INVALID", errors.New("compose deploy result is incomplete"))
 	}
 	return result, nil
@@ -724,6 +730,12 @@ func rpcError(err error) error {
 	status := grpcstatus.Convert(err)
 	if status.Code() == codes.Unimplemented {
 		return coded("AGENT_PROTOCOL_MISMATCH", err)
+	}
+	switch status.Code() {
+	case codes.Internal, codes.InvalidArgument, codes.Aborted:
+		if ncpcompose.IsDeployErrorCode(status.Message()) {
+			return coded(status.Message(), err)
+		}
 	}
 	switch status.Message() {
 	case "DOCKER_CONTAINER_NOT_FOUND":

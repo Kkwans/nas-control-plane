@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	defaultLimit         = 100
-	maximumLimit         = 200
-	maximumFilterLength  = 255
-	maximumCursorLength  = 4096
-	maximumEntrySize     = 1024 * 1024
-	journalctlTimeFormat = "2006-01-02 15:04:05.000000 UTC"
+	defaultLimit           = 100
+	maximumLimit           = 200
+	maximumFilterLength    = 255
+	maximumCursorLength    = 4096
+	maximumEntrySize       = 1024 * 1024
+	maximumQueryOutputSize = 2 * 1024 * 1024
+	journalctlTimeFormat   = "2006-01-02 15:04:05.000000 UTC"
 )
 
 var (
@@ -100,11 +101,15 @@ func (r *Reader) Query(ctx context.Context, query Query) (Page, error) {
 	}
 
 	output, err := r.runner.Output(ctx, journalctlArguments(normalized)...)
+	if callerErr := ctx.Err(); callerErr != nil {
+		return Page{}, coded("JOURNAL_QUERY_CANCELED", callerErr)
+	}
 	if err != nil {
-		if ctx.Err() != nil {
-			return Page{}, coded("JOURNAL_QUERY_CANCELED", ctx.Err())
-		}
 		return Page{}, coded("JOURNAL_QUERY_FAILED", err)
+	}
+	// 替代 Runner 也必须在解析之前执行同一原始字节预算检查。
+	if len(output) > maximumQueryOutputSize {
+		return Page{}, coded("JOURNAL_QUERY_FAILED", errQueryOutputBudget)
 	}
 	entries, err := parseEntries(output)
 	if err != nil {

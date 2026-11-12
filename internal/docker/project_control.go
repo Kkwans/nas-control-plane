@@ -33,6 +33,8 @@ func (r ProjectActionRequest) Normalize() (ProjectActionRequest, error) {
 	if len(r.ContainerIDs) == 0 {
 		return ProjectActionRequest{}, coded("DOCKER_PROJECT_ACTION_INVALID", errors.New("container collection is required"))
 	}
+	// 规范化只修改本次请求的快照，不能回写调用者的切片。
+	r.ContainerIDs = append([]string(nil), r.ContainerIDs...)
 	seen := make(map[string]struct{}, len(r.ContainerIDs))
 	for index, value := range r.ContainerIDs {
 		containerID := strings.TrimSpace(value)
@@ -45,9 +47,11 @@ func (r ProjectActionRequest) Normalize() (ProjectActionRequest, error) {
 		seen[containerID] = struct{}{}
 		r.ContainerIDs[index] = containerID
 	}
-	if _, err := ParseContainerAction(string(r.Action)); err != nil {
+	action, err := ParseContainerAction(string(r.Action))
+	if err != nil {
 		return ProjectActionRequest{}, coded("DOCKER_PROJECT_ACTION_INVALID", err)
 	}
+	r.Action = action
 	return r, nil
 }
 
@@ -192,7 +196,15 @@ func (c *ProjectController) controlContainer(ctx context.Context, containerID st
 		item.ContainerID = containerResult.ContainerID
 		item.Name = containerResult.Name
 		item.State = containerResult.State
-		item.Success = true
+		// 命令返回不代表目标状态已达到；保留本次读回结果，不轮询或重做动作。
+		wantState := "running"
+		if action == ContainerActionStop {
+			wantState = "stopped"
+		}
+		item.Success = containerResult.State == wantState
+		if !item.Success {
+			item.ErrorCode = "DOCKER_CONTAINER_STATE_MISMATCH"
+		}
 		return item, nil
 	}
 	if errors.Is(controlErr, context.Canceled) || errors.Is(controlErr, context.DeadlineExceeded) {

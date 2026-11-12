@@ -19,11 +19,7 @@ const (
 )
 
 func NewPOCManager() (*Manager, error) {
-	container, err := NewContainerStarter()
-	if err != nil {
-		return nil, err
-	}
-	return NewManager(NewHostStarter(), container, defaultMaxSessions), nil
+	return NewProductionManager(DefaultMaxSessions)
 }
 
 type POCResult struct {

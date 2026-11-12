@@ -65,6 +65,13 @@ func (service *composeService) ValidateConfig(ctx context.Context, request *stru
 }
 
 func (service *composeService) DeployConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	return service.DeployConfigChecked(ctx, request)
+}
+
+func (service *composeService) DeployConfigChecked(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.FromContextError(err).Err()
+	}
 	if service.provider == nil {
 		return nil, grpcstatus.Error(codes.Unavailable, "AGENT_COMPOSE_UNAVAILABLE")
 	}
@@ -88,14 +95,32 @@ func (service *composeService) DeployConfig(ctx context.Context, request *struct
 	if err != nil {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_REQUEST_INVALID")
 	}
+	baseContentHash, err := requiredString(request, "base_content_hash")
+	if err != nil || !ncpcompose.IsContentHash(baseContentHash) {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "COMPOSE_BASELINE_INVALID")
+	}
 	result, err := service.provider.Deploy(ctx, ncpcompose.DeployRequest{
 		ProjectID: projectID, WorkingDirectory: workingDirectory, ConfigFiles: configFiles,
-		TargetPath: targetPath, Content: content,
+		TargetPath: targetPath, Content: content, BaseContentHash: baseContentHash,
 	})
 	if err != nil {
-		return nil, grpcstatus.Error(codes.Internal, "COMPOSE_DEPLOY_FAILED")
+		// 只按当前 RPC 的取消状态分类；恢复命令自身超时仍保留已确认的业务错误码。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, grpcstatus.FromContextError(ctxErr).Err()
+		}
+		return nil, composeDeployFailure(ncpcompose.ErrorCode(err))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.FromContextError(err).Err()
 	}
 	return dashboardStruct(result, "AGENT_COMPOSE_RESPONSE_INVALID")
+}
+
+func composeDeployFailure(code string) error {
+	if !ncpcompose.IsDeployErrorCode(code) {
+		code = "COMPOSE_DEPLOY_FAILED"
+	}
+	return grpcstatus.Error(codes.Internal, code)
 }
 
 func requiredStringList(request *structpb.Struct, name string) ([]string, error) {

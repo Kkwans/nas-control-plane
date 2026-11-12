@@ -1,5 +1,9 @@
+import { decodeComposeActionReceipt, decodeContainerActionReceipt, decodeStandaloneActionReceipt, requestDockerActionReceipt } from './dockerActionOutcome'
+import { captureSession } from '@/session/sessionLifecycle'
+import { DOCKER_INVENTORY_RESPONSE_INVALID, parseDockerInventoryResponse } from './dockerInventoryResponse'
 import {
   NcpApiError,
+  isApiErrorResponse,
   jsonRequest,
   requestJson,
   requestOptions,
@@ -93,6 +97,7 @@ export interface JobSubscription {
 }
 
 export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => void): JobSubscription {
+  const session = captureSession()
   let settled = false
   let resolveDone!: (job: JobSnapshot) => void
   let rejectDone!: (error: unknown) => void
@@ -104,25 +109,31 @@ export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => vo
   const close = () => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     rejectDone(new DOMException('Job subscription closed', 'AbortError'))
   }
   const finish = (job: JobSnapshot) => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     resolveDone(job)
   }
+  session.signal.addEventListener('abort', close, { once: true })
+  if (session.signal.aborted) close()
   source.addEventListener('progress', (event) => {
+    if (settled) return
     try {
       const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
       const job = parseJobSnapshot(payload)
       if (!job) throw new Error('任务进度格式无效')
       onProgress(job)
-      if (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') finish(job)
+      if (job.persistenceStatus !== 'pending' && (job.status === 'completed' || job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled')) finish(job)
     } catch (error) {
       if (settled) return
       settled = true
+      session.signal.removeEventListener('abort', close)
       source.close()
       rejectDone(error)
     }
@@ -130,6 +141,7 @@ export function subscribeJob(jobId: string, onProgress: (job: JobSnapshot) => vo
   source.onerror = () => {
     if (settled) return
     settled = true
+    session.signal.removeEventListener('abort', close)
     source.close()
     rejectDone(new NcpApiError('JOB_STREAM_FAILED', '任务进度连接已中断。'))
   }
@@ -186,6 +198,41 @@ export async function deleteJob(jobId: string, fetcher: typeof fetch = fetch): P
   if (!response.ok) throw await responseError(response)
 }
 
+export class DockerImageRemoveAdmissionUnknownError extends NcpApiError {
+  constructor() {
+    super('DOCKER_IMAGE_REMOVE_ADMISSION_UNKNOWN', '删除任务可能已接收，结果尚未确认。请查看最近任务并只读刷新镜像，勿重复提交。')
+  }
+}
+
+/** 202 只证明任务接收；不把传输失败或异常回执解释为未执行。 */
+export async function requestDockerImageRemoveJob(imageId: string, fetcher: typeof fetch = fetch): Promise<JobSnapshot> {
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new NcpApiError('DOCKER_IMAGE_REMOVE_INVALID', '请选择完整的镜像 ID。')
+  let rejection: NcpApiError | undefined
+  try {
+    const response = await fetcher('/api/v1/docker/images/remove-job', requestOptions(jsonRequest({ imageId })))
+    const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') throw new DockerImageRemoveAdmissionUnknownError()
+    const payload: unknown = await response.json()
+    if (isApiErrorResponse(payload) && (
+      (response.status === 400 && payload.code === 'DOCKER_IMAGE_REMOVE_INVALID') ||
+      (response.status === 503 && ['AGENT_DOCKER_IMAGES_UNAVAILABLE', 'JOB_QUEUE_FULL', 'JOB_PERSIST_FAILED', 'JOB_ENGINE_UNAVAILABLE'].includes(payload.code))
+    )) {
+      rejection = new NcpApiError(payload.code, payload.message, payload.requestId)
+      throw rejection
+    }
+    const job = parseJobSnapshot(payload)
+    if (response.status !== 202 || !isRecord(payload) || payload.artifactState !== 'unknown' || !job || !job.id.trim() || job.type !== 'docker-image-remove' || job.reference !== imageId || job.cancellable !== false ||
+      job.status !== 'queued' || job.progressLimited === true || job.cancellationStatus !== undefined || job.persistenceStatus !== undefined ||
+      job.completedAt !== undefined || job.error !== undefined || job.errorCode !== undefined || Object.keys(job.layers).length !== 0 ||
+      !Number.isFinite(Date.parse(job.createdAt)) || !Number.isFinite(Date.parse(job.updatedAt)) ||
+      ![job.progress, job.downloadedBytes, job.totalBytes, job.speedBytes].every((value) => value === 0)) throw new DockerImageRemoveAdmissionUnknownError()
+    return job
+  } catch (caught) {
+    if (rejection && caught === rejection) throw rejection
+    throw new DockerImageRemoveAdmissionUnknownError()
+  }
+}
+
 export async function removeDockerImage(
   imageId: string,
   fetcher: typeof fetch = fetch,
@@ -207,17 +254,38 @@ export async function removeDockerImages(
   imageIds: string[],
   fetcher: typeof fetch = fetch,
 ): Promise<DockerImageRemoveBatchResult> {
-  return requestJson(
-    '/api/v1/docker/images/remove-batch',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ imageIds }),
-    },
-    isDockerImageRemoveBatchResult,
-    fetcher,
-    'DOCKER_IMAGE_REMOVE_BATCH_RESPONSE_INVALID',
-  )
+  // 在首次异步等待前保存请求身份，防止调用方修改数组污染回执校验。
+  const requestedIds = Object.freeze([...imageIds])
+  let rejection: NcpApiError | undefined
+  try {
+    const response = await fetcher(
+      '/api/v1/docker/images/remove-batch',
+      requestOptions({ ...jsonRequest({ imageIds: requestedIds }), redirect: 'error' }),
+    )
+    // 禁止重定向重放删除请求，也不信任已跟随重定向取得的回执。
+    if (response.redirected !== false) throw new Error('回执重定向状态无效')
+    const mediaType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') throw new Error('回执媒体类型无效')
+    const payload: unknown = await response.json()
+    // 仅保留服务端在调用 Agent 前明确拒绝请求体的状态与错误码组合。
+    if (isApiErrorResponse(payload) && (
+      (response.status === 413 && payload.code === 'HTTP_REQUEST_BODY_TOO_LARGE') ||
+      (response.status === 415 && payload.code === 'HTTP_UNSUPPORTED_MEDIA_TYPE')
+    )) {
+      rejection = new NcpApiError(payload.code, payload.message, payload.requestId)
+      throw rejection
+    }
+    if (response.status !== 200) throw new Error('回执状态无效')
+    if (!isDockerImageRemoveBatchResult(payload, requestedIds)) throw new Error('回执与请求不一致')
+    return payload
+  } catch (caught) {
+    if (rejection && caught === rejection) throw rejection
+    // 请求可能已执行；任何不完整或矛盾的回执都不能作为再次删除的依据。
+    throw new NcpApiError(
+      'DOCKER_IMAGE_REMOVE_BATCH_OUTCOME_UNKNOWN',
+      '批量删除结果尚未确认，部分镜像可能已删除。请只读刷新核对，勿重复提交。',
+    )
+  }
 }
 
 export async function searchDockerHub(
@@ -262,11 +330,12 @@ export async function requestDockerHubTags(
 }
 
 export async function requestDockerInventory(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerInventory> {
-  return requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isDockerInventory, fetcher, 'DOCKER_INVENTORY_RESPONSE_INVALID')
+  const payload = await requestJson('/api/v1/docker/inventory', signal ? { signal } : {}, isRecord, fetcher, DOCKER_INVENTORY_RESPONSE_INVALID)
+  return parseDockerInventoryResponse(payload)
 }
 
-export async function requestDockerResources(fetcher: typeof fetch = fetch): Promise<DockerResources> {
-  return requestJson('/api/v1/docker/resources', {}, isDockerResources, fetcher, 'DOCKER_RESOURCES_RESPONSE_INVALID')
+export async function requestDockerResources(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<DockerResources> {
+  return requestJson('/api/v1/docker/resources', signal ? { signal } : {}, isDockerResources, fetcher, 'DOCKER_RESOURCES_RESPONSE_INVALID')
 }
 
 export async function requestServices(fetcher: typeof fetch = fetch): Promise<ServiceListResponse> {
@@ -278,12 +347,13 @@ export async function requestContainerAction(
   action: ContainerAction,
   fetcher: typeof fetch = fetch,
 ): Promise<ContainerActionResult> {
-  return requestJson(
-    `/api/v1/docker/containers/${encodeURIComponent(containerId)}/actions/${action}`,
+  const intent = { containerId, action }
+  return requestDockerActionReceipt(
+    `/api/v1/docker/containers/${encodeURIComponent(intent.containerId)}/actions/${intent.action}`,
     { method: 'POST' },
-    isContainerActionResult,
+    'container',
+    (payload) => decodeContainerActionReceipt(payload, intent),
     fetcher,
-    'DOCKER_CONTAINER_ACTION_RESPONSE_INVALID',
   )
 }
 
@@ -306,38 +376,27 @@ export async function requestDockerProjectAction(
   fetcher: typeof fetch = fetch,
 ): Promise<DockerProjectActionResult | ComposeLifecycleResult> {
   if (project.kind === 'compose') {
-    return requestJson(
-      `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}/actions/${action}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectId: project.id,
-          workingDirectory: project.workingDirectory,
-          configFiles: project.configFiles,
-          action,
-        }),
-      },
-      isComposeLifecycleResult,
+    const intent = { projectId: project.id, action, workingDirectory: project.workingDirectory, configFiles: [...project.configFiles] }
+    return requestDockerActionReceipt(
+      `/api/v1/docker/compose/projects/${encodeURIComponent(intent.projectId)}/actions/${intent.action}`,
+      jsonRequest(intent),
+      'compose',
+      (payload) => decodeComposeActionReceipt(payload, intent),
       fetcher,
-      'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
     )
   }
-  return requestJson(
-    `/api/v1/docker/projects/${encodeURIComponent(project.id)}/actions/${action}`,
+  // 提交前复制标识和目标集合，等待响应时调用者的变化不能改变回执归属。
+  const intent = { projectId: project.id, action, containerIds: [...(project.containerIds ?? [])] }
+  return requestDockerActionReceipt(
+    `/api/v1/docker/projects/${encodeURIComponent(intent.projectId)}/actions/${intent.action}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        projectId: project.id,
-        kind: 'standalone',
-        containerIds: project.containerIds ?? [],
-        action,
-      }),
+      body: JSON.stringify({ projectId: intent.projectId, kind: 'standalone', containerIds: intent.containerIds, action: intent.action }),
     },
-    isDockerProjectActionResult,
+    'standalone',
+    (payload) => decodeStandaloneActionReceipt(payload, intent),
     fetcher,
-    'DOCKER_PROJECT_ACTION_RESPONSE_INVALID',
   )
 }
 
@@ -355,34 +414,169 @@ export async function requestContainerLogs(
   )
 }
 
+export class CreateContainerOutcomeUnknownError extends NcpApiError {
+  constructor() {
+    super('DOCKER_CONTAINER_CREATE_OUTCOME_UNKNOWN', '无法核实容器创建结果，请先检查容器列表，勿重复提交。')
+    this.name = 'CreateContainerOutcomeUnknownError'
+  }
+}
+
+// 仅已核实在创建副作用之前返回的状态/稳定码配对允许作为普通拒绝处理。
+// Agent 不可用及创建/启动/检查/补偿失败均可能发生在创建之后，不能加入此表。
+const createContainerRejections = new Map<string, number>([
+  ['DOCKER_CONTAINER_CREATE_INVALID', 400],
+  ['CONTROL_INPUT_INVALID', 400],
+  ['AUTH_UNAUTHORIZED', 401],
+  ['HTTP_CROSS_ORIGIN_REJECTED', 403],
+  ['ROUTE_NOT_FOUND', 404],
+  ['METHOD_NOT_ALLOWED', 405],
+  ['HTTP_REQUEST_BODY_TOO_LARGE', 413],
+  ['HTTP_UNSUPPORTED_MEDIA_TYPE', 415],
+  ['AUTH_UNAVAILABLE', 503],
+])
+
 export async function createDockerContainer(
   input: DockerContainerCreateInput,
   fetcher: typeof fetch = fetch,
 ): Promise<DockerContainerCreateResult> {
-  return requestJson(
-    '/api/v1/docker/containers',
-    jsonRequest(input),
-    isDockerContainerCreateResult,
-    fetcher,
-    'DOCKER_CONTAINER_CREATE_RESPONSE_INVALID',
-  )
+  // 固定本次提交意图，避免等待响应时表单变化影响核验。
+  const runContainer = input.runContainer
+  // 本地序列化与请求构造失败尚未调用 fetch，不能误报为远端结果未知。
+  // 禁止 fetch 通过 307/308 自动向跳转目标重发创建 POST。
+  const options = requestOptions({ ...jsonRequest(input), redirect: 'error' })
+  let response: Response
+  try {
+    response = await fetcher('/api/v1/docker/containers', options)
+  } catch {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  // 跳转后的响应只描述后续请求，不能确认原始创建请求的结果。
+  if (response.redirected) throw new CreateContainerOutcomeUnknownError()
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  if (!response.ok) {
+    if (isApiErrorResponse(payload) && createContainerRejections.get(payload.code) === response.status) {
+      throw new NcpApiError(payload.code, payload.message, payload.requestId)
+    }
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  if (!isDockerContainerCreateResult(payload, runContainer)) {
+    throw new CreateContainerOutcomeUnknownError()
+  }
+  return payload
+}
+
+// 这些状态/稳定码配对仅在删除副作用之前产生；注册表失败、回滚失败及
+// Agent 通道异常可能发生在部分容器已经删除之后，必须保留结果未知语义。
+const projectDeleteRejections = new Map<string, readonly [number, string]>([
+  ['DOCKER_PROJECT_DELETE_INVALID', [400, 'Docker 项目删除参数无效。']],
+  ['DOCKER_PROJECT_DELETE_RUNNING', [409, '项目仍有运行中的容器，停止后才能删除。']],
+  ['DOCKER_PROJECT_DELETE_PROTECTED', [409, '该项目受保护，不能删除。']],
+  ['DOCKER_PROJECT_DELETE_REGISTRY_NOT_FOUND', [409, '未找到精确匹配的项目注册记录，已拒绝删除。']],
+  ['DOCKER_PROJECT_DELETE_NOT_FOUND', [404, '当前 Docker 清单中找不到该项目，请先刷新状态。']],
+  ['CONTROL_INPUT_INVALID', [400, '请求参数无效。']],
+  ['AUTH_UNAUTHORIZED', [401, '请先登录。']],
+  ['AUTH_UNAVAILABLE', [503, '登录服务暂不可用。']],
+  ['HTTP_CROSS_ORIGIN_REJECTED', [403, '请求来源校验失败。']],
+  ['ROUTE_NOT_FOUND', [404, '请求的接口不存在。']],
+  ['METHOD_NOT_ALLOWED', [405, '请求方法不受支持。']],
+  ['HTTP_REQUEST_BODY_TOO_LARGE', [413, '请求体超过大小限制。']],
+  ['HTTP_UNSUPPORTED_MEDIA_TYPE', [415, '请求必须使用 application/json 内容类型。']],
+])
+
+class DockerProjectDeleteRejectedError extends NcpApiError {}
+export function isDockerProjectDeleteRejected(error: unknown): error is NcpApiError {
+  return error instanceof DockerProjectDeleteRejectedError
+}
+
+function projectDeleteOutcomeUnknown(): NcpApiError {
+  return new NcpApiError('DOCKER_PROJECT_DELETE_OUTCOME_UNKNOWN',
+    '项目可能已部分或全部删除，结果尚未确认。请先只读核对容器及项目注册状态，勿重复提交。')
+}
+
+// DeleteProject RPC 沿用 gRPC 默认 4MiB 接收上限；HTTP JSON 字符串
+// 转义最多放大六倍。32MiB 留出结构余量，不对合法项目另设容器数量上限。
+const projectDeleteResponseMaxBytes = 32 * 1024 * 1024
+
+function parseProjectDeleteJSON(source: string): unknown {
+  const payload: unknown = JSON.parse(source)
+  // JSON.parse 的后键覆盖会掩盖矛盾结果，按对象分别核对解码后的键。
+  const stack: (Set<string> | null)[] = []
+  const tokens = /"(?:\\.|[^"\\])*"|[{}[\]:,]/g
+  for (const match of source.matchAll(tokens)) {
+    const token = match[0]
+    if (token === '{' || token === '[') {
+      stack.push(token === '{' ? new Set() : null)
+      if (stack.length > 32) throw projectDeleteOutcomeUnknown()
+    } else if (token === '}' || token === ']') stack.pop()
+    else if (token.startsWith('"') && /^\s*:/.test(source.slice(match.index! + token.length))) {
+      const keys = stack.at(-1), key = JSON.parse(token) as string
+      if (!keys || keys.has(key)) throw projectDeleteOutcomeUnknown()
+      keys.add(key)
+    }
+  }
+  return payload
+}
+
+async function readProjectDeleteJSON(response: Response): Promise<unknown> {
+  if (response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json' || !response.body) throw projectDeleteOutcomeUnknown()
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+  let bytes = 0, source = ''
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > projectDeleteResponseMaxBytes) throw projectDeleteOutcomeUnknown()
+      source += decoder.decode(chunk.value, { stream: true })
+    }
+    return parseProjectDeleteJSON(source + decoder.decode())
+  } catch (error) {
+    await reader.cancel().catch(() => {})
+    throw error
+  } finally { reader.releaseLock() }
 }
 
 export async function deleteDockerProject(
   project: Pick<DockerProject, 'id' | 'name' | 'kind'>,
   fetcher: typeof fetch = fetch,
 ): Promise<DockerProjectDeleteResult> {
-  return requestJson(
-    `/api/v1/docker/compose/projects/${encodeURIComponent(project.id)}`,
-    {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId: project.id, kind: project.kind, registryName: project.name }),
-    },
-    isDockerProjectDeleteResult,
-    fetcher,
-    'DOCKER_PROJECT_DELETE_RESPONSE_INVALID',
-  )
+  // 固定提交身份；等待期间调用方的对象变化不能改写回执核验目标。
+  const projectId = project.id
+  const path = `/api/v1/docker/compose/projects/${encodeURIComponent(projectId)}`
+  const options = requestOptions({
+    method: 'DELETE',
+    redirect: 'error',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, kind: project.kind, registryName: project.name }),
+  })
+  let response: Response
+  let payload: unknown
+  try {
+    response = await fetcher(path, options)
+    if (response.redirected !== false) throw projectDeleteOutcomeUnknown()
+    payload = await readProjectDeleteJSON(response)
+  } catch {
+    throw projectDeleteOutcomeUnknown()
+  }
+  if (response.status !== 200) {
+    if (isApiErrorResponse(payload)) {
+      const rejection = projectDeleteRejections.get(payload.code)
+      if (rejection?.[0] === response.status) {
+        const requestId = /^[A-Za-z0-9._:-]{1,128}$/.test(payload.requestId) ? payload.requestId : undefined
+        throw new DockerProjectDeleteRejectedError(payload.code, rejection[1], requestId)
+      }
+    }
+    throw projectDeleteOutcomeUnknown()
+  }
+  if (!isDockerProjectDeleteResult(payload, projectId)) throw projectDeleteOutcomeUnknown()
+  return payload
 }
 
 export async function readComposeConfig(
@@ -403,7 +597,12 @@ export async function readComposeConfig(
     isComposeProjectConfig,
     fetcher,
     'COMPOSE_CONFIG_RESPONSE_INVALID',
-  )
+  ).catch((caught: unknown) => {
+    if (caught instanceof NcpApiError && caught.code === 'COMPOSE_CONFIG_RESPONSE_INVALID') {
+      throw new NcpApiError(caught.code, '无法核实 Compose 配置及磁盘基线，请更新 Agent/Server 后重新读取。', caught.requestId)
+    }
+    throw caught
+  })
 }
 
 export async function validateComposeConfig(
@@ -428,6 +627,9 @@ export async function deployComposeConfig(
   input: ComposeDeployInput,
   fetcher: typeof fetch = fetch,
 ): Promise<JobSnapshot> {
+  if (!isComposeContentHash(input.baseContentHash)) {
+    throw new NcpApiError('COMPOSE_BASELINE_INVALID', '缺少有效的 Compose 编辑基线，请重新读取配置后再发布。')
+  }
   return requestJobSnapshot(
     '/api/v1/docker/compose/deploy',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
@@ -488,7 +690,12 @@ function parseJobSnapshot(value: unknown): JobSnapshot | null {
     typeof value.downloadedBytes === 'number' &&
     typeof value.totalBytes === 'number' &&
     typeof value.speedBytes === 'number' &&
-    isRecord(value.layers))) {
+    isRecord(value.layers) &&
+    (value.cancellationStatus === undefined || value.cancellationStatus === 'requested' || value.cancellationStatus === 'confirmed' || value.cancellationStatus === 'unknown') &&
+    (value.persistenceStatus === undefined || value.persistenceStatus === 'pending') &&
+    (value.cancellable === undefined || typeof value.cancellable === 'boolean') &&
+    (value.progressLimited === undefined || typeof value.progressLimited === 'boolean') &&
+    (value.errorCode === undefined || typeof value.errorCode === 'string'))) {
     return null
   }
   const artifactState =
@@ -502,21 +709,28 @@ function isDockerImageRemoveResult(value: unknown): value is DockerImageRemoveRe
   return isRecord(value) && typeof value.imageId === 'string' && value.removed === true
 }
 
-function isDockerImageRemoveBatchResult(value: unknown): value is DockerImageRemoveBatchResult {
-  return (
-    isRecord(value) &&
-    typeof value.removedCount === 'number' &&
-    typeof value.failedCount === 'number' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.items) &&
-    value.items.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.imageId === 'string' &&
-        typeof item.removed === 'boolean' &&
-        (item.errorCode === undefined || typeof item.errorCode === 'string'),
-    )
-  )
+function isDockerImageRemoveBatchResult(value: unknown, requestedIds: readonly string[]): value is DockerImageRemoveBatchResult {
+  if (!isRecord(value) || !Array.isArray(value.items) || value.items.length !== requestedIds.length ||
+    typeof value.removedCount !== 'number' || !Number.isSafeInteger(value.removedCount) || value.removedCount < 0 ||
+    typeof value.failedCount !== 'number' || !Number.isSafeInteger(value.failedCount) || value.failedCount < 0 ||
+    typeof value.completed !== 'boolean') return false
+
+  const remainingIds = new Set(requestedIds)
+  if (remainingIds.size !== requestedIds.length) return false
+  let removedCount = 0
+  for (const item of value.items) {
+    if (!isRecord(item) || typeof item.imageId !== 'string' || !remainingIds.delete(item.imageId) ||
+      typeof item.removed !== 'boolean') return false
+    if (item.removed) {
+      if (item.errorCode !== undefined && item.errorCode !== '') return false
+      removedCount += 1
+    } else if (typeof item.errorCode !== 'string' || !item.errorCode.trim()) {
+      return false
+    }
+  }
+  const failedCount = requestedIds.length - removedCount
+  return remainingIds.size === 0 && value.removedCount === removedCount &&
+    value.failedCount === failedCount && value.completed === (failedCount === 0)
 }
 
 function isDockerHubRepository(value: unknown): value is DockerHubRepository {
@@ -557,56 +771,6 @@ function isDockerHubTagsWireResult(value: unknown): value is DockerHubTagsWireRe
     value.results.every(isDockerHubTagWire)
 }
 
-function isContainerAction(value: unknown): value is ContainerAction {
-  return value === 'start' || value === 'stop' || value === 'restart'
-}
-
-function isDockerProjectActionResult(value: unknown): value is DockerProjectActionResult {
-  return (
-    isRecord(value) &&
-    typeof value.projectId === 'string' &&
-    (value.kind === 'standalone' || value.kind === 'compose') &&
-    isContainerAction(value.action) &&
-    typeof value.state === 'string' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.containers) &&
-    value.containers.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.containerId === 'string' &&
-        typeof item.name === 'string' &&
-        isContainerAction(item.action) &&
-        typeof item.state === 'string' &&
-        typeof item.success === 'boolean' &&
-        (item.errorCode === undefined || typeof item.errorCode === 'string'),
-    )
-  )
-}
-
-function isComposeLifecycleResult(value: unknown): value is ComposeLifecycleResult {
-  return (
-    isRecord(value) &&
-    typeof value.projectId === 'string' &&
-    isContainerAction(value.action) &&
-    typeof value.state === 'string' &&
-    typeof value.output === 'string' &&
-    typeof value.completed === 'boolean' &&
-    Array.isArray(value.services) &&
-    value.services.every(
-      (service) =>
-        isRecord(service) &&
-        typeof service.name === 'string' &&
-        (service.containerId === undefined || typeof service.containerId === 'string') &&
-        typeof service.state === 'string' &&
-        typeof service.running === 'boolean',
-    )
-  )
-}
-
-function isDockerInventory(value: unknown): value is DockerInventory {
-  return isRecord(value) && typeof value.collectedAt === 'string' && isRecord(value.engine) && Array.isArray(value.containers) && Array.isArray(value.projects)
-}
-
 function isDockerResources(value: unknown): value is DockerResources {
   return isRecord(value) &&
     typeof value.collectedAt === 'string' &&
@@ -629,16 +793,6 @@ function isDockerResources(value: unknown): value is DockerResources {
 
 function isServiceListResponse(value: unknown): value is ServiceListResponse {
   return isRecord(value) && typeof value.collectedAt === 'string' && Array.isArray(value.services)
-}
-
-function isContainerActionResult(value: unknown): value is ContainerActionResult {
-  return (
-    isRecord(value) &&
-    typeof value.containerId === 'string' &&
-    typeof value.name === 'string' &&
-    (value.action === 'start' || value.action === 'stop' || value.action === 'restart') &&
-    typeof value.state === 'string'
-  )
 }
 
 function isContainerDetails(value: unknown): value is ContainerDetails {
@@ -682,39 +836,46 @@ function isContainerLogsResult(value: unknown): value is ContainerLogsResult {
   )
 }
 
-function isDockerContainerCreateResult(value: unknown): value is DockerContainerCreateResult {
+function isDockerContainerCreateResult(value: unknown, runContainer: boolean): value is DockerContainerCreateResult {
   return (
     isRecord(value) &&
-    typeof value.containerId === 'string' &&
+    typeof value.containerId === 'string' && value.containerId.trim().length > 0 &&
     typeof value.name === 'string' &&
-    typeof value.image === 'string' &&
-    typeof value.state === 'string' &&
+    typeof value.image === 'string' && value.image.trim().length > 0 &&
+    (value.state === 'running' || value.state === 'stopped') &&
     value.created === true &&
-    typeof value.started === 'boolean' &&
-    typeof value.runContainer === 'boolean'
+    typeof value.started === 'boolean' && value.started === runContainer &&
+    typeof value.runContainer === 'boolean' && value.runContainer === runContainer
   )
 }
 
-function isDockerProjectDeleteResult(value: unknown): value is DockerProjectDeleteResult {
+function isDockerProjectDeleteResult(value: unknown, projectId: string): value is DockerProjectDeleteResult {
+  const containerIds = new Set<string>()
   return (
     isRecord(value) &&
-    typeof value.projectId === 'string' &&
+    typeof value.projectId === 'string' && value.projectId === projectId && projectId.trim().length > 0 &&
     value.kind === 'compose' &&
     value.completed === true &&
-    typeof value.partial === 'boolean' &&
-    typeof value.registryDeleted === 'boolean' &&
-    typeof value.registryRolledBack === 'boolean' &&
+    value.partial === false &&
+    value.registryDeleted === true &&
+    value.registryRolledBack === false &&
     Array.isArray(value.containers) &&
-    value.containers.every((container) =>
-      isRecord(container) &&
-      typeof container.containerId === 'string' &&
-      typeof container.name === 'string' &&
-      typeof container.state === 'string' &&
-      typeof container.deleted === 'boolean' &&
-      typeof container.success === 'boolean' &&
-      (container.errorCode === undefined || typeof container.errorCode === 'string'),
-    )
+    value.containers.every((container) => {
+      if (!isRecord(container) ||
+        typeof container.containerId !== 'string' || !container.containerId.trim() ||
+        containerIds.has(container.containerId) ||
+        typeof container.name !== 'string' ||
+        typeof container.state !== 'string' ||
+        container.deleted !== true || container.success !== true ||
+        (container.errorCode !== undefined && container.errorCode !== '')) return false
+      containerIds.add(container.containerId)
+      return true
+    })
   )
+}
+
+export function isComposeContentHash(value: unknown): value is string {
+  return typeof value === 'string' && value.length === 64 && /^[0-9a-f]{64}$/.test(value)
 }
 
 function isComposeProjectConfig(value: unknown): value is ComposeProjectConfig {
@@ -723,7 +884,7 @@ function isComposeProjectConfig(value: unknown): value is ComposeProjectConfig {
     typeof value.workingDirectory === 'string' &&
     typeof value.collectedAt === 'string' &&
     Array.isArray(value.files) &&
-    value.files.every((file) => isRecord(file) && typeof file.path === 'string' && typeof file.name === 'string' && typeof file.content === 'string' && typeof file.size === 'number')
+    value.files.every((file) => isRecord(file) && typeof file.path === 'string' && typeof file.name === 'string' && typeof file.content === 'string' && isComposeContentHash(file.contentHash) && typeof file.size === 'number')
 }
 
 function isComposeValidationResult(value: unknown): value is ComposeValidationResult {

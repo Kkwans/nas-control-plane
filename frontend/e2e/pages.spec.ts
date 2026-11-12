@@ -29,7 +29,7 @@ const viewports = [
 
 for (const viewport of viewports) {
   for (const route of routes) {
-    test(`${route.path} 在 ${viewport.name} 可进入且无横向失控`, async ({ page }) => {
+    test(`${route.path} 在 ${viewport.name} 可进入且无横向失控`, async ({ page }, testInfo) => {
       test.setTimeout(120_000)
       const browserErrors: string[] = []
       page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`))
@@ -53,6 +53,15 @@ for (const viewport of viewports) {
       expect(layout.mainWidth, `${route.path} main 横向溢出`).toBeLessThanOrEqual(layout.viewportWidth)
 
       expect(browserErrors).toEqual([])
+
+      // 仅捕获通过页面检查的 mock fixture；不上传 trace、登录状态或真实 NAS 数据。
+      if (process.env.NCP_CAPTURE_UI === '1') {
+        const routeName = route.path === '/' ? 'overview' : route.path.slice(1).replaceAll('/', '-')
+        const filename = `fixture-${routeName}-${viewport.name}-${viewport.width}x${viewport.height}.png`
+        const screenshotPath = testInfo.outputPath('ui-captures', filename)
+        await page.screenshot({ path: screenshotPath, fullPage: true, animations: 'disabled' })
+        await testInfo.attach(filename, { path: screenshotPath, contentType: 'image/png' })
+      }
     })
   }
 }

@@ -35,10 +35,20 @@ type Discovery struct {
 }
 
 type Credentials struct {
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	Token    string `json:"token,omitempty"`
-	Database string `json:"database,omitempty"`
+	Username string     `json:"username,omitempty"`
+	Password string     `json:"password,omitempty"`
+	Token    string     `json:"token,omitempty"`
+	Database string     `json:"database,omitempty"`
+	TLS      *TLSPolicy `json:"tls,omitempty"`
+}
+
+// CloneCredentials 为跨测试、RPC 与持久化边界创建独立的策略副本。
+func CloneCredentials(credentials Credentials) Credentials {
+	if credentials.TLS != nil {
+		policy := *credentials.TLS
+		credentials.TLS = &policy
+	}
+	return credentials
 }
 
 type Connection struct {
@@ -108,17 +118,29 @@ type Catalog struct {
 	Tables []Table `json:"tables"`
 }
 
+// QueryResultMode 只决定结果读取路径，不限制 SQL 权限或写入能力。
+type QueryResultMode string
+
+const (
+	QueryResultModeAuto QueryResultMode = "auto"
+	QueryResultModeRows QueryResultMode = "rows"
+	QueryResultModeExec QueryResultMode = "exec"
+)
+
 type QueryRequest struct {
 	Connection
-	SQL string `json:"sql"`
+	SQL        string          `json:"sql"`
+	ResultMode QueryResultMode `json:"resultMode,omitempty"`
 }
 
 type QueryResult struct {
-	Columns      []string `json:"columns"`
-	Rows         [][]any  `json:"rows"`
-	RowsAffected int64    `json:"rowsAffected"`
-	Truncated    bool     `json:"truncated"`
-	DurationMs   int64    `json:"durationMs"`
+	Columns           []string `json:"columns"`
+	Rows              [][]any  `json:"rows"`
+	RowsAffected      int64    `json:"rowsAffected"`
+	RowsAffectedKnown bool     `json:"rowsAffectedKnown"`
+	Truncated         bool     `json:"truncated"`
+	TruncationReason  string   `json:"truncationReason,omitempty"`
+	DurationMs        int64    `json:"durationMs"`
 }
 
 type RowsRequest struct {

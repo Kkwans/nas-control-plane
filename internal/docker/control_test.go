@@ -58,11 +58,72 @@ func TestContainerControllerReturnsStableFailureWhenActionFails(t *testing.T) {
 	}
 }
 
+func TestContainerControllerNormalizesActionBeforeDispatch(t *testing.T) {
+	for _, test := range []struct {
+		input ContainerAction
+		want  ContainerAction
+	}{
+		{ContainerActionStart, ContainerActionStart},
+		{ContainerActionStop, ContainerActionStop},
+		{ContainerActionRestart, ContainerActionRestart},
+		{" START ", ContainerActionStart},
+		{"\tStop\n", ContainerActionStop},
+		{" ReStart ", ContainerActionRestart},
+	} {
+		t.Run(string(test.input), func(t *testing.T) {
+			request := ContainerActionRequest{ContainerID: "abc123", Action: test.input}
+			gateway := &fakeContainerControlGateway{snapshot: ContainerSnapshot{ID: "abc123", Running: test.want != ContainerActionStop}}
+			result, err := NewContainerController(gateway).Control(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Control() error = %v", err)
+			}
+			if len(gateway.actions) != 1 || gateway.actions[0] != string(test.want) || gateway.inspectCalls != 1 {
+				t.Fatalf("actions = %#v, inspect calls = %d", gateway.actions, gateway.inspectCalls)
+			}
+			if result.Action != test.want || request.Action != test.input {
+				t.Fatalf("result action = %q, original action = %q", result.Action, request.Action)
+			}
+		})
+	}
+}
+
+func TestContainerControllerRejectsInvalidOrCancelledActionWithoutGatewayCall(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, test := range []struct {
+		name    string
+		ctx     context.Context
+		request ContainerActionRequest
+		code    string
+	}{
+		{"unsupported", context.Background(), ContainerActionRequest{ContainerID: "abc123", Action: " stop;start "}, "DOCKER_CONTAINER_ACTION_INVALID"},
+		{"empty action", context.Background(), ContainerActionRequest{ContainerID: "abc123", Action: "\t"}, "DOCKER_CONTAINER_ACTION_INVALID"},
+		{"empty container", context.Background(), ContainerActionRequest{ContainerID: " ", Action: " START "}, "DOCKER_CONTAINER_ACTION_INVALID"},
+		{"cancelled", cancelled, ContainerActionRequest{ContainerID: "abc123", Action: " START "}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gateway := &fakeContainerControlGateway{}
+			_, err := NewContainerController(gateway).Control(test.ctx, test.request)
+			if test.code == "" {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error = %v, want context cancellation", err)
+				}
+			} else if ErrorCode(err) != test.code {
+				t.Fatalf("error = %v, want %s", err, test.code)
+			}
+			if len(gateway.actions) != 0 || gateway.inspectCalls != 0 {
+				t.Fatalf("actions = %#v, inspect calls = %d, want no calls", gateway.actions, gateway.inspectCalls)
+			}
+		})
+	}
+}
+
 type fakeContainerControlGateway struct {
-	actions    []string
-	actionErr  error
-	snapshot   ContainerSnapshot
-	inspectErr error
+	actions      []string
+	actionErr    error
+	snapshot     ContainerSnapshot
+	inspectErr   error
+	inspectCalls int
 }
 
 func (f *fakeContainerControlGateway) StartContainer(context.Context, string) error {
@@ -81,5 +142,6 @@ func (f *fakeContainerControlGateway) RestartContainer(context.Context, string) 
 }
 
 func (f *fakeContainerControlGateway) InspectContainer(context.Context, string) (ContainerSnapshot, error) {
+	f.inspectCalls++
 	return f.snapshot, f.inspectErr
 }

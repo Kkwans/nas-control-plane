@@ -178,7 +178,11 @@ func TestRotationFailureRetainsCiphertextAndDisablesAutomaticConnection(t *testi
 		t.Fatal(err)
 	}
 	source := Source{ID: "postgres-1", Driver: DriverPostgreSQL, Host: "db.internal", Port: 5432, DefaultDatabase: "control"}
-	if _, err := vault.Save(context.Background(), source, Credentials{Username: "admin", Password: "secret", Database: "control"}); err != nil {
+	coordinator, err := NewConnectionCoordinator(vault, &capturingTester{diagnostic: ConnectionDiagnostic{Connected: true, Code: "connected"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.ManualConnect(context.Background(), source, Credentials{Username: "admin", Password: "secret", Database: "control"}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.GetCredential(context.Background(), source.ID)
